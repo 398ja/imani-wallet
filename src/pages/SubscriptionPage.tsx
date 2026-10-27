@@ -4,7 +4,7 @@ import { RefreshCw, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-reac
 import { Screen, BackLink, PageHeader, Panel, DetailRow, Button, Centered } from '../components/ui'
 import { formatDate, formatFace } from '../lib/format'
 import { explain, licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
-import { salesPosition, SUBSCRIPTION_SITE_URL, type SalesPosition } from '../lib/entitlement'
+import { refreshCatalog, salesPosition, SUBSCRIPTION_SITE_URL, type SalesPosition } from '../lib/entitlement'
 import { GRACE_WINDOW_SECONDS } from '@imani/licence'
 import { listTransactions, onWalletChanged } from '../lib/wallet'
 
@@ -45,6 +45,8 @@ export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currenc
   const check = useCallback(async () => {
     setChecking(true)
     try {
+      // A newer signed catalog changes the numbers below; fetched first, best effort.
+      await refreshCatalog()
       const next = await licenceStatus({ pubkey })
       setStatus(next)
       // The plan and what has been used of it (#407). Best effort: a ledger that cannot be read

@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils'
@@ -15,6 +15,7 @@ import {
   countedSales,
   currentCatalog,
   forgetCatalog,
+  refreshCatalog,
   salesPosition,
   checkSale,
   SalesLimitError,
@@ -139,5 +140,19 @@ describe('terminals from the tier', () => {
     expect(terminalLimit(status([g({ tier: 'basic' })]))).toBe(3)
     expect(terminalLimit(status([g({ tier: 'pro' })]))).toBeNull()
     expect(terminalLimit(status([g({})]))).toBeNull()
+  })
+})
+
+describe('fetching the published catalog', () => {
+  it('adopts a newer signed catalog from the site, and ignores a bad answer', async () => {
+    vi.stubEnv('VITE_LICENCE_SELLER_PUBKEY', ISSUER)
+    const good = sign(catalogBody(3, 150_00))
+    const ok = await refreshCatalog(async () => new Response(JSON.stringify(good), { status: 200 }))
+    expect(ok).toBe(true)
+    expect(currentCatalog().version).toBe(3)
+    expect(await refreshCatalog(async () => new Response('nope', { status: 502 }))).toBe(false)
+    expect(await refreshCatalog(async () => { throw new Error('offline') })).toBe(false)
+    expect(currentCatalog().version).toBe(3)
+    vi.unstubAllEnvs()
   })
 })
