@@ -2,6 +2,7 @@ import { DENIAL_REASONS, GRACE_REASONS } from '@imani/licence'
 
 import { LICENCE_FEATURES } from './licenceIssue'
 import { grants, type LicenceStatus } from './licenceStatus'
+import { terminalLimit } from './entitlement'
 
 /**
  * How many tills a stall may run, and what to say when it may not run another.
@@ -58,6 +59,8 @@ export const ENROL_REFUSAL = {
   LAPSED: 'lapsed',
   /** The seller revoked the subscription (a refund, #226). Renewing the same one cannot restore it. */
   REVOKED: 'revoked',
+  /** A live subscription whose tier allows a fixed number of tills, all in use (#407). */
+  AT_TIER_LIMIT: 'at-tier-limit',
 } as const
 
 export type EnrolRefusal = (typeof ENROL_REFUSAL)[keyof typeof ENROL_REFUSAL]
@@ -79,17 +82,22 @@ export type EnrolDecision =
  * say "no" would send them nowhere.
  */
 export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDecision {
-  if (grants(status, LICENCE_FEATURES.TERMINALS)) {
-    // A live subscription. The spec sells per STALL, not per terminal:
-    // "One voucher, however many terminals." So there is no count to check —
-    // per-terminal pricing was rejected precisely because it is not enforceable
-    // here, and re-introducing a numeric cap would be that decision reversed by
-    // accident.
+  // The stall's terminal allowance from its tier (#407): unlimited on Pro and on licences sold
+  // before tiers, 3 on Basic, the free one otherwise. All from the catalog.
+  const limit = terminalLimit(status)
+  if (limit === null || enrolledCount < limit) {
     return { allowed: true }
   }
 
-  if (enrolledCount < FREE_TERMINALS) {
-    return { allowed: true }
+  if (grants(status, LICENCE_FEATURES.TERMINALS)) {
+    // A live subscription whose tier has a ceiling, and it is reached. Upgrading lifts it.
+    return {
+      allowed: false,
+      reason: ENROL_REFUSAL.AT_TIER_LIMIT,
+      message:
+        `Your plan includes ${limit} till${limit === 1 ? '' : 's'}, and you are using all of them. ` +
+        'Upgrade your plan to add more. Your tills keep working as they are.',
+    }
   }
 
   // No subscription now. WAS there one? A stall that has held a licence and let
@@ -168,7 +176,8 @@ export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDec
  * someone who navigated straight to it still meets it.
  */
 export function remainingTerminals(status: LicenceStatus, enrolledCount: number): number {
-  if (grants(status, LICENCE_FEATURES.TERMINALS)) return Infinity
+  const limit = terminalLimit(status)
+  if (limit === null) return Infinity
   // Clamp the INPUT, not just the output. `Math.max(0, ...)` alone let a
   // nonsense count through in both directions: a negative count reported MORE
   // free terminals than exist (-1 gave 2 of a 1-terminal tier), and NaN
@@ -179,6 +188,6 @@ export function remainingTerminals(status: LicenceStatus, enrolledCount: number)
   // exceeds the tier invites them to enrol a terminal that will then be
   // refused. Failing to a conservative 0 is the honest reading of "I cannot
   // tell you how many you have left".
-  const enrolled = Number.isFinite(enrolledCount) ? Math.max(0, enrolledCount) : FREE_TERMINALS
-  return Math.max(0, FREE_TERMINALS - enrolled)
+  const enrolled = Number.isFinite(enrolledCount) ? Math.max(0, enrolledCount) : limit
+  return Math.max(0, limit - enrolled)
 }

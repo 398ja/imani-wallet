@@ -167,8 +167,13 @@ export function heldLicences(
     // "a customer's renewal keeps the same subscription identity, so a year of
     // renewals is one relationship". `voucher_id` changes on every renewal and
     // `lockKey` changes on a re-issue after key loss, so neither can group.
-    const key = licence.subscriptionId
-    if (!key) continue
+    //
+    // And by `valid_from` (#407): a renewal is delivered BEFORE the current term ends, with a
+    // future start, so for a few days the stall holds two windows of one subscription. Keeping only
+    // the later one would hide the licence in force today. Licences sold before #407 carry no start
+    // and group exactly as before.
+    if (!licence.subscriptionId) continue
+    const key = `${licence.subscriptionId}@${licence.validFrom ?? ''}`
 
     const held = bySubscription.get(key)
     // `>`, not `>=`. Two licences with the SAME expiry are the same entitlement

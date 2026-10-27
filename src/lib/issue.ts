@@ -20,6 +20,7 @@ import {
 import { parseIssuanceWarrant } from './issuanceWarrant'
 import type { AttestedSale } from './cashAttestation'
 import { NEVER_EXPIRES } from './merchant'
+import { assertWithinSalesLimit, SALES_LIMIT_MESSAGE } from './entitlement'
 import { recordTillSale } from './tillSales'
 
 /**
@@ -304,7 +305,9 @@ async function detail(response: Response, fallback: string): Promise<string> {
   const text = await response.text().catch(() => '')
   if (!text) return `${fallback} (${response.status}).`
   try {
-    const body = JSON.parse(text) as { error?: string | { message?: string }; message?: string }
+    const body = JSON.parse(text) as { error?: string | { message?: string }; message?: string; code?: string }
+    // The gateway's sales-limit refusal (#407), worded the same as the device's own.
+    if (body.code === 'SALES_LIMIT_REACHED' || body.error === 'SALES_LIMIT_REACHED') return SALES_LIMIT_MESSAGE
     const message =
       typeof body.error === 'string' ? body.error : (body.error?.message ?? body.message)
     if (message) return message
@@ -704,6 +707,15 @@ export async function issueAndDeliver(
   }
 
   onStage?.('issuing')
+  // The tier's sales allowance (#407), on the owner's device. Before minting, so a sale refused
+  // here leaves nothing to clean up. The gateway enforces the same limit for every till.
+  if (params.actor.kind === 'owner') {
+    await assertWithinSalesLimit({
+      stallPubkey: issuingStall(params.actor),
+      currency: params.currency,
+      amount: params.faceValueMinor,
+    })
+  }
   // Destructured so everything below keeps working on a plain list. The
   // warrant travels separately because it describes the SALE, not any one
   // coupon, and recordSale needs it to file what the stall actually signed.
