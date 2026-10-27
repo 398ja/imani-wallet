@@ -658,6 +658,9 @@ async function main() {
 
   const paidAmountMinor = Number(arg('--paid', '0'))
   const paidCurrency = arg('--currency', 'GBP')
+  // gateway-customer refuses a face value of 0 (VALIDATION_001, seen on staging 2026-10-27), so a
+  // free grant or pilot is minted at 1 minor unit. `paid_amount_minor` still records 0.
+  const faceMinor = Math.max(1, paidAmountMinor)
   const pilot = flag('--pilot')
   // Supplied = this is a RENEWAL or a re-issue to a replacement key. Omitted = a
   // new customer. Getting this wrong is silent: a renewal with a fresh id mints
@@ -729,13 +732,19 @@ async function main() {
     process.exitCode = 1
     return
   }
-  const created = await mintLicence(seller, { paidAmountMinor, paidCurrency, term, metadata, days })
+  const created = await mintLicence(seller, { paidAmountMinor: faceMinor, paidCurrency, term, metadata, days })
   console.log(`\nminted ${created.voucher_id}, waiting for settlement…`)
 
   const ready = await waitForToken(seller, created.voucher_id)
+  // For verification runs: keep the exact token the customer receives (as e2e/licenceGate does).
+  if (process.env.LICENCE_TOKEN_OUT) writeFileSync(process.env.LICENCE_TOKEN_OUT, `${ready.token}\n`)
   const result = await deliver(seller, ready, customerPubkey)
 
-  const expiry = toEpochSeconds(ready.expires_at)
+  // `expires_at` can still be null on the ISSUED read (see waitForToken); the signed token carries
+  // it regardless. Fall back to the term asked for, so the reminder ledger is never left without one.
+  const expiry =
+    toEpochSeconds(ready.expires_at) ??
+    Math.floor(Date.now() / 1000) + (days ?? TERM_DAYS[term]) * 86_400
   console.log(
     `delivered ${String(result.event_id ?? result.eventId ?? '(printed)').slice(0, 12)}…  ` +
       `expires ${expiry ? new Date(expiry * 1000).toISOString().slice(0, 10) : 'NEVER — a licence with no expiry grants NOTHING'}`,
