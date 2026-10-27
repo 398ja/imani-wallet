@@ -106,6 +106,9 @@ services:
   imani-vault-jpa:
     image: ${VAULT_JPA_IMAGE:-docker.398ja.xyz/staging/cashu-vault-jpa:latest}
     environment:
+      # Bearer token required on /vault/** by current cashu-vault-jpa (audit C-2); it refuses to
+      # start without one. Local value in imani-deploy/.env.local; the mint presents the same.
+      VAULT_API_TOKEN: "${VAULT_API_TOKEN:?set VAULT_API_TOKEN in imani-deploy/.env.local}"
       # A vault at 0.11.1 runs migration V3, which DROPS t_key.private_key and
       # moves key material to HashiCorp Vault — the migration the block above
       # describes.
@@ -182,6 +185,8 @@ services:
       # unset means 401 UNKNOWN_SERVICE, not a bypass. Same secret as
       # CUSTOMER_WALLET_SVC_CRED_MERCHANT_PORTAL below.
       CUSTOMER_WALLET_SERVICE_TOKEN: "dev-merchant-portal-token-local-only"
+      # imani-security >= 0.2.0 refuses to boot without it (SEC-02); the wallet dev origin.
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
 
   # Two changes:
   #
@@ -425,6 +430,10 @@ services:
       # server, which proxies /api with the browser's Host (vite.config.ts, changeOrigin false).
       GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
       GATEWAY_CORE_CORS_ADDITIONAL_ORIGINS: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      # gateway-customer calls /internal/v1 (merchant standing on receive, incoming
+      # notifications) with GATEWAY_CUSTOMER_SERVICE_TOKEN. Without this gateway-core answers
+      # 401 internal_auth_unknown_service and the customer's receive fails with 503.
+      GATEWAY_CORE_SVC_CRED_CUSTOMER_WALLET: "dev-customer-notify-token-local-only"
       GATEWAY_DEV_MODE: "false"
       # Web Push, so /api/v1/push/vapid-key answers with a key instead of 503.
       #
@@ -541,6 +550,8 @@ services:
   imani-mint-rest:
     image: ${MINT_REST_IMAGE:-docker.398ja.xyz/imani-mint-rest:latest}
     environment:
+      # Presented by VaultClient on every vault call (audit C-2); must match the vault's.
+      VAULT_API_TOKEN: "${VAULT_API_TOKEN:?set VAULT_API_TOKEN in imani-deploy/.env.local}"
       # The MINT bundles cashu-vault-hashi and resolves key material itself:
       # imani-vault-jpa serves the row (privateKey null, vaultPath set) and the
       # mint reads the secret at that path. So these belong here, not only on
@@ -628,6 +639,17 @@ services:
       # current ip and deploy/up.sh resolves it dynamically.
       - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     environment:
+      # Seals the wallet's proofs and pending voucher recipes; current builds refuse to start
+      # without it. Losing it locks the wallet database (that is what happened to the old one,
+      # backed up in ~/imani-backups). Local value in imani-deploy/.env.local.
+      WALLET_PASSPHRASE: "${WALLET_PASSPHRASE:?set WALLET_PASSPHRASE in imani-deploy/.env.local}"
+      # wallet-lib >= 0.3 validates every mint URL (MintUrlValidator) and fails closed WITHOUT a
+      # log line when plaintext http or an internal address is involved: finalize then throws
+      # "Wallet request validation failed" and the voucher sits PENDING forever. The local mint
+      # is plaintext on a private Docker address, so allow exactly that host. Local stack only.
+      WALLET_MINT_ALLOWLIST: "127.0.0.1.mint"
+      JAVA_TOOL_OPTIONS: "-Dwallet.mint.allowPlaintextHttp=true -Dwallet.mint.allowInternalAddresses=true"
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
       # See the gateway-core note above.
       GATEWAY_DEV_MODE: "false"
       # Where to reach gateway-core for the calls this tier delegates rather
