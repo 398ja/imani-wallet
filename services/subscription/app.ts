@@ -287,16 +287,24 @@ export function createApp(deps: AppDeps) {
     const priceId = deps.config.prices[`${tier}:${term}`]
     if (!priceId) return json(400, { error: `no ${term} price for the ${tier} plan` })
     const existing = (await deps.ledger.forStall(pubkey)).find((r) => r.stripeCustomerId)
-    const session = await deps.stripe.createCheckout({
-      priceId,
-      stallPubkey: pubkey,
-      tier,
-      term,
-      successUrl: `${deps.config.publicOrigin}/done?session={CHECKOUT_SESSION_ID}`,
-      cancelUrl: `${deps.config.publicOrigin}/plans`,
-      automaticTax: deps.config.automaticTax,
-      customerId: existing?.stripeCustomerId,
-    })
+    let session: { url: string }
+    try {
+      session = await deps.stripe.createCheckout({
+        priceId,
+        stallPubkey: pubkey,
+        tier,
+        term,
+        successUrl: `${deps.config.publicOrigin}/done?session={CHECKOUT_SESSION_ID}`,
+        cancelUrl: `${deps.config.publicOrigin}/plans`,
+        automaticTax: deps.config.automaticTax,
+        customerId: existing?.stripeCustomerId,
+      })
+    } catch (error) {
+      // A 502 with a sentence, not a bare 500: "checkout is unavailable" is something the stall can
+      // act on (try later), and the cause is logged for us.
+      log({ event: 'checkout_failed', tier, term, error: String((error as Error).message ?? error) })
+      return json(502, { error: 'Checkout is unavailable right now. Please try again in a few minutes.' })
+    }
     return json(200, { url: session.url })
   }
 

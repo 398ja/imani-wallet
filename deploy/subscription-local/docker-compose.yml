@@ -1,0 +1,37 @@
+# subscription.imani.casa, locally, against REAL Stripe test mode and the staging gateway.
+#
+#   cd deploy/subscription-local
+#   ./up.sh            # builds the image, writes .env from imani-deploy/.env.staging, starts both
+#   open http://localhost:18910
+#
+# - `subscription`: the site and service (services/subscription/Dockerfile).
+# - `stripe`: the Stripe CLI, forwarding the test account's webhooks to the service, so a real
+#   test-card payment in Checkout triggers a real `invoice.paid`.
+# Licences are minted and delivered by STAGING gateway-customer, as the staging seller, so a stall
+# that exists on wallet.staging.398ja.xyz receives the plan in its wallet.
+services:
+  subscription:
+    image: imani-subscription:local
+    build:
+      context: ../..
+      dockerfile: services/subscription/Dockerfile
+    ports: ["18910:8090"]
+    env_file: .env
+    environment:
+      SUBSCRIPTION_PUBLIC_ORIGIN: http://localhost:18910
+    volumes: ["ledger:/data"]
+    restart: unless-stopped
+
+  stripe:
+    image: stripe/stripe-cli:latest
+    command:
+      - listen
+      - --api-key=${STRIPE_SECRET_KEY}
+      - --forward-to=http://subscription:8090/v1/stripe/webhook
+      - --events=invoice.paid,customer.subscription.updated,customer.subscription.deleted
+    env_file: .env
+    depends_on: [subscription]
+    restart: unless-stopped
+
+volumes:
+  ledger:
