@@ -289,6 +289,16 @@ services:
     networks:
       - imani-internal
     environment:
+      # TrustedIssuerKeysGuard refuses to boot without the voucher issuer key(s) it trusts.
+      # Local-only key, generated into imani-deploy/.env.local (gitignored).
+      GATEWAY_FULFILMENT_TRUSTED_ISSUER_PUBKEYS: "${VOUCHER_ISSUER_PUBKEYS:?set VOUCHER_ISSUER_PUBKEYS in imani-deploy/.env.local}"
+      # Refuses the shipped default outside a dev profile. Local value in imani-deploy/.env.local.
+      GATEWAY_API_KEY_MASTER_KEY: "${ACCOUNT_MASTER_KEY:?set ACCOUNT_MASTER_KEY in imani-deploy/.env.local}"
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      # TrustedMintUrlsGuard: the mint this gateway's coupons are stamped with (as gateway-core).
+      GATEWAY_WALLET_MINT_PUBLIC_URL: "${MINT_URL:-http://127.0.0.1.mint:7777}"
+      # Exact-origin CORS since gateway-core 0.3x: the wallet dev server is not a production origin.
+      GATEWAY_CORE_CORS_ADDITIONAL_ORIGINS: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
       SPRING_DATASOURCE_URL: jdbc:postgresql://imani-gateway-db:5432/imani_core
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres
@@ -409,6 +419,12 @@ services:
       # current ip and deploy/up.sh resolves it dynamically.
       - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
     environment:
+      # Same local voucher issuer key as account-app (TrustedIssuerKeysGuard).
+      GATEWAY_FULFILMENT_TRUSTED_ISSUER_PUBKEYS: "${VOUCHER_ISSUER_PUBKEYS:?set VOUCHER_ISSUER_PUBKEYS in imani-deploy/.env.local}"
+      # imani-security >= 0.2.0 binds NIP-98 `u` to this origin. Locally that is the wallet dev
+      # server, which proxies /api with the browser's Host (vite.config.ts, changeOrigin false).
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      GATEWAY_CORE_CORS_ADDITIONAL_ORIGINS: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
       GATEWAY_DEV_MODE: "false"
       # Web Push, so /api/v1/push/vapid-key answers with a key instead of 503.
       #
@@ -676,5 +692,11 @@ services:
 # Declared here because the service that uses it is declared here. Named rather
 # than a bind mount so blobs survive `up.sh down` without leaving a
 # root-owned directory in the repo.
+
+  # imani-security >= 0.2.0 refuses to boot without the origin NIP-98 `u` tags are bound to.
+  # The wallet calls merchant-service through the dev server, so that origin.
+  merchant-service:
+    environment:
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
 volumes:
   blossom-data:
