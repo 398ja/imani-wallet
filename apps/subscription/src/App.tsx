@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { LogOut } from 'lucide-react'
 
+import { IdentityInline } from '@wallet/components/ui/IdentityInline'
 import { Centered } from '@wallet/components/ui/layout'
 import { api, type Me } from './lib/api'
-import { npubOf, type Signer } from './lib/signer'
+import { type Signer } from './lib/signer'
 import { PlansPage } from './pages/PlansPage'
 import { SignInPage } from './pages/SignInPage'
 import { AccountPage } from './pages/AccountPage'
@@ -58,8 +59,8 @@ export function App() {
         </Link>
         {signer ? (
           <div className="flex items-center gap-3 text-sm text-mono-500">
-            <Link to="/account" className="pressable max-w-[10rem] truncate" title={npubOf(signer.pubkey)}>
-              {npubOf(signer.pubkey).slice(0, 12)}…
+            <Link to="/account" className="pressable min-w-0 max-w-[14rem]" aria-label="My plan">
+              <IdentityInline pubkey={signer.pubkey} size="sm" fallbackName={signer.name ?? undefined} linkToProfile={false} />
             </Link>
             {me?.admin ? (
               <Link to="/admin" className="pressable">

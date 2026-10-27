@@ -191,7 +191,7 @@ async function main() {
     const signIn = await page.locator('main').innerText()
     check(
       'the key the wallet left in this browser is offered, by stall name',
-      /Test Stall, from your wallet on this device/.test(signIn),
+      /From your wallet on this device/i.test(signIn) && /Test Stall/.test(signIn),
       signIn.slice(0, 300),
     )
     await page.getByLabel('Wallet passphrase').fill('wrong passphrase')
@@ -203,7 +203,7 @@ async function main() {
     await page.waitForURL((u) => u.pathname === '/subscription/plans')
     await page.waitForLoadState('networkidle')
     const head = await page.locator('header').first().innerText()
-    check('signed in as the stall', head.includes(nip19.npubEncode(stall).slice(0, 12)), head)
+    check('signed in as the stall, shown by name not npub', head.includes('Test Stall') && !head.includes('npub1'), head)
 
     await page.getByRole('button', { name: 'Choose Basic' }).click()
     await page.waitForURL(/\/done/, { timeout: 15_000 })
@@ -265,7 +265,7 @@ async function main() {
       mimeType: 'application/json',
       buffer: Buffer.from(backupFile),
     })
-    await page.getByText('Test Stall, from your backup file').waitFor()
+    await page.getByText('From your backup file', { exact: true }).waitFor()
     await page.getByLabel('Wallet passphrase').fill(PASSPHRASE)
     await page.getByRole('button', { name: 'Continue' }).click()
     await page.waitForURL((u) => u.pathname === '/subscription/account')

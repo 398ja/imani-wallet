@@ -13,7 +13,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY tailwind.config.js tsconfig*.json ./
 COPY src ./src
-COPY packages/licence ./packages/licence
+COPY shared ./shared
+# All workspace packages: the site uses wallet components (IdentityInline) that reach several.
+COPY packages ./packages
 COPY apps/subscription ./apps/subscription
 # Baked into the site bundle. The Google client id lets a stall open its wallet key from Drive.
 # Its OAuth client must list the origin the site is served from as an authorised JS origin.

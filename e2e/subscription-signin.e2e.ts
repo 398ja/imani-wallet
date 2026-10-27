@@ -12,7 +12,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chromium, type Page } from 'playwright'
-import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
+import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 
 import { walletBackupFile, walletKeyEnvelope, walletLocalStorage } from './walletKeyFixture.ts'
 
@@ -22,7 +22,27 @@ const BASE = `${ORIGIN}/subscription`
 const PASSPHRASE = 'correct horse battery'
 const sk = generateSecretKey()
 const stall = getPublicKey(sk)
-const npub12 = nip19.npubEncode(stall).slice(0, 12)
+const npub = nip19.npubEncode(stall)
+const PROFILE = { name: 'Mama Njeri', nip05: 'njeri@imani.casa', picture: 'https://example.invalid/njeri.png' }
+
+/** The gateway's profile read, answered with the stall's signed kind-0, as the wallet sees it. */
+async function stubProfile(page: Page) {
+  const kind0 = finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify(PROFILE) }, sk)
+  await page.route('**/api/v1/nostr/query', async (r) => {
+    const body = JSON.parse(r.request().postData() ?? '{}') as { kinds?: number[]; authors?: string[] }
+    const hit = body.kinds?.includes(0) && (!body.authors || body.authors.includes(stall))
+    await r.fulfill({ json: { events: hit ? [kind0] : [] } })
+  })
+  await page.route('https://example.invalid/**', (r) => r.fulfill({ status: 404 }))
+}
+
+/** The header and sign-in show the wallet's identity row: name and NIP-05, never the npub. */
+async function showsProfile(page: Page, where: 'header' | 'main') {
+  const el = page.locator(where).first()
+  await el.getByText(PROFILE.name).first().waitFor({ timeout: 10_000 }).catch(() => {})
+  const t = await el.innerText()
+  return { ok: t.includes(PROFILE.name) && /@njeri/.test(t) && !t.includes('npub1'), t }
+}
 
 const results: Array<[string, boolean]> = []
 const check = (name: string, ok: boolean, detail = '') => {
@@ -96,7 +116,11 @@ async function main() {
   const fresh = async () => {
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
-    page.on('pageerror', (e) => errors.push(e.message))
+    await stubProfile(page)
+    page.on('pageerror', (e) => {
+      errors.push(e.message)
+      console.log(`  page error: ${e.message.slice(0, 300)}`)
+    })
     return { ctx, page }
   }
 
@@ -125,9 +149,11 @@ async function main() {
       await page.evaluate((items) => {
         for (const [k, v] of Object.entries(items)) localStorage.setItem(k, v)
       }, walletLocalStorage(stall, envelope, 'Test Stall'))
-      const before = await page.evaluate(() => JSON.stringify(localStorage))
+      const before = await page.evaluate(() => localStorage.getItem('imani-wallet-key'))
       await signInPage(page)
-      check('browser key: offered by name', /Test Stall, from your wallet on this device/.test(await mainText(page)))
+      const shown = await showsProfile(page, 'main')
+      check('browser key: shows the stall profile (name, NIP-05), no npub', shown.ok, shown.t.slice(0, 200))
+      check('browser key: says where the key came from', /From your wallet on this device/i.test(shown.t))
       await page.getByLabel('Wallet passphrase').fill('nope')
       await page.getByRole('button', { name: 'Continue' }).click()
       await page.getByText('That passphrase does not open this key.').waitFor()
@@ -136,9 +162,11 @@ async function main() {
       await page.getByRole('button', { name: 'Continue' }).click()
       await page.waitForURL((u) => u.pathname === '/subscription/account')
       await page.getByText(/plan/i).first().waitFor()
-      check('browser key: signed in as the stall, sent to ?next', (await header(page)).includes(npub12))
-      const after = await page.evaluate(() => JSON.stringify(localStorage))
-      check("browser key: the wallet's localStorage is left untouched", before === after)
+      const head = await showsProfile(page, 'header')
+      check('browser key: signed in, header shows the profile not the npub, sent to ?next', head.ok, head.t)
+      // The key the wallet wrote is unchanged (the shared profile cache may add its usual entries).
+      const after = await page.evaluate(() => localStorage.getItem('imani-wallet-key'))
+      check("browser key: the wallet's stored key is left untouched", before === after)
       check('signed-in API call accepted (NIP-98 under the mount)', !/Sign in/.test(await header(page)))
       await page.getByRole('button', { name: 'Sign out' }).click()
       check('sign out forgets the key', /Sign in/.test(await header(page)))
@@ -151,14 +179,14 @@ async function main() {
       const seen = await stubGoogle(page, { file: backup, grant: true })
       await signInPage(page)
       await page.getByRole('button', { name: 'Use my backup from Google Drive' }).click()
-      await page.getByText('Test Stall, from Google Drive').waitFor()
+      await page.getByText('From Google Drive', { exact: true }).waitFor()
       check('Drive: asks only for the app-data scope', (await page.evaluate(() => (window as unknown as { __gisScope: string }).__gisScope)) === 'https://www.googleapis.com/auth/drive.appdata')
       check('Drive: reads with the granted token', seen.auth === 'Bearer tok-e2e', seen.auth)
       await page.getByLabel('Wallet passphrase').fill(PASSPHRASE)
       await page.getByRole('button', { name: 'Continue' }).click()
       await page.waitForURL((u) => u.pathname === '/subscription/account')
-      check('Drive: signed in as the stall', (await header(page)).includes(npub12))
-      check('Drive: nothing written to this browser', (await page.evaluate(() => localStorage.length)) === 0)
+      check('Drive: signed in as the stall', (await showsProfile(page, 'header')).ok)
+      check('Drive: no key written to this browser', (await page.evaluate(() => localStorage.getItem('imani-wallet-key'))) === null)
       await ctx.close()
     }
     for (const [name, drive, msg] of [
@@ -181,11 +209,11 @@ async function main() {
       const { ctx, page } = await fresh()
       await signInPage(page)
       await upload(page, backup)
-      await page.getByText('Test Stall, from your backup file').waitFor()
+      await page.getByText('From your backup file', { exact: true }).waitFor()
       await page.getByLabel('Wallet passphrase').fill(PASSPHRASE)
       await page.getByRole('button', { name: 'Continue' }).click()
       await page.waitForURL((u) => u.pathname === '/subscription/account')
-      check('file: signed in as the stall', (await header(page)).includes(npub12))
+      check('file: signed in as the stall', (await showsProfile(page, 'header')).ok)
       await ctx.close()
     }
     const other = getPublicKey(generateSecretKey())

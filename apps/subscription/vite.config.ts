@@ -13,6 +13,14 @@ import tailwind from 'tailwindcss'
 import autoprefixer from 'autoprefixer'
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
+const imani = (name: string) => r(`../../packages/${name}/src/index.ts`)
+// Same workspace packages the wallet aliases (vite.config.ts at the root): the wallet components
+// used here (IdentityInline, Avatar) reach them through src/lib.
+const WORKSPACE = [
+  'wallet-storage', 'nostr-vouchers', 'nostr-transactions', 'wallet-balance', 'voucher-send', 'profile-service',
+  'blossom-upload', 'gateway-client', 'dm-poll', 'money', 'wallet-core', 'licence', 'merchant-record', 'redemption',
+  'reports', 'payment-requests',
+]
 
 export default defineConfig({
   root: r('.'),
@@ -25,8 +33,10 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom'],
     alias: {
-      '@imani/licence': r('../../packages/licence/src/index.ts'),
+      ...Object.fromEntries(WORKSPACE.map((n) => [`@imani/${n}`, imani(n)])),
+      'imani-qr': imani('imani-qr'),
       '@wallet': r('../../src'),
+      '@': r('../../src'),
     },
   },
   server: {
