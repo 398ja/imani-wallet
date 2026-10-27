@@ -724,7 +724,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // REACHABILITY (a customer has no stall to run terminals for), same
             // predicate as the row that leads here.
             merchant !== null ? (
-              <SubscriptionPage pubkey={pubkey} />
+              <SubscriptionPage pubkey={pubkey} currency={merchant.issuanceCurrency} />
             ) : (
               <Navigate to="/settings" replace />
             )

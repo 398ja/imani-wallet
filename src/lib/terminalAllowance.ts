@@ -148,7 +148,7 @@ export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDec
         reason: ENROL_REFUSAL.AT_FREE_LIMIT,
         message:
           `You are using your free till. Running more than ${FREE_TERMINALS} at once ` +
-          'needs a subscription — get in touch and we will set one up. ' +
+          'needs a subscription. Upgrade at subscription.imani.casa and it arrives on this device on its own. ' +
           'This device is not affected and keeps working as it does now.',
       }
     : {
@@ -156,7 +156,7 @@ export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDec
         reason: ENROL_REFUSAL.LAPSED,
         message:
           'Your subscription has ended, so you cannot add another till. ' +
-          'Renewing restores your tills straight away — get in touch and we will sort it out. ' +
+          'Renewing at subscription.imani.casa restores your tills straight away. ' +
           'Your stall keeps trading either way.',
       }
 }

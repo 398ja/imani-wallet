@@ -89,7 +89,7 @@ describe('a stall with no subscription', () => {
       // and a refusal without the second is a dead end.
       expect(decision.message).toContain('free till')
       expect(decision.message).toContain('subscription')
-      expect(decision.message).toContain('get in touch')
+      expect(decision.message).toContain('subscription.imani.casa')
     }
   })
 
