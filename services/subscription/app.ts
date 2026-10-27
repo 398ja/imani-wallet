@@ -144,14 +144,19 @@ export function createApp(deps: AppDeps) {
   async function onInvoicePaid(invoice: Record<string, unknown>): Promise<Response> {
     const line = ((invoice.lines as { data?: Array<Record<string, unknown>> })?.data ?? [])[0] ?? {}
     const period = (line.period ?? {}) as { start?: number; end?: number }
+    // Stripe moved these in API 2025-03-31 (basil): `subscription` and `subscription_details` now live
+    // under `parent.subscription_details`. Read both, so a pinned or upgraded API version both work.
+    const parentDetails = ((invoice.parent as { subscription_details?: Record<string, unknown> })?.subscription_details ??
+      {}) as { subscription?: string; metadata?: Record<string, string> }
     const meta = {
+      ...(parentDetails.metadata ?? {}),
       ...((invoice.subscription_details as { metadata?: Record<string, string> })?.metadata ?? {}),
       ...((line.metadata as Record<string, string>) ?? {}),
     }
     const stall = String(meta.stall_pubkey ?? '').toLowerCase()
     const tier = String(meta.tier ?? '')
     const term = String(meta.term ?? '') as 'monthly' | 'annual'
-    const stripeSub = String(invoice.subscription ?? '')
+    const stripeSub = String(invoice.subscription ?? parentDetails.subscription ?? '')
     if (!HEX64.test(stall) || !catalog.tiers[tier] || !TERM_SECONDS[term] || !stripeSub) {
       log({ event: 'invoice_unattributable', invoice: invoice.id })
       // 200, not 4xx: Stripe would retry forever an event that will never carry what is missing.
