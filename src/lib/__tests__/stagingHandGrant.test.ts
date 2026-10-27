@@ -16,7 +16,7 @@ import { BUNDLED_CATALOG, entitlementOf, maySell, verifyLicence } from '@imani/l
 import { licenceFromToken, licenceSignatureVerifier } from '../licences'
 import { parseVoucherToken } from '../voucherToken'
 
-const TOKEN = readFileSync(join(__dirname, 'fixtures/staging-hand-grant.token'), 'utf8').trim()
+const TOKEN = readFileSync(join(__dirname, 'fixtures/staging-hand-grant.staging-token'), 'utf8').trim()
 const CUSTOMER = readFileSync(join(__dirname, 'fixtures/staging-hand-grant.customer'), 'utf8').trim()
 const ISSUER = parseVoucherToken(TOKEN).voucher.issuerPublicKey
 const licence = licenceFromToken(TOKEN)!

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../node_modules/.tmp/tsconfig.subscription.tsbuildinfo",
+    "baseUrl": ".",
+    "paths": {
+      "@wallet/*": ["../../src/*"],
+      "@imani/licence": ["../../packages/licence/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

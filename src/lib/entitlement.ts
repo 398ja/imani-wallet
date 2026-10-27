@@ -16,7 +16,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { hexToBytes } from '@noble/hashes/utils'
 import type { TransactionRow } from '@imani/wallet-storage'
 
-import { licenceIssuerPubkey, type LicenceStatus } from './licenceStatus'
+import { licenceSellerPubkey, type LicenceStatus } from './licenceStatus'
 
 /**
  * What this stall may do, in tiers and limits (#407): the join between the licence status, the
@@ -73,11 +73,14 @@ export function adoptCatalog(signed: SignedCatalog): boolean {
 }
 
 /**
- * BIP-340 over sha256 of the exact body bytes, by OUR issuer key, the same build-time key a licence
- * must be signed by (see `licenceIssuerPubkey`). No key configured means no catalog verifies, and the
- * device stays on the bundled one: the safe direction.
+ * BIP-340 over sha256 of the exact body bytes, by the LICENCE SELLER's key (`VITE_LICENCE_SELLER_PUBKEY`),
+ * the key subscription.imani.casa signs with. Not the gateway issuer key: that key signs every
+ * stall's coupons, so anyone able to mint through the gateway could not sign a catalog with it, but
+ * nor do we hold it to sign one. No seller configured means no catalog verifies, and the device
+ * stays on the bundled one: the safe direction.
  */
-export function catalogSignatureValid(signed: SignedCatalog, issuerPublicKey = licenceIssuerPubkey()): boolean {
+export function catalogSignatureValid(signed: SignedCatalog, sellerPublicKey = licenceSellerPubkey()): boolean {
+  const issuerPublicKey = sellerPublicKey
   if (!/^[0-9a-f]{64}$/i.test(issuerPublicKey) || !/^[0-9a-f]{128}$/i.test(signed.signature)) return false
   try {
     return schnorr.verify(
@@ -96,6 +99,23 @@ export function forgetCatalog(): void {
     localStorage.removeItem(CATALOG_KEY)
   } catch {
     // nothing held
+  }
+}
+
+/**
+ * Fetch the catalog subscription.imani.casa publishes (`GET /v1/catalog`) and adopt it if it is
+ * ours and newer. Best effort and silent: offline, or a bad answer, leaves the one already held.
+ * This is how a limit changes without an app release (#407 Q2).
+ */
+export async function refreshCatalog(fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const r = await fetchImpl(`${SUBSCRIPTION_SITE_URL.replace(/\/+$/, '')}/v1/catalog`, { cache: 'no-cache' })
+    if (!r.ok) return false
+    const signed = (await r.json()) as SignedCatalog
+    if (typeof signed?.body !== 'string' || typeof signed?.signature !== 'string') return false
+    return adoptCatalog(signed)
+  } catch {
+    return false
   }
 }
 
