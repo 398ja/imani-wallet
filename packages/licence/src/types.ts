@@ -46,7 +46,41 @@ export interface LicenceVoucher {
   features?: readonly string[]
   /** Marks a pilot, so support and revenue are not guesses. */
   pilot?: boolean
+  /** The tier this licence was sold as (`basic`, `pro`, or `custom` for a hand grant). Informational. */
+  tier?: string
+  /**
+   * Unix SECONDS. Before this the licence grants nothing (`NOT_YET_VALID`). Absent on licences sold
+   * before #407, which are valid from issue.
+   */
+  validFrom?: number
+  /** The limits this licence lifts the stall to. Signed, so a hand grant is just different numbers. */
+  limits?: LicenceLimits
+  /** `subscription` (bought) or `custom` (issued by hand, #407 §7). */
+  grantKind?: string
 }
+
+/**
+ * What a licence lifts a stall to (#407).
+ *
+ * `null` means UNLIMITED, and absent means "this licence says nothing about it", so the stall keeps
+ * whatever else grants it. The two must not be confused: a Pro licence writes `null` to remove the
+ * cap, while a terminals-only licence from before #407 writes nothing and must not remove one.
+ */
+export interface LicenceLimits {
+  /**
+   * Sales allowed, in MINOR units of the stall's currency, per period. A map of currency to amount,
+   * so limits never need FX at sale time (#407 Q5).
+   */
+  sales?: { period: SalesPeriod; amounts: Readonly<Record<string, number>> } | null
+  /** Enrolled terminals allowed, beyond nothing: the owner's device is counted as one. */
+  terminals?: number | null
+}
+
+/**
+ * `lifetime` never resets (the free tier, #407 Q1). `month` resets at 00:00 UTC on the 1st (Q6).
+ * `window` is the licence's own `validFrom` to `expiresAt`, which is what a hand grant uses.
+ */
+export type SalesPeriod = 'lifetime' | 'month' | 'window'
 
 /** What a verified licence confers. */
 export interface LicenceGrant {
@@ -55,6 +89,10 @@ export interface LicenceGrant {
   /** Unix SECONDS, so a caller can show "until when" without re-deriving it. */
   expiresAt: number
   pilot: boolean
+  /** Carried so the grace window keeps serving the same limits the verification conferred. */
+  limits?: LicenceLimits
+  tier?: string
+  validFrom?: number
 }
 
 /**
@@ -78,6 +116,8 @@ export const DENIAL_REASONS = {
   UNLOCKED: 'unlocked',
   /** Past its expiry, decided from the signed field and the caller's clock. */
   EXPIRED: 'expired',
+  /** Before its signed `valid_from`. An answer, like an expiry, so no grace window applies. */
+  NOT_YET_VALID: 'not-yet-valid',
   /** No expiry field. Refused rather than treated as eternal. */
   NO_EXPIRY: 'no-expiry',
   /** Verified, and confers nothing. A licence for no features is not a licence. */
