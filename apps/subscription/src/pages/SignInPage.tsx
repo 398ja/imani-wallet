@@ -3,10 +3,15 @@ import { useSearchParams } from 'react-router-dom'
 import { CloudDownload, FileText, KeyRound } from 'lucide-react'
 
 import { Button } from '@wallet/components/ui/Button'
+import { IdentityInline } from '@wallet/components/ui/IdentityInline'
 import { Input } from '@wallet/components/ui/Input'
 import { Alert, Panel, Screen, PageHeader } from '@wallet/components/ui/layout'
+import { nip19 } from 'nostr-tools'
 import { signerFromKey, type Signer } from '../lib/signer'
 import { keyFromBackup, keyFromDrive, keyInThisBrowser, openKey, type FoundKey } from '../lib/walletKey'
+
+const sourceLabel = (s: FoundKey['source']) =>
+  s === 'browser' ? 'From your wallet on this device' : s === 'drive' ? 'From Google Drive' : 'From your backup file'
 
 /**
  * Sign in with the stall's wallet key.
@@ -69,15 +74,25 @@ export function SignInPage({ onSignedIn }: { onSignedIn: (s: Signer, next: strin
 
       {found ? (
         <Panel className="mb-4 p-4">
-          <div className="mb-3 flex items-start gap-3">
-            <KeyRound className="mt-0.5 h-5 w-5 shrink-0 text-mono-500" aria-hidden />
-            <div className="min-w-0 text-sm">
-              <p className="font-medium text-mono-900 dark:text-mono-50">
-                {found.name ?? 'Your stall'}
-                {found.source === 'browser' ? ', from your wallet on this device' : found.source === 'drive' ? ', from Google Drive' : ', from your backup file'}
-              </p>
-              {found.npub ? <p className="truncate text-mono-500">{found.npub}</p> : null}
-            </div>
+          <div className="mb-3">
+            {/* The wallet's own identity row (avatar, name, NIP-05), not a raw npub. */}
+            {found.npub ? (
+              <IdentityInline
+                pubkey={nip19.decode(found.npub).data as string}
+                label={sourceLabel(found.source)}
+                size="md"
+                fallbackName={found.name ?? undefined}
+                linkToProfile={false}
+              />
+            ) : (
+              <div className="flex items-start gap-3">
+                <KeyRound className="mt-0.5 h-5 w-5 shrink-0 text-mono-500" aria-hidden />
+                <p className="text-sm font-medium text-mono-900 dark:text-mono-50">
+                  {found.name ?? 'Your stall'}
+                  <span className="block font-normal text-mono-500">{sourceLabel(found.source)}</span>
+                </p>
+              </div>
+            )}
           </div>
           <form
             onSubmit={(e) => {
