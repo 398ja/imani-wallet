@@ -6,6 +6,7 @@ import {
   type LastVerification,
   type LicenceCheck,
   type LicenceDecision,
+  type LicenceGrant,
   type LicenceVoucher,
 } from '@imani/licence'
 import type { VoucherRow } from '@imani/wallet-storage'
@@ -131,6 +132,11 @@ export function readLastVerification(pubkey: string): LastVerification | null {
         subscriptionId: grant.subscriptionId,
         expiresAt: grant.expiresAt,
         pilot: grant.pilot === true,
+        // Kept, so the window keeps serving the LIMITS the verification conferred (#407). Dropping
+        // them would put a Pro stall back on the free sales limit the moment its relay went quiet.
+        ...(grant.limits && typeof grant.limits === 'object' ? { limits: grant.limits } : {}),
+        ...(typeof grant.tier === 'string' ? { tier: grant.tier } : {}),
+        ...(typeof grant.validFrom === 'number' ? { validFrom: grant.validFrom } : {}),
       },
     }
   } catch {
@@ -175,6 +181,12 @@ export interface LicenceStatus {
   licence: LicenceVoucher | null
   /** When the check ran, so a screen can say what it is describing. */
   checkedAt: number
+  /**
+   * EVERY licence in force, not only the one `decision` describes (#407 §3). A stall may hold a
+   * subscription and hand grants at once, and its entitlement is the best of all of them. Each is
+   * verified on its own; under the grace window this is the grant the window carries.
+   */
+  grants?: LicenceGrant[]
 }
 
 export interface LicenceStatusOptions {
@@ -225,17 +237,20 @@ export async function licenceStatus(options: LicenceStatusOptions): Promise<Lice
     held = heldLicences(await load(), (l) => !sellerPublicKey || sameHex(l.issuerId, sellerPublicKey))
   } catch (error) {
     // Could not look. Not "no licence" — see above.
+    const decision = decideWithGrace({
+      check: {
+        status: 'impossible',
+        detail: `the wallet could not be read (${describe(error)})`,
+      },
+      lastVerification: readLastVerification(options.pubkey),
+      now,
+    })
     return {
-      decision: decideWithGrace({
-        check: {
-          status: 'impossible',
-          detail: `the wallet could not be read (${describe(error)})`,
-        },
-        lastVerification: readLastVerification(options.pubkey),
-        now,
-      }),
+      decision,
       licence: null,
       checkedAt: now,
+      // The window carries the last verified grant, limits included, through the outage.
+      grants: decision.granted ? [decision.grant] : [],
     }
   }
 
@@ -272,13 +287,14 @@ export async function licenceStatus(options: LicenceStatusOptions): Promise<Lice
     }) }
   } else {
     /**
-     * The newest licence per subscription, and if a stall somehow holds two
-     * SUBSCRIPTIONS, the one expiring last. That cannot happen from anything we
-     * sell — one feature, one licence — but a customer could be re-issued onto
-     * a new id by support, and picking the one that grants longest is the
-     * reading that never takes something away from someone who paid.
+     * The licence the DECISION describes: the one that ends last. Hand grants and a subscription
+     * may be held together (#407); every one of them still counts through `grants` below, and this
+     * pick only decides what the status screen explains and what the grace window remembers.
      */
-    const best = held.reduce((a, b) =>
+    const inWindow = held.filter((h) => !(typeof h.licence.validFrom === 'number' && now < h.licence.validFrom))
+    // A renewal delivered early ends LATEST but has not started (#407 §6). Electing it would report
+    // "not yet valid" over a licence that is in force today, so licences already open come first.
+    const best = (inWindow.length > 0 ? inWindow : held).reduce((a, b) =>
       (b.licence.expiresAt ?? -Infinity) > (a.licence.expiresAt ?? -Infinity) ? b : a,
     )
     licence = best.licence
@@ -311,7 +327,22 @@ export async function licenceStatus(options: LicenceStatusOptions): Promise<Lice
     rememberVerification(options.pubkey, { at: now, grant: decision.grant })
   }
 
-  return { decision, licence, checkedAt: now }
+  // Every held licence verified on its own. A refused one simply contributes nothing.
+  const grants: LicenceGrant[] = []
+  for (const h of held) {
+    const verdict = verifyLicence(h.licence, {
+      issuerPublicKey,
+      now,
+      presenter: options.pubkey,
+      sellerPublicKey,
+      verifySignature: licenceSignatureVerifier(h.row),
+    })
+    if (verdict.granted) grants.push(verdict.grant)
+  }
+  // Under grace nothing verified just now, and the window's carried grant is what is in force.
+  if (decision.granted && decision.source === 'grace' && grants.length === 0) grants.push(decision.grant)
+
+  return { decision, licence, checkedAt: now, grants }
 }
 
 function describe(error: unknown): string {
@@ -364,6 +395,8 @@ export function explain(status: LicenceStatus): string {
       return 'This licence is not tied to a key, so it cannot be used by anyone.'
     case 'expired':
       return 'This subscription has ended. Renewing restores it immediately.'
+    case 'not-yet-valid':
+      return 'This subscription has arrived and starts on its start date. Nothing to do until then.'
     case 'no-expiry':
       return 'This licence carries no end date, which is not something we issue.'
     case 'no-features':

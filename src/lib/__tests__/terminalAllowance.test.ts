@@ -277,3 +277,28 @@ describe('a count that makes no sense', () => {
     expect(mayEnrol(status, NaN).allowed).toBe(false)
   })
 })
+
+describe('tiers (#407)', () => {
+  const tiered = (tier: string) => ({
+    decision: { granted: true as const, grant: { features: ['terminals'], expiresAt: 4_000_000_000, pilot: false, tier }, source: 'verified' as const },
+    licence: null,
+    checkedAt: 1_800_000_000,
+    grants: [{ features: ['terminals'], expiresAt: 4_000_000_000, pilot: false, tier }],
+  })
+
+  it('lets a Basic stall enrol up to three, then refuses with the tier limit', () => {
+    expect(mayEnrol(tiered('basic'), 2)).toEqual({ allowed: true })
+    expect(mayEnrol(tiered('basic'), 3)).toMatchObject({ allowed: false, reason: ENROL_REFUSAL.AT_TIER_LIMIT })
+    expect(remainingTerminals(tiered('basic'), 1)).toBe(2)
+  })
+
+  it('never caps a Pro stall', () => {
+    expect(mayEnrol(tiered('pro'), 500)).toEqual({ allowed: true })
+    expect(remainingTerminals(tiered('pro'), 500)).toBe(Infinity)
+  })
+
+  it('keeps the live licence from before tiers unlimited, as it was sold', async () => {
+    const status = await withLicence(EXPIRES_AT - 10 * DAY)
+    expect(mayEnrol(status, 50)).toEqual({ allowed: true })
+  })
+})
