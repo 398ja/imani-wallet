@@ -22,7 +22,6 @@ const BASE = `${ORIGIN}/subscription`
 const PASSPHRASE = 'correct horse battery'
 const sk = generateSecretKey()
 const stall = getPublicKey(sk)
-const npub = nip19.npubEncode(stall)
 const PROFILE = { name: 'Mama Njeri', nip05: 'njeri@imani.casa', picture: 'https://example.invalid/njeri.png' }
 
 /** The gateway's profile read, answered with the stall's signed kind-0, as the wallet sees it. */
