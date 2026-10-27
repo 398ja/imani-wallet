@@ -15,6 +15,10 @@ COPY tailwind.config.js tsconfig*.json ./
 COPY src ./src
 COPY packages/licence ./packages/licence
 COPY apps/subscription ./apps/subscription
+# Baked into the site bundle. The Google client id lets a stall open its wallet key from Drive.
+# Its OAuth client must list the origin the site is served from as an authorised JS origin.
+ARG VITE_GOOGLE_CLIENT_ID=""
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 RUN npx vite build --config apps/subscription/vite.config.ts
 
 # ---- the service

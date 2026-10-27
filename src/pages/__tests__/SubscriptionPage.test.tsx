@@ -112,6 +112,8 @@ function renderPage() {
 beforeEach(() => {
   rows = []
   txRows = []
+  // The screen first asks the subscription site for a newer catalog. No site here: answer at once.
+  vi.stubGlobal('fetch', async () => new Response('{}', { status: 404 }))
   storeThrows = false
   walletListeners = []
   forgetLicenceParses()
@@ -126,6 +128,7 @@ afterEach(() => {
   forgetVerification(CUSTOMER)
   vi.useRealTimers()
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 describe('reaching the screen without a subscription', () => {
@@ -143,10 +146,10 @@ describe('reaching the screen without a subscription', () => {
     renderPage()
 
     await screen.findByText('Not active')
-    // Bought outside the app (#407 §6): a link to the site, not a button that does nothing.
-    const link = screen.getByRole('link', { name: /visit subscription\.imani\.casa/ })
-    expect(link.getAttribute('href')).toBe('https://subscription.imani.casa')
-    expect(screen.getByText(/To upgrade,/)).toBeTruthy()
+    // Bought on the subscription site, on the wallet's own origin, in this tab (#407 §6).
+    const link = screen.getByRole('link', { name: 'Upgrade my plan' })
+    expect(link.getAttribute('href')).toBe(`${window.location.origin}/subscription`)
+    expect(link.getAttribute('target')).toBeNull()
   })
 
   it('refuses a licence that is not ours, however well-formed', async () => {

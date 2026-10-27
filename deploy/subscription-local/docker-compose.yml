@@ -2,7 +2,12 @@
 #
 #   cd deploy/subscription-local
 #   ./up.sh            # builds the image, writes .env from imani-deploy/.env.staging, starts both
-#   open http://localhost:18910
+#   npm run dev        # in the repo root: the wallet on http://localhost:5173
+#   open http://localhost:5173/subscription/
+#
+# The site lives at /subscription on the WALLET's origin, as in production, because it reads the
+# wallet key the wallet keeps in that origin's localStorage. The wallet's Vite dev server proxies
+# /subscription to this container (vite.config.ts), so the browser sees one origin.
 #
 # - `subscription`: the site and service (services/subscription/Dockerfile).
 # - `stripe`: the Stripe CLI, forwarding the test account's webhooks to the service, so a real
@@ -15,10 +20,14 @@ services:
     build:
       context: ../..
       dockerfile: services/subscription/Dockerfile
+      args:
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
     ports: ["18910:8090"]
     env_file: .env
     environment:
-      SUBSCRIPTION_PUBLIC_ORIGIN: http://localhost:18910
+      # The origin the BROWSER is on (the wallet dev server), since NIP-98 signs that URL.
+      SUBSCRIPTION_PUBLIC_ORIGIN: ${SUBSCRIPTION_PUBLIC_ORIGIN:-http://localhost:5173}
+      SUBSCRIPTION_BASE_PATH: /subscription
     volumes: ["ledger:/data"]
     restart: unless-stopped
 
@@ -27,7 +36,7 @@ services:
     command:
       - listen
       - --api-key=${STRIPE_SECRET_KEY}
-      - --forward-to=http://subscription:8090/v1/stripe/webhook
+      - --forward-to=http://subscription:8090/subscription/v1/stripe/webhook
       - --events=invoice.paid,customer.subscription.updated,customer.subscription.deleted
     env_file: .env
     depends_on: [subscription]

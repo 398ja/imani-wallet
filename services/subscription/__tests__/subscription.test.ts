@@ -104,6 +104,7 @@ beforeEach(async () => {
   ledger = new Ledger(join(await mkdtemp(join(tmpdir(), 'sub-')), 'ledger.json'))
   const config: SubscriptionConfig = {
     publicOrigin: ORIGIN,
+    basePath: '',
     walletUrl: WALLET,
     edgeSecret: 'edge',
     internalRelay: 'ws://relay',

@@ -12,6 +12,12 @@
 export interface SubscriptionConfig {
   /** Public origin the browser signs NIP-98 for, e.g. https://subscription.imani.casa. */
   publicOrigin: string
+  /**
+   * Path the site and API are mounted under on that origin, '' or e.g. '/subscription'. Mounted
+   * under the WALLET's origin, the site can read the key the wallet stored (localStorage is per
+   * origin), which is how a stall sent here from the wallet is already signed in.
+   */
+  basePath: string
   /** gateway-customer, for minting (`/api/v1/wallet/vouchers`) and delivery (`/api/v1/dm/tokens/send`). */
   walletUrl: string
   /** The edge secret gateway-customer trusts, as `sell-subscription.mjs` sends it. */
@@ -60,8 +66,12 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): SubscriptionCo
   const origin = need('SUBSCRIPTION_PUBLIC_ORIGIN').replace(/\/+$/, '')
   if (!/^https?:\/\/[^/]+$/.test(origin)) throw new ConfigError('SUBSCRIPTION_PUBLIC_ORIGIN must be an origin')
 
+  const basePath = (env.SUBSCRIPTION_BASE_PATH ?? '').trim().replace(/\/+$/, '')
+  if (basePath && !/^\/[a-z0-9-]+(\/[a-z0-9-]+)*$/.test(basePath)) throw new ConfigError('SUBSCRIPTION_BASE_PATH must look like /subscription')
+
   return {
     publicOrigin: origin,
+    basePath,
     walletUrl: need('SUBSCRIPTION_WALLET_URL').replace(/\/+$/, ''),
     edgeSecret: need('EDGE_SECRET'),
     internalRelay: env.INTERNAL_RELAY_URL?.trim() || 'ws://nostr-relay:7777',

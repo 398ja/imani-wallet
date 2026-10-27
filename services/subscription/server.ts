@@ -48,9 +48,21 @@ async function main() {
     catalogBody: (await readFile(config.catalogPath, 'utf8')).trim(),
   })
   const staticDir = process.env.SUBSCRIPTION_STATIC_DIR?.trim()
+  const base = config.basePath
 
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', 'http://x')
+    const full = new URL(req.url ?? '/', 'http://x')
+    // Mounted under a path (e.g. /subscription on the wallet origin): strip it, so routes and the
+    // NIP-98 check see the same path the app signs relative to (`site()` puts it back).
+    if (base && !(full.pathname === base || full.pathname.startsWith(`${base}/`))) {
+      if (full.pathname === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}')
+        return
+      }
+      res.writeHead(404).end()
+      return
+    }
+    const url = new URL((base ? full.pathname.slice(base.length) || '/' : full.pathname) + full.search, 'http://x')
     if (!url.pathname.startsWith('/v1/') && url.pathname !== '/health' && staticDir) {
       return serveStatic(staticDir, url.pathname, res)
     }

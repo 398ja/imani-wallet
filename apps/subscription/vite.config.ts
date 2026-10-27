@@ -16,6 +16,10 @@ const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
 
 export default defineConfig({
   root: r('.'),
+  // Mounted at /subscription on the WALLET's origin, so the site can read the key the wallet keeps
+  // in localStorage (per origin). Override with SUBSCRIPTION_BASE=/ for a standalone origin.
+  base: process.env.SUBSCRIPTION_BASE ?? '/subscription/',
+  envDir: r('../..'),
   plugins: [react()],
   css: { postcss: { plugins: [tailwind({ config: r('./tailwind.config.js') }), autoprefixer()] } },
   resolve: {
@@ -27,7 +31,7 @@ export default defineConfig({
   },
   server: {
     port: 5180,
-    proxy: { '/v1': process.env.SUBSCRIPTION_API ?? 'http://localhost:8090' },
+    proxy: { '/subscription/v1': process.env.SUBSCRIPTION_API ?? 'http://localhost:8090' },
   },
   build: { outDir: r('./dist'), emptyOutDir: true },
 })

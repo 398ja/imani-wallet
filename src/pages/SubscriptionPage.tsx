@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react'
 
-import { Screen, BackLink, PageHeader, Panel, DetailRow, Button, Centered } from '../components/ui'
+import { Screen, BackLink, PageHeader, Panel, DetailRow, Button, Centered, buttonClasses } from '../components/ui'
 import { formatDate, formatFace } from '../lib/format'
 import { explain, licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { refreshCatalog, salesPosition, SUBSCRIPTION_SITE_URL, type SalesPosition } from '../lib/entitlement'
@@ -167,25 +167,18 @@ export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currenc
         {checking ? 'Checking…' : 'Check again'}
       </Button>
 
-      {/* Bought outside the app (#407 §6), by card, signed in with this stall's key. */}
-      <p className="mt-4 text-sm text-mono-500">
-        {granted ? 'To change or renew your plan, ' : 'To upgrade, '}
-        <a
-          href={SUBSCRIPTION_SITE_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium text-mono-900 underline-offset-4 hover:underline dark:text-mono-50"
-        >
-          visit {SUBSCRIPTION_SITE_HOST}
-        </a>
-        . New plans arrive on this device on their own.
-      </p>
+      {/* Bought on the subscription site (#407 §6), on this same origin: the stall goes there in
+          this tab, with the key this wallet keeps, and is asked only for its passphrase. */}
+      <a
+        href={SUBSCRIPTION_SITE_URL}
+        className={`${buttonClasses(granted ? 'secondary' : 'primary', 'md')} mt-4 w-full`}
+      >
+        {granted ? 'Change or renew my plan' : 'Upgrade my plan'}
+      </a>
+      <p className="mt-2 text-sm text-mono-500">Pay by card. Your new plan arrives on this device on its own.</p>
     </Screen>
   )
 }
-
-/** Where plans are bought (#407 §6). */
-const SUBSCRIPTION_SITE_HOST = SUBSCRIPTION_SITE_URL.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
 
 const TIER_NAMES: Record<string, string> = { free: 'Free', basic: 'Basic', pro: 'Pro', custom: 'Custom' }
 
