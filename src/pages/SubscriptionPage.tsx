@@ -4,8 +4,9 @@ import { RefreshCw, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-reac
 import { Screen, BackLink, PageHeader, Panel, DetailRow, Button, Centered } from '../components/ui'
 import { formatDate, formatFace } from '../lib/format'
 import { explain, licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
+import { salesPosition, SUBSCRIPTION_SITE_URL, type SalesPosition } from '../lib/entitlement'
 import { GRACE_WINDOW_SECONDS } from '@imani/licence'
-import { onWalletChanged } from '../lib/wallet'
+import { listTransactions, onWalletChanged } from '../lib/wallet'
 
 /**
  * Subscription diagnostics: what the licence check believes, and why.
@@ -36,18 +37,29 @@ import { onWalletChanged } from '../lib/wallet'
  * log line on a server that never saw the licence, because nothing server-side
  * ever does (that is the whole architecture).
  */
-export function SubscriptionPage({ pubkey }: { pubkey: string }) {
+export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currency?: string }) {
   const [status, setStatus] = useState<LicenceStatus | null>(null)
+  const [position, setPosition] = useState<SalesPosition | null>(null)
   const [checking, setChecking] = useState(false)
 
   const check = useCallback(async () => {
     setChecking(true)
     try {
-      setStatus(await licenceStatus({ pubkey }))
+      const next = await licenceStatus({ pubkey })
+      setStatus(next)
+      // The plan and what has been used of it (#407). Best effort: a ledger that cannot be read
+      // leaves the licence verdict above on its own rather than hiding it.
+      if (currency) {
+        try {
+          setPosition(salesPosition(next, currency, await listTransactions()))
+        } catch {
+          setPosition(null)
+        }
+      }
     } finally {
       setChecking(false)
     }
-  }, [pubkey])
+  }, [pubkey, currency])
 
   useEffect(() => {
     void check()
@@ -90,6 +102,8 @@ export function SubscriptionPage({ pubkey }: { pubkey: string }) {
           </div>
         </div>
       </Panel>
+
+      {position ? <PlanPanel position={position} /> : null}
 
       {/* What it believes, itemised. A support conversation needs the dates and
           the id, not only the verdict — "expired on the 3rd" is answerable and
@@ -151,17 +165,76 @@ export function SubscriptionPage({ pubkey }: { pubkey: string }) {
         {checking ? 'Checking…' : 'Check again'}
       </Button>
 
-      {/* Selling is out-of-band while this is a pilot, so the way to get one is
-          to ask a person. A screen that said "Subscribe" and did nothing would
-          be worse than one that says who to talk to. */}
-      {!granted ? (
-        <p className="mt-4 text-sm text-mono-500">
-          Subscriptions are currently arranged directly with us. Get in touch and
-          we will send one to this device.
-        </p>
-      ) : null}
+      {/* Bought outside the app (#407 §6), by card, signed in with this stall's key. */}
+      <p className="mt-4 text-sm text-mono-500">
+        {granted ? 'To change or renew your plan, ' : 'To upgrade, '}
+        <a
+          href={SUBSCRIPTION_SITE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-mono-900 underline-offset-4 hover:underline dark:text-mono-50"
+        >
+          visit {SUBSCRIPTION_SITE_HOST}
+        </a>
+        . New plans arrive on this device on their own.
+      </p>
     </Screen>
   )
+}
+
+/** Where plans are bought (#407 §6). */
+const SUBSCRIPTION_SITE_HOST = SUBSCRIPTION_SITE_URL.replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+
+const TIER_NAMES: Record<string, string> = { free: 'Free', basic: 'Basic', pro: 'Pro', custom: 'Custom' }
+
+/**
+ * The plan, in the numbers a merchant checks against their own day: what tier, how much has been
+ * sold of how much, and how many tills it allows.
+ */
+function PlanPanel({ position }: { position: SalesPosition }) {
+  const { entitlement, used } = position
+  const sales = entitlement.sales
+  const decimals = sales?.currency === 'SAT' ? 0 : 2
+  const money = (minor: number) => formatFace(minor, { unit: sales?.currency ?? '', decimals })
+  const pct = sales && sales.amount > 0 ? Math.min(100, Math.round((used / sales.amount) * 100)) : 0
+
+  return (
+    <Panel className="mb-6 divide-y divide-mono-200 dark:divide-mono-800">
+      <DetailRow label="Plan" value={TIER_NAMES[entitlement.tier] ?? entitlement.tier} />
+      <DetailRow
+        label={sales?.period === 'month' ? 'Sold this month' : 'Sold'}
+        value={sales ? `${money(used)} of ${money(sales.amount)}` : 'No limit'}
+      />
+      {sales ? (
+        <div className="px-4 py-3">
+          <div
+            className="h-2 w-full overflow-hidden rounded-full bg-mono-200 dark:bg-mono-800"
+            role="progressbar"
+            aria-label="Sales used"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={pct}
+          >
+            <div
+              className={`h-full ${pct >= 100 ? 'bg-red-600' : pct >= 80 ? 'bg-amber-500' : 'bg-green-600'}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+      <DetailRow
+        label="Tills"
+        value={entitlement.terminals === null ? 'No limit' : `${entitlement.terminals} besides this device`}
+      />
+      {entitlement.features.length ? (
+        <DetailRow label="Includes" value={entitlement.features.map(featureName).join(', ')} />
+      ) : null}
+    </Panel>
+  )
+}
+
+function featureName(f: string): string {
+  return f === 'api' ? 'API access' : f === 'ecommerce' ? 'Online shop' : f === 'terminals' ? 'Extra tills' : f
 }
 
 /**

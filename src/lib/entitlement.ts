@@ -32,6 +32,11 @@ import { licenceIssuerPubkey, type LicenceStatus } from './licenceStatus'
 
 const CATALOG_KEY = 'imani.tiers.catalog'
 
+/** Where plans are bought, by card, signed in with the stall's key (#407 §6). Overridable per deployment. */
+export const SUBSCRIPTION_SITE_URL =
+  ((import.meta.env.VITE_SUBSCRIPTION_SITE_URL as string | undefined) ?? '').trim() ||
+  'https://subscription.imani.casa'
+
 /**
  * The catalog this device holds: the highest-version signed catalog it has accepted, or the one
  * compiled in. Re-verified on every read, so a value written into storage by anything else is

@@ -389,7 +389,7 @@ async function main() {
 
   check('renders rather than 404ing', sub.includes('Subscription'))
   check('states a verdict', /Not active|Active|Working/.test(sub), sub.slice(0, 160))
-  check('says what to do about it', /get in touch|Get in touch/i.test(sub))
+  check('says what to do about it', /visit subscription\.|get in touch/i.test(sub))
   check('no uncaught errors anywhere', pageErrors.length === 0, pageErrors.join('; '))
 
   console.log('\nReduced motion is honoured, in a real browser')

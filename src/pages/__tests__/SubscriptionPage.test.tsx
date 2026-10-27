@@ -25,6 +25,7 @@ const SOLD_AT = 1_800_000_000
 const YEAR = 365 * 86400
 
 let rows: VoucherRow[] = []
+let txRows: Array<Record<string, unknown>> = []
 let storeThrows = false
 let walletListeners: Array<() => void> = []
 
@@ -33,6 +34,7 @@ vi.mock('../../lib/wallet', () => ({
     if (storeThrows) throw new Error('storage unavailable')
     return rows
   },
+  listTransactions: async () => txRows,
   onWalletChanged: (listener: () => void) => {
     walletListeners.push(listener)
     return () => {
@@ -109,6 +111,7 @@ function renderPage() {
 
 beforeEach(() => {
   rows = []
+  txRows = []
   storeThrows = false
   walletListeners = []
   forgetLicenceParses()
@@ -140,8 +143,10 @@ describe('reaching the screen without a subscription', () => {
     renderPage()
 
     await screen.findByText('Not active')
-    // Selling is out-of-band while this is a pilot.
-    expect(screen.getByText(/arranged directly with us/)).toBeTruthy()
+    // Bought outside the app (#407 §6): a link to the site, not a button that does nothing.
+    const link = screen.getByRole('link', { name: /visit subscription\.imani\.casa/ })
+    expect(link.getAttribute('href')).toBe('https://subscription.imani.casa')
+    expect(screen.getByText(/To upgrade,/)).toBeTruthy()
   })
 
   it('refuses a licence that is not ours, however well-formed', async () => {
@@ -325,5 +330,20 @@ describe('a subscription the seller revoked (review of imani-wallet#226, W-1)', 
     } finally {
       forgetRevocations(CUSTOMER)
     }
+  })
+})
+
+describe('the plan (#407)', () => {
+  it('shows a free stall its one-off allowance and what it has used of it', async () => {
+    txRows = [{ id: 'issued:a', type: 'issued', direction: 'out', timestamp: SOLD_AT * 1000, amount: 8200, unit: 'GBP' }]
+    render(
+      <MemoryRouter>
+        <SubscriptionPage pubkey={CUSTOMER} currency="GBP" />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('Free')).toBeTruthy()
+    expect(screen.getByText(/82\.00 of .*100\.00/)).toBeTruthy()
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('82')
+    expect(screen.getByText('1 besides this device')).toBeTruthy()
   })
 })
