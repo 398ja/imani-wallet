@@ -4,10 +4,11 @@ import { KeyRound, ShieldCheck } from 'lucide-react'
 import { Alert, Button, Input, Panel, Screen } from '../components/ui'
 import { keyStore } from '../lib/nap'
 import { startSignerPage, walletConsentStore, type SignerPage, type SignerView } from '../lib/napSignerPage'
-import { signerPolicy, siteDescription, siteName } from '../lib/napSignerPolicy'
+import { signerPolicy, siteAudience, siteDescription, siteName } from '../lib/napSignerPolicy'
 import { createWalletSigner } from '../lib/signer'
 import { isTerminalDevice } from '../lib/terminalEnrol'
 import { loadProfile, profileName } from '../lib/profile'
+import { merchantStatus } from '../lib/merchant'
 
 /**
  * `/nap/signer`: the popup a sister site opens to sign someone in with this wallet (#411, #410 G10).
@@ -31,7 +32,10 @@ export function NapSignerPage() {
       policy: signerPolicy(),
       keyStore,
       makeSigner: createWalletSigner,
+      pubkeyOf: (s) => (s as ReturnType<typeof createWalletSigner>).pubkey,
       isTerminal: isTerminalDevice,
+      merchantStatus,
+      audienceOf: siteAudience,
       consentStore: walletConsentStore(),
       onView: (v) => !abort.signal.aborted && setView(v),
       signal: abort.signal,
@@ -67,6 +71,35 @@ function SignerBody({ view, page }: { view: SignerView; page: React.RefObject<Si
       return <p className="text-center text-callout text-mono-500">Waiting for the site that opened this window…</p>
     case 'unavailable':
       return <Unavailable reason={view.reason} />
+    case 'wrong-account':
+      return (
+        <Panel className="p-5 text-center">
+          <h1 className="text-title font-semibold">
+            {view.audience === 'customers' ? 'This is a stall account' : 'This is not a stall account'}
+          </h1>
+          <p className="mt-2 text-callout text-mono-500">
+            {view.audience === 'customers'
+              ? `${siteName(view.origin)} is for customers buying vouchers as gifts. A stall can't sign in there. You can still buy as a guest, or sign in with a customer wallet.`
+              : `${siteName(view.origin)} is for stalls. Sign in with your stall's wallet.`}
+          </p>
+          <p className="mt-2 text-sm text-mono-500">Nothing was shared with the site.</p>
+          <Button className="mt-4 w-full" variant="secondary" onClick={() => window.close()}>
+            Close
+          </Button>
+        </Panel>
+      )
+    case 'role-unknown':
+      return (
+        <Panel className="p-5 text-center">
+          <h1 className="text-title font-semibold">Couldn&apos;t check your account</h1>
+          <p className="mt-2 text-callout text-mono-500">
+            Imani could not be reached to check this account, so {siteName(view.origin)} was not signed in. Close this window and try again.
+          </p>
+          <Button className="mt-4 w-full" variant="secondary" onClick={() => window.close()}>
+            Close
+          </Button>
+        </Panel>
+      )
     case 'unlock':
       return <Unlock origin={view.origin} error={view.error} page={page} />
     case 'consent': {
