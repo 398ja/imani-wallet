@@ -250,7 +250,7 @@ identities on a test deployment and worth nothing, but they are still keys.
     node loadtest/signer.mjs &
     node loadtest/pool.mjs --size 50
     GATEWAY_URL=http://localhost:28082 PORTAL_URL=http://localhost:28084 \
-      EDGE_SECRET=dev-edge-secret-local-only \
+      EDGE_SECRET=dev-edge-secret-local-only-32-plus-chars \
       k6 run loadtest/issuance.js
 
 Issuance goes first because it produces the coupons that sending, splitting and
@@ -459,7 +459,7 @@ this.
     node loadtest/stalls.mjs --count 10 --verify
     GATEWAY_URL=http://localhost:28082 PORTAL_URL=http://localhost:28084 \
       ACCOUNT_URL=http://localhost:28081 \
-      EDGE_SECRET=dev-edge-secret-local-only \
+      EDGE_SECRET=dev-edge-secret-local-only-32-plus-chars \
       k6 run loadtest/market-day.js
 
 Everything above this heading is a **scenario**: one subsystem, isolated, so a

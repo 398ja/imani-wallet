@@ -41,7 +41,7 @@ case "$GATEWAY" in
     fi
     WALLET_URL=http://gateway-customer:8082
     WALLET_PUBLIC_URL=${WALLET_DEV_ORIGIN:-http://localhost:5173}
-    EDGE=dev-edge-secret-local-only
+    EDGE=dev-edge-secret-local-only-32-plus-chars
     export VITE_WALLET_ORIGIN=${VITE_WALLET_ORIGIN:-$WALLET_PUBLIC_URL}
     ;;
   *) echo "GATEWAY must be staging or local" >&2; exit 1 ;;

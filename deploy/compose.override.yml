@@ -196,7 +196,7 @@ services:
       #
       # We do not run edge-proxy here (Vite proxies straight to host ports), so
       # the seed script stands in for it. Dev-only value on a local stack.
-      GATEWAY_PORTAL_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      GATEWAY_PORTAL_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
       # The cashback mint reads a voucher back to finalize it, and that read now
       # goes to customer-wallet's /internal/v1/wallet/vouchers/{id} instead of the
       # NIP-98-protected public one. /internal/v1/** is .authenticated() whether or
@@ -516,7 +516,7 @@ services:
       # which tier logged it, so setting the variable it names on gateway-core
       # changes nothing and the warning persists — which is exactly the wrong
       # turn this comment exists to save the next person.
-      GATEWAY_CORE_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      GATEWAY_CORE_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
       # The real NIP-17 DM publisher, without which the atomic-send saga has no
       # way to deliver.
       #
@@ -721,7 +721,7 @@ services:
       # and fails closed the same way: without it the identity the edge
       # established is discarded on this tier too. All three names must hold the
       # same value — application.yml puts it as "one nap_auth.lua, one secret".
-      GATEWAY_CUSTOMER_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      GATEWAY_CUSTOMER_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
       # The licence seller (imani-subscriptions) allowed to mint licences and whose licences count
       # (#197, #407). Locally: deploy/subscription-local mints through THIS gateway as that seller.
       # The same identity as staging's (scripts/sell-subscription.mjs), so a seller nsec from
