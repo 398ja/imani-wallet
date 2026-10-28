@@ -2,12 +2,11 @@
 #
 #   cd deploy/subscription-local
 #   ./up.sh            # builds the image, writes .env from imani-deploy/.env.staging, starts both
-#   npm run dev        # in the repo root: the wallet on http://localhost:5173
-#   open http://localhost:5173/subscription/
+#   npx tsx --tsconfig tsconfig.services.json e2e/subscription-local.e2e.ts   # from the repo root
 #
-# The site lives at /subscription on the WALLET's origin, as in production, because it reads the
-# wallet key the wallet keeps in that origin's localStorage. The wallet's Vite dev server proxies
-# /subscription to this container (vite.config.ts), so the browser sees one origin.
+# The site has its OWN origin (http://localhost:18910 here, subscription.imani.casa in production)
+# and no login page (#411). It is opened from the wallet, which signs its NAP login over
+# postMessage; VITE_WALLET_ORIGIN (build arg) is the one wallet origin it accepts that from.
 #
 # - `subscription`: the site and service (services/subscription/Dockerfile).
 # - `stripe`: the Stripe CLI, forwarding the test account's webhooks to the service, so a real
@@ -21,13 +20,15 @@ services:
       context: ../..
       dockerfile: services/subscription/Dockerfile
       args:
-        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
+        # The wallet the site accepts a signer from. Locally: a wallet dev server, or the stand-in
+        # wallet page e2e/subscription-local.e2e.ts serves on 127.0.0.1:18924.
+        VITE_WALLET_ORIGIN: ${VITE_WALLET_ORIGIN:-http://127.0.0.1:18924}
     ports: ["18910:8090"]
     env_file: .env
     environment:
-      # The origin the BROWSER is on (the wallet dev server), since NIP-98 signs that URL.
-      SUBSCRIPTION_PUBLIC_ORIGIN: ${SUBSCRIPTION_PUBLIC_ORIGIN:-http://localhost:5173}
-      SUBSCRIPTION_BASE_PATH: /subscription
+      # Its own origin (#411), as subscription.imani.casa: no path under the wallet any more.
+      SUBSCRIPTION_PUBLIC_ORIGIN: ${SUBSCRIPTION_PUBLIC_ORIGIN:-http://localhost:18910}
+      SUBSCRIPTION_BASE_PATH: ''
     volumes: ["ledger:/data"]
     restart: unless-stopped
 
@@ -36,7 +37,7 @@ services:
     command:
       - listen
       - --api-key=${STRIPE_SECRET_KEY}
-      - --forward-to=http://subscription:8090/subscription/v1/stripe/webhook
+      - --forward-to=http://subscription:8090/v1/stripe/webhook
       - --events=invoice.paid,customer.subscription.updated,customer.subscription.deleted
     env_file: .env
     depends_on: [subscription]

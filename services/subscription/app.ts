@@ -245,7 +245,14 @@ export function createApp(deps: AppDeps) {
       case 'GET /health':
         return json(200, { ok: true })
       case 'GET /v1/catalog':
-        return { status: 200, body: signedCatalog, headers: { 'Cache-Control': 'public, max-age=300' } }
+        // Readable from any origin: the wallet (wallet.imani.casa) fetches it cross-origin now that
+        // this site has its own (#411). Safe to open: it is public and signed by the seller, the
+        // wallet verifies the signature, and no credential is sent or honoured on this route.
+        return {
+          status: 200,
+          body: signedCatalog,
+          headers: { 'Cache-Control': 'public, max-age=300', 'Access-Control-Allow-Origin': '*' },
+        }
       case 'GET /v1/plans':
         return json(200, plans())
       case 'POST /v1/stripe/webhook':

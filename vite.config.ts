@@ -392,10 +392,9 @@ export const proxy = {
   // every authenticated wallet call fail with 401 AUTH_002 "URL mismatch" —
   // which reads as a credential problem, not a proxy one.
   '/api': { target: 'http://localhost:28082', changeOrigin: false },
-  // The subscription site (#407), served on the wallet's origin as in production so it can read
-  // the stall's key from this origin's localStorage. Container from deploy/subscription-local.
-  // changeOrigin false for the same NIP-98 reason as above.
-  '/subscription': { target: process.env.SUBSCRIPTION_DEV_URL ?? 'http://localhost:18910', changeOrigin: false },
+  // The subscription site (#407, #411) is NOT proxied here any more: it has its own origin, and the
+  // wallet opens it and signs its login over postMessage. Locally, run deploy/subscription-local
+  // (http://localhost:18910) and set VITE_SUBSCRIPTION_SITE_URL=http://localhost:18910.
 }
 
 /**

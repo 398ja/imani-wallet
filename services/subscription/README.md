@@ -1,14 +1,19 @@
-# The subscription site (`/subscription` on the wallet's origin)
+# The subscription site (`subscription.imani.casa`, its own origin)
 
-Where a stall buys a plan (#407). It is a single-page site (`apps/subscription`) plus this service,
-mounted at `/subscription` on the WALLET's origin (the wallet's "Upgrade my plan" button opens it in
-the same tab). The site uses the wallet's stack and components: React, Vite, Tailwind,
+Where a stall buys a plan (#407, #411). It is a single-page site (`apps/subscription`) plus this
+service, on its own origin. The site uses the wallet's stack and components: React, Vite, Tailwind,
 react-router and `src/components/ui`.
 
-- **Sign in** with the stall's wallet key, opened with the wallet passphrase. The site finds it in
-  this origin's localStorage (where the wallet keeps it), or else in the stall's Google Drive
-  backup or an uploaded backup file. There is no extension, bunker or paste-your-nsec path. The
-  decrypted key stays in the tab's memory. Every API call is NIP-98 signed, so there is no account.
+- **Signing in: there is no login page.** The stall opens the site from its wallet (Settings ›
+  Subscription › Upgrade my plan). That tap opens the site in a new tab, and the WALLET signs the
+  site's NAP login over `postMessage` (NAP extension 0002, `src/lib/sisterSiteSigner.ts`): the key
+  never reaches this origin, and the wallet signs only proofs addressed to this site. The service
+  answers with an HttpOnly session cookie. **Every page needs that session**; opened any other way,
+  the site says "Open this from your wallet".
+- **Merchants only.** The session's role is read from the stall's own signed, live
+  `imani:merchant` record (gateway-customer's public nostr query, `merchantRole.ts`). A customer
+  key is refused at login and never holds a session; the role is re-read on every request, so a
+  stall that retires its record loses access.
 - **Buy** a tier by card through Stripe Checkout, using Billing for renewals and Tax for VAT.
 - **On `invoice.paid`**, the service mints a licence through gateway-customer as the seller and DMs
   it to the stall. This happens once per invoice, and a replayed or retried event resumes rather
@@ -26,7 +31,7 @@ Nothing reads it to *grant* a feature: the wallet verifies the licence it holds,
 ```bash
 npx vite build --config apps/subscription/vite.config.ts           # the site
 npx tsx --tsconfig tsconfig.services.json services/subscription/server.ts
-npx tsx e2e/subscription.e2e.ts                                     # browser e2e, fakes Stripe + gateway
+npx tsx --tsconfig tsconfig.services.json e2e/subscription.e2e.ts   # two-origin browser e2e: builds the site, fakes Stripe + gateway
 docker build -f services/subscription/Dockerfile -t imani-subscription .
 ```
 
@@ -34,10 +39,10 @@ docker build -f services/subscription/Dockerfile -t imani-subscription .
 
 | Variable | |
 | --- | --- |
-| `SUBSCRIPTION_PUBLIC_ORIGIN` | the wallet's origin, e.g. `https://wallet.imani.casa`; NIP-98 `u` tags must match it |
-| `SUBSCRIPTION_BASE_PATH` | `/subscription`: the path the edge proxies here (left on, so routes see it stripped) |
-| `VITE_GOOGLE_CLIENT_ID` (build arg) | the wallet's Google OAuth client, for the Drive backup sign-in |
-| `SUBSCRIPTION_WALLET_URL` | gateway-customer (mint, deliver, revoke) |
+| `SUBSCRIPTION_PUBLIC_ORIGIN` | the site's own origin, e.g. `https://subscription.imani.casa`; NAP login proofs are addressed to it and the session cookie is issued for it |
+| `SUBSCRIPTION_BASE_PATH` | `''` (the root of its origin). A path only if the edge mounts it under one, matching the `SUBSCRIPTION_BASE` build arg |
+| `VITE_WALLET_ORIGIN` (build arg) | the ONE wallet origin the site accepts a signer from, e.g. `https://wallet.imani.casa` |
+| `SUBSCRIPTION_WALLET_URL` | gateway-customer (mint, deliver, revoke, and the public nostr query the merchant role is read from) |
 | `EDGE_SECRET` | edge secret gateway-customer trusts |
 | `IMANI_SUBSCRIPTIONS_SELLER_NSEC` | the seller (`GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`); also signs the catalog; wallets pin it as `VITE_LICENCE_SELLER_PUBKEY` |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | webhook events: `invoice.paid`, `customer.subscription.updated`, `customer.subscription.deleted` |

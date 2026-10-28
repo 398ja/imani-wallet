@@ -160,13 +160,11 @@ export class SubscriptionAuth {
       return toPublicAuthFailure()
     }
     const body = toPublicAuthSuccess(outcome.session)
-    // Cookie mode: the access token goes in an HttpOnly cookie and never into the body.
-    const { access_token: _token, token_type: _type, refresh_token: _refresh, status: _status, ...view } = body as typeof body & {
-      refresh_token?: string
-    }
+    // Cookie mode: the access token goes in an HttpOnly cookie and never into the body. The body is
+    // built field by field, so a credential added to the success shape later cannot leak through.
     return {
       status: 200,
-      body: { status: 'ok', ...view },
+      body: { status: 'ok', expires_at: body.expires_at, principal: body.principal, roles: body.roles, permissions: body.permissions },
       headers: { 'Set-Cookie': this.cookie(outcome.session.access_token, SESSION_TTL_SECONDS) },
     }
   }

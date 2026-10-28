@@ -1,14 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { Button } from '@wallet/components/ui/Button'
 import { Alert, DetailRow, Notice, Panel, PageHeader, Screen } from '@wallet/components/ui/layout'
 import { buttonClasses } from '@wallet/components/ui/buttonClasses'
 import { api, date, salesLine, tillsLine, TIER_NAMES, type Me } from '../lib/api'
-import type { Signer } from '../lib/signer'
 
 /** The stall's plan, its licences, card and cancellation, and "send it to my wallet again". */
-export function AccountPage({ signer, me, onRefresh }: { signer: Signer; me: Me | null; onRefresh: () => Promise<void> }) {
+export function AccountPage({ me, onRefresh }: { me: Me | null; onRefresh: () => Promise<void> }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -29,6 +28,22 @@ export function AccountPage({ signer, me, onRefresh }: { signer: Signer; me: Me 
   const subs = me?.subscriptions ?? []
   const now = Date.now() / 1000
   const hasCard = subs.some((s) => s.has_card)
+  // A licence still on its way (minted, the DM not yet confirmed) is re-read every few seconds for
+  // a short while, so the page catches up with the delivery on its own instead of showing a stale
+  // "On its way" left over from an earlier page.
+  const pending = subs.some((s) => s.licences.some((l) => l.valid_to > now && l.state !== 'delivered'))
+  const [polls, setPolls] = useState(0)
+  useEffect(() => {
+    if (polls > 0 && (!pending || polls > 10)) return
+    const t = setTimeout(
+      () => {
+        void onRefresh()
+        setPolls((n) => n + 1)
+      },
+      polls === 0 ? 0 : 3000,
+    )
+    return () => clearTimeout(t)
+  }, [polls, pending, onRefresh])
 
   return (
     <Screen>
@@ -75,7 +90,7 @@ export function AccountPage({ signer, me, onRefresh }: { signer: Signer; me: Me 
             disabled={busy !== null}
             onClick={() =>
               void act('resend', async () => {
-                const { sent } = await api.resend(signer)
+                const { sent } = await api.resend()
                 setMessage(sent ? 'Sent to your wallet again. It appears within a minute.' : 'There is nothing current to send.')
                 await onRefresh()
               })
@@ -90,7 +105,7 @@ export function AccountPage({ signer, me, onRefresh }: { signer: Signer; me: Me 
             disabled={busy !== null}
             onClick={() =>
               void act('portal', async () => {
-                window.location.assign((await api.portal(signer)).url)
+                window.location.assign((await api.portal()).url)
               })
             }
           >

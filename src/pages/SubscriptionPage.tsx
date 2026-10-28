@@ -5,6 +5,7 @@ import { Screen, BackLink, PageHeader, Panel, DetailRow, Button, Centered, butto
 import { formatDate, formatFace } from '../lib/format'
 import { explain, licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { refreshCatalog, salesPosition, SUBSCRIPTION_SITE_URL, type SalesPosition } from '../lib/entitlement'
+import { openSisterSite } from '../lib/sisterSiteSigner'
 import { GRACE_WINDOW_SECONDS } from '@imani/licence'
 import { listTransactions, onWalletChanged } from '../lib/wallet'
 
@@ -167,15 +168,24 @@ export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currenc
         {checking ? 'Checking…' : 'Check again'}
       </Button>
 
-      {/* Bought on the subscription site (#407 §6), on this same origin: the stall goes there in
-          this tab, with the key this wallet keeps, and is asked only for its passphrase. */}
+      {/* Bought on the subscription site (#407 §6, #411). This tap opens it in a new tab and THIS
+          wallet signs the site's login (sisterSiteSigner.ts): the stall arrives signed in, with no
+          passphrase and no login page. The plain href is the fallback when the browser refuses the
+          tab, and the site then says "open this from your wallet". */}
       <a
         href={SUBSCRIPTION_SITE_URL}
+        target="imani-subscription"
+        rel="opener"
+        onClick={(e) => {
+          if (openSisterSite(SUBSCRIPTION_SITE_URL, 'imani-subscription')) e.preventDefault()
+        }}
         className={`${buttonClasses(granted ? 'secondary' : 'primary', 'md')} mt-4 w-full`}
       >
         {granted ? 'Change or renew my plan' : 'Upgrade my plan'}
       </a>
-      <p className="mt-2 text-sm text-mono-500">Pay by card. Your new plan arrives on this device on its own.</p>
+      <p className="mt-2 text-sm text-mono-500">
+        Opens Imani plans in a new tab, signed in as this stall. Pay by card; your new plan arrives on this device on its own.
+      </p>
     </Screen>
   )
 }

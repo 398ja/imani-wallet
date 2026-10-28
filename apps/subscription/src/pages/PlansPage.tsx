@@ -1,22 +1,19 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Check } from 'lucide-react'
 
 import { Button } from '@wallet/components/ui/Button'
 import { Alert, Panel } from '@wallet/components/ui/layout'
-import { api, featureName, salesLine, tillsLine, TIER_NAMES, type Me, type Plan } from '../lib/api'
-import type { Signer } from '../lib/signer'
+import { api, featureName, salesLine, SessionEnded, tillsLine, TIER_NAMES, type Me, type Plan } from '../lib/api'
 
 /**
  * The plans, from the catalog the service publishes, so the numbers here are the ones the wallet
  * enforces. Buying opens Stripe Checkout (card only, #407 Q9); the licence arrives in the wallet.
  */
-export function PlansPage({ signer, me }: { signer: Signer | null; me: Me | null }) {
+export function PlansPage({ me, onSessionEnded }: { me: Me | null; onSessionEnded: () => void }) {
   const [plans, setPlans] = useState<Plan[] | null>(null)
   const [term, setTerm] = useState<'monthly' | 'annual'>('monthly')
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const navigate = useNavigate()
 
   useEffect(() => {
     api.plans().then(setPlans, (e: Error) => setError(e.message))
@@ -25,13 +22,13 @@ export function PlansPage({ signer, me }: { signer: Signer | null; me: Me | null
   const current = me?.subscriptions.find((s) => s.kind === 'subscription' && s.status !== 'revoked')?.tier ?? 'free'
 
   const buy = async (tier: string) => {
-    if (!signer) return navigate(`/sign-in?next=/plans`)
     setError(null)
     setBusy(tier)
     try {
-      const { url } = await api.checkout(signer, tier, term)
+      const { url } = await api.checkout(tier, term)
       window.location.assign(url)
     } catch (e) {
+      if (e instanceof SessionEnded) return onSessionEnded()
       setError((e as Error).message)
       setBusy(null)
     }
@@ -99,8 +96,8 @@ export function PlansPage({ signer, me }: { signer: Signer | null; me: Me | null
       </div>
 
       <p className="mt-6 text-sm text-mono-500">
-        Prices include VAT where it applies; business customers can add a VAT number at checkout. You sign in with your stall’s
-        key, so there is no account to create.
+        Prices include VAT where it applies; business customers can add a VAT number at checkout. You are signed in through
+        your stall’s wallet, so there is no account to create.
       </p>
     </div>
   )

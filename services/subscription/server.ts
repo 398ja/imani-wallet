@@ -4,8 +4,9 @@
  *   docker build -f services/subscription/Dockerfile -t imani-subscription .
  *
  * Serves the API under /v1 and, when SUBSCRIPTION_STATIC_DIR is set, the built site
- * (`apps/subscription`) from the same origin, so the browser's NIP-98 `u` tag and the API share
- * one origin and no CORS is needed.
+ * (`apps/subscription`) from the same origin, so the session cookie rides every API call and no
+ * CORS is needed (only the public catalog answers cross-origin). The site has no login page: the
+ * wallet signs its NAP login cross-origin (#411).
  */
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
@@ -55,8 +56,9 @@ async function main() {
 
   const server = createServer(async (req, res) => {
     const full = new URL(req.url ?? '/', 'http://x')
-    // Mounted under a path (e.g. /subscription on the wallet origin): strip it, so routes and the
-    // NIP-98 check see the same path the app signs relative to (`site()` puts it back).
+    // Mounted under a path (only if the edge mounts it under one; production is the root of
+    // subscription.imani.casa): strip it, so routes see app paths (`site()` puts it back for the
+    // NAP login audience and the cookie path).
     if (base && !(full.pathname === base || full.pathname.startsWith(`${base}/`))) {
       if (full.pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}')
@@ -112,10 +114,11 @@ async function serveStatic(dir: string, path: string, res: import('node:http').S
     'Cache-Control': file.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
-    // The page opens the wallet's signer page as a popup and talks to it (NAP extension 0002).
-    // `same-origin` would sever that window; `same-origin-allow-popups` keeps it and still gives
-    // pages that open US no handle on this window.
-    'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+    // The wallet opens this site in a tab and signs its NAP login over `postMessage` (NAP extension
+    // 0002, src/lib/sisterSiteSigner.ts). That needs the tab to keep its opener, and ANY other COOP
+    // value on a cross-origin page opened this way severs it (checked in Chromium by nap's e2e). The
+    // wallet keeps its own stricter `same-origin-allow-popups`; this page must be `unsafe-none`.
+    'Cross-Origin-Opener-Policy': 'unsafe-none',
     'X-Frame-Options': 'DENY',
     'Content-Security-Policy': "frame-ancestors 'none'",
   })

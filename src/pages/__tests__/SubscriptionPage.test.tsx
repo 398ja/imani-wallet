@@ -146,10 +146,12 @@ describe('reaching the screen without a subscription', () => {
     renderPage()
 
     await screen.findByText('Not active')
-    // Bought on the subscription site, on the wallet's own origin, in this tab (#407 §6).
+    // Bought on the subscription site, its own origin, in a named tab the wallet signs in (#411).
     const link = screen.getByRole('link', { name: 'Upgrade my plan' })
-    expect(link.getAttribute('href')).toBe(`${window.location.origin}/subscription`)
-    expect(link.getAttribute('target')).toBeNull()
+    expect(link.getAttribute('href')).toBe('https://subscription.imani.casa')
+    expect(link.getAttribute('target')).toBe('imani-subscription')
+    // The opener is kept on purpose: it is the channel the wallet signs the site's login over.
+    expect(link.getAttribute('rel')).toBe('opener')
   })
 
   it('refuses a licence that is not ours, however well-formed', async () => {
