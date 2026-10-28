@@ -45,7 +45,7 @@ async function main() {
     config,
     seller,
     ledger: new Ledger(config.ledgerPath),
-    issuer: new LicenceIssuer({ walletUrl: config.walletUrl, edgeSecret: config.edgeSecret, internalRelay: config.internalRelay, seller }),
+    issuer: new LicenceIssuer({ walletUrl: config.walletUrl, nip98BaseUrl: config.walletPublicUrl, edgeSecret: config.edgeSecret, internalRelay: config.internalRelay, seller }),
     stripe: stripeClient(config.stripeSecretKey),
     catalogBody: (await readFile(config.catalogPath, 'utf8')).trim(),
     // gateway-customer serves the public `POST /api/v1/nostr/query` the role is read from.

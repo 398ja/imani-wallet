@@ -51,6 +51,13 @@ export interface MintedLicence {
 
 export interface IssuerDeps {
   walletUrl: string
+  /**
+   * The public base URL gateway-customer binds NIP-98 `u` tags to (its
+   * GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL). Defaults to `walletUrl`. Differs when the service
+   * reaches the gateway on an internal address (http://gateway-customer:8082) while the gateway
+   * names its public origin: the request goes to `walletUrl`, the signature names this.
+   */
+  nip98BaseUrl?: string
   edgeSecret: string
   internalRelay: string
   seller: Seller
@@ -132,11 +139,17 @@ export class LicenceIssuer {
   private headers(url: string, method: string, body?: string, extra: Record<string, string> = {}) {
     return {
       'Content-Type': 'application/json',
-      Authorization: nip98(this.deps.seller.sk, url, method, body),
+      Authorization: nip98(this.deps.seller.sk, this.signedUrl(url), method, body),
       'X-Auth-Pubkey': this.deps.seller.pk,
       'X-Edge-Auth': this.deps.edgeSecret,
       ...extra,
     }
+  }
+
+  /** The URL a NIP-98 `u` tag names for a request to `url`: the same path on the public base. */
+  private signedUrl(url: string): string {
+    const base = this.deps.nip98BaseUrl?.replace(/\/+$/, '')
+    return base && url.startsWith(this.deps.walletUrl) ? base + url.slice(this.deps.walletUrl.length) : url
   }
 
   /** Mint (idempotent on `order.key`) and wait for the token. */
@@ -190,7 +203,7 @@ export class LicenceIssuer {
     const body = JSON.stringify(reason ? { subscription_id: subscriptionId, reason } : { subscription_id: subscriptionId })
     const r = await this.fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: nip98(this.deps.seller.sk, url, 'POST', body) },
+      headers: { 'Content-Type': 'application/json', Authorization: nip98(this.deps.seller.sk, this.signedUrl(url), 'POST', body) },
       body,
     })
     if (!r.ok) throw new Error(`revoke failed ${r.status}: ${(await r.text()).slice(0, 300)}`)
