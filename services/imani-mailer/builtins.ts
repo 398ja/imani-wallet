@@ -1,0 +1,101 @@
+/**
+ * The templates imani-mailer ships with (#410). Deployments add or replace templates with
+ * MAILER_TEMPLATES_FILE (same shape, JSON); a name defined there wins over the one here.
+ *
+ * Copy rules that apply to every gift email, from #410:
+ * - A claim or return link appears in the BODY only, never the subject (url fields cannot be used
+ *   in a subject at all: templates.ts refuses it at load).
+ * - "Imani never asks for card details or passwords." in every message.
+ * - No tracking, no rewritten links: the HTML part's anchors are the checked URLs themselves.
+ */
+import type { TemplateDef } from './templates.ts'
+
+const FOOTER = 'Imani never asks for card details or passwords. If you did not expect this email, you can ignore it.'
+
+export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
+  'gift-claim': {
+    fromName: 'Imani gifts',
+    subject: '{{from}} sent you a voucher for {{stall}}',
+    text: [
+      '{{from}} sent you a {{amount}} voucher for {{stall}}.',
+      '{{#message}}',
+      '',
+      '{{message}}',
+      '{{/message}}',
+      '',
+      'Claim it by {{claimBy}}:',
+      '{{claimUrl}}',
+      '',
+      'Open the link, create or open an Imani wallet, and tap Claim.',
+      "Anyone with this link can claim it. Don't forward it.",
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      from: { type: 'line', max: 80, default: 'Someone' },
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      claimBy: { type: 'line', max: 60, required: true },
+      claimUrl: { type: 'url', required: true },
+      message: { type: 'text', max: 280 },
+    },
+  },
+  'gift-receipt': {
+    fromName: 'Imani gifts',
+    subject: 'Your {{stall}} voucher gift',
+    text: [
+      'You paid {{amount}} to {{stall}} for a voucher for {{recipient}}.',
+      '',
+      'The recipient may need to check their spam folder.',
+      "Refunds are the stall's decision.",
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      recipient: { type: 'line', max: 320, required: true },
+    },
+  },
+  'gift-return-link': {
+    fromName: 'Imani gifts',
+    subject: "If your {{stall}} gift isn't claimed",
+    text: [
+      "If your gift isn't claimed by {{claimBy}}, use this link to take it back into a wallet:",
+      '{{returnUrl}}',
+      '',
+      "Keep it private: it is yours, not the recipient's.",
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      claimBy: { type: 'line', max: 60, required: true },
+      returnUrl: { type: 'url', required: true },
+    },
+  },
+  'gift-bounced': {
+    fromName: 'Imani gifts',
+    subject: "We couldn't deliver your gift",
+    text: [
+      "We couldn't deliver to {{recipient}}.",
+      '',
+      'The gift is still safe. Take it back with your return link, or from Activity in your wallet.',
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      recipient: { type: 'email', required: true },
+    },
+  },
+  'gift-reminder': {
+    fromName: 'Imani gifts',
+    subject: 'Your {{stall}} gift: {{when}}',
+    text: ['A reminder about your {{stall}} gift: {{when}}.', '{{returnUrl}}', '', FOOTER].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      when: { type: 'line', max: 60, required: true },
+      returnUrl: { type: 'url', required: true },
+    },
+  },
+}
