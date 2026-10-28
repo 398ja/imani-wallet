@@ -882,6 +882,40 @@ services:
     networks:
       - imani-internal
 
+  # imani-mailer (#410): the shared mailer, sending through Mailpit locally. Build the image from
+  # the gifting branch (services/imani-mailer lands with #410):
+  #
+  #   docker build -f services/imani-mailer/Dockerfile -t imani-mailer:local .
+  #
+  # Callers use http://imani-mailer:8095 with MAILER_TOKEN; MAILER_CLIENTS holds only its sha256
+  # (both in imani-deploy/.env.local, `npx tsx services/imani-mailer/cli.ts token <id> <templates>`).
+  # Profile `mailer`, so a stack without the image still starts.
+  imani-mailer:
+    image: ${MAILER_IMAGE:-imani-mailer:local}
+    container_name: imani-mailer-test
+    profiles: ["mailer"]
+    depends_on:
+      mailpit:
+        condition: service_started
+    environment:
+      MAILER_ENV: development
+      MAILER_TRANSPORT: smtp
+      MAILER_SMTP_HOST: mailpit
+      MAILER_SMTP_PORT: "1025"
+      MAILER_SMTP_SECURITY: none
+      MAILER_FROM_ADDRESS: gifts@imani.local
+      MAILER_FROM_NAME: Imani
+      MAILER_LINK_HOSTS: "localhost:5173,localhost:5181"
+      MAILER_LINK_ALLOW_HTTP: "true"
+      MAILER_CLIENTS: "${MAILER_CLIENTS:?set MAILER_CLIENTS in imani-deploy/.env.local}"
+      MAILER_TAG_KEY: "${MAILER_TAG_KEY:?set MAILER_TAG_KEY in imani-deploy/.env.local}"
+    volumes:
+      - imani-mailer-state:/var/lib/imani-mailer
+    ports:
+      - "8095:8095"
+    networks:
+      - imani-internal
+
   # Stripe test-mode events for payment-adapter's /webhook/stripe, against a real sk_test_ key
   # only (with stripe-mock there is nothing to listen to): COMPOSE_PROFILES=stripe-test. Card
   # sales run on the stall's connected account, so Connect events go to the same endpoint.
@@ -934,6 +968,7 @@ services:
       - imani-internal
 
 volumes:
+  imani-mailer-state:
   blossom-data:
   app-db-data:
   mint-db-data:
