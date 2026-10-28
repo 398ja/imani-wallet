@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { Centered, Notice, Screen } from '@wallet/components/ui/layout'
 
 import { giftingApi } from '../lib/api'
+import { returnLink } from '../lib/gift'
+import { WALLET_ORIGIN } from '../lib/signer'
 import type { Draft } from '../lib/draft'
 
 const api = giftingApi()
@@ -27,6 +29,9 @@ export function ReturnPage() {
     api.getDraft(draftId).then(setFetched, () => setFetched('gone'))
   }, [draftId, valid])
   const draft = valid ? fetched : 'gone'
+  // A guest's refund key R, kept in this tab since review (option D). Shown as the return link: it
+  // is the buyer's own key, not the recipient's claim link (G8).
+  const refundSecret = useMemo(() => findRefundSecret(draftId), [draftId])
 
   if (cancelled)
     return (
@@ -58,6 +63,31 @@ export function ReturnPage() {
         It can take a minute. If it isn&apos;t claimed in time, it comes back to you: to your wallet if you were signed in, or through the return link
         we email you.
       </p>
+      {refundSecret && draft !== 'gone' && draft.delivery.kind !== 'self' && (
+        <div className="mt-6 rounded-2xl border border-mono-200 p-4 dark:border-mono-800" data-testid="return-link">
+          <p className="mb-2 text-sm font-medium">Your return link</p>
+          <p className="mb-2 text-sm text-mono-500">
+            If it isn&apos;t claimed in time, open this link to take the gift back into a wallet. Keep it private: it is yours, not the recipient&apos;s.
+          </p>
+          <a className="break-all text-sm underline" href={returnLink(WALLET_ORIGIN, refundSecret)}>
+            Take the gift back
+          </a>
+        </div>
+      )}
     </Screen>
   )
+}
+
+function findRefundSecret(draftId: string): string | undefined {
+  try {
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i)
+      if (!k?.startsWith('imani:gift:')) continue
+      const kept = JSON.parse(sessionStorage.getItem(k) ?? '{}') as { draftId?: string; refundSecret?: string }
+      if (kept.draftId === draftId && typeof kept.refundSecret === 'string' && /^[0-9a-f]{64}$/.test(kept.refundSecret)) return kept.refundSecret
+    }
+  } catch {
+    // Storage blocked: the emailed return link is the copy that matters.
+  }
+  return undefined
 }

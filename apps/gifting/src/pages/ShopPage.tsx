@@ -386,13 +386,12 @@ function Review({
       let sealed: string | undefined
       if (form.deliver === 'email') {
         const issuer = await api.issuerKey()
-        // G4: ℓ sealed to the issuer, bound to this stall, amount and address. A guest's R rides in
-        // the same seal ONLY so the issuer can email the return link from the webhook; it is opened
-        // to send that email and then deleted with the rest.
+        // G4: ONLY ℓ is sealed to the issuer, bound to this stall, amount and address. R never
+        // leaves this browser except in the guest's own return link (G-R3).
         sealed = seal(
           issuer,
           { stallPubkey: shop.pubkey, amountMinor: toMinorUnits(form.amount, safeDecimals(shop.record.issuanceCurrency)) ?? 0, recipient: form.email.trim().toLowerCase() },
-          { linkSecret: secrets.linkSecret!, ...(secrets.refundSecret ? { refundSecret: secrets.refundSecret } : {}) },
+          { linkSecret: secrets.linkSecret! },
         )
       }
       const req = draftRequest(form, {

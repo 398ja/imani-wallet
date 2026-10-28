@@ -284,6 +284,8 @@ async function main() {
     check('Stripe metadata is the draft id only (G9)', JSON.stringify(stripeMetadata) === JSON.stringify([{ draft_id: draft.draftId }]))
     check('the paid gift goes to the key reviewed, not the moved handle', paid.length === 1 && paid[0].delivery.recipientPubkey === bob)
     check('the return page shows no claim link (G8)', !/#k=|\/claim#/.test(await text()))
+    const back = await page.getByTestId('return-link').locator('a').getAttribute('href')
+    check('a guest gets the return link to their own refund key R (option D)', /\/gift-return#r=[0-9a-f]{64}$/.test(back ?? ''), back ?? '')
 
     // Paying the same draft again (back button) answers the same session.
     const again = await page.evaluate(async (id) => (await fetch('/api/v1/checkout/purchase', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draftId: id }) })).json(), draft.draftId)
@@ -303,6 +305,7 @@ async function main() {
       'the seal opens only for the issuer and is bound to stall, amount and address (G4)',
       opened.stallPubkey === stall && opened.amountMinor === 2000 && opened.recipient === 'carol@example.com' && /^[0-9a-f]{64}$/.test(String(opened.linkSecret)),
     )
+    check('the seal carries the link secret only, never the refund secret (G-R3)', !('refundSecret' in opened))
     check('the draft never echoes the seal back to the page', !(await page.evaluate(() => document.body.innerHTML)).includes('v1.'))
 
     check('no page errors', errors.length === 0, errors.join(' | '))
