@@ -7,7 +7,6 @@ import { Button } from '@wallet/components/ui/Button'
 import { Avatar } from '@wallet/components/ui/Avatar'
 import { fetchMerchantRecord } from '@wallet/lib/merchant'
 import { merchantBranding } from '@wallet/lib/branding'
-import { shortPubkey } from '@wallet/lib/format'
 import { getDecimals } from '@imani/money'
 
 import { ApiError, CODES, COPY, giftingApi } from '../lib/api'
@@ -29,7 +28,7 @@ import {
   type FormErrors,
   type GiftForm,
 } from '../lib/draft'
-import { normaliseRecipientHandle } from '../lib/handle'
+import { displayHandle, normaliseRecipientHandle } from '../lib/handle'
 import { newGiftSecrets, seal } from '../lib/gift'
 import { loadShop, robotsFor, SHOP_COPY, type Shop, type ShopState } from '../lib/shop'
 import type { Session } from '../lib/signer'
@@ -147,7 +146,7 @@ function ShopHeader({ shop, children }: { shop: Shop; children?: React.ReactNode
         <Avatar src={shop.branding.picture} name={shop.name} />
         <div className="min-w-0">
           <h1 className="truncate text-title font-semibold">{shop.name}</h1>
-          <p className="text-sm text-mono-500">{shop.nip05}</p>
+          <p className="text-sm text-mono-500">{displayHandle(shop.nip05)}</p>
         </div>
       </div>
       {(shop.branding.about || r.storeDescription) && <p className="mb-2 text-callout">{shop.branding.about || r.storeDescription}</p>}
@@ -283,8 +282,9 @@ function GiftFlow({
               <div className="mt-2 flex items-center gap-2 text-sm" data-testid="resolved-recipient">
                 <Avatar src={resolved.picture} name={resolved.name ?? normaliseRecipientHandle(form.handle) ?? ''} />
                 <span>
-                  <span className="font-medium">{resolved.name ?? normaliseRecipientHandle(form.handle)}</span>{' '}
-                  <span className="text-mono-500">{shortPubkey(resolved.pubkey)}</span>
+                  {/* Who this is, by name and handle: what a buyer can check. Never a key. */}
+                  <span className="font-medium">{resolved.name ?? displayHandle(normaliseRecipientHandle(form.handle) ?? '')}</span>{' '}
+                  {resolved.name && <span className="text-mono-500">{displayHandle(normaliseRecipientHandle(form.handle) ?? '')}</span>}
                 </span>
               </div>
             )}
@@ -475,9 +475,7 @@ function Review({
           <Avatar src={shop.branding.picture} name={shop.name} />
           <div>
             <p className="font-medium">{shop.name}</p>
-            <p className="text-xs text-mono-500">
-              {shop.nip05} · {shortPubkey(shop.pubkey)}
-            </p>
+            <p className="text-xs text-mono-500">{displayHandle(shop.nip05)}</p>
           </div>
         </div>
         <p className="text-title font-semibold" data-testid="review-amount">
@@ -490,8 +488,8 @@ function Review({
         {draft.delivery.kind === 'self' && <p data-testid="review-recipient">Your wallet{session ? '' : ' (sign in again to confirm)'}</p>}
         {draft.delivery.kind === 'handle' && draft.delivery.recipientPubkey && (
           <div data-testid="review-recipient">
-            <p className="font-medium">{normaliseRecipientHandle(form.handle)}</p>
-            <p className="text-xs text-mono-500">Key {shortPubkey(draft.delivery.recipientPubkey)}. Check this is the right person.</p>
+            <p className="font-medium">{displayHandle(normaliseRecipientHandle(form.handle) ?? '')}</p>
+            <p className="text-xs text-mono-500">Check this is the right person. The gift goes to their wallet as it is now.</p>
             <p className="mt-1 text-sm text-mono-500">If they don&apos;t take it by {day(deadline)}, it comes back to you.</p>
           </div>
         )}
