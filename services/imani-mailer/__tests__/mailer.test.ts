@@ -1,92 +1,218 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-import { clean, createMailer, recipientTag, render, safeUrl, TemplateError, type Provider } from '../mailer'
+import { describe, expect, it } from 'vitest'
 
-const HOSTS = ['imani.casa']
-const claimFields = {
-  stall: 'Alice Bakery',
-  amount: '€20.00',
-  claimBy: '27 Nov 2026',
-  claimUrl: `https://imani.casa/claim#${'ab'.repeat(32)}`,
-  message: 'Happy birthday',
+import { createMailer } from '../mailer'
+import { createStore } from '../store'
+import { TransportError } from '../transport'
+import { CLAIM_SECRET, claimFields, client, devConfig, memoryTransport } from './fixtures'
+
+function setup(overrides: Record<string, string | undefined> = {}, stateFile: string | null = null) {
+  const config = devConfig(overrides)
+  const transport = memoryTransport()
+  const lines: Array<Record<string, unknown>> = []
+  let t = 1_700_000_000_000
+  const store = createStore({ file: stateFile, ttlMs: config.idempotencyTtlHours * 3_600_000 })
+  const mailer = createMailer({ config, transport, store, log: (l) => lines.push(l), now: () => t })
+  const issuer = client(config, 'purchase-issuer')
+  return { config, transport, lines, mailer, issuer, store, advance: (ms: number) => (t += ms) }
 }
-
-describe('templates', () => {
-  it('the claim email: secret only in the body link, never the subject', () => {
-    const r = render('gift-claim', claimFields, HOSTS)
-    expect(r.subject).toBe('Someone sent you a voucher for Alice Bakery')
-    expect(r.subject).not.toContain('ab'.repeat(32))
-    expect(r.text).toContain(`https://imani.casa/claim#${'ab'.repeat(32)}`)
-    expect(r.text).toMatch(/Don't forward it/)
-    expect(r.text).toMatch(/never asks for card details or passwords/)
-  })
-  it('refuses a link to another host or not https', () => {
-    expect(() => render('gift-claim', { ...claimFields, claimUrl: 'https://evil.example/claim#x' }, HOSTS)).toThrow(TemplateError)
-    expect(() => render('gift-claim', { ...claimFields, claimUrl: 'http://imani.casa/claim#x' }, HOSTS)).toThrow(TemplateError)
-  })
-  it('fields are plain text', () => {
-    expect(clean('<b>hi</b>\u0007')).toBe('bhi/b')
-    expect(render('gift-claim', { ...claimFields, from: '<script>Eve' }, HOSTS).subject).toBe('scriptEve sent you a voucher for Alice Bakery')
-  })
-  it('every template renders with its fields, and refuses without them', () => {
-    expect(render('gift-receipt', { stall: 'A', amount: '€1', recipient: 'bob@example.com' }, HOSTS).text).toMatch(/spam/)
-    expect(render('gift-return-link', { stall: 'A', claimBy: 'x', returnUrl: 'https://imani.casa/gift-return#r=1' }, HOSTS).text).toMatch(/take it back/)
-    expect(render('gift-bounced', { recipient: 'bob@exmaple.com' }, HOSTS).text).toMatch(/couldn't deliver/)
-    expect(render('gift-reminder', { stall: 'A', when: 'expires in 7 days', returnUrl: 'https://imani.casa/gift-return#r=1' }, HOSTS).subject).toMatch(/7 days/)
-    expect(() => render('gift-receipt', {}, HOSTS)).toThrow(TemplateError)
-  })
-  it('safeUrl', () => {
-    expect(safeUrl('https://imani.casa/x', HOSTS)).toBe('https://imani.casa/x')
-    expect(safeUrl('javascript:alert(1)', HOSTS)).toBeNull()
-  })
+const claim = (key = 'evt_123:claim', to = 'Bob@Example.com', fields: Record<string, unknown> = claimFields) => ({
+  template: 'gift-claim',
+  to,
+  fields,
+  idempotencyKey: key,
 })
 
 describe('sending', () => {
-  const setup = (provider?: Provider) => {
-    const lines: Array<Record<string, unknown>> = []
-    const p: Provider = provider ?? { send: vi.fn(async () => ({ id: 'm1' })) }
-    let t = 0
-    const mailer = createMailer({ provider: p, from: 'gifts@imani.casa', allowedHosts: HOSTS, now: () => (t += 1000), log: (l) => lines.push(l), perRecipientPerHour: 3 })
-    return { mailer, lines, p }
-  }
-  const req = (key = 'evt_1:claim') => ({ template: 'gift-claim' as const, to: 'Bob@Example.com', fields: claimFields, idempotencyKey: key })
+  it('renders, sends one message to one recipient from the service address', async () => {
+    const { mailer, issuer, transport } = setup()
+    const out = await mailer.send(issuer, claim())
+    expect(out).toMatchObject({ ok: true, status: 202, duplicate: false, sandboxed: false })
+    expect(transport.sent).toHaveLength(1)
+    const m = transport.sent[0]
+    expect(m.to).toBe('Bob@Example.com')
+    expect(m.fromName).toBe('Imani gifts')
+    expect(m.subject).toBe('Alice sent you a voucher for Card Test Bakery')
+    expect(m.messageId).toMatch(/^<[0-9a-f-]{36}@imani\.test>$/)
+    expect(m.headers).toMatchObject({ 'Auto-Submitted': 'auto-generated', 'X-Imani-Template': 'gift-claim' })
+  })
 
-  it('sends once per idempotency key (one email per gift)', async () => {
-    const { mailer, p } = setup()
-    expect(await mailer.send(req())).toMatchObject({ status: 202, duplicate: false })
-    expect(await mailer.send(req())).toMatchObject({ status: 202, duplicate: true })
-    expect(p.send).toHaveBeenCalledTimes(1)
-  })
-  it('never logs the address, the body or the link', async () => {
-    const { mailer, lines } = setup()
-    await mailer.send(req())
+  it('never logs the address, the link, the secret, the message or the subject', async () => {
+    const { mailer, issuer, lines } = setup()
+    await mailer.send(issuer, claim())
+    await mailer.send(issuer, claim('evt_123:claim:other', 'nope'))
+    await mailer.send(issuer, claim('evt_124:claim', 'bob@example.com', { ...claimFields, claimUrl: 'https://evil.test/#x' }))
     const all = JSON.stringify(lines)
-    expect(all).not.toMatch(/bob@example\.com/i)
-    expect(all).not.toContain('ab'.repeat(32))
-    expect(all).not.toContain('Happy birthday')
-    expect(all).toContain(recipientTag('bob@example.com'))
+    for (const s of ['bob@example.com', 'Bob@Example.com', CLAIM_SECRET, 'claim#', 'Happy birthday', 'Card Test Bakery', 'evil.test']) {
+      expect(all.toLowerCase()).not.toContain(s.toLowerCase())
+    }
+    expect(lines.find((l) => l.event === 'mail_accepted')?.to).toMatch(/^[0-9a-f]{16}$/)
   })
-  it('rate limits per recipient', async () => {
-    const { mailer } = setup()
-    for (let i = 0; i < 3; i++) expect((await mailer.send(req(`evt_${i}:claim`))).status).toBe(202)
-    expect((await mailer.send(req('evt_9:claim'))).status).toBe(429)
+})
+
+describe('authorisation', () => {
+  it('a client may only send its own templates', async () => {
+    const { mailer, config, transport } = setup()
+    const out = await mailer.send(client(config, 'receipts'), claim())
+    expect(out).toMatchObject({ ok: false, status: 403, error: 'template_not_allowed' })
+    expect(transport.sent).toHaveLength(0)
   })
-  it('a hard bounce suppresses the address; nothing is re-sent there', async () => {
-    const { mailer } = setup()
-    mailer.bounce('bob@example.com', true)
-    expect((await mailer.send(req())).status).toBe(409)
+
+  it('unknown templates and unknown request properties are refused', async () => {
+    const { mailer, issuer } = setup()
+    expect(await mailer.send(issuer, { ...claim(), template: 'nope' })).toMatchObject({ status: 400, error: 'unknown_template' })
+    expect(await mailer.send(issuer, { ...claim(), cc: 'x@y.z' } as never)).toMatchObject({ status: 400, error: 'invalid_request' })
+    expect(await mailer.send(issuer, { ...claim(), fields: [] as never })).toMatchObject({ status: 400 })
   })
-  it('a provider failure is a 502 and is not remembered as sent', async () => {
-    let fail = true
-    const { mailer } = setup({ send: async () => { if (fail) throw new Error('down'); return { id: 'm2' } } })
-    expect((await mailer.send(req())).status).toBe(502)
-    fail = false
-    expect(await mailer.send(req())).toMatchObject({ status: 202, id: 'm2' })
+})
+
+describe('recipients', () => {
+  it.each(['bob@example.com, eve@example.com', 'bob@example.com\r\nBcc: eve@example.com', '"Bob" <bob@example.com>', 'bob', ''])('refuses %j', async (to) => {
+    const { mailer, issuer, transport } = setup()
+    expect(await mailer.send(issuer, claim('evt_9:claim', to))).toMatchObject({ ok: false, status: 400 })
+    expect(transport.sent).toHaveLength(0)
   })
-  it('refuses bad input', async () => {
-    const { mailer } = setup()
-    expect((await mailer.send({ ...req(), to: 'nope' })).status).toBe(400)
-    expect((await mailer.send({ ...req(), idempotencyKey: 'x' })).status).toBe(400)
-    expect((await mailer.send({ ...req(), fields: { ...claimFields, claimUrl: 'https://evil.example/' } })).status).toBe(400)
+
+  it('deny and allow domains, subdomains included', async () => {
+    const deny = setup({ MAILER_RECIPIENT_DENY_DOMAINS: 'example.com' })
+    expect(await deny.mailer.send(deny.issuer, claim('evt_1:claim', 'bob@mail.example.com'))).toMatchObject({ status: 403, error: 'recipient_refused' })
+    const allow = setup({ MAILER_RECIPIENT_ALLOW_DOMAINS: 'imani.test' })
+    expect(await allow.mailer.send(allow.issuer, claim('evt_1:claim', 'bob@example.com'))).toMatchObject({ status: 403 })
+    expect(await allow.mailer.send(allow.issuer, claim('evt_2:claim', 'qa@team.imani.test'))).toMatchObject({ ok: true })
+  })
+
+  it('a suppressed recipient is refused until lifted', async () => {
+    const { mailer, issuer, config } = setup()
+    const ops = client(config, 'ops')
+    mailer.suppress(ops, 'BOB@example.com', 'hard-bounce')
+    expect(await mailer.send(issuer, claim())).toMatchObject({ status: 409, error: 'recipient_suppressed' })
+    expect(mailer.unsuppress(ops, 'bob@example.com')).toBe(true)
+    expect(await mailer.send(issuer, claim())).toMatchObject({ ok: true })
+  })
+
+  it('sandbox: everything goes to one address, the subject says so, and the original address is not in the message', async () => {
+    const { mailer, issuer, transport } = setup({ MAILER_SANDBOX_REDIRECT: 'qa@imani.test' })
+    expect(await mailer.send(issuer, claim())).toMatchObject({ ok: true, sandboxed: true })
+    const m = transport.sent[0]
+    expect(m.to).toBe('qa@imani.test')
+    expect(m.subject).toMatch(/^\[sandbox\] /)
+    expect(JSON.stringify(m).toLowerCase()).not.toContain('bob@example.com')
+    expect(m.headers['X-Imani-Sandbox-Recipient']).toMatch(/^[0-9a-f]{16}$/)
+  })
+})
+
+describe('idempotency', () => {
+  it('the same key and request sends once, and answers the same message id', async () => {
+    const { mailer, issuer, transport } = setup()
+    const a = await mailer.send(issuer, claim())
+    const b = await mailer.send(issuer, claim())
+    expect(b).toMatchObject({ ok: true, duplicate: true })
+    expect(a.ok && b.ok && a.messageId === b.messageId).toBe(true)
+    expect(transport.sent).toHaveLength(1)
+  })
+
+  it('the same key with a different request is a conflict, never a silent no-op', async () => {
+    const { mailer, issuer, transport } = setup()
+    await mailer.send(issuer, claim())
+    expect(await mailer.send(issuer, claim('evt_123:claim', 'eve@example.com'))).toMatchObject({ status: 409, error: 'idempotency_conflict' })
+    expect(transport.sent).toHaveLength(1)
+  })
+
+  it('concurrent duplicates send once', async () => {
+    const { mailer, issuer, transport } = setup()
+    const outs = await Promise.all(Array.from({ length: 10 }, () => mailer.send(issuer, claim())))
+    expect(transport.sent).toHaveLength(1)
+    expect(outs.filter((o) => o.ok && !o.duplicate)).toHaveLength(1)
+  })
+
+  it('keys are per client: another client using the same key is a separate message', async () => {
+    const { mailer, issuer, config, transport } = setup()
+    const receipt = { template: 'gift-receipt', to: 'bob@example.com', fields: { stall: 'A', amount: '£1', recipient: 'Bob' }, idempotencyKey: 'shared-key-1' }
+    await mailer.send(issuer, receipt)
+    expect(await mailer.send(client(config, 'receipts'), receipt)).toMatchObject({ ok: true, duplicate: false })
+    expect(transport.sent).toHaveLength(2)
+  })
+
+  it('a failed send is not remembered, so the caller can retry with the same key', async () => {
+    const { mailer, issuer, transport } = setup()
+    transport.failNext(new TransportError('ECONNECTION', true))
+    expect(await mailer.send(issuer, claim())).toMatchObject({ status: 503, error: 'transport_unavailable', retryable: true })
+    expect(await mailer.send(issuer, claim())).toMatchObject({ ok: true, duplicate: false })
+  })
+
+  it('a permanent rejection is a 502 and not retryable', async () => {
+    const { mailer, issuer, transport } = setup()
+    transport.failNext(new TransportError('550 no such user', false))
+    expect(await mailer.send(issuer, claim())).toMatchObject({ status: 502, error: 'transport_rejected', retryable: false })
+  })
+
+  it('survives a restart through the state file, written 0600, holding no address', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'mailer-state-')), 'state.json')
+    const first = setup({}, file)
+    await first.mailer.send(first.issuer, claim())
+    first.mailer.suppress(client(first.config, 'ops'), 'eve@example.com', 'complaint')
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    const raw = readFileSync(file, 'utf8')
+    expect(raw).not.toContain('example.com')
+    const second = setup({}, file)
+    expect(await second.mailer.send(second.issuer, claim())).toMatchObject({ ok: true, duplicate: true })
+    expect(await second.mailer.send(second.issuer, claim('evt_7:claim', 'eve@example.com'))).toMatchObject({ error: 'recipient_suppressed' })
+    expect(second.transport.sent).toHaveLength(0)
+  })
+
+  it('a corrupt state file refuses to start rather than forgetting suppressions', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'mailer-state-')), 'state.json')
+    writeFileSync(file, '{not json')
+    expect(() => createStore({ file, ttlMs: 1000 })).toThrow(/cannot be used/)
+  })
+
+  it('idempotency entries expire after the TTL', async () => {
+    const { mailer, issuer, transport, advance, config } = setup({ MAILER_IDEMPOTENCY_TTL_HOURS: '1' })
+    await mailer.send(issuer, claim())
+    advance(config.idempotencyTtlHours * 3_600_000 + 1)
+    mailer.housekeeping()
+    expect(await mailer.send(issuer, claim())).toMatchObject({ ok: true, duplicate: false })
+    expect(transport.sent).toHaveLength(2)
+  })
+})
+
+describe('rate limits', () => {
+  it('per recipient per hour, with Retry-After, and it resets', async () => {
+    const { mailer, issuer, advance } = setup({ MAILER_RATE_PER_RECIPIENT_HOUR: '2' })
+    expect(await mailer.send(issuer, claim('k-000001'))).toMatchObject({ ok: true })
+    expect(await mailer.send(issuer, claim('k-000002'))).toMatchObject({ ok: true })
+    const limited = await mailer.send(issuer, claim('k-000003'))
+    expect(limited).toMatchObject({ status: 429, error: 'rate_limited', retryable: true })
+    expect(!limited.ok && limited.retryAfterSeconds! > 0).toBe(true)
+    advance(3_600_001)
+    expect(await mailer.send(issuer, claim('k-000003'))).toMatchObject({ ok: true })
+  })
+
+  it('global per minute', async () => {
+    const { mailer, issuer } = setup({ MAILER_RATE_GLOBAL_MINUTE: '1' })
+    await mailer.send(issuer, claim('k-000001', 'a@example.com'))
+    expect(await mailer.send(issuer, claim('k-000002', 'b@example.com'))).toMatchObject({ status: 429 })
+  })
+
+  it('a refused or failed send does not use up the recipient allowance', async () => {
+    const { mailer, issuer, transport } = setup({ MAILER_RATE_PER_RECIPIENT_HOUR: '1' })
+    transport.failNext(new TransportError('down', true))
+    await mailer.send(issuer, claim('k-000001'))
+    expect(await mailer.send(issuer, claim('k-000002'))).toMatchObject({ ok: true })
+  })
+})
+
+describe('metrics', () => {
+  it('counts by template and outcome, with no recipient or key in any label', async () => {
+    const { mailer, issuer } = setup()
+    await mailer.send(issuer, claim())
+    await mailer.send(issuer, claim())
+    const m = mailer.metrics()
+    expect(m).toContain('imani_mailer_messages_total{template="gift-claim",outcome="accepted"} 1')
+    expect(m).toContain('imani_mailer_messages_total{template="gift-claim",outcome="duplicate"} 1')
+    expect(m).not.toMatch(/example|evt_/)
   })
 })
