@@ -27,9 +27,10 @@
  * bearer token is exactly the failure a wallet full of bearer coupons cannot
  * afford twice.
  */
+import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
-import { valueHolding, planSpend, checkRecipient, needsRecipientLookup } from '@imani/wallet-core'
+import { valueHolding, planSpend, checkRecipient, needsRecipientLookup, limitsForSender, type BusinessSenders } from '@imani/wallet-core'
 import { merchantStats, outstandingLiability, expiringSoon } from '@imani/reports'
 
 import { verifyNip98, type AuthFailure } from './nip98.js'
@@ -46,6 +47,7 @@ import {
 } from './redeem.js'
 import { parseLicenceRequest, checkLicence, licenceIssuerPubkey } from './licence.js'
 import { parseLinksStatusRequest, linksStatus, linksMintUrl } from './links.js'
+import { businessSendersFrom, linksPlan, parseLinksPlanRequest } from './linkPlan.js'
 import {
   parseGenerateRequest,
   generateBody,
@@ -232,6 +234,22 @@ export function setMintFetch(impl: typeof fetch): void {
 
 export function resetMintFetch(): void {
   mintFetch = fetch
+}
+
+/**
+ * The business senders and their link limit (#366), from WALLET_API_BUSINESS_SENDERS(_FILE). Read at
+ * start-up: a malformed list refuses the boot (`loadBusinessSenders`) rather than quietly giving an
+ * employer the individual limit. A seam so tests can name business senders.
+ */
+let businessSenders: BusinessSenders = { pubkeys: new Set(), maxOutstanding: 500 }
+
+export function loadBusinessSenders(env: NodeJS.ProcessEnv = process.env): BusinessSenders {
+  businessSenders = businessSendersFrom(env, (p) => readFileSync(p, 'utf8'))
+  return businessSenders
+}
+
+export function setBusinessSenders(value: BusinessSenders): void {
+  businessSenders = value
 }
 
 /** One header, lower-cased and de-duplicated, or undefined. */
@@ -815,6 +833,39 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     } catch {
       // 502: the request was fine and the mint did not answer. Nothing is guessed, and nothing
       // about the caller's links is logged.
+      return json(res, 502, { error: 'mint-unavailable', detail: 'the mint did not answer; nothing was changed, try again' })
+    }
+  }
+
+  /**
+   * #366: the signer's Cashlink limits, by account type. Read-only and keyless; the account type is
+   * the deployment's (WALLET_API_BUSINESS_SENDERS), never the caller's claim.
+   */
+  if (path === '/v1/links/limits' && method === 'GET') {
+    return answer(200, { pubkey: auth.pubkey, limits: limitsForSender(auth.pubkey, businessSenders) })
+  }
+
+  /**
+   * #366: before a caller sends one link or a batch. Counts the caller's own open links from the
+   * MINT's states, applies the signer's limits, and says for each coupon whether a link holding it
+   * can be armed to come back on its own. Nothing is stored, signed or spent; the send itself happens
+   * on the caller's side (`@imani/cashlink-sender`), which is where the keys are.
+   */
+  if (path === '/v1/links/plan' && method === 'POST') {
+    const mint = linksMintUrl()
+    if (!mint) {
+      return json(res, 503, { error: 'not-configured', detail: 'WALLET_API_MINT_URL is unset, so no link can be checked' })
+    }
+    const parsed = readJson(body)
+    if (!parsed.ok) return json(res, 400, parsed.problem)
+    const input = parseLinksPlanRequest(parsed.value, mint, Math.floor(Date.now() / 1000))
+    if (!input.ok) {
+      metrics.validationErrors++
+      return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
+    }
+    try {
+      return answer(200, await linksPlan(input.value, auth.pubkey, businessSenders, mint, mintFetch))
+    } catch {
       return json(res, 502, { error: 'mint-unavailable', detail: 'the mint did not answer; nothing was changed, try again' })
     }
   }
@@ -1457,6 +1508,8 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()
   // IW-04: before listening, not after. A process that cannot keep its replay promise should
   // never accept the first request.
   assertSingleReplica()
+  // #366: refuses to start on a malformed business-sender list, before the first request.
+  loadBusinessSenders()
   server.listen(PORT, () => {
     console.log(`[wallet-api] listening on ${PORT}`)
   })

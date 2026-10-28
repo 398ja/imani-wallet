@@ -60,3 +60,25 @@ export {
   type SendVerdict,
   type SendRefusal,
 } from './recipient'
+
+export {
+  INDIVIDUAL_MAX_OUTSTANDING,
+  INDIVIDUAL_MAX_EXPIRED_UNRETURNED,
+  BASE_RESTORE_GAP,
+  DEFAULT_BUSINESS_MAX_OUTSTANDING,
+  ABSOLUTE_MAX_OUTSTANDING,
+  INDIVIDUAL_LIMITS,
+  LinkLimitsConfigError,
+  limitsFor,
+  limitsForSender,
+  linkAllowance,
+  parseBusinessSenders,
+  restoreGapFor,
+  restoreScanEnd,
+  expiredCapFor,
+  type AccountType,
+  type BusinessSenders,
+  type LinkAllowance,
+  type LinkCountsInput,
+  type LinkLimits,
+} from './linkLimits'
