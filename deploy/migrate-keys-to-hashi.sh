@@ -16,7 +16,7 @@
 # plaintext this needs to copy no longer exists anywhere.
 set -euo pipefail
 
-VAULT_DB="${VAULT_DB:-imani-vault-db-test}"
+VAULT_DB="${VAULT_DB:-mint-db-test}"
 VAULT_DB_NAME="${VAULT_DB_NAME:-imani_vault}"
 HASHI="${HASHI:-cashu-mint-hashicorp-vault-1}"
 HASHI_TOKEN="${HASHI_TOKEN:-dev-root-token}"

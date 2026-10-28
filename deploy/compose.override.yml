@@ -105,7 +105,14 @@ services:
   # ---------------------------------------------------------------------------
   imani-vault-jpa:
     image: ${VAULT_JPA_IMAGE:-docker.398ja.xyz/staging/cashu-vault-jpa:latest}
+    depends_on: !override
+      mint-db:
+        condition: service_healthy
     environment:
+      # Two database servers (see the end of this file): the vault lives on mint-db.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://mint-db:5432/imani_vault
+      SPRING_DATASOURCE_USERNAME: vault
+      SPRING_DATASOURCE_PASSWORD: vault
       # Bearer token required on /vault/** by current cashu-vault-jpa (audit C-2); it refuses to
       # start without one. Local value in imani-deploy/.env.local; the mint presents the same.
       VAULT_API_TOKEN: "${VAULT_API_TOKEN:?set VAULT_API_TOKEN in imani-deploy/.env.local}"
@@ -167,7 +174,19 @@ services:
     # Deliberately a different NAME rather than a rebuild of the registry tag, so
     # `latest` stays whatever was pulled and this cannot be mistaken for it.
     image: ${GATEWAY_PORTAL_IMAGE:-imani-gateway-portal:acl-local}
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      cashback-claim:
+        condition: service_healthy
+      gateway-customer:
+        condition: service_healthy
+      nostr-relay:
+        condition: service_started
     environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/imani_portal
+      SPRING_DATASOURCE_USERNAME: portal
+      SPRING_DATASOURCE_PASSWORD: portal
       # The portal authenticates merchants either by NIP-98 or by trusting the
       # edge proxy, which forwards the NAP-verified pubkey as X-Auth-Pubkey
       # alongside X-Edge-Auth (the raw shared secret). With no secret configured
@@ -288,8 +307,12 @@ services:
     #
     # Same database and credentials as gateway-core, since it IS gateway-core's
     # image running a second role.
-    depends_on:
-      imani-gateway-db:
+    #
+    # Restarts on failure: on a FRESH app-db the first boot runs initdb and restarts Postgres
+    # once, and an account-app that connects in that window exits for good.
+    restart: unless-stopped
+    depends_on: !override
+      app-db:
         condition: service_healthy
     networks:
       - imani-internal
@@ -304,9 +327,9 @@ services:
       GATEWAY_WALLET_MINT_PUBLIC_URL: "${MINT_URL:-http://127.0.0.1.mint:7777}"
       # Exact-origin CORS since gateway-core 0.3x: the wallet dev server is not a production origin.
       GATEWAY_CORE_CORS_ADDITIONAL_ORIGINS: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
-      SPRING_DATASOURCE_URL: jdbc:postgresql://imani-gateway-db:5432/imani_core
-      SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/imani_core
+      SPRING_DATASOURCE_USERNAME: core
+      SPRING_DATASOURCE_PASSWORD: core
       GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_ENABLED: "true"
       GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN: "dev-atomic-ops-token-local-only"
       # Needed only once account-app is built from current gateway-core source
@@ -423,7 +446,20 @@ services:
       # rather than failing loudly as an unset variable. .env.test carries the
       # current ip and deploy/up.sh resolves it dynamically.
       - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      bottin-api:
+        condition: service_healthy
+      bottin-seed:
+        condition: service_completed_successfully
     environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/imani_core
+      SPRING_DATASOURCE_USERNAME: core
+      SPRING_DATASOURCE_PASSWORD: core
+      GATEWAY_API_KEY_DB_URL: jdbc:postgresql://app-db:5432/imani_core
+      GATEWAY_API_KEY_DB_USERNAME: core
+      GATEWAY_API_KEY_DB_PASSWORD: core
       # Same local voucher issuer key as account-app (TrustedIssuerKeysGuard).
       GATEWAY_FULFILMENT_TRUSTED_ISSUER_PUBKEYS: "${VOUCHER_ISSUER_PUBKEYS:?set VOUCHER_ISSUER_PUBKEYS in imani-deploy/.env.local}"
       # imani-security >= 0.2.0 binds NIP-98 `u` to this origin. Locally that is the wallet dev
@@ -518,7 +554,13 @@ services:
       BLOSSOM_SERVER_URL: ${BLOSSOM_SERVER_URL:-http://localhost:28089}
 
   bottin-api:
+    depends_on: !override
+      app-db:
+        condition: service_healthy
     environment:
+      BOTTIN_DATABASE_URL: jdbc:postgresql://app-db:5432/bottin
+      BOTTIN_DATABASE_USER: bottin
+      BOTTIN_DATABASE_PASSWORD: bottin
       BOTTIN_API_USER: ${BOTTIN_ADMIN_USERNAME:-imani}
       BOTTIN_API_PASSWORD: ${BOTTIN_ADMIN_PASSWORD:-test-bottin-admin-9ace19b7fb61b5007225f745}
 
@@ -638,7 +680,17 @@ services:
       # rather than failing loudly as an unset variable. .env.test carries the
       # current ip and deploy/up.sh resolves it dynamically.
       - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      gateway-core:
+        condition: service_healthy
+      nostr-relay:
+        condition: service_started
     environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/imani_customer
+      SPRING_DATASOURCE_USERNAME: customer
+      SPRING_DATASOURCE_PASSWORD: customer
       # Seals the wallet's proofs and pending voucher recipes; current builds refuse to start
       # without it. Losing it locks the wallet database (that is what happened to the old one,
       # backed up in ~/imani-backups). Local value in imani-deploy/.env.local.
@@ -718,7 +770,123 @@ services:
   # imani-security >= 0.2.0 refuses to boot without the origin NIP-98 `u` tags are bound to.
   # The wallet calls merchant-service through the dev server, so that origin.
   merchant-service:
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      bottin-api:
+        condition: service_healthy
+      payment-adapter:
+        condition: service_healthy
     environment:
       GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      # Its own database, as in prod. The test compose pointed it at imani_gateway, a database
+      # it shared with nothing but whose name it never owned.
+      MERCHANT_DB_URL: jdbc:postgresql://app-db:5432/imani_merchant
+      MERCHANT_DB_USERNAME: merchant
+      MERCHANT_DB_PASSWORD: merchant
+
+  # ---------------------------------------------------------------------------
+  # TWO database servers, as in prod and demo (imani-deploy 70f2704):
+  #
+  #   app-db   one database and login per app service: imani_core (gateway-core and
+  #            account-app), imani_customer, imani_portal, imani_merchant,
+  #            payment_gateway, bottin, imani_cashback_claim
+  #   mint-db  the mint's data, kept apart: imani_vault (and cashu_mint, unused locally)
+  #
+  # They replace the test compose's four servers (imani-gateway-db, imani-vault-db,
+  # imani-payment-db, bottin-db), removed here with !reset. Databases and roles are
+  # created by deploy/initdb/{app,mint}/01-databases.sh on an EMPTY volume only; to start
+  # over: ./deploy/up.sh down && docker volume rm imani-test_app-db-data imani-test_mint-db-data
+  # ---------------------------------------------------------------------------
+  app-db:
+    image: postgres:16
+    container_name: app-db-test
+    restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=200"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - app-db-data:/var/lib/postgresql/data
+      - ${WALLET_DEPLOY_DIR:-.}/initdb/app:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1: over TCP, as the services connect. During first-boot initdb Postgres
+      # listens only on its socket, so a socket check reports healthy too early.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks:
+      - imani-internal
+
+  mint-db:
+    image: postgres:16
+    container_name: mint-db-test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - mint-db-data:/var/lib/postgresql/data
+      - ${WALLET_DEPLOY_DIR:-.}/initdb/mint:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1: over TCP, as the services connect. During first-boot initdb Postgres
+      # listens only on its socket, so a socket check reports healthy too early.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks:
+      - imani-internal
+
+  imani-gateway-db: !reset null
+  imani-vault-db: !reset null
+  imani-payment-db: !reset null
+  bottin-db: !reset null
+
+  payment-adapter:
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      stripe-mock:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/payment_gateway
+      SPRING_DATASOURCE_USERNAME: payment
+      SPRING_DATASOURCE_PASSWORD: payment
+
+  cashback-claim:
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+    environment:
+      CASHBACK_CLAIM_DB_URL: jdbc:postgresql://app-db:5432/imani_cashback_claim
+      CASHBACK_CLAIM_DB_USER: cashback
+      CASHBACK_CLAIM_DB_PASSWORD: cashback
+
+  # Seeds the dev keyset rows the mint's preload file names, now into mint-db.
+  vault-seed:
+    command:
+      - "until pg_isready -h mint-db -U vault; do sleep 1; done && PGPASSWORD=vault psql -h mint-db -U vault -d imani_vault -f /seed-vault.sql && echo 'Vault seeded successfully'"
+
+  # Seeds bottin's imani.local domain (deploy/seed-bottin.sql) once bottin-api has migrated,
+  # so a blank stack can register handles. gateway-core, which registers them, waits for it.
+  bottin-seed:
+    image: postgres:16
+    container_name: bottin-seed-test
+    depends_on:
+      bottin-api:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: bottin
+    entrypoint: ["psql", "-v", "ON_ERROR_STOP=1", "-h", "app-db", "-U", "bottin", "-d", "bottin", "-f", "/seed-bottin.sql"]
+    volumes:
+      - ${WALLET_DEPLOY_DIR:-.}/seed-bottin.sql:/seed-bottin.sql:ro
+    restart: "no"
+    networks:
+      - imani-internal
+
 volumes:
   blossom-data:
+  app-db-data:
+  mint-db-data:
