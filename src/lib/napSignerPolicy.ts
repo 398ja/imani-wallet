@@ -1,13 +1,17 @@
 /**
- * The wallet's NAP signer page (#411, NAP extension 0002).
+ * Which sister sites this wallet signs in, and what each may have signed (#411, NAP extension 0002).
  *
- * Sister sites (subscription.imani.casa, gifting.imani.casa) never hold the stall's key. They open
- * THIS page in a popup on the wallet's origin and ask it, over `postMessage`, to sign their NAP
- * login. This page checks who is asking with the browser-reported origin, asks the person once
- * ("Allow subscription.imani.casa to sign you in?"), and signs only proofs addressed to that site.
+ * Sister sites (subscription.imani.casa, gifting.imani.casa) never hold the stall's key. They get
+ * their NAP login signed by the wallet over `postMessage`, in one of two ways, both bound by THIS
+ * policy:
+ * - the wallet opened the site (Settings › Subscription › Upgrade), and the unlocked wallet tab
+ *   answers it (`sisterSiteSigner.ts`);
+ * - the site opened the wallet's `/nap/signer` popup (gifting's "Sign in with Imani wallet"), which
+ *   unlocks the stored key there, asks once, and answers (`napSignerPage.ts`).
+ * Either way nap checks who is asking with the browser-reported origin, and signs only proofs
+ * addressed to that site.
  *
- * Which sites, and what each may have signed, is the POLICY below. It is code, on purpose: a policy
- * the relying site could influence would be no policy at all.
+ * It is code, on purpose: a policy the relying site could influence would be no policy at all.
  */
 import type { CrossOriginPolicy } from '@imani/nap-client-web'
 

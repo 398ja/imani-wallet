@@ -11,11 +11,16 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import '../shared/nut18v.js'
 
 import App from './App.tsx'
+import { NapSignerPage } from './pages/NapSignerPage'
 import { initNative, hideSplash } from './lib/native'
 import { loadTrustedMints } from './lib/trustedMint'
 import './index.css'
 
 const queryClient = new QueryClient()
+
+// The NAP signer popup (#411, #410 G10) is its own page, not a route in the app: it must not start
+// a session, a relay connection or the DM poller, and it answers only the site that opened it.
+const SIGNER_PAGE = window.location.pathname.replace(/\/+$/, '') === '/nap/signer'
 
 // Android back button, status bar. No-op in a browser.
 initNative()
@@ -23,15 +28,19 @@ initNative()
 // Ask the gateway which mint is ours before anything can receive a coupon (#133).
 // Started here so it is usually done by the time login finishes; `startDmPoll`
 // awaits the same promise before the poller's first catch-up. Never rejects.
-void loadTrustedMints()
+if (!SIGNER_PAGE) void loadTrustedMints()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </QueryClientProvider>
+    {SIGNER_PAGE ? (
+      <NapSignerPage />
+    ) : (
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </QueryClientProvider>
+    )}
   </StrictMode>,
 )
 
