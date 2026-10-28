@@ -15,6 +15,7 @@ import { createApp } from './app.ts'
 import { readConfig, ConfigError } from './config.ts'
 import { LicenceIssuer, sellerFrom } from './issuer.ts'
 import { Ledger } from './ledger.ts'
+import { cachedMerchantReader, readMerchantStanding } from './merchantRole.ts'
 import { stripeClient } from './stripe.ts'
 
 const MIME: Record<string, string> = {
@@ -46,6 +47,8 @@ async function main() {
     issuer: new LicenceIssuer({ walletUrl: config.walletUrl, edgeSecret: config.edgeSecret, internalRelay: config.internalRelay, seller }),
     stripe: stripeClient(config.stripeSecretKey),
     catalogBody: (await readFile(config.catalogPath, 'utf8')).trim(),
+    // gateway-customer serves the public `POST /api/v1/nostr/query` the role is read from.
+    merchantStanding: cachedMerchantReader((pubkey) => readMerchantStanding(config.walletUrl, pubkey)),
   })
   const staticDir = process.env.SUBSCRIPTION_STATIC_DIR?.trim()
   const base = config.basePath
@@ -83,7 +86,7 @@ async function main() {
         headers: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, Array.isArray(v) ? v[0] : v])),
         body: Buffer.concat(chunks).toString('utf8'),
       })
-      res.writeHead(out.status, { 'Content-Type': 'application/json', ...(out.headers ?? {}) })
+      res.writeHead(out.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...(out.headers ?? {}) })
       res.end(JSON.stringify(out.body))
     } catch (error) {
       console.error(JSON.stringify({ event: 'request_failed', path: url.pathname, error: String(error) }))
@@ -109,6 +112,12 @@ async function serveStatic(dir: string, path: string, res: import('node:http').S
     'Cache-Control': file.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable',
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
+    // The page opens the wallet's signer page as a popup and talks to it (NAP extension 0002).
+    // `same-origin` would sever that window; `same-origin-allow-popups` keeps it and still gives
+    // pages that open US no handle on this window.
+    'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "frame-ancestors 'none'",
   })
   res.end(await readFile(file))
 }

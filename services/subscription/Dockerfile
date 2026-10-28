@@ -33,7 +33,9 @@ RUN npm install --no-package-lock --omit=dev \
       @noble/curves@2.0.1 \
       @noble/hashes@1.8.0 \
       nostr-tools@2.24.1 \
-      tsx@4.19.2
+      tsx@4.19.2 \
+      @imani/nap-core@npm:@398ja/nap-core@0.13.0 \
+      @imani/nap-server@npm:@398ja/nap-server@0.13.0
 
 COPY services/subscription ./services/subscription
 COPY src/lib/licenceIssue.ts src/lib/voucherToken.ts ./src/lib/

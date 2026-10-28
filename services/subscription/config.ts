@@ -10,15 +10,17 @@
  */
 
 export interface SubscriptionConfig {
-  /** Public origin the browser signs NIP-98 for, e.g. https://subscription.imani.casa. */
+  /** Public origin the session cookie is issued for and NAP proofs are addressed to, e.g. https://subscription.imani.casa. */
   publicOrigin: string
   /**
-   * Path the site and API are mounted under on that origin, '' or e.g. '/subscription'. Mounted
-   * under the WALLET's origin, the site can read the key the wallet stored (localStorage is per
-   * origin), which is how a stall sent here from the wallet is already signed in.
+   * Path the site and API are mounted under on that origin, '' or e.g. '/subscription'. The
+   * session cookie is scoped to it.
    */
   basePath: string
-  /** gateway-customer, for minting (`/api/v1/wallet/vouchers`) and delivery (`/api/v1/dm/tokens/send`). */
+  /**
+   * gateway-customer, for minting (`/api/v1/wallet/vouchers`), delivery (`/api/v1/dm/tokens/send`)
+   * and the merchant check (public `POST /api/v1/nostr/query`, merchantRole.ts).
+   */
   walletUrl: string
   /** The edge secret gateway-customer trusts, as `sell-subscription.mjs` sends it. */
   edgeSecret: string
