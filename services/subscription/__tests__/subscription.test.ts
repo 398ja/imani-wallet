@@ -1,23 +1,25 @@
 /**
  * @vitest-environment node
  *
- * subscription.imani.casa end to end at the service boundary: real NIP-98 from a stall key, real
- * Stripe webhook signatures, a real ledger on disk, and the licence it mints read back through the
- * wallet's OWN reader and verifier. Only the gateway and Stripe's API are faked, by URL.
+ * subscription.imani.casa end to end at the service boundary: a real NAP login from a stall key
+ * (merchant-only, #411), real Stripe webhook signatures, a real ledger on disk, and the licence it
+ * mints read back through the wallet's OWN reader and verifier. Only the gateway and Stripe's API
+ * are faked, by URL.
  */
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sha256 } from '@noble/hashes/sha256'
-import { bytesToHex } from '@noble/hashes/utils'
-import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
+import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { acceptCatalog, BUNDLED_CATALOG, entitlementOf, licenceOf, parseCatalog } from '@imani/licence'
+import { buildAuthCompleteRequest, createPrivateKeySigner } from '@imani/nap-client-http'
 
 import { createApp, type Request } from '../app.ts'
+import { SESSION_COOKIE } from '../auth.ts'
 import type { SubscriptionConfig } from '../config.ts'
 import { LicenceIssuer, sellerFrom } from '../issuer.ts'
 import { Ledger } from '../ledger.ts'
+import { type MerchantStanding } from '../merchantRole.ts'
 import { stripeSignatureHeader, type StripeClient } from '../stripe.ts'
 import { catalogSignatureValid } from '../../../src/lib/entitlement.ts'
 
@@ -30,22 +32,50 @@ const STALL_SK = generateSecretKey()
 const STALL = getPublicKey(STALL_SK)
 const ADMIN_SK = generateSecretKey()
 const ADMIN = getPublicKey(ADMIN_SK)
+const CUSTOMER_SK = generateSecretKey()
 const CATALOG = (await readFile(join(__dirname, '..', 'catalog.json'), 'utf8')).trim()
 
-function sign(sk: Uint8Array, method: string, path: string, body = ''): string {
-  const tags = [
-    ['u', `${ORIGIN}${path}`],
-    ['method', method],
-  ]
-  if (body) tags.push(['payload', bytesToHex(sha256(new TextEncoder().encode(body)))])
-  tags.push(['nonce', bytesToHex(crypto.getRandomValues(new Uint8Array(8)))])
-  const e = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, sk)
-  return `Nostr ${Buffer.from(JSON.stringify(e)).toString('base64')}`
+/** Who has a live, signed stall record, as the fake gateway's nostr query answers it. */
+let merchants = new Set<string>()
+/** Standing the fake gateway reports for a key, or `unknown` when it is "down". */
+let gatewayDown = false
+const standing = async (pk: string): Promise<MerchantStanding> => (gatewayDown ? 'unknown' : merchants.has(pk) ? 'merchant' : 'customer')
+
+/** Session cookies by key, from a real NAP login against the app. */
+let cookies = new Map<Uint8Array, string>()
+
+async function login(sk: Uint8Array): Promise<{ status: number; cookie?: string; body: unknown }> {
+  const npub = nip19.npubEncode(getPublicKey(sk))
+  const init = await app.handle({ method: 'POST', path: '/v1/auth/init', headers: {}, body: JSON.stringify({ npub }) })
+  if (init.status !== 200) return { status: init.status, body: init.body }
+  const completion = await buildAuthCompleteRequest({
+    challenge: init.body as Parameters<typeof buildAuthCompleteRequest>[0]['challenge'],
+    signer: createPrivateKeySigner(Buffer.from(sk).toString('hex')),
+  })
+  const out = await app.handle({
+    method: 'POST',
+    path: '/v1/auth/complete',
+    headers: { authorization: completion.authorization },
+    body: new TextDecoder().decode(completion.rawBody),
+  })
+  const set = out.headers?.['Set-Cookie']
+  const cookie = set?.split(';')[0]
+  return { status: out.status, cookie, body: out.body }
 }
 
-const req = (sk: Uint8Array | null, method: string, path: string, payload?: unknown): Request => {
+async function cookieFor(sk: Uint8Array): Promise<string> {
+  const held = cookies.get(sk)
+  if (held) return held
+  const out = await login(sk)
+  if (!out.cookie) throw new Error(`login failed: ${out.status} ${JSON.stringify(out.body)}`)
+  cookies.set(sk, out.cookie)
+  return out.cookie
+}
+
+/** A request with the session cookie of `sk`'s login, or with no session at all. */
+const req = async (sk: Uint8Array | null, method: string, path: string, payload?: unknown): Promise<Request> => {
   const body = payload === undefined ? '' : JSON.stringify(payload)
-  return { method, path, body, headers: sk ? { authorization: sign(sk, method, path, body) } : {} }
+  return { method, path, body, headers: sk ? { cookie: await cookieFor(sk) } : {} }
 }
 
 /** A fake gateway-customer: mints a voucher whose token is the metadata it was given. */
@@ -125,8 +155,13 @@ beforeEach(async () => {
     stripe,
     catalogBody: CATALOG,
     issuer: new LicenceIssuer({ walletUrl: WALLET, edgeSecret: 'edge', internalRelay: 'ws://relay', seller: SELLER, fetch: gateway.fetchImpl, sleep: async () => {} }),
+    merchantStanding: standing,
+    napServerOptions: { minAuthResponseMillis: 0 },
     log: () => {},
   })
+  merchants = new Set([STALL, ADMIN])
+  gatewayDown = false
+  cookies = new Map()
 })
 
 /** Read a delivered "token" (the fake gateway's: the signed metadata) as the wallet would. */
@@ -161,31 +196,122 @@ function invoicePaid(id: string, start: number, end: number, tier = 'basic', ter
   return { method: 'POST', path: '/v1/stripe/webhook', body, headers: { 'stripe-signature': stripeSignatureHeader(body, WEBHOOK_SECRET) } }
 }
 
-describe('signing in is a signature, nothing else', () => {
-  it('refuses an unsigned or replayed request, and answers a signed one for that key only', async () => {
-    expect((await app.handle(req(null, 'GET', '/v1/me'))).status).toBe(401)
-    const r = req(STALL_SK, 'GET', '/v1/me')
-    const ok = await app.handle(r)
-    expect(ok).toMatchObject({ status: 200, body: { pubkey: STALL, admin: false, subscriptions: [] } })
-    expect((await app.handle(r)).status).toBe(401)
+describe('signing in: a NAP session, merchants only (#411)', () => {
+  it('refuses every account route without a session', async () => {
+    for (const [method, path] of [
+      ['GET', '/v1/me'],
+      ['POST', '/v1/checkout'],
+      ['POST', '/v1/portal'],
+      ['POST', '/v1/licences/resend'],
+      ['POST', '/v1/admin/grants'],
+      ['POST', '/v1/admin/revoke'],
+    ] as const) {
+      expect((await app.handle(await req(null, method, path))).status, `${method} ${path}`).toBe(401)
+    }
   })
 
-  it('refuses a signature for a different path or body', async () => {
-    const r = req(STALL_SK, 'POST', '/v1/checkout', { tier: 'basic', term: 'monthly' })
-    expect((await app.handle({ ...r, path: '/v1/portal' })).status).toBe(401)
-    expect((await app.handle({ ...r, body: JSON.stringify({ tier: 'pro', term: 'annual' }) })).status).toBe(401)
+  it('the public routes stay public', async () => {
+    expect((await app.handle({ method: 'GET', path: '/v1/plans', headers: {}, body: '' })).status).toBe(200)
+    expect((await app.handle({ method: 'GET', path: '/v1/catalog', headers: {}, body: '' })).status).toBe(200)
+  })
+
+  it('a merchant logs in with a NAP proof and gets an HttpOnly session cookie scoped to the site', async () => {
+    const out = await login(STALL_SK)
+    expect(out.status).toBe(200)
+    expect(out.body).toMatchObject({ status: 'ok', principal: { pubkey: STALL }, roles: ['merchant'] })
+    // Cookie mode: the access token never reaches script.
+    expect(JSON.stringify(out.body)).not.toContain('access_token')
+    const me = await app.handle({ method: 'GET', path: '/v1/me', headers: { cookie: out.cookie }, body: '' })
+    expect(me).toMatchObject({ status: 200, body: { pubkey: STALL, roles: ['merchant'], admin: false, subscriptions: [] } })
+  })
+
+  it('the cookie is HttpOnly, SameSite=Lax, Secure on https, and scoped to the mount path', async () => {
+    const npub = nip19.npubEncode(STALL)
+    const init = await app.handle({ method: 'POST', path: '/v1/auth/init', headers: {}, body: JSON.stringify({ npub }) })
+    const completion = await buildAuthCompleteRequest({
+      challenge: init.body as Parameters<typeof buildAuthCompleteRequest>[0]['challenge'],
+      signer: createPrivateKeySigner(Buffer.from(STALL_SK).toString('hex')),
+    })
+    const out = await app.handle({ method: 'POST', path: '/v1/auth/complete', headers: { authorization: completion.authorization }, body: new TextDecoder().decode(completion.rawBody) })
+    const set = out.headers?.['Set-Cookie'] ?? ''
+    expect(set.startsWith(`${SESSION_COOKIE}=`)).toBe(true)
+    expect(set).toContain('HttpOnly')
+    expect(set).toContain('SameSite=Lax')
+    expect(set).toContain('Secure')
+    expect(set).toContain('Path=/')
+  })
+
+  it('a customer (no stall record) is refused AT LOGIN, with a sentence, and never holds a session', async () => {
+    const out = await login(CUSTOMER_SK)
+    expect(out.status).toBe(403)
+    expect(out.cookie).toBeUndefined()
+    expect(out.body).toMatchObject({ error: expect.stringMatching(/for stalls/i) })
+  })
+
+  it('the gateway being unreachable refuses login (fail closed), without claiming the key is a customer', async () => {
+    gatewayDown = true
+    const out = await login(STALL_SK)
+    expect(out.status).toBe(403)
+    expect(out.cookie).toBeUndefined()
+  })
+
+  it('a stall that retires its record loses access on its next request, not when the session ends', async () => {
+    const cookie = await cookieFor(STALL_SK)
+    expect((await app.handle({ method: 'GET', path: '/v1/me', headers: { cookie }, body: '' })).status).toBe(200)
+    merchants.delete(STALL)
+    expect((await app.handle({ method: 'GET', path: '/v1/me', headers: { cookie }, body: '' })).status).toBe(403)
+    // A definite "not a merchant" revokes the session: restoring the record does not bring it back.
+    merchants.add(STALL)
+    expect((await app.handle({ method: 'GET', path: '/v1/me', headers: { cookie }, body: '' })).status).toBe(401)
+  })
+
+  it('a gateway outage refuses the request but keeps the session', async () => {
+    const cookie = await cookieFor(STALL_SK)
+    gatewayDown = true
+    expect((await app.handle({ method: 'GET', path: '/v1/me', headers: { cookie }, body: '' })).status).toBe(403)
+    gatewayDown = false
+    expect((await app.handle({ method: 'GET', path: '/v1/me', headers: { cookie }, body: '' })).status).toBe(200)
+  })
+
+  it('the session view answers for a live session, and logout ends it', async () => {
+    const cookie = await cookieFor(STALL_SK)
+    const view = await app.handle({ method: 'GET', path: '/v1/auth/session', headers: { cookie }, body: '' })
+    expect(view).toMatchObject({ status: 200, body: { principal: { pubkey: STALL }, roles: ['merchant'] } })
+    const out = await app.handle({ method: 'POST', path: '/v1/auth/logout', headers: { cookie }, body: '' })
+    expect(out.status).toBe(200)
+    expect(out.headers?.['Set-Cookie']).toContain('Max-Age=0')
+    expect((await app.handle({ method: 'GET', path: '/v1/auth/session', headers: { cookie }, body: '' })).status).toBe(401)
+    expect((await app.handle({ method: 'GET', path: '/v1/me', headers: { cookie }, body: '' })).status).toBe(401)
+  })
+
+  it('a forged or unknown cookie is no session', async () => {
+    const out = await app.handle({ method: 'GET', path: '/v1/me', headers: { cookie: `${SESSION_COOKIE}=forged` }, body: '' })
+    expect(out.status).toBe(401)
+  })
+
+  it('a NAP proof addressed to another site is refused (audience binding)', async () => {
+    const npub = nip19.npubEncode(STALL)
+    const init = await app.handle({ method: 'POST', path: '/v1/auth/init', headers: {}, body: JSON.stringify({ npub }) })
+    const challenge = init.body as Parameters<typeof buildAuthCompleteRequest>[0]['challenge']
+    const completion = await buildAuthCompleteRequest({
+      challenge: { ...challenge, auth_url: 'https://gifting.test/v1/auth/complete' },
+      signer: createPrivateKeySigner(Buffer.from(STALL_SK).toString('hex')),
+    })
+    const out = await app.handle({ method: 'POST', path: '/v1/auth/complete', headers: { authorization: completion.authorization }, body: new TextDecoder().decode(completion.rawBody) })
+    expect(out.status).toBe(401)
+    expect(out.headers?.['Set-Cookie']).toBeUndefined()
   })
 })
 
 describe('buying a plan', () => {
   it('opens Stripe Checkout for the stall, card only, with tax and the stall key in metadata', async () => {
-    const out = await app.handle(req(STALL_SK, 'POST', '/v1/checkout', { tier: 'basic', term: 'monthly' }))
+    const out = await app.handle(await req(STALL_SK, 'POST', '/v1/checkout', { tier: 'basic', term: 'monthly' }))
     expect(out).toMatchObject({ status: 200, body: { url: 'https://checkout.stripe.test/cs_1' } })
     expect(stripe.checkouts[0]).toMatchObject({ priceId: 'price_b_m', stallPubkey: STALL, tier: 'basic', term: 'monthly', automaticTax: true })
   })
 
   it('refuses a tier or term with no price', async () => {
-    expect((await app.handle(req(STALL_SK, 'POST', '/v1/checkout', { tier: 'pro', term: 'monthly' }))).status).toBe(400)
+    expect((await app.handle(await req(STALL_SK, 'POST', '/v1/checkout', { tier: 'pro', term: 'monthly' }))).status).toBe(400)
   })
 
   it('mints a Basic licence for the paid period on invoice.paid, locked to the stall, and delivers it', async () => {
@@ -281,10 +407,10 @@ describe('buying a plan', () => {
   it('shows the stall its own subscription and lets it re-send a lost licence', async () => {
     const end = Math.floor(Date.now() / 1000) + 10 * 86_400
     await app.handle(invoicePaid('in_1', end - 30 * 86_400, end))
-    const me = await app.handle(req(STALL_SK, 'GET', '/v1/me'))
+    const me = await app.handle(await req(STALL_SK, 'GET', '/v1/me'))
     expect(me.body).toMatchObject({ subscriptions: [{ tier: 'basic', kind: 'subscription', has_card: true, licences: [{ state: 'delivered' }] }] })
     expect(JSON.stringify(me.body)).not.toContain('cus_1')
-    const resent = await app.handle(req(STALL_SK, 'POST', '/v1/licences/resend'))
+    const resent = await app.handle(await req(STALL_SK, 'POST', '/v1/licences/resend'))
     expect(resent).toMatchObject({ status: 200, body: { sent: 1 } })
     expect(gateway.minted).toHaveLength(1)
     expect(gateway.delivered).toHaveLength(2)
@@ -295,12 +421,12 @@ describe('hand grants (#407 §7)', () => {
   const grantBody = { stall_pubkey: STALL, limits: { sales: { amounts: { GBP: 20000 } } }, days: 30, reason: 'free tier used up, pilot' }
 
   it('only an admin may issue one', async () => {
-    expect((await app.handle(req(STALL_SK, 'POST', '/v1/admin/grants', grantBody))).status).toBe(403)
+    expect((await app.handle(await req(STALL_SK, 'POST', '/v1/admin/grants', grantBody))).status).toBe(403)
     expect(gateway.minted).toHaveLength(0)
   })
 
   it('raises a free stall to 200 for 30 days from now, recorded with who and why', async () => {
-    const out = await app.handle(req(ADMIN_SK, 'POST', '/v1/admin/grants', grantBody))
+    const out = await app.handle(await req(ADMIN_SK, 'POST', '/v1/admin/grants', grantBody))
     expect(out.status).toBe(201)
     const row = (await ledger.all())[0]
     expect(row).toMatchObject({ grantKind: 'custom', issuedBy: ADMIN, reason: 'free tier used up, pilot', stallPubkey: STALL })
@@ -317,7 +443,7 @@ describe('hand grants (#407 §7)', () => {
       { stall_pubkey: STALL, reason: 'x' },
       { ...grantBody, stall_pubkey: 'nope' },
     ]) {
-      expect((await app.handle(req(ADMIN_SK, 'POST', '/v1/admin/grants', bad))).status).toBe(400)
+      expect((await app.handle(await req(ADMIN_SK, 'POST', '/v1/admin/grants', bad))).status).toBe(400)
     }
     expect(gateway.minted).toHaveLength(0)
   })

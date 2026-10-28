@@ -7,20 +7,25 @@
  * Routes:
  *   GET  /v1/catalog                 public: the signed tier catalog wallets adopt
  *   GET  /v1/plans                   public: tiers and prices for the site
- *   GET  /v1/me                      NIP-98: this stall's subscriptions and licences
- *   POST /v1/checkout                NIP-98: Stripe Checkout for {tier, term}
- *   POST /v1/portal                  NIP-98: Stripe Customer Portal (card, cancel)
- *   POST /v1/licences/resend         NIP-98: re-deliver this stall's current licences
- *   POST /v1/admin/grants            NIP-98, admin: issue a hand grant to any stall
- *   POST /v1/admin/revoke            NIP-98, admin: revoke a subscription (refund)
  *   POST /v1/stripe/webhook          Stripe-signed: invoice.paid / subscription updates
+ *   /v1/auth/*                       NAP login (auth.ts): init, complete, session, logout
+ *   GET  /v1/me                      session, merchant: this stall's subscriptions and licences
+ *   POST /v1/checkout                session, merchant: Stripe Checkout for {tier, term}
+ *   POST /v1/portal                  session, merchant: Stripe Customer Portal (card, cancel)
+ *   POST /v1/licences/resend         session, merchant: re-deliver this stall's current licences
+ *   POST /v1/admin/grants            session, merchant, admin: issue a hand grant to any stall
+ *   POST /v1/admin/revoke            session, merchant, admin: revoke a subscription (refund)
+ *
+ * Every route that is not public needs a NAP session whose role is `merchant` (#411). There is no
+ * per-request signature any more: the session is the authentication.
  */
 import { parseCatalog, type LicenceLimits, type TierCatalog } from '@imani/licence'
 
+import { SubscriptionAuth } from './auth.ts'
 import type { SubscriptionConfig } from './config.ts'
 import { LicenceIssuer, signCatalog, type LicenceOrder, type Seller } from './issuer.ts'
 import { Ledger, newSubscriptionId, type IssuedLicence, type SubscriptionRow } from './ledger.ts'
-import { ReplayGuard, verifyNip98 } from './nip98.ts'
+import type { MerchantReader } from './merchantRole.ts'
 import { verifyStripeSignature, type StripeClient } from './stripe.ts'
 
 export interface Request {
@@ -44,8 +49,12 @@ export interface AppDeps {
   seller: Seller
   /** The catalog JSON as published (snake_case). Read once at boot. */
   catalogBody: string
+  /** Is this key a merchant (a live, signed `imani:merchant` record)? See merchantRole.ts. */
+  merchantStanding: MerchantReader
   now?: () => number
   log?: (event: Record<string, unknown>) => void
+  /** Tests only: NAP server overrides (clock, response padding). */
+  napServerOptions?: ConstructorParameters<typeof SubscriptionAuth>[0]['serverOptions']
 }
 
 const HEX64 = /^[0-9a-f]{64}$/
@@ -55,7 +64,6 @@ const TERM_SECONDS = { monthly: 31 * 86_400, annual: 366 * 86_400 } as const
 export function createApp(deps: AppDeps) {
   const now = () => Math.floor((deps.now?.() ?? Date.now()) / 1000)
   const log = deps.log ?? ((e) => console.log(JSON.stringify(e)))
-  const replay = new ReplayGuard()
   const catalog: TierCatalog = parseCatalog(deps.catalogBody) ?? (() => {
     throw new Error('the published catalog does not parse (parseCatalog returned null)')
   })()
@@ -65,18 +73,13 @@ export function createApp(deps: AppDeps) {
   /** The public URL of a path on this site: origin + mount path + path. */
   const site = (path: string) => `${deps.config.publicOrigin}${deps.config.basePath ?? ''}${path}`
 
-  function authenticate(req: Request): { pubkey: string } | Response {
-    const auth = verifyNip98({
-      header: req.headers.authorization,
-      url: site(req.path),
-      method: req.method,
-      body: req.body,
-      now: now(),
-    })
-    if (!auth.ok) return json(401, { error: `sign in with your stall key (${auth.reason})` })
-    if (!replay.accept(auth.eventId)) return json(401, { error: 'this signed request was already used' })
-    return { pubkey: auth.pubkey }
-  }
+  const auth = new SubscriptionAuth({
+    site,
+    merchantStanding: deps.merchantStanding,
+    secureCookie: deps.config.publicOrigin.startsWith('https://'),
+    cookiePath: deps.config.basePath || '/',
+    serverOptions: deps.napServerOptions,
+  })
 
   const isResponse = (x: unknown): x is Response => typeof (x as Response)?.status === 'number'
 
@@ -249,14 +252,23 @@ export function createApp(deps: AppDeps) {
         return webhook(req)
     }
 
-    const who = authenticate(req)
+    if (req.path.startsWith('/v1/auth/')) {
+      return (await auth.handle(req)) ?? json(404, { error: 'not found' })
+    }
+
+    const who = await auth.require(req)
     if (isResponse(who)) return who
     const body = parseBody(req)
     if (isResponse(body)) return body
 
     switch (route) {
       case 'GET /v1/me':
-        return json(200, { pubkey: who.pubkey, admin: isAdmin(who.pubkey), subscriptions: (await deps.ledger.forStall(who.pubkey)).map(publicRow) })
+        return json(200, {
+          pubkey: who.pubkey,
+          roles: who.roles,
+          admin: isAdmin(who.pubkey),
+          subscriptions: (await deps.ledger.forStall(who.pubkey)).map(publicRow),
+        })
       case 'POST /v1/checkout':
         return checkout(who.pubkey, body)
       case 'POST /v1/portal':
