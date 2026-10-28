@@ -88,6 +88,35 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       recipient: { type: 'email', required: true },
     },
   },
+  // The recipient's "expires soon" reminder for an unclaimed email gift (#410 §6d). G13: it never
+  // carries the claim link (the sealed link secret is deleted once the claim email is accepted, G4),
+  // so it has no url field at all and points to the original email by date and subject instead.
+  'gift-expiring': {
+    fromName: 'Imani gifts',
+    subject: 'Your voucher for {{stall}} expires soon',
+    text: [
+      '{{from}} sent you a {{amount}} voucher for {{stall}}, and it has not been claimed yet.',
+      '',
+      'Claim it by {{claimBy}}, or it goes back to {{from}}.',
+      '',
+      'To claim it, open the link in our email of {{sentOn}} from {{sender}}, with the subject:',
+      '"{{claimSubject}}"',
+      'If you cannot find it, check your spam or junk folder.',
+      '',
+      "If you've already claimed it, you can ignore this email.",
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      from: { type: 'line', max: 80, default: 'Someone' },
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      claimBy: { type: 'line', max: 60, required: true },
+      sentOn: { type: 'line', max: 60, required: true },
+      sender: { type: 'line', max: 254, required: true },
+      claimSubject: { type: 'line', max: 250, required: true },
+    },
+  },
   'gift-reminder': {
     fromName: 'Imani gifts',
     subject: 'Your {{stall}} gift: {{when}}',

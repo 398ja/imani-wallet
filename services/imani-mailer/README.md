@@ -115,7 +115,9 @@ Every secret may be given as `NAME_FILE` (Docker/Kubernetes secrets) instead of 
 
 `{{field}}` inserts, `{{#field}}…{{/field}}` only when it has a value, `{{^field}}…{{/field}}` only
 when it has none. Nothing else. Built-ins: `gift-claim`, `gift-receipt`, `gift-return-link`,
-`gift-bounced`, `gift-reminder` (`builtins.ts`).
+`gift-bounced`, `gift-expiring`, `gift-reminder` (`builtins.ts`). `gift-expiring` is the recipient's
+"expires soon" reminder (#410 §6) and by decision G13 has no link field at all: it points to the
+original claim email by date and subject.
 
 ## Tests
 
