@@ -24,9 +24,10 @@ const WORKSPACE = [
 
 export default defineConfig({
   root: r('.'),
-  // Mounted at /subscription on the WALLET's origin, so the site can read the key the wallet keeps
-  // in localStorage (per origin). Override with SUBSCRIPTION_BASE=/ for a standalone origin.
-  base: process.env.SUBSCRIPTION_BASE ?? '/subscription/',
+  // Its own origin, subscription.imani.casa (#411). The wallet opens it and signs its login over
+  // postMessage, so nothing needs to share the wallet's origin any more. SUBSCRIPTION_BASE mounts it
+  // under a path if a deployment needs that (the service's SUBSCRIPTION_BASE_PATH must match).
+  base: process.env.SUBSCRIPTION_BASE ?? '/',
   envDir: r('../..'),
   plugins: [react()],
   css: { postcss: { plugins: [tailwind({ config: r('./tailwind.config.js') }), autoprefixer()] } },
@@ -41,7 +42,7 @@ export default defineConfig({
   },
   server: {
     port: 5180,
-    proxy: { '/subscription/v1': process.env.SUBSCRIPTION_API ?? 'http://localhost:8090' },
+    proxy: { [`${(process.env.SUBSCRIPTION_BASE ?? '/').replace(/\/+$/, '')}/v1`]: process.env.SUBSCRIPTION_API ?? 'http://localhost:8090' },
   },
   build: { outDir: r('./dist'), emptyOutDir: true },
 })

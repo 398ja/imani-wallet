@@ -33,13 +33,13 @@ import { licenceSellerPubkey, type LicenceStatus } from './licenceStatus'
 const CATALOG_KEY = 'imani.tiers.catalog'
 
 /**
- * Where plans are bought (#407 §6): `/subscription` on the wallet's OWN origin, so the stall arrives
- * already holding its key there (the site reads the key the wallet keeps in this browser). A
- * deployment may point elsewhere with VITE_SUBSCRIPTION_SITE_URL, at the cost of that hand-off.
+ * Where plans are bought (#407 §6, #411): subscription.imani.casa, its own origin. The wallet opens
+ * it from Settings › Subscription and signs its login there (sisterSiteSigner.ts). A deployment
+ * points elsewhere with VITE_SUBSCRIPTION_SITE_URL (staging, local), and the signer's origin
+ * policy reads the same setting, so the two cannot disagree.
  */
 export const SUBSCRIPTION_SITE_URL =
-  ((import.meta.env.VITE_SUBSCRIPTION_SITE_URL as string | undefined) ?? '').trim() ||
-  (typeof window !== 'undefined' ? `${window.location.origin}/subscription` : '/subscription')
+  ((import.meta.env.VITE_SUBSCRIPTION_SITE_URL as string | undefined) ?? '').trim() || 'https://subscription.imani.casa'
 
 /**
  * The catalog this device holds: the highest-version signed catalog it has accepted, or the one

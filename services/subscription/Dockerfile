@@ -17,10 +17,14 @@ COPY shared ./shared
 # All workspace packages: the site uses wallet components (IdentityInline) that reach several.
 COPY packages ./packages
 COPY apps/subscription ./apps/subscription
-# Baked into the site bundle. The Google client id lets a stall open its wallet key from Drive.
-# Its OAuth client must list the origin the site is served from as an authorised JS origin.
-ARG VITE_GOOGLE_CLIENT_ID=""
-ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+# Baked into the site bundle: the ONE wallet origin the site accepts a NAP signer from (#411). The
+# wallet opens this site and signs its login over postMessage; a signer anywhere else is ignored.
+ARG VITE_WALLET_ORIGIN="https://wallet.imani.casa"
+ENV VITE_WALLET_ORIGIN=$VITE_WALLET_ORIGIN
+# Served at the root of its own origin (subscription.imani.casa). Set to e.g. /subscription only
+# together with SUBSCRIPTION_BASE_PATH on the service.
+ARG SUBSCRIPTION_BASE="/"
+ENV SUBSCRIPTION_BASE=$SUBSCRIPTION_BASE
 RUN npx vite build --config apps/subscription/vite.config.ts
 
 # ---- the service

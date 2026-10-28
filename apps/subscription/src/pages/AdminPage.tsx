@@ -3,14 +3,13 @@ import { useState } from 'react'
 import { Button } from '@wallet/components/ui/Button'
 import { Input } from '@wallet/components/ui/Input'
 import { Alert, Notice, Panel, PageHeader, Screen } from '@wallet/components/ui/layout'
-import { api } from '../lib/api'
-import { toPubkeyHex, type Signer } from '../lib/signer'
+import { api, toPubkeyHex } from '../lib/api'
 
 /**
  * Hand grants (#407 §7): lift any stall's limits for a while, e.g. "raise this free stall to 200
  * for a month". Every grant needs a reason and is recorded with who issued it.
  */
-export function AdminPage({ signer }: { signer: Signer }) {
+export function AdminPage() {
   const [stall, setStall] = useState('')
   const [currency, setCurrency] = useState('GBP')
   const [sales, setSales] = useState('200')
@@ -41,7 +40,7 @@ export function AdminPage({ signer }: { signer: Signer }) {
     if (tills.trim()) limits.terminals = tills.trim() === 'unlimited' ? null : Number(tills)
     setBusy(true)
     try {
-      const out = await api.grant(signer, {
+      const out = await api.grant({
         stall_pubkey: pubkey,
         limits: Object.keys(limits).length ? limits : undefined,
         days: Number(days),
@@ -99,7 +98,7 @@ export function AdminPage({ signer }: { signer: Signer }) {
             if (!window.confirm(`End ${revokeId} permanently?`)) return
             setBusy(true)
             api
-              .revoke(signer, revokeId.trim(), revokeReason.trim())
+              .revoke(revokeId.trim(), revokeReason.trim())
               .then((r) => setResult(`Ended ${r.revoked}.`), (e: Error) => setError(e.message))
               .finally(() => setBusy(false))
           }}
