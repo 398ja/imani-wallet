@@ -112,6 +112,8 @@ export interface SignerPage {
   cancelUnlock(): void
   /** The consent view's answer. */
   answerConsent(allow: boolean): void
+  /** "Close" on a refusal (wrong kind of account, or unchecked): only now is the site told. */
+  dismiss(): void
   /** Stop answering and zero the key. */
   close(): void
 }
@@ -132,6 +134,7 @@ export async function startSignerPage(deps: SignerPageDeps): Promise<SignerPage>
     submitPassphrase: async () => {},
     cancelUnlock: () => {},
     answerConsent: () => {},
+    dismiss: () => {},
     close: () => {},
   }
   // The same refusals nap makes, made first so the page can say something: a framed page shows no
@@ -173,6 +176,17 @@ export async function startSignerPage(deps: SignerPageDeps): Promise<SignerPage>
     inner?.clearKey()
     inner = null
   }
+
+  // A refusal the person must READ before the site is told: the site closes this window as soon as
+  // it hears DECLINED, so answering first would take the explanation away with it. Held until they
+  // tap Close (`dismiss`), or the window goes. The key is already dropped by then.
+  let pendingDismiss: (() => void) | null = null
+  const refusalSeen = (v: SignerView) =>
+    new Promise<void>((resolve) => {
+      pendingDismiss?.()
+      pendingDismiss = resolve
+      view(v)
+    })
 
   // The signer nap is mounted with. It forwards to the key once unlocked; before that (and after
   // the key is dropped) it refuses, which nap reports to the site as SIGNER_ERROR.
@@ -231,12 +245,12 @@ export async function startSignerPage(deps: SignerPageDeps): Promise<SignerPage>
       }
       if (status === 'unknown') {
         dropKey()
-        view({ state: 'role-unknown', origin })
+        await refusalSeen({ state: 'role-unknown', origin })
         throw new Error('role unknown')
       }
       if ((audience === 'merchants') !== (status === 'merchant')) {
         dropKey()
-        view({ state: 'wrong-account', origin, audience })
+        await refusalSeen({ state: 'wrong-account', origin, audience })
         throw new Error('wrong account for this site')
       }
     },
@@ -293,6 +307,8 @@ export async function startSignerPage(deps: SignerPageDeps): Promise<SignerPage>
     pendingUnlock = null
     pendingConsent?.(false)
     pendingConsent = null
+    pendingDismiss?.()
+    pendingDismiss = null
     handle.close()
     target.removeEventListener('message', noteAsker)
     bus?.close()
@@ -327,6 +343,11 @@ export async function startSignerPage(deps: SignerPageDeps): Promise<SignerPage>
       const answer = pendingConsent
       pendingConsent = null
       answer?.(allow)
+    },
+    dismiss() {
+      const done = pendingDismiss
+      pendingDismiss = null
+      done?.()
     },
     close,
   }

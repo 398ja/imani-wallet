@@ -232,6 +232,10 @@ describe('/nap/signer', () => {
     await t.page.submitPassphrase(PASS)
     await until(() => t.last().state === 'wrong-account')
     expect(t.last()).toEqual({ state: 'wrong-account', origin: SITE, audience: 'customers' })
+    // The site is told only once the person has read why (it closes this window when it hears).
+    await flush()
+    expect(t.replies('error')).toHaveLength(0)
+    t.page.dismiss()
     await until(() => t.replies('error').length === 1)
     expect(t.replies('error')[0].message).toMatchObject({ code: 'DECLINED' })
     expect(t.replies('connected')).toHaveLength(0)
