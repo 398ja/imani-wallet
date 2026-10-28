@@ -236,7 +236,7 @@ async function main() {
     check('an unknown recipient handle is caught inline', true)
     await page.getByLabel('Their handle').fill('Bob@Example.com')
     await page.getByTestId('resolved-recipient').waitFor()
-    check('the resolved recipient is shown by name with a short key', /Bob/.test(await page.getByTestId('resolved-recipient').innerText()))
+    check('the resolved recipient is shown by name and handle, never a key', /Bob/.test(await page.getByTestId('resolved-recipient').innerText()) && !/[0-9a-f]{8}…|npub1/.test(await page.getByTestId('resolved-recipient').innerText()))
     await page.getByLabel('Message (optional)').fill('see https://evil.example')
     await page.getByLabel('Your email').fill('buyer@example.com')
     await page.getByRole('button', { name: 'Review' }).click()
@@ -249,7 +249,7 @@ async function main() {
     await page.getByRole('heading', { name: 'Check your gift' }).waitFor()
     const review = await text()
     check('review shows the amount in the stall currency', /€20\.00/.test(review), review.slice(0, 400))
-    check('review shows the recipient handle and pinned key', /bob@example\.com/.test(review) && review.includes(bob.slice(0, 8)))
+    check('review shows the recipient by handle, never by key', /bob@example\.com/.test(review) && !review.includes(bob.slice(0, 8)) && !/npub1/.test(review))
     check('review says it comes back if not taken (G7)', /it comes back to you/.test(review))
     check('review names the merchant of record and the refund terms', /Paid to Alice Bakery via Stripe/.test(review) && /refunds are Alice Bakery/.test(review))
     const firstDraft = [...drafts.values()].at(-1)!

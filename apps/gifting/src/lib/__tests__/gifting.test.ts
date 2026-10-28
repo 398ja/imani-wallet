@@ -325,3 +325,13 @@ describe('cross-origin sign-in (NAP 0002)', () => {
     expect(connectImpl).toHaveBeenCalledWith(expect.objectContaining({ kinds: [27235], audiences: [window.location.origin], expectedPubkey: BOB }))
   })
 })
+
+describe('displayHandle: a handle as a person reads it, never a key', () => {
+  it('is @name on the site\'s own domain, the full handle elsewhere', async () => {
+    const { displayHandle } = await import('../handle')
+    expect(displayHandle('alice@imani.casa', 'imani.casa')).toBe('@alice')
+    expect(displayHandle('alice@example.com', 'imani.casa')).toBe('alice@example.com')
+    expect(displayHandle('_@imani.casa', 'imani.casa')).toBe('_@imani.casa')
+    expect(displayHandle('alice@imani.casa', '')).toBe('alice@imani.casa')
+  })
+})

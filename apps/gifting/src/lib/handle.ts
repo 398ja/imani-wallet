@@ -56,6 +56,18 @@ export function parseShopHandle(raw: string | undefined, defaultDomain = DEFAULT
   return { kind: 'ok', nip05, canonical, redirect: canonical !== decoded.trim() }
 }
 
+/**
+ * A handle as a person reads it: `@name` on this site's own handle domain (as the wallet shows it),
+ * the full `name@domain` otherwise, so two stalls on different domains are never confused.
+ */
+export function displayHandle(nip05: string, defaultDomain = DEFAULT_HANDLE_DOMAIN): string {
+  const at = nip05.lastIndexOf('@')
+  if (at <= 0) return nip05
+  const local = nip05.slice(0, at)
+  const domain = nip05.slice(at + 1)
+  return defaultDomain && domain === defaultDomain && local !== '_' ? `@${local}` : nip05
+}
+
 /** Normalise a recipient handle typed by the buyer: lower case, leading `@` dropped, bare → default domain. */
 export function normaliseRecipientHandle(raw: string, defaultDomain = DEFAULT_HANDLE_DOMAIN): string | null {
   const value = raw.trim().replace(/^@/, '').toLowerCase()
