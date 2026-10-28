@@ -136,8 +136,7 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise
       sealed: r.delivery.sealed,
     }
     drafts.set(d.draftId, d)
-    const { sealed: _s, ...view } = d
-    return send(201, view), true
+    return send(201, { ...d, sealed: undefined }), true
   }
   const m = path.match(/^\/api\/v1\/gifting\/drafts\/([0-9a-f-]+)$/)
   if (m) {
@@ -147,8 +146,7 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise
       return send(204), true
     }
     if (!d) return send(404, { error: 'no such gift' }), true
-    const { sealed: _s, session: _x, ...view } = d
-    return send(200, view), true
+    return send(200, { ...d, sealed: undefined, session: undefined }), true
   }
   if (path === '/api/v1/checkout/purchase') {
     const { draftId, ...rest } = JSON.parse(body) as { draftId: string }
