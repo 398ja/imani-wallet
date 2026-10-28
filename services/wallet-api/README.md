@@ -682,7 +682,7 @@ default), and this service's plan counts from the mint. Both are on the
 sender's side of the trust line. A sender that skips them can open more
 links, so the hard cap belongs to the gateway's lock route, which is the one
 call every armed link makes, signed by the sender. That is tracked in
-imani-gateway-customer (see #366). Until it lands, a sender that bypasses the
+imani-gateway-customer#274. Until it lands, a sender that bypasses the
 SDK can open more links than its limit. Each one still holds a coupon the
 sender paid for, so the cost of going past the limit is the sender's own
 value (and the gateway's per-request rate limits), not anyone else's.
