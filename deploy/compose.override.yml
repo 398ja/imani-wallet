@@ -865,6 +865,23 @@ services:
       # voucher never issued: the buyer sees "Your payment went through" and nothing arrives.
       STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
 
+  # Fake SMTP for every local email (#410: imani-mailer's claim, receipt and return-link mails).
+  # Accepts anything on mailpit:1025 with no auth or TLS, delivers nothing, and shows every message
+  # at http://localhost:8025 (API: /api/v1/messages, for e2e assertions). Services point
+  # SMTP_HOST=mailpit SMTP_PORT=1025; a host process uses localhost:1025.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit-test
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+      MP_MAX_MESSAGES: "2000"
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - imani-internal
+
   # Stripe test-mode events for payment-adapter's /webhook/stripe, against a real sk_test_ key
   # only (with stripe-mock there is nothing to listen to): COMPOSE_PROFILES=stripe-test. Card
   # sales run on the stall's connected account, so Connect events go to the same endpoint.
