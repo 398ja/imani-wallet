@@ -81,7 +81,7 @@ const KEYS = join(HERE, '..', '.seed-keys.json')
 /** The seller's record of what was sold, read by notify-expiring.mjs. */
 const SOLD = join(HERE, '..', '.sold-subscriptions.json')
 const WALLET = process.env.WALLET_URL ?? 'http://localhost:28082'
-const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only'
+const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only-32-plus-chars'
 const INTERNAL_RELAY = process.env.INTERNAL_RELAY_URL ?? 'ws://nostr-relay:7777'
 
 function arg(flag, fallback) {

@@ -4,7 +4,7 @@
 //   node loadtest/pool.mjs --size 140
 //   GATEWAY_URL=http://localhost:28082 PORTAL_URL=http://localhost:28084 \
 //     ACCOUNT_URL=http://localhost:28081 \
-//     EDGE_SECRET=dev-edge-secret-local-only \
+//     EDGE_SECRET=dev-edge-secret-local-only-32-plus-chars \
 //     k6 run loadtest/market-day.js
 //
 // Settled in ADR 0013. The short version, because the numbers here are only

@@ -47,7 +47,10 @@ const imani = (name: string) => r(`./packages/${name}/src/index.ts`)
  * Matches GATEWAY_PORTAL_EDGE_SHARED_SECRET in deploy/compose.override.yml and
  * MERCHANT_EDGE_SHARED_SECRET in imani-deploy's test stack.
  */
-const EDGE_SHARED_SECRET = process.env.PORTAL_EDGE_SECRET ?? 'dev-edge-secret-local-only'
+// 32+ characters: NapProxyAuthFilter refuses anything shorter and then IGNORES
+// X-Auth-Pubkey on every request (`edge_shared_secret_too_weak` at startup), so
+// a 26-character value here silently turned every edge-vouched call anonymous.
+const EDGE_SHARED_SECRET = process.env.PORTAL_EDGE_SECRET ?? 'dev-edge-secret-local-only-32-plus-chars'
 
 /** account-app — the only service that can read the NAP session store. */
 const ACCOUNT_APP = 'http://localhost:28081'

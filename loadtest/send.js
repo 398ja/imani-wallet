@@ -3,7 +3,7 @@
 //   node loadtest/signer.mjs &
 //   node loadtest/pool.mjs --size 50
 //   GATEWAY_URL=http://localhost:28082 PORTAL_URL=http://localhost:28084 \
-//     ACCOUNT_URL=http://localhost:28081 EDGE_SECRET=dev-edge-secret-local-only \
+//     ACCOUNT_URL=http://localhost:28081 EDGE_SECRET=dev-edge-secret-local-only-32-plus-chars \
 //     k6 run loadtest/send.js
 //
 // Sending consumes coupons, so each iteration issues one first and then sends
