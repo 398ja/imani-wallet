@@ -25,6 +25,8 @@ const WORKSPACE = [
 ]
 
 const API = process.env.GIFTING_API ?? 'http://localhost:28082'
+/** payment-adapter: Purchase Drafts and checkout (local stack 28087). */
+const PAYMENTS = process.env.GIFTING_PAYMENTS_API ?? 'http://localhost:28087'
 
 export default defineConfig({
   root: r('.'),
@@ -45,7 +47,13 @@ export default defineConfig({
     port: 5181,
     // COOP must allow the signer popup to keep its opener (NAP 0002): never `same-origin`.
     headers: { 'Cross-Origin-Opener-Policy': 'same-origin-allow-popups' },
-    proxy: { '/api': { target: API, changeOrigin: false } },
+    // As the edge routes it: drafts and checkout on payment-adapter, the rest (resolve, nostr) on
+    // gateway-customer. changeOrigin false: a signed-in buyer's NIP-98 `u` names this origin.
+    proxy: {
+      '/api/v1/gifting': { target: PAYMENTS, changeOrigin: false },
+      '/api/v1/checkout': { target: PAYMENTS, changeOrigin: false },
+      '/api': { target: API, changeOrigin: false },
+    },
   },
   build: { outDir: r('./dist'), emptyOutDir: true },
 })
