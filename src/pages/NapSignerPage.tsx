@@ -65,6 +65,15 @@ export function NapSignerPage() {
   )
 }
 
+/**
+ * Close on a refusal: tell the site now (it closes this window when it hears), and close it here
+ * too in case the site has gone.
+ */
+function dismissAndClose(page: React.RefObject<SignerPage | null>) {
+  page.current?.dismiss()
+  setTimeout(() => window.close(), 300)
+}
+
 function SignerBody({ view, page }: { view: SignerView; page: React.RefObject<SignerPage | null> }) {
   switch (view.state) {
     case 'waiting':
@@ -83,7 +92,7 @@ function SignerBody({ view, page }: { view: SignerView; page: React.RefObject<Si
               : `${siteName(view.origin)} is for stalls. Sign in with your stall's wallet.`}
           </p>
           <p className="mt-2 text-sm text-mono-500">Nothing was shared with the site.</p>
-          <Button className="mt-4 w-full" variant="secondary" onClick={() => window.close()}>
+          <Button className="mt-4 w-full" variant="secondary" onClick={() => dismissAndClose(page)}>
             Close
           </Button>
         </Panel>
@@ -95,7 +104,7 @@ function SignerBody({ view, page }: { view: SignerView; page: React.RefObject<Si
           <p className="mt-2 text-callout text-mono-500">
             Imani could not be reached to check this account, so {siteName(view.origin)} was not signed in. Close this window and try again.
           </p>
-          <Button className="mt-4 w-full" variant="secondary" onClick={() => window.close()}>
+          <Button className="mt-4 w-full" variant="secondary" onClick={() => dismissAndClose(page)}>
             Close
           </Button>
         </Panel>
