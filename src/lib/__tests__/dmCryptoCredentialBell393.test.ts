@@ -56,6 +56,7 @@ describe('#393: a credential DM is in the bell before its unwrap returns', () =>
     expect(dm?.content).toBe(content)
     expect(recorded).toHaveLength(1)
     expect(recorded[0]).toMatchObject({ pubkey: ME, type: 'terminal_setup_request', url: '/terminal/setup' })
-    expect(recorded[0].title).toMatch(/^Terminal setup request from npub1/)
+    // An unnamed stall is "a stall", never its key.
+    expect(recorded[0].title).toBe('Terminal setup request from a stall')
   })
 })

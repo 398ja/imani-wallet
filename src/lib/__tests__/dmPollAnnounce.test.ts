@@ -34,10 +34,10 @@ vi.mock('../heldToast', () => ({ announceHeld: () => {} }))
 // The non-money notices (#160 owner report): captured, as the money toast is above.
 const notices: Array<Record<string, unknown>> = []
 vi.mock('../notMoneyNotice', () => ({
-  licenceNotice: (voucherId: string, seller?: string) => ({
+  licenceNotice: (voucherId: string, licence: { tier?: string }, opts?: { renewal?: boolean }) => ({
     id: `licence:${voucherId}`,
     type: 'licence_received',
-    title: `Licence from ${seller ?? 'Imani'}`,
+    title: `Imani ${licence.tier ?? ''} plan ${opts?.renewal ? 'renewed' : 'activated'}`,
     body: '',
     url: '/settings/subscription',
   }),
@@ -89,7 +89,10 @@ const notifyWalletChanged = vi.fn()
 vi.mock('../wallet', () => ({
   getWallet: () => ({}),
   notifyWalletChanged: () => notifyWalletChanged(),
+  listVouchers: async () => heldRows,
 }))
+/** What the store holds when a licence arrives: another licence of the same subscription is a renewal. */
+let heldRows: Array<{ token: string; token_id?: string }> = []
 
 /**
  * The settlement receipt, captured at the boundary.
@@ -434,12 +437,17 @@ describe('who the settlement receipt is addressed to', () => {
 })
 
 describe('a licence arriving through dm-poll (#160 owner report)', () => {
-  it('is announced as "Licence from …", never as a payment', async () => {
-    const { token } = buildLicenceVoucherToken({
-      merchantMetadata: JSON.stringify({ subscription_id: 'sub_1', features: ['terminals'], lock_key: 'f'.repeat(64) }),
+  const licenceToken = (expiresAt: number) =>
+    buildLicenceVoucherToken({
+      merchantMetadata: JSON.stringify({ subscription_id: 'sub_1', features: ['terminals'], lock_key: 'f'.repeat(64), tier: 'basic' }),
       faceValue: 4000,
       unit: 'GBP',
-    })
+      expiresAt: 2_000_000_000 + expiresAt,
+    }).token
+
+  it('is announced by the plan it is, never as a payment and never by a key', async () => {
+    heldRows = []
+    const token = licenceToken(1)
     redeem.mockResolvedValue({ ...VOUCHER, voucher_id: 'v-licence' })
     startDmPoll('f'.repeat(64))
 
@@ -447,7 +455,20 @@ describe('a licence arriving through dm-poll (#160 owner report)', () => {
 
     await vi.waitFor(() => expect(notices).toHaveLength(1))
     expect(announced).toEqual([])
-    expect(notices[0]).toMatchObject({ type: 'licence_received', url: '/settings/subscription' })
-    expect(String(notices[0]!.title)).toMatch(/^Licence from /)
+    expect(notices[0]).toMatchObject({ type: 'licence_received', url: '/settings/subscription', title: 'Imani basic plan activated' })
+    expect(String(notices[0]!.title)).not.toMatch(/npub|[0-9a-f]{16}/)
+  })
+
+  it('says "renewed" when the wallet already held this subscription', async () => {
+    heldRows = [{ token: licenceToken(2), token_id: 'held-1' }]
+    const token = licenceToken(3)
+    redeem.mockResolvedValue({ ...VOUCHER, voucher_id: 'v-licence-2' })
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem(token, { metadata: {} })
+
+    await vi.waitFor(() => expect(notices).toHaveLength(1))
+    expect(notices[0]!.title).toBe('Imani basic plan renewed')
+    heldRows = []
   })
 })

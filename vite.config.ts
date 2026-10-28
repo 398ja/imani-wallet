@@ -456,6 +456,19 @@ export default defineConfig({
   // is the one failure mode a performance suite cannot afford. Listed
   // explicitly for the same reason as `services/`.
   test: {
+    // The suite must not read THIS machine's `.env.local`. Vite loads it in every mode, and its
+    // values (the local stack's licence issuer and seller keys, the sister-site URLs) are
+    // per-environment config: a developer who points their dev server at a local stack would
+    // otherwise see licence, entitlement and sister-site tests fail, and CI would pass the same
+    // code. Tests set what they need with `vi.stubEnv`. `.env.test` is the place for any
+    // test-wide value; there is none today.
+    env: {
+      VITE_LICENCE_ISSUER_PUBKEY: '',
+      VITE_LICENCE_SELLER_PUBKEY: '',
+      VITE_VOUCHER_ISSUER_PUBKEYS: '',
+      VITE_SUBSCRIPTION_SITE_URL: '',
+      VITE_GIFTING_SITE_URL: '',
+    },
     // Each package under packages/ ships its OWN vitest.config.ts, and eleven
     // of them were never run by `npm test`. The include globs below only reach
     // `packages/**/src/`, while most of those suites live in `tests/` or
