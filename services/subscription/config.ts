@@ -22,6 +22,8 @@ export interface SubscriptionConfig {
    * and the merchant check (public `POST /api/v1/nostr/query`, merchantRole.ts).
    */
   walletUrl: string
+  /** The public base gateway-customer binds NIP-98 `u` to, when it is not `walletUrl` (issuer.ts). */
+  walletPublicUrl?: string
   /** The edge secret gateway-customer trusts, as `sell-subscription.mjs` sends it. */
   edgeSecret: string
   /** Relay the gateway publishes the delivery DM to. */
@@ -75,6 +77,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): SubscriptionCo
     publicOrigin: origin,
     basePath,
     walletUrl: need('SUBSCRIPTION_WALLET_URL').replace(/\/+$/, ''),
+    walletPublicUrl: env.SUBSCRIPTION_WALLET_PUBLIC_URL?.trim().replace(/\/+$/, '') || undefined,
     edgeSecret: need('EDGE_SECRET'),
     internalRelay: env.INTERNAL_RELAY_URL?.trim() || 'ws://nostr-relay:7777',
     sellerNsec: need('IMANI_SUBSCRIPTIONS_SELLER_NSEC'),

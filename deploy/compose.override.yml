@@ -722,6 +722,11 @@ services:
       # established is discarded on this tier too. All three names must hold the
       # same value — application.yml puts it as "one nap_auth.lua, one secret".
       GATEWAY_CUSTOMER_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      # The licence seller (imani-subscriptions) allowed to mint licences and whose licences count
+      # (#197, #407). Locally: deploy/subscription-local mints through THIS gateway as that seller.
+      # The same identity as staging's (scripts/sell-subscription.mjs), so a seller nsec from
+      # imani-deploy/.env.staging works here unchanged. Public key, not a secret.
+      GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS: "${LICENCE_SELLER_PUBKEYS:-62dd912f098cb439e97e0bfe3e6513b27b0cecc9f262a1778635c6fe18545c01}"
       # Defaults to the service name, which the published image accepts. The
       # rebuilt image carries cashu-wallet 0.7.0, whose MintUrlValidator refuses
       # a non-localhost http:// mint — correct, and not relaxed here. For that

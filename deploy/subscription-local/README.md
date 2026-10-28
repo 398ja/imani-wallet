@@ -1,16 +1,32 @@
 # subscription.imani.casa, running locally
 
-This runs the site and service on your machine against **Stripe test mode** and the **staging**
-gateway. Purchases are real test-mode Checkout sessions, and the resulting plan is delivered to
-the stall's wallet on wallet.staging.398ja.xyz.
+This runs the site and service on your machine against **Stripe test mode**, with one of two
+gateways:
+
+- **`GATEWAY=local`**: the local stack (`deploy/up.sh`) and your wallet dev server
+  (`npm run dev`, http://localhost:5173). This is the local deployment: register a stall in that
+  wallet, tap Settings › Subscription › **Upgrade my plan**, pay, and the plan arrives in the same
+  wallet.
+- **staging** (default): the staging gateway, with the plan delivered to the stall's wallet on
+  wallet.staging.398ja.xyz. `e2e/subscription-local.e2e.ts` uses this.
 
 ```bash
-./up.sh                                           # build, configure, start
+# the local deployment
+../up.sh && npm run dev                           # local stack + wallet (from the repo root: ./deploy/up.sh)
+GATEWAY=local ./up.sh                             # this site on http://localhost:18910
+npx tsx e2e/subscription-local-wallet.e2e.mts     # (repo root) the whole flow in a real browser
+
+./up.sh                                           # staging gateway instead
 SUBSCRIPTION_ADMIN_PUBKEYS=<hex> ./up.sh          # same, with /admin enabled for that key
-open http://localhost:18910
 docker compose logs -f                            # service + forwarded Stripe events
 docker compose down                               # stop (add -v to forget the ledger)
 ```
+
+The wallet finds this site through its own env, never code: `.env.local` (gitignored) sets
+`VITE_SUBSCRIPTION_SITE_URL=http://localhost:18910`, plus `VITE_LICENCE_ISSUER_PUBKEY` (the local
+gateway's signing key) and `VITE_LICENCE_SELLER_PUBKEY` so the local licence verifies. The local
+gateway-customer accepts the seller through `GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`
+(`deploy/compose.override.yml`).
 
 `up.sh` reads `STRIPE_SECRET_KEY` (test keys only, others are refused) and
 `IMANI_SUBSCRIPTIONS_SELLER_NSEC` from `../../../imani-deploy/.env.staging`. It writes a
