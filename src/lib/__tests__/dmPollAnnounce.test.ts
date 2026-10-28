@@ -437,12 +437,14 @@ describe('who the settlement receipt is addressed to', () => {
 })
 
 describe('a licence arriving through dm-poll (#160 owner report)', () => {
+  // A renewal is a NEW voucher: its own signed voucher id.
   const licenceToken = (expiresAt: number) =>
     buildLicenceVoucherToken({
       merchantMetadata: JSON.stringify({ subscription_id: 'sub_1', features: ['terminals'], lock_key: 'f'.repeat(64), tier: 'basic' }),
       faceValue: 4000,
       unit: 'GBP',
       expiresAt: 2_000_000_000 + expiresAt,
+      voucherId: `v-licence-${expiresAt}`,
     }).token
 
   it('is announced by the plan it is, never as a payment and never by a key', async () => {

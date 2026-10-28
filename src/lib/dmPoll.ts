@@ -1353,15 +1353,25 @@ function redemptionAdapter(): RedemptionAdapter {
         const voucherId = String(meta?.voucherId ?? '')
         const voucherKey = licence.subscriptionId + ':' + voucherId
         void (async () => {
-          // A renewal when this device already held ANOTHER licence of the same subscription (this
-          // one is already in the store by now, so it is excluded by its own token).
+          // A renewal when this device already held ANOTHER licence of the same subscription. This
+          // one is already in the store by now, under its post-swap token, so it is told apart by
+          // its SIGNED voucher id (a renewal is a new voucher), not by the token string.
           let renewal = false
           try {
             const { listVouchers } = await import('./wallet')
             const { licenceIn } = await import('./licences')
+            const signedId = (t: string): string | null => {
+              try {
+                return parseVoucherToken(t).voucher.voucherId
+              } catch {
+                return null
+              }
+            }
+            const own = signedId(token)
             renewal = (await listVouchers()).some((row) => {
-              if (row.token === token) return false
-              return licenceIn(row)?.subscriptionId === licence.subscriptionId
+              if (licenceIn(row)?.subscriptionId !== licence.subscriptionId) return false
+              const other = signedId(row.token)
+              return other !== null && other !== own
             })
           } catch {
             // Wording only: "activated" is right enough when the store cannot be read.

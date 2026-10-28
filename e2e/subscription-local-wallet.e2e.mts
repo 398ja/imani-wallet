@@ -106,6 +106,16 @@ async function main() {
       plan = await text(wallet)
     }
     check('the plan arrived in this local wallet: Settings › Subscription shows Basic', /Basic/.test(plan), plan.slice(0, 400))
+
+    // The notice the wallet raised for it names the plan, never a key (owner rule: no npubs).
+    await wallet.locator('summary[aria-label^="Notifications"]').click()
+    await wallet.waitForTimeout(500)
+    const bell = (await wallet.locator('details:has(summary[aria-label^="Notifications"])').innerText()).replace(/\s+/g, ' ')
+    check(
+      'the notice names the plan ("Imani Basic plan activated"), shows no key, and is not a payment',
+      /Imani Basic plan activated/.test(bell) && !/npub1|Licence from|\b[0-9a-f]{12,}\b|Payment on its way/.test(bell),
+      bell.slice(0, 400),
+    )
     check('no uncaught page errors', errors.length === 0, errors.join(' | '))
   } catch (e) {
     if (!(e instanceof Error && results.some(([n, ok]) => !ok && n === e.message))) console.log(`FAIL  flow  (${String(e).slice(0, 300)})`)
@@ -115,7 +125,7 @@ async function main() {
   }
   const failed = results.filter(([, ok]) => !ok).length
   console.log(`\n${results.length - failed}/${results.length} passed`)
-  process.exit(failed || results.length < 7 ? 1 : 0)
+  process.exit(failed || results.length < 8 ? 1 : 0)
 }
 
 void main()
