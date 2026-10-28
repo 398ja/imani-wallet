@@ -7,6 +7,7 @@ import { legacyApi } from '../lib/legacyBridge'
 import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommission'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { userMessage } from '../lib/userMessage'
+import { ConnectedSites } from '../components/ConnectedSites'
 import {
   passphraseStrength,
   validateConfirmation,
@@ -52,6 +53,7 @@ export function SecurityPage({
       {!terminal && (
         <>
           <ChangePassphrase pubkey={pubkey} />
+          <ConnectedSites pubkey={pubkey} />
           </>
       )}
 
