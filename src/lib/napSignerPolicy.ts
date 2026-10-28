@@ -15,23 +15,18 @@
  */
 import type { CrossOriginPolicy } from '@imani/nap-client-web'
 
+import { giftingSiteUrl, originOf, subscriptionSiteUrl } from './sisterSites'
+
 /** The NAP completion proof and NIP-98 share one kind. Nothing else is ever signed for a sister site. */
 const NAP_KIND = 27235
 
-function origin(url: string | undefined, fallback: string): string {
-  try {
-    return new URL((url ?? '').trim() || fallback).origin
-  } catch {
-    return new URL(fallback).origin
-  }
-}
-
 /**
- * The subscription site's origin. `VITE_SUBSCRIPTION_SITE_URL` points the wallet's "Upgrade" button
- * there too (`entitlement.ts`), so both read one setting.
+ * The sister sites' origins, from the same settings that point the wallet's buttons at them
+ * (`sisterSites.ts`: VITE_SUBSCRIPTION_SITE_URL, VITE_GIFTING_SITE_URL), so the two cannot disagree.
+ * Null when this build has none.
  */
-export const SUBSCRIPTION_ORIGIN = origin(import.meta.env.VITE_SUBSCRIPTION_SITE_URL as string | undefined, 'https://subscription.imani.casa')
-export const GIFTING_ORIGIN = origin(import.meta.env.VITE_GIFTING_SITE_URL as string | undefined, 'https://gifting.imani.casa')
+export const subscriptionOrigin = (): string | null => originOf(subscriptionSiteUrl())
+export const giftingOrigin = (): string | null => originOf(giftingSiteUrl())
 
 /** Five minutes is enough to complete one login. Nothing longer: a grant is a live signing capability. */
 const GRANT_TTL_SECONDS = 300
@@ -40,13 +35,14 @@ const GRANT_TTL_SECONDS = 300
  * Each site may have signed only kind-27235 events whose single `u` tag is ON THAT SITE. So the
  * subscription site cannot obtain a proof for the gateway, for the gifting site, or for any other
  * NAP server (NAP RFC §7.1, origin substitution).
+ *
+ * Only the sites this build is configured with. A build with none returns an empty policy, which
+ * nap refuses to mount: nothing is signed for anyone.
  */
 export function signerPolicy(): CrossOriginPolicy {
-  const entries: CrossOriginPolicy = {
-    [SUBSCRIPTION_ORIGIN]: { kinds: [NAP_KIND], audiences: [SUBSCRIPTION_ORIGIN], maxTtlSeconds: GRANT_TTL_SECONDS },
-  }
-  if (GIFTING_ORIGIN !== SUBSCRIPTION_ORIGIN) {
-    entries[GIFTING_ORIGIN] = { kinds: [NAP_KIND], audiences: [GIFTING_ORIGIN], maxTtlSeconds: GRANT_TTL_SECONDS }
+  const entries: CrossOriginPolicy = {}
+  for (const origin of [subscriptionOrigin(), giftingOrigin()]) {
+    if (origin && !entries[origin]) entries[origin] = { kinds: [NAP_KIND], audiences: [origin], maxTtlSeconds: GRANT_TTL_SECONDS }
   }
   return entries
 }
@@ -62,7 +58,7 @@ export function siteName(siteOrigin: string): string {
 
 /** What the site is for, said on the consent screen. Unknown origins never get this far. */
 export function siteDescription(siteOrigin: string): string {
-  if (siteOrigin === SUBSCRIPTION_ORIGIN) return 'buy and manage your stall’s plan'
-  if (siteOrigin === GIFTING_ORIGIN) return 'buy and send vouchers as gifts'
+  if (siteOrigin === subscriptionOrigin()) return 'buy and manage your stall’s plan'
+  if (siteOrigin === giftingOrigin()) return 'buy and send vouchers as gifts'
   return 'sign you in'
 }

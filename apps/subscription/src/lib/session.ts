@@ -19,13 +19,19 @@ import {
 
 import { BASE } from './api'
 
-/** Where the wallet lives. The site accepts a signer from this origin only. */
-export const WALLET_ORIGIN = (() => {
+/**
+ * Where the wallet lives: the ONE origin this site accepts a signer from. Per-environment
+ * configuration (`VITE_WALLET_ORIGIN`, a build arg, required by the Dockerfile), never code. Unset,
+ * the site accepts no signer at all and every visit ends on "Open this from your wallet".
+ */
+export const WALLET_ORIGIN: string | null = (() => {
   const configured = ((import.meta.env.VITE_WALLET_ORIGIN as string | undefined) ?? '').trim()
+  if (!configured) return null
   try {
-    return new URL(configured || 'https://wallet.imani.casa').origin
+    const url = new URL(configured)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : null
   } catch {
-    return 'https://wallet.imani.casa'
+    return null
   }
 })()
 
@@ -90,12 +96,13 @@ function failureFor(code: CrossOriginErrorCode): SignInFailure {
  */
 export async function signInThroughWallet(opts: { expectedPubkey?: string; readyTimeoutMs?: number } = {}): Promise<Account> {
   const opener = window.opener as Window | null
-  if (!opener) throw new SignInError('from-wallet')
+  if (!opener || !WALLET_ORIGIN) throw new SignInError('from-wallet')
+  const keyOrigin = WALLET_ORIGIN
 
   let grant
   try {
     grant = await connectCrossOrigin({
-      keyOrigin: WALLET_ORIGIN,
+      keyOrigin,
       kinds: [27235],
       audiences: [window.location.origin],
       expectedPubkey: opts.expectedPubkey,

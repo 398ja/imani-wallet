@@ -11,9 +11,13 @@ import { bytesToHex } from '@noble/hashes/utils'
 
 import { createWalletSigner } from '../signer'
 
-const SITE = 'https://subscription.imani.casa'
+const SITE = 'https://subscription.example.test'
 const signer = createWalletSigner(bytesToHex(generateSecretKey()))
 let locked = false
+
+// The site is this environment's configuration (sisterSites.ts), not a constant in the code.
+vi.stubEnv('VITE_SUBSCRIPTION_SITE_URL', SITE)
+vi.stubEnv('VITE_GIFTING_SITE_URL', 'https://gifting.example.test')
 
 vi.mock('../nap', () => ({
   getSigner: () => signer,

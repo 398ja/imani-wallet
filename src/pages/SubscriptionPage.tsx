@@ -4,7 +4,7 @@ import { RefreshCw, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-reac
 import { Screen, BackLink, PageHeader, Panel, DetailRow, Button, Centered, buttonClasses } from '../components/ui'
 import { formatDate, formatFace } from '../lib/format'
 import { explain, licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
-import { refreshCatalog, salesPosition, SUBSCRIPTION_SITE_URL, type SalesPosition } from '../lib/entitlement'
+import { refreshCatalog, salesPosition, subscriptionSiteUrl, type SalesPosition } from '../lib/entitlement'
 import { openSisterSite } from '../lib/sisterSiteSigner'
 import { GRACE_WINDOW_SECONDS } from '@imani/licence'
 import { listTransactions, onWalletChanged } from '../lib/wallet'
@@ -171,22 +171,39 @@ export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currenc
       {/* Bought on the subscription site (#407 §6, #411). This tap opens it in a new tab and THIS
           wallet signs the site's login (sisterSiteSigner.ts): the stall arrives signed in, with no
           passphrase and no login page. The plain href is the fallback when the browser refuses the
-          tab, and the site then says "open this from your wallet". */}
+          tab, and the site then says "open this from your wallet". Where it is comes from this
+          build's env (VITE_SUBSCRIPTION_SITE_URL); a build without one says so instead of guessing. */}
+      <UpgradeLink label={granted ? 'Change or renew my plan' : 'Upgrade my plan'} variant={granted ? 'secondary' : 'primary'} />
+    </Screen>
+  )
+}
+
+function UpgradeLink({ label, variant }: { label: string; variant: 'primary' | 'secondary' }) {
+  const site = subscriptionSiteUrl()
+  if (!site) {
+    return (
+      <p className="mt-4 text-sm text-mono-500">
+        Plans cannot be bought from this wallet yet: no subscription site is set up for it.
+      </p>
+    )
+  }
+  return (
+    <>
       <a
-        href={SUBSCRIPTION_SITE_URL}
+        href={site}
         target="imani-subscription"
         rel="opener"
         onClick={(e) => {
-          if (openSisterSite(SUBSCRIPTION_SITE_URL, 'imani-subscription')) e.preventDefault()
+          if (openSisterSite(site, 'imani-subscription')) e.preventDefault()
         }}
-        className={`${buttonClasses(granted ? 'secondary' : 'primary', 'md')} mt-4 w-full`}
+        className={`${buttonClasses(variant, 'md')} mt-4 w-full`}
       >
-        {granted ? 'Change or renew my plan' : 'Upgrade my plan'}
+        {label}
       </a>
       <p className="mt-2 text-sm text-mono-500">
         Opens Imani plans in a new tab, signed in as this stall. Pay by card; your new plan arrives on this device on its own.
       </p>
-    </Screen>
+    </>
   )
 }
 

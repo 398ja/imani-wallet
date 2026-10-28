@@ -17,6 +17,7 @@ import { hexToBytes } from '@noble/hashes/utils'
 import type { TransactionRow } from '@imani/wallet-storage'
 
 import { licenceSellerPubkey, type LicenceStatus } from './licenceStatus'
+import { subscriptionSiteUrl } from './sisterSites'
 
 /**
  * What this stall may do, in tiers and limits (#407): the join between the licence status, the
@@ -33,13 +34,12 @@ import { licenceSellerPubkey, type LicenceStatus } from './licenceStatus'
 const CATALOG_KEY = 'imani.tiers.catalog'
 
 /**
- * Where plans are bought (#407 §6, #411): subscription.imani.casa, its own origin. The wallet opens
- * it from Settings › Subscription and signs its login there (sisterSiteSigner.ts). A deployment
- * points elsewhere with VITE_SUBSCRIPTION_SITE_URL (staging, local), and the signer's origin
- * policy reads the same setting, so the two cannot disagree.
+ * Where plans are bought (#407 §6, #411): the subscription site, on its own origin. The wallet opens
+ * it from Settings › Subscription and signs its login there (sisterSiteSigner.ts). The URL is
+ * per-environment configuration, `VITE_SUBSCRIPTION_SITE_URL` (sisterSites.ts), never code; the
+ * signer's origin policy reads the same setting, so the two cannot disagree.
  */
-export const SUBSCRIPTION_SITE_URL =
-  ((import.meta.env.VITE_SUBSCRIPTION_SITE_URL as string | undefined) ?? '').trim() || 'https://subscription.imani.casa'
+export { subscriptionSiteUrl }
 
 /**
  * The catalog this device holds: the highest-version signed catalog it has accepted, or the one
@@ -107,13 +107,15 @@ export function forgetCatalog(): void {
 }
 
 /**
- * Fetch the catalog subscription.imani.casa publishes (`GET /v1/catalog`) and adopt it if it is
- * ours and newer. Best effort and silent: offline, or a bad answer, leaves the one already held.
- * This is how a limit changes without an app release (#407 Q2).
+ * Fetch the catalog the subscription site publishes (`GET /v1/catalog`) and adopt it if it is
+ * ours and newer. Best effort and silent: offline, a bad answer, or a build with no subscription
+ * site, leaves the one already held. This is how a limit changes without an app release (#407 Q2).
  */
 export async function refreshCatalog(fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  const site = subscriptionSiteUrl()
+  if (!site) return false
   try {
-    const r = await fetchImpl(`${SUBSCRIPTION_SITE_URL.replace(/\/+$/, '')}/v1/catalog`, { cache: 'no-cache' })
+    const r = await fetchImpl(`${site}/v1/catalog`, { cache: 'no-cache' })
     if (!r.ok) return false
     const signed = (await r.json()) as SignedCatalog
     if (typeof signed?.body !== 'string' || typeof signed?.signature !== 'string') return false

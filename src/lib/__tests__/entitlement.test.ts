@@ -146,13 +146,30 @@ describe('terminals from the tier', () => {
 describe('fetching the published catalog', () => {
   it('adopts a newer signed catalog from the site, and ignores a bad answer', async () => {
     vi.stubEnv('VITE_LICENCE_SELLER_PUBKEY', ISSUER)
+    vi.stubEnv('VITE_SUBSCRIPTION_SITE_URL', 'https://plans.example.test')
+    const asked: string[] = []
     const good = sign(catalogBody(3, 150_00))
-    const ok = await refreshCatalog(async () => new Response(JSON.stringify(good), { status: 200 }))
+    const ok = await refreshCatalog(async (url) => {
+      asked.push(String(url))
+      return new Response(JSON.stringify(good), { status: 200 })
+    })
     expect(ok).toBe(true)
+    expect(asked).toEqual(['https://plans.example.test/v1/catalog'])
     expect(currentCatalog().version).toBe(3)
     expect(await refreshCatalog(async () => new Response('nope', { status: 502 }))).toBe(false)
     expect(await refreshCatalog(async () => { throw new Error('offline') })).toBe(false)
     expect(currentCatalog().version).toBe(3)
+    vi.unstubAllEnvs()
+  })
+
+  it('asks nobody when this build has no subscription site', async () => {
+    vi.stubEnv('VITE_SUBSCRIPTION_SITE_URL', '')
+    let asked = false
+    expect(await refreshCatalog(async () => {
+      asked = true
+      return new Response('{}')
+    })).toBe(false)
+    expect(asked).toBe(false)
     vi.unstubAllEnvs()
   })
 })

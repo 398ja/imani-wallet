@@ -143,15 +143,28 @@ describe('reaching the screen without a subscription', () => {
   })
 
   it('says how to get one, rather than offering a button that does nothing', async () => {
+    // Where the site is comes from this environment's build config, never from code.
+    vi.stubEnv('VITE_SUBSCRIPTION_SITE_URL', 'https://plans.example.test/')
     renderPage()
 
     await screen.findByText('Not active')
     // Bought on the subscription site, its own origin, in a named tab the wallet signs in (#411).
     const link = screen.getByRole('link', { name: 'Upgrade my plan' })
-    expect(link.getAttribute('href')).toBe('https://subscription.imani.casa')
+    expect(link.getAttribute('href')).toBe('https://plans.example.test')
     expect(link.getAttribute('target')).toBe('imani-subscription')
     // The opener is kept on purpose: it is the channel the wallet signs the site's login over.
     expect(link.getAttribute('rel')).toBe('opener')
+    vi.unstubAllEnvs()
+  })
+
+  it('a build with no subscription site says so, and links nowhere', async () => {
+    vi.stubEnv('VITE_SUBSCRIPTION_SITE_URL', '')
+    renderPage()
+
+    await screen.findByText('Not active')
+    expect(screen.queryByRole('link', { name: 'Upgrade my plan' })).toBeNull()
+    expect(screen.getByText(/no subscription site is set up/)).toBeTruthy()
+    vi.unstubAllEnvs()
   })
 
   it('refuses a licence that is not ours, however well-formed', async () => {

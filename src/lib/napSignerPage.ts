@@ -52,7 +52,7 @@ export type SignerView =
   /** Mounted, waiting for the site that opened it to ask. */
   | { state: 'waiting' }
   /** This window cannot sign for anyone. The page says why and offers nothing to do. */
-  | { state: 'unavailable'; reason: 'no-opener' | 'framed' | 'no-key' | 'terminal' }
+  | { state: 'unavailable'; reason: 'no-opener' | 'framed' | 'no-key' | 'terminal' | 'no-sites' }
   /** A policy site asked; the stored key has to be unlocked first. */
   | { state: 'unlock'; origin: string; error?: string }
   /** Unlocked; may this site sign the person in? */
@@ -122,6 +122,11 @@ export async function startSignerPage(deps: SignerPageDeps): Promise<SignerPage>
   // unlock UI at all (clickjacking), and a page opened by hand has nobody to answer.
   if (isFramed) {
     view({ state: 'unavailable', reason: 'framed' })
+    return inert
+  }
+  // A build configured with no sister site signs for nobody (nap would refuse the empty policy).
+  if (Object.keys(deps.policy).length === 0) {
+    view({ state: 'unavailable', reason: 'no-sites' })
     return inert
   }
   if (!opener) {

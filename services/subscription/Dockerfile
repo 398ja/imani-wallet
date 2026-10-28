@@ -19,8 +19,11 @@ COPY packages ./packages
 COPY apps/subscription ./apps/subscription
 # Baked into the site bundle: the ONE wallet origin the site accepts a NAP signer from (#411). The
 # wallet opens this site and signs its login over postMessage; a signer anywhere else is ignored.
-ARG VITE_WALLET_ORIGIN="https://wallet.imani.casa"
+# Per environment (e.g. https://wallet.imani.casa in production), so REQUIRED: a site built without
+# it could never be signed in, which is a build that should fail rather than ship.
+ARG VITE_WALLET_ORIGIN
 ENV VITE_WALLET_ORIGIN=$VITE_WALLET_ORIGIN
+RUN test -n "$VITE_WALLET_ORIGIN" || { echo "set --build-arg VITE_WALLET_ORIGIN=<the wallet's origin>" >&2; exit 1; }
 # Served at the root of its own origin (subscription.imani.casa). Set to e.g. /subscription only
 # together with SUBSCRIPTION_BASE_PATH on the service.
 ARG SUBSCRIPTION_BASE="/"

@@ -129,6 +129,7 @@ function Unavailable({ reason }: { reason: Extract<SignerView, { state: 'unavail
     framed: 'This page cannot be used inside another page.',
     'no-key': 'There is no wallet on this device yet. Open Imani wallet, create or restore your wallet, then try again.',
     terminal: 'This device is a till. A till cannot sign anyone in to other sites.',
+    'no-sites': 'This wallet is not set up to sign you in to any other site.',
   }[reason]
   return <Alert>{text}</Alert>
 }
