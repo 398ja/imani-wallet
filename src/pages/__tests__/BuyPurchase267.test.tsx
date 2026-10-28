@@ -3,9 +3,8 @@
  *
  * imani-wallet#267 items 2 and 3, buyer side.
  *
- * - A guest (no wallet) cannot start a card purchase: their coupon would be
- *   delivered by Cashlink, which is not wired, so they would pay and receive
- *   nothing. Refused before any network call, so nothing is charged.
+ * - A guest (no wallet) cannot start a card purchase HERE; since #410 they are
+ *   pointed to the stall's gifting page, which takes guests.
  * - Stripe returns the buyer to `/buy/done?session_id=…` or `/buy/cancelled`.
  *   `session_id` is never shown or used to look anything up.
  */
@@ -29,6 +28,12 @@ let readinessOverride: string | null = null
 vi.mock('../../lib/cardSalesEnrolment', () => ({
   cardSalesReadiness: async (...a: unknown[]) =>
     readinessOverride ?? ((await cardSalesReady(...(a as []))) ? 'ready' : 'not-ready'),
+}))
+
+let identity: { nip05?: string } | undefined
+vi.mock('../../lib/identity', async (orig) => ({
+  ...(await orig<typeof import('../../lib/identity')>()),
+  useIdentity: () => identity,
 }))
 
 import { BuyPage } from '../BuyPage'
@@ -57,13 +62,24 @@ function buy(buyerPubkey: string | null) {
   )
 }
 
-describe('Buy page, guest refusal (#267 item 2)', () => {
-  it('tells a guest to create a wallet and offers no card button', () => {
+describe('Buy page, guest (#267 item 2, #410)', () => {
+  it('points a guest to the gifting page (by handle) and offers no card button here', async () => {
+    identity = { nip05: 'mama@imani.casa' }
     buy(null)
-    expect(screen.getByText('Create a wallet first to buy a voucher by card')).toBeTruthy()
+    expect(screen.getByText(/buy this voucher by card on the gifting page/)).toBeTruthy()
+    const link = (await screen.findByRole('link', { name: 'Buy on the gifting page' })) as HTMLAnchorElement
+    expect(link.href).toBe('https://gifting.imani.casa/shop/mama')
+    expect(screen.getByRole('link', { name: 'Create a wallet' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /pay by card/i })).toBeNull()
     expect(screen.queryByText(/link to claim your voucher/i)).toBeNull()
     expect(startPurchase).not.toHaveBeenCalled()
+  })
+
+  it('a stall with no handle has no gifting link (no hexpub URLs), only Create a wallet', () => {
+    identity = undefined
+    buy(null)
+    expect(screen.queryByRole('link', { name: 'Buy on the gifting page' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Create a wallet' })).toBeTruthy()
   })
 
   it('lets a wallet holder pay, and remembers the stall for the return page', async () => {
