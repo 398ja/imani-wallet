@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { LogOut } from 'lucide-react'
 
+import { CrossOriginSignerError } from '@imani/nap-client-web'
+
 import { IdentityInline } from '@wallet/components/ui/IdentityInline'
 import { Screen } from '@wallet/components/ui/layout'
 import { connect, isLive, type Session } from './lib/signer'
@@ -10,6 +12,9 @@ import { ReturnPage } from './pages/ReturnPage'
 
 /**
  * gifting.imani.casa (#410): a stall's vouchers, by card, for yourself, a handle or an email.
+ *
+ * For customers and guests only (owner, 2026-10-28). A stall's wallet is refused sign-in by the
+ * wallet itself (napSignerPolicy `siteAudience`), and payment-adapter refuses a draft a stall signed.
  *
  * The session is a cross-origin grant from the wallet (G10) and lives in memory only. Leaving for
  * Stripe drops it, which is fine: delivery runs from Stripe's webhook, and the return page works
@@ -28,7 +33,15 @@ export function App() {
   const signIn = (expectedPubkey?: string) => {
     setSignInError(null)
     connect({ expectedPubkey }).then(setSession, (e: unknown) =>
-      setSignInError(e instanceof Error && /closed|denied|cancel/i.test(e.message) ? 'Sign-in was cancelled.' : 'Could not sign in with your wallet. Try again.'),
+      setSignInError(
+        // DECLINED covers "not now" and a stall account (this site is for customers and guests): the
+        // wallet window already said which. Here, only what the buyer can do next.
+        e instanceof CrossOriginSignerError && e.code === 'DECLINED'
+          ? 'Not signed in. You can still buy as a guest.'
+          : e instanceof Error && /closed|denied|cancel/i.test(e.message)
+            ? 'Sign-in was cancelled.'
+            : 'Could not sign in with your wallet. Try again.',
+      ),
     )
   }
   const live = isLive(session) ? session : null
