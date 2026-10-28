@@ -57,6 +57,12 @@ export interface Obligation {
    * warrant as `ref` so the stall can reconcile it; not evidence.
    */
   processorReference?: string | null
+  /**
+   * A gifting-site gift's delivery (#410). `self` is delivered exactly like a wallet purchase.
+   * `handle` and `email` must be LOCKED (to the recipient key or a link key, refund = R, locktime x,
+   * G7/G11) before anyone can hold them, so they are never minted as a plain coupon here.
+   */
+  gift?: { kind: 'self' | 'handle' | 'email' } | null
 }
 
 /**
@@ -189,6 +195,18 @@ export async function discharge(
     return {
       kind: 'blocked',
       reason: 'guest purchase: Cashlink delivery is not wired yet; nothing minted, refund or deliver by hand',
+    }
+  }
+
+  // #410: a handle or email gift must arrive LOCKED with a refund to the buyer (G7, §4c). Minting
+  // it here would hand an unlocked voucher to the recipient (handle) or to nobody (email), and the
+  // buyer could never get it back. Refused BEFORE minting, so nothing exists that a second pass
+  // could double: payment-adapter only sells these once `purchase.gifting.kinds` enables them,
+  // which waits for arming (see giftLock.ts).
+  if (obligation.gift && obligation.gift.kind !== 'self') {
+    return {
+      kind: 'blocked',
+      reason: `${obligation.gift.kind} gift: locked gift delivery is not enabled on this issuer; nothing minted`,
     }
   }
 

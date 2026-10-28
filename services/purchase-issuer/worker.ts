@@ -349,5 +349,6 @@ function toObligation(purchase: OwedPurchase): Obligation {
         : { kind: 'pubkey', pubkey: purchase.recipientPubkey },
     attempts: purchase.attempts,
     processorReference: purchase.processorReference,
+    gift: purchase.delivery ? { kind: purchase.delivery.kind } : null,
   }
 }
