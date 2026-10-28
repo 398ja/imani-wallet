@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes } from 'react-router-dom'
 import { LogOut } from 'lucide-react'
 
 import { IdentityInline } from '@wallet/components/ui/IdentityInline'
@@ -78,13 +78,8 @@ export function App() {
               <Screen>
                 <h1 className="mb-2 text-title font-semibold">Send a voucher</h1>
                 <p className="text-callout text-mono-500">
-                  Open a stall&apos;s gifting link, like <span className="font-medium">gifting.imani.casa/shop/name</span>, to buy one of
+                  Open a stall&apos;s gifting link, like <span className="font-medium">{window.location.host}/shop/name</span>, to buy one of
                   its vouchers by card. There is no list of stalls here.
-                </p>
-                <p className="mt-6 text-sm text-mono-500">
-                  <Link className="underline" to="/">
-                    imani.casa
-                  </Link>
                 </p>
               </Screen>
             }

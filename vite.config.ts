@@ -453,6 +453,14 @@ export default defineConfig({
   // is the one failure mode a performance suite cannot afford. Listed
   // explicitly for the same reason as `services/`.
   test: {
+    // Per-environment settings are fixed for the suite rather than read from this machine's
+    // `.env.local` (a developer's local-stack values would change what the tests see). The gifting
+    // site reads its handle domain and wallet origin at module load, so they are set here rather
+    // than with `vi.stubEnv`.
+    env: {
+      VITE_GIFTING_HANDLE_DOMAIN: 'imani.casa',
+      VITE_WALLET_ORIGIN: 'https://wallet.example.test',
+    },
     // Each package under packages/ ships its OWN vitest.config.ts, and eleven
     // of them were never run by `npm test`. The include globs below only reach
     // `packages/**/src/`, while most of those suites live in `tests/` or

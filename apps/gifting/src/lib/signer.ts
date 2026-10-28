@@ -17,9 +17,21 @@ import { connectCrossOrigin, type CrossOriginGrant } from '@imani/nap-client-web
 
 import type { RemoteSigner } from './api'
 
-/** The wallet's origin, `VITE_WALLET_ORIGIN`, else https://imani.casa. */
-export const WALLET_ORIGIN: string =
-  (import.meta.env?.VITE_WALLET_ORIGIN as string | undefined)?.replace(/\/+$/, '') || 'https://imani.casa'
+/**
+ * The wallet's origin: the one this site asks to sign, and where a guest's return link goes.
+ * Per-environment configuration (`VITE_WALLET_ORIGIN`), never code. Unset (or not an http(s) URL),
+ * signing in is unavailable and nothing is ever sent to a guessed origin.
+ */
+export const WALLET_ORIGIN: string | null = (() => {
+  const raw = ((import.meta.env?.VITE_WALLET_ORIGIN as string | undefined) ?? '').trim()
+  if (!raw) return null
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : null
+  } catch {
+    return null
+  }
+})()
 
 export interface Session extends RemoteSigner {
   grant: CrossOriginGrant
@@ -35,6 +47,7 @@ export type Connect = typeof connectCrossOrigin
 export function connect(opts: { expectedPubkey?: string; connectImpl?: Connect } = {}): Promise<Session> {
   const run = opts.connectImpl ?? connectCrossOrigin
   const audience = window.location.origin
+  if (!WALLET_ORIGIN) return Promise.reject(new Error('Signing in with a wallet is not set up on this site.'))
   return run({
     keyOrigin: WALLET_ORIGIN,
     kinds: [27235],

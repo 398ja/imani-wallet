@@ -6,9 +6,13 @@
  * There is deliberately no hexpub or npub form: the handle is the shop's name.
  */
 
-/** The default handle domain, `VITE_GIFTING_HANDLE_DOMAIN`, else imani.casa. */
+/**
+ * The handle domain a bare name belongs to (`alice` → `alice@<domain>`). Per-environment
+ * configuration (`VITE_GIFTING_HANDLE_DOMAIN`: imani.casa in production, imani.local on the local
+ * stack), never code. Unset, a bare name resolves nowhere and only a full handle works.
+ */
 export const DEFAULT_HANDLE_DOMAIN: string =
-  (import.meta.env?.VITE_GIFTING_HANDLE_DOMAIN as string | undefined)?.trim().toLowerCase() || 'imani.casa'
+  ((import.meta.env?.VITE_GIFTING_HANDLE_DOMAIN as string | undefined) ?? '').trim().toLowerCase()
 
 export type ShopHandle =
   | {
