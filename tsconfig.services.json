@@ -74,5 +74,5 @@
      second voucher parser would be a second opinion about somebody's money. It
      is pure — schnorr, sha256, hex, no DOM — so it costs the service nothing to
      run the wallet's own reader. */
-  "include": ["services", "src/lib/audit.ts", "src/lib/voucherToken.ts"]
+  "include": ["services", "sdk", "src/lib/audit.ts", "src/lib/voucherToken.ts"]
 }
