@@ -859,6 +859,31 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/payment_gateway
       SPRING_DATASOURCE_USERNAME: payment
       SPRING_DATASOURCE_PASSWORD: payment
+      # The signing secret of the local `stripe listen` below (STRIPE_WEBHOOK_SECRET in
+      # imani-deploy/.env.local, from `stripe listen --print-secret`). Without a forwarder nothing
+      # delivers checkout.session.completed here, so a paid card sale is never recorded and its
+      # voucher never issued: the buyer sees "Your payment went through" and nothing arrives.
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+
+  # Stripe test-mode events for payment-adapter's /webhook/stripe, against a real sk_test_ key
+  # only (with stripe-mock there is nothing to listen to): COMPOSE_PROFILES=stripe-test. Card
+  # sales run on the stall's connected account, so Connect events go to the same endpoint.
+  stripe-listen:
+    image: stripe/stripe-cli:latest
+    container_name: stripe-listen-test
+    profiles: ["stripe-test"]
+    command:
+      - listen
+      - --api-key
+      - "${STRIPE_SECRET_KEY:-}"
+      - --forward-to
+      - http://payment-adapter:8080/webhook/stripe
+      - --forward-connect-to
+      - http://payment-adapter:8080/webhook/stripe
+      - --events
+      - checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired,payment_intent.payment_failed,charge.refunded,charge.dispute.created
+    networks:
+      - imani-internal
 
   cashback-claim:
     depends_on: !override
