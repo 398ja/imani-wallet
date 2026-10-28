@@ -54,6 +54,26 @@ export interface OwedPurchase {
    * payment-adapter recorded none.
    */
   processorReference: string | null
+  /**
+   * A gifting-site purchase's PINNED delivery (#410), or null for a wallet purchase. Pinned in the
+   * Purchase Draft at review: nothing here may change who receives the voucher.
+   */
+  delivery?: GiftDelivery | null
+}
+
+/**
+ * How a gift is delivered (#410 §4). `sealed` is the link secret sealed to this issuer (G4), opened
+ * only to arm and email, then scrubbed. Never logged: see `describeGift`.
+ */
+export interface GiftDelivery {
+  kind: 'self' | 'handle' | 'email'
+  refundPubkey: string | null
+  recipientEmail: string | null
+  sealed: string | null
+  message: string | null
+  from: string | null
+  buyerEmail: string | null
+  claimWindowDays: number
 }
 
 export type DischargeOutcome =
@@ -150,7 +170,16 @@ export function parseOwedPurchase(row: unknown): OwedPurchase | null {
     processorReference = rawRef
   }
 
+  let delivery: GiftDelivery | null = null
+  if (r.delivery !== null && r.delivery !== undefined) {
+    delivery = parseGiftDelivery(r.delivery)
+    if (delivery === null) return null
+    // A handle or self gift has a pinned key; an email gift never does (the link key is made at arm).
+    if (delivery.kind === 'email' ? recipientPubkey !== null : recipientPubkey === null) return null
+  }
+
   return {
+    delivery,
     eventId,
     paymentRequestId,
     stallPubkey: stallPubkey as string | null,
@@ -161,6 +190,42 @@ export function parseOwedPurchase(row: unknown): OwedPurchase | null {
     attempts,
     processorReference,
   }
+}
+
+const optStr = (v: unknown, max: number): string | null | undefined =>
+  v === null || v === undefined ? null : typeof v === 'string' && v.length <= max ? v : undefined
+
+/** Strict, like the rest of this parser: a malformed delivery drops the row, loudly. */
+export function parseGiftDelivery(raw: unknown): GiftDelivery | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const d = raw as Record<string, unknown>
+  if (d.kind !== 'self' && d.kind !== 'handle' && d.kind !== 'email') return null
+  const refundPubkey = optStr(d.refundPubkey, 64)
+  if (refundPubkey === undefined || (refundPubkey !== null && !HEX64.test(refundPubkey))) return null
+  if (d.kind !== 'self' && refundPubkey === null) return null
+  const recipientEmail = optStr(d.recipientEmail, 320)
+  const sealed = optStr(d.sealed, 2048)
+  const message = optStr(d.message, 280)
+  const from = optStr(d.from, 80)
+  const buyerEmail = optStr(d.buyerEmail, 320)
+  if ([recipientEmail, sealed, message, from, buyerEmail].includes(undefined)) return null
+  const claimWindowDays = typeof d.claimWindowDays === 'number' && Number.isInteger(d.claimWindowDays) && d.claimWindowDays > 0 && d.claimWindowDays <= 365 ? d.claimWindowDays : null
+  if (claimWindowDays === null) return null
+  return {
+    kind: d.kind,
+    refundPubkey,
+    recipientEmail: recipientEmail as string | null,
+    sealed: sealed as string | null,
+    message: message as string | null,
+    from: from as string | null,
+    buyerEmail: buyerEmail as string | null,
+    claimWindowDays,
+  }
+}
+
+/** A gift for a log line: kind and refund key only. Never the email, message or seal (#410). */
+export function describeGift(d: GiftDelivery | null | undefined): string {
+  return d ? `${d.kind} gift, refund ${d.refundPubkey ? `${d.refundPubkey.slice(0, 8)}…` : 'none'}` : 'wallet purchase'
 }
 
 export class PurchasesApi {
