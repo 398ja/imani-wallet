@@ -53,6 +53,13 @@ export type SignerView =
   | { state: 'waiting' }
   /** This window cannot sign for anyone. The page says why and offers nothing to do. */
   | { state: 'unavailable'; reason: 'no-opener' | 'framed' | 'no-key' | 'terminal' | 'no-sites' }
+  /**
+   * This account is the wrong kind for the site: a stall on the gifting site (customers and guests
+   * only), or a customer on the subscription site (stalls only). Nothing is signed.
+   */
+  | { state: 'wrong-account'; origin: string; audience: 'merchants' | 'customers' }
+  /** Could not tell whether this account is a stall (relay unreachable). Nothing is signed. */
+  | { state: 'role-unknown'; origin: string }
   /** A policy site asked; the stored key has to be unlocked first. */
   | { state: 'unlock'; origin: string; error?: string }
   /** Unlocked; may this site sign the person in? */
@@ -74,8 +81,17 @@ export interface SignerPageDeps {
   keyStore: { hasKey(): Promise<boolean>; loadKey(passphrase: string): Promise<string> }
   /** Builds the signer from the decrypted key. */
   makeSigner(privkeyHex: string): UnlockableSigner
+  /** The signer's public key, hex. */
+  pubkeyOf(signer: UnlockableSigner): string
   /** True on a till: it never signs a person in anywhere. */
   isTerminal(): boolean
+  /**
+   * Is this key a stall? Read from its signed public record (`merchantStatus`). Each site is for one
+   * kind of account (`siteAudience`), checked on every connect, before consent is asked.
+   */
+  merchantStatus(pubkey: string): Promise<'merchant' | 'customer' | 'unknown'>
+  /** Which kind of account a site is for; null for none (refused). */
+  audienceOf(origin: string): 'merchants' | 'customers' | null
   consentStore: ConsentStore
   onView(view: SignerView): void
   // Injectable for tests; the browser's own by default.
@@ -190,15 +206,39 @@ export async function startSignerPage(deps: SignerPageDeps): Promise<SignerPage>
     isFramed: false,
     consentStore: deps.consentStore,
     sessionChannel: deps.sessionChannel,
-    ensureUnlocked: () => {
-      if (ended) return Promise.reject(new Error('ended'))
-      if (inner) return Promise.resolve()
-      // One unlock at a time: a second connect while the first is being answered waits on it.
-      return new Promise<void>((resolve, reject) => {
-        pendingUnlock?.reject(new Error('superseded'))
-        pendingUnlock = { resolve, reject, origin: askingOrigin }
-        view({ state: 'unlock', origin: askingOrigin })
-      })
+    ensureUnlocked: async () => {
+      if (ended) throw new Error('ended')
+      const origin = askingOrigin
+      if (!inner) {
+        // One unlock at a time: a second connect while the first is being answered waits on it.
+        await new Promise<void>((resolve, reject) => {
+          pendingUnlock?.reject(new Error('superseded'))
+          pendingUnlock = { resolve, reject, origin }
+          view({ state: 'unlock', origin })
+        })
+      }
+      // The right kind of account for this site, on EVERY connect (a remembered "yes" skips
+      // onConsent, never this): a stall on the gifting site, or a customer on the subscription
+      // site, is told so here, the key is dropped, and the site gets DECLINED.
+      if (!inner) throw new Error('locked')
+      const pubkey = deps.pubkeyOf(inner)
+      const audience = deps.audienceOf(origin)
+      const status = await deps.merchantStatus(pubkey).catch(() => 'unknown' as const)
+      if (ended) throw new Error('ended')
+      if (audience === null) {
+        dropKey()
+        throw new Error('not a site this wallet signs for')
+      }
+      if (status === 'unknown') {
+        dropKey()
+        view({ state: 'role-unknown', origin })
+        throw new Error('role unknown')
+      }
+      if ((audience === 'merchants') !== (status === 'merchant')) {
+        dropKey()
+        view({ state: 'wrong-account', origin, audience })
+        throw new Error('wrong account for this site')
+      }
     },
     onConsent: (request) =>
       new Promise<boolean>((resolve) => {

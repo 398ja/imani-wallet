@@ -62,3 +62,28 @@ export function siteDescription(siteOrigin: string): string {
   if (siteOrigin === giftingOrigin()) return 'buy and send vouchers as gifts'
   return 'sign you in'
 }
+
+/**
+ * Which accounts may sign in to which site (owner decisions, 2026-10-28):
+ * - the subscription site is for stalls only (#411);
+ * - the gifting site is for customers and guests only (#410). A stall does not buy gifts there.
+ *
+ * The wallet checks this before it decrypts anything, so a wrong account is told why, in the
+ * wallet, instead of the site refusing it later. Each site's server refuses the wrong role too:
+ * this is the courtesy, not the boundary.
+ */
+export type SiteAudience = 'merchants' | 'customers'
+
+export function siteAudience(siteOrigin: string): SiteAudience | null {
+  if (siteOrigin === subscriptionOrigin()) return 'merchants'
+  if (siteOrigin === giftingOrigin()) return 'customers'
+  return null
+}
+
+/** May an account that is (or is not) a stall sign in to this site? */
+export function accountMaySignIn(siteOrigin: string, isMerchant: boolean): boolean {
+  const audience = siteAudience(siteOrigin)
+  if (audience === 'merchants') return isMerchant
+  if (audience === 'customers') return !isMerchant
+  return false
+}

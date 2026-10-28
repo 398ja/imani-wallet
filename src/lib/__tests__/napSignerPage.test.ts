@@ -78,7 +78,11 @@ async function start(over: Partial<Parameters<typeof startSignerPage>[0]> = {}) 
       signers.push(s)
       return s
     },
+    pubkeyOf: (s) => (s as ReturnType<typeof createWalletSigner>).pubkey,
     isTerminal: () => false,
+    // SITE is the gifting site here (customers only); OTHER is the subscription site (stalls only).
+    merchantStatus: async () => 'customer',
+    audienceOf: (o) => (o === SITE ? 'customers' : o === OTHER ? 'merchants' : null),
     consentStore: walletConsentStore(storage),
     onView: (v) => views.push(v),
     opener: h.opener,
@@ -219,6 +223,59 @@ describe('/nap/signer', () => {
     await until(() => t.replies('error').length === 1)
     expect(t.replies('error')[0].message).toMatchObject({ code: 'REFUSED' })
     expect(t.replies('connected')).toHaveLength(0)
+  })
+
+  it('a stall is refused on the gifting site (customers and guests only), and told why in the wallet', async () => {
+    const t = await start({ merchantStatus: async () => 'merchant' })
+    t.send(connect())
+    await until(() => t.last().state === 'unlock')
+    await t.page.submitPassphrase(PASS)
+    await until(() => t.last().state === 'wrong-account')
+    expect(t.last()).toEqual({ state: 'wrong-account', origin: SITE, audience: 'customers' })
+    await until(() => t.replies('error').length === 1)
+    expect(t.replies('error')[0].message).toMatchObject({ code: 'DECLINED' })
+    expect(t.replies('connected')).toHaveLength(0)
+    expect(t.views.some((v) => v.state === 'consent')).toBe(false)
+    expect(t.signers[0].hasKey()).toBe(false)
+  })
+
+  it('a customer is refused on the subscription site (stalls only)', async () => {
+    const t = await start()
+    t.send({ type: 'connect', id: 'c1', kinds: [27235], audiences: [OTHER] }, OTHER)
+    await until(() => t.last().state === 'unlock')
+    await t.page.submitPassphrase(PASS)
+    await until(() => t.last().state === 'wrong-account')
+    expect(t.last()).toEqual({ state: 'wrong-account', origin: OTHER, audience: 'merchants' })
+    expect(t.replies('connected')).toHaveLength(0)
+  })
+
+  it('a remembered yes does not skip the role check', async () => {
+    const storage = memoryStorage()
+    const first = await start({ consentStore: walletConsentStore(storage) })
+    first.send(connect())
+    await until(() => first.last().state === 'unlock')
+    await first.page.submitPassphrase(PASS)
+    await until(() => first.last().state === 'consent')
+    first.page.answerConsent(true)
+    await until(() => first.replies('connected').length === 1)
+
+    // The same key became a stall since: the remembered yes must not let it in.
+    const again = await start({ consentStore: walletConsentStore(storage), merchantStatus: async () => 'merchant' })
+    again.send(connect())
+    await until(() => again.last().state === 'unlock')
+    await again.page.submitPassphrase(PASS)
+    await until(() => again.last().state === 'wrong-account')
+    expect(again.replies('connected')).toHaveLength(0)
+  })
+
+  it('when the account cannot be checked, nothing is signed', async () => {
+    const t = await start({ merchantStatus: async () => 'unknown' })
+    t.send(connect())
+    await until(() => t.last().state === 'unlock')
+    await t.page.submitPassphrase(PASS)
+    await until(() => t.last().state === 'role-unknown')
+    expect(t.replies('connected')).toHaveLength(0)
+    expect(t.signers[0].hasKey()).toBe(false)
   })
 
   it('closing the page zeroes the key and stops answering', async () => {
