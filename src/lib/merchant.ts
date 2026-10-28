@@ -100,6 +100,11 @@ export interface MerchantProfile {
    * separate thing for a stall to remember.
    */
   acceptsCards?: boolean
+  /**
+   * The stall opted in to search-engine indexing of its gifting page (#410 G1).
+   * Like `acceptsCards`, only a literal `true` counts, and absent means no.
+   */
+  giftingIndexable?: boolean
   /** When this record was last written locally, ms. For display only. */
   updatedAt: number
   /**
@@ -322,6 +327,7 @@ export function buildMerchantEvent(merchant: MerchantProfile): EventTemplate {
   // also what an older client that never knew the field publishes, so the two
   // agree rather than needing to be told apart.
   if (merchant.acceptsCards === true) content.acceptsCards = true
+  if (merchant.giftingIndexable === true) content.giftingIndexable = true
 
   return {
     kind: MERCHANT_KIND,
@@ -380,6 +386,7 @@ export function mergeMerchantEvent(
     // record that stops asserting it has stopped being evidence for it. Holding
     // the old value would keep a Buy button alive on a stall that disconnected.
     acceptsCards: parsed.acceptsCards === true,
+    giftingIndexable: parsed.giftingIndexable === true,
     updatedAt: Date.now(),
     eventAt: createdAt > 0 ? createdAt : merchant.eventAt,
   }

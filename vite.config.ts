@@ -482,6 +482,9 @@ export default defineConfig({
     include: [
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',
+      // The gifting site (#410), and the subscription site (#407) once it lands: their own pages and
+      // libraries, tested against the wallet's real modules.
+      'apps/**/src/**/*.test.{ts,tsx}',
       'perf/**/*.test.{ts,tsx}',
       // `deploy/` ships the container's nginx.conf, and its CSP is application
       // behaviour, not decoration: `worker-src 'self'` there silently disabled
@@ -519,6 +522,8 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
     alias: {
       '@': r('./src'),
+      // How apps/* import the wallet's modules (apps/gifting/vite.config.ts aliases it the same).
+      '@wallet': r('./src'),
 
       // imani-apps — wallet core. Order matters: nostr-vouchers must precede
       // any shorter prefix that could shadow it.
