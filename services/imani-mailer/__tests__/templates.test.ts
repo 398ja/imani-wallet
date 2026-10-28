@@ -31,6 +31,20 @@ describe('built-in templates', () => {
     expect(r.text).toMatch(/voucher for Card Test Bakery\.\n\nClaim it by/)
   })
 
+  it('gift-expiring (G13): no link field at all, so no claim link can ever be sent; points to the claim email', () => {
+    const t = compile('gift-expiring', BUILTIN_TEMPLATES['gift-expiring'])
+    expect(Object.values(t.def.fields).some((f) => f.type === 'url')).toBe(false)
+    const fields = { from: 'Alice', stall: 'Card Test Bakery', amount: '£5.00', claimBy: '27 Nov 2026', sentOn: '28 Oct 2026', sender: 'gifts@imani.casa', claimSubject: 'Alice sent you a voucher for Card Test Bakery' }
+    const r = render(t, resolveFields(t, fields, LINKS))
+    expect(r.subject).toBe('Your voucher for Card Test Bakery expires soon')
+    expect(r.text).toContain('our email of 28 Oct 2026 from gifts@imani.casa')
+    expect(r.text).toContain('"Alice sent you a voucher for Card Test Bakery"')
+    expect(r.text).toMatch(/spam/)
+    expect(r.text).not.toMatch(/https?:/)
+    expect(r.html).not.toMatch(/<a /)
+    expect(() => resolveFields(t, { ...fields, claimUrl: claimFields.claimUrl }, LINKS)).toThrow(/unknown field "claimUrl"/)
+  })
+
   it('refuses missing required fields, unknown fields and non-strings', () => {
     expect(() => renderClaim({ ...claimFields, stall: '' })).toThrow(/stall is required/)
     expect(() => renderClaim({ ...claimFields, bcc: 'x@y.z' })).toThrow(/unknown field "bcc"/)
