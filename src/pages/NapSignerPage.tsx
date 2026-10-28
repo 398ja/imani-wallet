@@ -7,7 +7,7 @@ import { startSignerPage, walletConsentStore, type SignerPage, type SignerView }
 import { signerPolicy, siteDescription, siteName } from '../lib/napSignerPolicy'
 import { createWalletSigner } from '../lib/signer'
 import { isTerminalDevice } from '../lib/terminalEnrol'
-import { shortPubkey } from '../lib/format'
+import { loadProfile, profileName } from '../lib/profile'
 
 /**
  * `/nap/signer`: the popup a sister site opens to sign someone in with this wallet (#411, #410 G10).
@@ -69,13 +69,16 @@ function SignerBody({ view, page }: { view: SignerView; page: React.RefObject<Si
       return <Unavailable reason={view.reason} />
     case 'unlock':
       return <Unlock origin={view.origin} error={view.error} page={page} />
-    case 'consent':
+    case 'consent': {
+      // Who this is, in a person's words: their name or handle as saved on this device. Never a key.
+      const me = loadProfile(view.request.pubkey)
+      const who = me && (me.displayName || me.nip05) ? profileName(me) : null
       return (
         <Panel className="p-5">
           <ShieldCheck className="mb-3 h-7 w-7 text-mono-500" aria-hidden />
           <h1 className="text-title font-semibold">Sign in to {siteName(view.request.origin)}?</h1>
           <p className="mt-2 text-callout text-mono-500">
-            It wants to sign you in as <span className="font-mono">{shortPubkey(view.request.pubkey)}</span> to{' '}
+            It wants to sign you in{who ? <> as <span className="font-medium text-mono-900 dark:text-mono-50">{who}</span></> : null} to{' '}
             {siteDescription(view.request.origin)}.
           </p>
           <p className="mt-2 text-sm text-mono-500">
@@ -90,6 +93,7 @@ function SignerBody({ view, page }: { view: SignerView; page: React.RefObject<Si
           </div>
         </Panel>
       )
+    }
     case 'connected':
       return (
         <Panel className="p-5 text-center">

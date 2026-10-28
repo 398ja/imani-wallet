@@ -1344,15 +1344,31 @@ function redemptionAdapter(): RedemptionAdapter {
       // written from the coupon itself, and nothing here touches it. A coupon
       // with no usable declaration takes the plain `announceArrival` path.
       // A licence is not a payment either: no money toast, no "+…" and no `voucher_received`
-      // row, but its own "Licence from …" notice (#160 owner report). Read from the token's
-      // signed metadata, as `licences.ts` reads it for the balance.
+      // row, but its own notice naming the PLAN ("Imani Basic plan activated", or "renewed"), from
+      // the token's signed metadata, as `licences.ts` reads it for the balance. Never the seller's
+      // key: no npub is shown to end users.
       const licence = licenceFromToken(token)
       if (licence) {
         // Lazily, like every toast module on this path: sonner touches the DOM at import.
-        const voucherKey = licence.subscriptionId + ':' + String(meta?.voucherId ?? '')
-        void import('./notMoneyNotice')
-          .then((m) => m.showNotice(m.licenceNotice(voucherKey, licence.issuerId), currentPubkey))
-          .catch(() => undefined)
+        const voucherId = String(meta?.voucherId ?? '')
+        const voucherKey = licence.subscriptionId + ':' + voucherId
+        void (async () => {
+          // A renewal when this device already held ANOTHER licence of the same subscription (this
+          // one is already in the store by now, so it is excluded by its own token).
+          let renewal = false
+          try {
+            const { listVouchers } = await import('./wallet')
+            const { licenceIn } = await import('./licences')
+            renewal = (await listVouchers()).some((row) => {
+              if (row.token === token) return false
+              return licenceIn(row)?.subscriptionId === licence.subscriptionId
+            })
+          } catch {
+            // Wording only: "activated" is right enough when the store cannot be read.
+          }
+          const m = await import('./notMoneyNotice')
+          m.showNotice(m.licenceNotice(voucherKey, licence, { renewal }), currentPubkey)
+        })().catch(() => undefined)
       } else void announceBundleArrival(
         toArrivedVoucher(voucher),
         declaredBundleOf(meta),

@@ -69,9 +69,10 @@ describe('a terminal credential is announced as a setup request', () => {
     expect(toasts[0].title).toBe('Terminal setup request from Rosa Green Farm')
   })
 
-  it('falls back to a short npub when the stall has published no name', () => {
+  it('never shows a key when the stall has published no name', () => {
     const n = terminalNotice(offer())!
-    expect(n.title).toMatch(/^Terminal setup request from npub1\w+…$/)
+    expect(n.title).toBe('Terminal setup request from a stall')
+    expect(`${n.title} ${n.body}`).not.toMatch(/npub|[0-9a-f]{16}/)
   })
 
   it('a renewal reads "Terminal renewal from …" with its own type', () => {
@@ -103,12 +104,26 @@ describe('a terminal credential is announced as a setup request', () => {
   })
 })
 
-describe('a licence is announced as a licence', () => {
-  it('reads "Licence from <seller>", links to the subscription, carries no amount', () => {
-    const seller = 'e'.repeat(64)
-    profiles.set(seller, { displayName: 'Imani' })
-    showNotice(licenceNotice('sub:v', seller), ME)
-    expect(recorded[0]).toMatchObject({ type: 'licence_received', title: 'Licence from Imani', url: '/settings/subscription' })
+describe('a licence is announced by the plan it is', () => {
+  const NOW = Date.UTC(2026, 9, 28) / 1000
+  const END = Date.UTC(2026, 10, 28) / 1000
+
+  it('names the plan and its end date, links to the subscription, carries no amount and no key', () => {
+    showNotice(licenceNotice('sub:v', { tier: 'basic', expiresAt: END }, { now: NOW }), ME)
+    const row = recorded[0]
+    expect(row).toMatchObject({ type: 'licence_received', title: 'Imani Basic plan activated', url: '/settings/subscription' })
+    expect(String(row.body)).toMatch(/^Your stall is on the Imani Basic plan until .*2026\. It is not part of your balance\.$/)
+    expect(`${row.title} ${row.body}`).not.toMatch(/npub|[0-9a-f]{16}|Licence from/)
     expect(toasts[0].kind).toBe('plain')
+  })
+
+  it('a renewal says renewed; a plan that starts later says when', () => {
+    expect(licenceNotice('sub:v2', { tier: 'pro', expiresAt: END }, { renewal: true, now: NOW }).title).toBe('Imani Pro plan renewed')
+    expect(licenceNotice('sub:v3', { tier: 'basic', validFrom: NOW + 86_400 * 3, expiresAt: END }, { now: NOW }).body).toMatch(/, from .* until /)
+  })
+
+  it('a hand grant is a plan grant, and a licence with no tier is still a plan', () => {
+    expect(licenceNotice('g:1', { tier: 'custom', grantKind: 'custom', expiresAt: END }, { now: NOW }).title).toBe('Your Imani plan grant arrived')
+    expect(licenceNotice('l:1', { expiresAt: END }, { now: NOW }).title).toBe('Imani plan activated')
   })
 })
