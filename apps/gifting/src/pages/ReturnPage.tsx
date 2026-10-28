@@ -63,7 +63,7 @@ export function ReturnPage() {
         It can take a minute. If it isn&apos;t claimed in time, it comes back to you: to your wallet if you were signed in, or through the return link
         we email you.
       </p>
-      {refundSecret && draft !== 'gone' && draft.delivery.kind !== 'self' && (
+      {refundSecret && WALLET_ORIGIN && draft !== 'gone' && draft.delivery.kind !== 'self' && (
         <div className="mt-6 rounded-2xl border border-mono-200 p-4 dark:border-mono-800" data-testid="return-link">
           <p className="mb-2 text-sm font-medium">Your return link</p>
           <p className="mb-2 text-sm text-mono-500">
