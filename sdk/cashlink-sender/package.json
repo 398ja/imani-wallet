@@ -1,0 +1,13 @@
+{
+  "name": "@imani/cashlink-sender",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Send, reconcile, take back and restore Cashlinks from a server, with the sender's key held by the caller (#366)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "license": "MIT"
+}

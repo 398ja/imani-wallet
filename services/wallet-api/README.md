@@ -594,6 +594,107 @@ link URL with `k=`), is refused with **400** and the field named, before the
 mint is asked. The value is never echoed. **502** when the mint does not answer,
 **503** when `WALLET_API_MINT_URL` is unset (there is no default).
 
+## Sending Cashlinks from a server (#366)
+
+An employer's payroll run, a loyalty job, anything that sends gifts without a
+person at a phone. The send itself happens **on your side**, with
+[`@imani/cashlink-sender`](../../sdk/cashlink-sender/README.md): it holds your
+key, derives each link, puts the coupon on it, locks it so it comes back on its
+own, and keeps a state file with no secret in it. This service answers the two
+questions you ask before a run, and never sees a key.
+
+### `GET /v1/links/limits`
+
+How many links the signer may have open, by account type.
+
+```json
+{ "pubkey": "3086…8a8a",
+  "limits": { "accountType": "business", "maxOutstanding": 500, "maxExpiredUnreturned": 500, "restoreGap": 1000 } }
+```
+
+| account type | `maxOutstanding` | `maxExpiredUnreturned` | `restoreGap` |
+|---|---|---|---|
+| `individual` (anyone not listed) | 10 | 10 | 20 |
+| `business` | the deployment's limit (default 500, at most 5000) | the same | twice the limit, at least 20 |
+
+The account type is the **deployment's**, never the caller's claim: a signer is
+`business` only when its pubkey is in `WALLET_API_BUSINESS_SENDERS`.
+
+- `maxExpiredUnreturned` stays in proportion: a link past `x` that has not
+  come back can still be opened by whoever has it, which is the same exposure
+  the outstanding limit bounds.
+- `restoreGap` is how far a restore scans past the last link it knows. It
+  grows with the limit so that a lost state file cannot hide open links (and
+  their value) beyond the scan.
+
+### `POST /v1/links/plan`
+
+Before you send one link or a batch. Send the links you already have open (as
+for `/v1/links/status`), the coupons you mean to send, and the expiry `x` you
+mean to give them:
+
+```json
+{ "links": [{ "id": "emp-001", "x": 1850000000, "tokens": ["cashuB…"] }],
+  "coupons": ["cashuB…", "cashuB…"],
+  "x": 1850259200 }
+```
+
+```json
+{ "limits": { "accountType": "business", "maxOutstanding": 500, "maxExpiredUnreturned": 500, "restoreGap": 1000 },
+  "counts": { "outstanding": 1, "expiredUnreturned": 0, "claimed": 0, "unknown": 0 },
+  "allowance": { "ok": true, "remaining": 497 },
+  "coupons": [
+    { "index": 0, "armable": true, "blockers": [], "stallId": "27aa…", "faceValue": 500, "unit": "EUR", "expiresAt": 1801005983 },
+    { "index": 1, "armable": false, "blockers": ["no_amount_proof"], "stallId": "27aa…", "faceValue": 500, "unit": "EUR", "expiresAt": 1801005983 }
+  ],
+  "latestCommonX": 1852592000,
+  "unknownLinks": [] }
+```
+
+- `counts` comes from the **mint's** states for your links. A link the mint
+  gave no answer for, or one mid-swap, is counted as open: an unknown never
+  frees a slot. Those links are named in `unknownLinks`.
+- `allowance` is `{ "ok": false, "reason": "too_many_outstanding" | "too_many_expired", "limit": n }`
+  when the batch (`wanted`, default one per coupon) would go past a limit.
+- `armable` says whether a link holding that coupon can be locked so it comes
+  back on its own at `x`. When it cannot, it still sends (as a plain bearer
+  gift that your next run takes back after `x`), and `blockers` says why:
+
+| blocker | means |
+|---|---|
+| `not_a_bearer_voucher` | Locked, a licence, a credential, or not readable as a coupon. |
+| `unverified` | The issuer's signature does not verify. |
+| `no_amount_proof` | No DLEQ on a proof. The lock route proves the burnt amount by it, so without one nothing is burnt. Coupons minted by the mint carry one. |
+| `too_near` / `too_far` | `x` is under an hour, or over 30 days, from now. |
+| `too_close_to_expiry` | `x` is less than a day before the coupon itself expires. |
+| `own_stall` | The coupon is the sender's own stall's. A stall's Cashlinks lapse and never come back to it. |
+
+- `latestCommonX` is the furthest `x` every armable coupon in the batch would
+  accept, or `null`.
+- At most 5000 links, 20000 proofs and 200 coupons per request. The same key
+  refusal as `/v1/links/status` applies, field by field.
+
+### Where the limit is enforced
+
+The SDK refuses to send past the limit **before anything moves**, using this
+service's limits (or the individual ones when it is not configured, the safe
+default), and this service's plan counts from the mint. Both are on the
+sender's side of the trust line. A sender that skips them can open more
+links, so the hard cap belongs to the gateway's lock route, which is the one
+call every armed link makes, signed by the sender. That is tracked in
+imani-gateway-customer (see #366). Until it lands, a sender that bypasses the
+SDK can open more links than its limit. Each one still holds a coupon the
+sender paid for, so the cost of going past the limit is the sender's own
+value (and the gateway's per-request rate limits), not anyone else's.
+
+### Configuration
+
+| variable | |
+|---|---|
+| `WALLET_API_MINT_URL` | The mint coupons must name. Required for `/v1/links/*` (503 without it). |
+| `WALLET_API_MINT_TRANSPORT_URL` | Where to reach that mint, when it differs (an internal service name). Only requests for the mint above are routed; anything else is refused. |
+| `WALLET_API_BUSINESS_SENDERS` / `_FILE` | `{"maxOutstanding": 500, "pubkeys": ["<x-only hex>", …]}`. Strict: a malformed value **refuses the boot** rather than quietly giving an employer the individual limit. |
+
 ### `GET /metrics`
 
 Unauthenticated counters: requests, errors, refusals by reason, validation

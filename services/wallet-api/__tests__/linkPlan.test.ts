@@ -254,3 +254,26 @@ describe('GET /v1/links/limits and POST /v1/links/plan', () => {
     expect((await call('POST', '/v1/links/plan', {})).status).toBe(503)
   })
 })
+
+describe('WALLET_API_MINT_TRANSPORT_URL', () => {
+  it('is read like the mint URL: http(s) only, else unset', async () => {
+    const { linksMintTransportUrl } = await import('../links.js')
+    expect(linksMintTransportUrl({ WALLET_API_MINT_TRANSPORT_URL: 'http://mint:7777/' })).toBe('http://mint:7777')
+    expect(linksMintTransportUrl({ WALLET_API_MINT_TRANSPORT_URL: 'ftp://mint' })).toBeNull()
+    expect(linksMintTransportUrl({})).toBeNull()
+  })
+
+  it('routes requests for the configured mint only, keeping the path, and refuses any other URL', async () => {
+    const { routedMintFetch } = await import('../links.js')
+    const seen: string[] = []
+    const routed = routedMintFetch(MINT, 'http://internal:7777', (async (u: string) => {
+      seen.push(u)
+      return new Response('{}')
+    }) as typeof fetch)
+    await routed(`${MINT}/v1/checkstate`, { method: 'POST' })
+    expect(seen).toEqual(['http://internal:7777/v1/checkstate'])
+    await expect(routed('http://elsewhere.test/v1/checkstate')).rejects.toThrow('only the configured mint')
+    await expect(routed(`${MINT}.evil/v1/checkstate`)).rejects.toThrow('only the configured mint')
+    expect(seen.length).toBe(1)
+  })
+})

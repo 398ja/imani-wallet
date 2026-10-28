@@ -46,7 +46,7 @@ import {
   receiveBody,
 } from './redeem.js'
 import { parseLicenceRequest, checkLicence, licenceIssuerPubkey } from './licence.js'
-import { parseLinksStatusRequest, linksStatus, linksMintUrl } from './links.js'
+import { parseLinksStatusRequest, linksStatus, linksMintUrl, linksMintTransportUrl, routedMintFetch } from './links.js'
 import { businessSendersFrom, linksPlan, parseLinksPlanRequest } from './linkPlan.js'
 import {
   parseGenerateRequest,
@@ -227,6 +227,12 @@ export function resetGatewayFetch(): void {
  * the answers that matter most here (a mint down, a mint saying "pending") only happen on failure.
  */
 let mintFetch: typeof fetch = fetch
+
+/** The mint fetch, routed to WALLET_API_MINT_TRANSPORT_URL when that is set. */
+function mintFetchFor(mint: string): typeof fetch {
+  const transport = linksMintTransportUrl()
+  return transport ? routedMintFetch(mint, transport, mintFetch) : mintFetch
+}
 
 export function setMintFetch(impl: typeof fetch): void {
   mintFetch = impl
@@ -829,7 +835,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
 
     try {
-      return answer(200, await linksStatus(input.value, mint, mintFetch))
+      return answer(200, await linksStatus(input.value, mint, mintFetchFor(mint)))
     } catch {
       // 502: the request was fine and the mint did not answer. Nothing is guessed, and nothing
       // about the caller's links is logged.
@@ -864,7 +870,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       return json(res, 400, { error: 'invalid-request', field: input.error.field, detail: input.error.detail })
     }
     try {
-      return answer(200, await linksPlan(input.value, auth.pubkey, businessSenders, mint, mintFetch))
+      return answer(200, await linksPlan(input.value, auth.pubkey, businessSenders, mint, mintFetchFor(mint)))
     } catch {
       return json(res, 502, { error: 'mint-unavailable', detail: 'the mint did not answer; nothing was changed, try again' })
     }
