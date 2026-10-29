@@ -87,14 +87,16 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('coupon detail (#265)', () => {
-  it('a live coupon inside the week: date plus countdown, "Use it before", and its QR', async () => {
+  it('a live coupon inside the week: date plus countdown, "Use it before", and no QR (#419)', async () => {
     h.rows = [row('live', 3 * DAY + 3_600_000)]
     openCoupon('live')
     const expires = h.rows[0]!.expires_at!
     await screen.findByText(`${formatDate(expires)} · in 3 days`)
     expect(screen.getByText(`Use it before ${formatDate(expires)}`)).toBeTruthy()
     expect(screen.getByText('active')).toBeTruthy()
-    expect(await screen.findByRole('img', { name: /^Redemption code/i })).toBeTruthy()
+    // The code used to render asynchronously (qrcode): give it the chance before saying it did not.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByRole('img', { name: /^Redemption code/i })).toBeNull()
   })
 
   it('beyond the week: the countdown, but no callout', async () => {
