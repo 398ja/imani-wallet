@@ -2,49 +2,52 @@ import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { LogOut } from 'lucide-react'
 
-import { CrossOriginSignerError } from '@imani/nap-client-web'
-
 import { IdentityInline } from '@wallet/components/ui/IdentityInline'
 import { Screen } from '@wallet/components/ui/layout'
-import { connect, isLive, type Session } from './lib/signer'
+import { currentAccount, signIn as signInWithWallet, signOut, SignInError, type Account } from './lib/session'
 import { ShopPage } from './pages/ShopPage'
 import { ReturnPage } from './pages/ReturnPage'
 
 /**
- * gifting.imani.casa (#410): a stall's vouchers, by card, for yourself, a handle or an email.
+ * gifting.imani.casa (#410): a stall's vouchers, by card, for a handle or an email.
  *
  * For customers and guests only (owner, 2026-10-28). A stall's wallet is refused sign-in by the
- * wallet itself (napSignerPolicy `siteAudience`), and payment-adapter refuses a draft a stall signed.
+ * wallet itself (napSignerPolicy `siteAudience`), and payment-adapter refuses a stall at login and
+ * at draft time.
  *
- * The session is a cross-origin grant from the wallet (G10) and lives in memory only. Leaving for
- * Stripe drops it, which is fine: delivery runs from Stripe's webhook, and the return page works
- * signed out.
+ * Signing in is one NAP login signed through the wallet's window (G10); the session then lives in an
+ * HttpOnly cookie from payment-adapter, so it survives the trip to Stripe and back (`session.ts`).
  */
 export function App() {
-  const [session, setSession] = useState<Session | null>(null)
+  const [account, setAccount] = useState<Account | null>(null)
   const [signInError, setSignInError] = useState<string | null>(null)
 
+  // The cookie may already carry a session (back from Stripe, a reload, a second tab).
   useEffect(() => {
-    if (!session) return
-    return session.grant.onEnd(() => setSession(null))
-  }, [session])
+    let live = true
+    void currentAccount().then((a) => live && a && setAccount(a))
+    return () => {
+      live = false
+    }
+  }, [])
 
-  /** Synchronous in the click: the popup opens inside `connect` (NAP 0002). */
-  const signIn = (expectedPubkey?: string) => {
+  /** Synchronous in the click: the popup opens inside `signIn` (NAP 0002). */
+  const signIn = () => {
     setSignInError(null)
-    connect({ expectedPubkey }).then(setSession, (e: unknown) =>
+    signInWithWallet().then(setAccount, (e: unknown) => {
+      const reason = e instanceof SignInError ? e.reason : 'error'
       setSignInError(
         // DECLINED covers "not now" and a stall account (this site is for customers and guests): the
         // wallet window already said which. Here, only what the buyer can do next.
-        e instanceof CrossOriginSignerError && e.code === 'DECLINED'
+        reason === 'declined' || reason === 'not-customer'
           ? 'Not signed in. You can still buy as a guest.'
-          : e instanceof Error && /closed|denied|cancel/i.test(e.message)
+          : reason === 'cancelled'
             ? 'Sign-in was cancelled.'
             : 'Could not sign in with your wallet. Try again.',
-      ),
-    )
+      )
+    })
   }
-  const live = isLive(session) ? session : null
+  const live = account
 
   return (
     <div className="min-h-screen">
@@ -62,8 +65,8 @@ export function App() {
               aria-label="Sign out"
               className="pressable"
               onClick={() => {
-                live.grant.disconnect()
-                setSession(null)
+                setAccount(null)
+                void signOut()
               }}
             >
               <LogOut className="h-4 w-4" />
@@ -82,8 +85,8 @@ export function App() {
       )}
       <main>
         <Routes>
-          <Route path="/shop/:handle" element={<ShopPage session={live} onSignIn={signIn} step="form" />} />
-          <Route path="/shop/:handle/review" element={<ShopPage session={live} onSignIn={signIn} step="review" />} />
+          <Route path="/shop/:handle" element={<ShopPage session={live} step="form" />} />
+          <Route path="/shop/:handle/review" element={<ShopPage session={live} step="review" />} />
           <Route path="/return" element={<ReturnPage />} />
           <Route
             path="/"

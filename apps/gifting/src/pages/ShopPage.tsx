@@ -31,7 +31,8 @@ import {
 import { displayHandle, normaliseRecipientHandle } from '../lib/handle'
 import { newGiftSecrets, returnLink, seal } from '../lib/gift'
 import { loadShop, robotsFor, SHOP_COPY, type Shop, type ShopState } from '../lib/shop'
-import { WALLET_ORIGIN, type Session } from '../lib/signer'
+import { WALLET_ORIGIN } from '../lib/signer'
+import type { Account } from '../lib/session'
 
 const api = giftingApi()
 
@@ -73,7 +74,7 @@ function useHead(state: ShopState | null) {
   }, [state])
 }
 
-export function ShopPage({ session, onSignIn, step }: { session: Session | null; onSignIn: (expected?: string) => void; step: 'form' | 'review' }) {
+export function ShopPage({ session, step }: { session: Account | null; step: 'form' | 'review' }) {
   const { handle = '' } = useParams()
   const navigate = useNavigate()
   const [attempt, setAttempt] = useState(0)
@@ -112,7 +113,6 @@ export function ShopPage({ session, onSignIn, step }: { session: Session | null;
       key={state.shop.pubkey}
       shop={state.shop}
       session={session}
-      onSignIn={onSignIn}
       step={step}
       goReview={() => navigate(`/shop/${state.shop.canonical}/review`)}
       goForm={(field) => navigate(`/shop/${state.shop.canonical}${field ? `#${field}` : ''}`)}
@@ -192,14 +192,12 @@ function useResolvedHandle(raw: string): Resolved {
 function GiftFlow({
   shop,
   session,
-  onSignIn,
   step,
   goReview,
   goForm,
 }: {
   shop: Shop
-  session: Session | null
-  onSignIn: (expected?: string) => void
+  session: Account | null
   step: 'form' | 'review'
   goReview: () => void
   goForm: (field?: string) => void
@@ -230,7 +228,7 @@ function GiftFlow({
 
   if (step === 'review') {
     if (Object.keys(errors).length > 0) return <RedirectTo to={`/shop/${shop.canonical}`} />
-    return <Review shop={shop} form={form} session={session} onSignIn={onSignIn} goForm={goForm} />
+    return <Review shop={shop} form={form} session={session} goForm={goForm} />
   }
 
   const set = (patch: Partial<GiftForm>) => setForm((f) => ({ ...f, ...patch }))
@@ -254,23 +252,14 @@ function GiftFlow({
           <legend className="mb-2 block text-sm font-medium">Deliver to</legend>
           {(
             [
-              ['self', 'Myself'],
               ['handle', "Someone's handle"],
               ['email', 'An email address'],
             ] as Array<[DeliveryKind, string]>
-          ).map(([kind, label]) =>
-            kind === 'self' && !signedIn ? (
-              <p key={kind} className="mb-2 text-sm text-mono-500">
-                <button type="button" className="pressable underline" onClick={() => onSignIn()}>
-                  Sign in to send to yourself
-                </button>
-              </p>
-            ) : (
-              <label key={kind} className="mb-2 flex items-center gap-2 text-callout">
-                <input type="radio" name="deliver" value={kind} checked={form.deliver === kind} onChange={() => set({ deliver: kind })} /> {label}
-              </label>
-            ),
-          )}
+          ).map(([kind, label]) => (
+            <label key={kind} className="mb-2 flex items-center gap-2 text-callout">
+              <input type="radio" name="deliver" value={kind} checked={form.deliver === kind} onChange={() => set({ deliver: kind })} /> {label}
+            </label>
+          ))}
           {show('deliver') && <p className="text-sm text-red-600">{errors.deliver}</p>}
         </fieldset>
 
@@ -308,12 +297,14 @@ function GiftFlow({
           <input id="from" maxLength={FROM_MAX} className={inputClass} value={form.from} placeholder={signedIn ? '' : 'Your name, or leave blank'} onChange={(e) => set({ from: e.target.value })} />
         </Field>
 
-        {!signedIn && (
-          <Field id="buyerEmail" label="Your email" error={show('buyerEmail')}>
-            <input id="buyerEmail" type="email" autoComplete="email" className={inputClass} value={form.buyerEmail} onChange={(e) => set({ buyerEmail: e.target.value })} />
-            <p className="mt-1 text-xs text-mono-500">For your receipt, and the link to take the gift back if it isn&apos;t claimed.</p>
-          </Field>
-        )}
+        <Field id="buyerEmail" label="Your email" error={show('buyerEmail')}>
+          <input id="buyerEmail" type="email" autoComplete="email" className={inputClass} value={form.buyerEmail} onChange={(e) => set({ buyerEmail: e.target.value })} />
+          <p className="mt-1 text-xs text-mono-500">
+            {signedIn
+              ? 'For your receipt, and to tell you when it is claimed or if it is not.'
+              : 'For your receipt, your link to take the gift back, and to tell you when it is claimed or if it is not.'}
+          </p>
+        </Field>
 
         <p className="mb-4 text-xs text-mono-500">
           We keep the recipient&apos;s email and your message only as long as delivery and the claim window need them. {shop.name} gets no buyer or
@@ -361,13 +352,11 @@ function Review({
   shop,
   form,
   session,
-  onSignIn,
   goForm,
 }: {
   shop: Shop
   form: GiftForm
-  session: Session | null
-  onSignIn: (expected?: string) => void
+  session: Account | null
   goForm: (field?: string) => void
 }) {
   const [state, setState] = useState<ReviewState>({ kind: 'preparing' })
@@ -404,9 +393,9 @@ function Review({
         sealed,
         signedIn: sessionKey !== null,
       })
-      const draft = await api.createDraft(req, session)
-      const expected = form.deliver === 'self' ? sessionKey ?? undefined : undefined
-      if (!draftMatches(draft, req, expected) || isExpired(draft)) throw new ApiError('Something changed while we checked. Please review again.', 409)
+      // A signed-in buyer's draft rides the session cookie; nothing is signed per request.
+      const draft = await api.createDraft(req)
+      if (!draftMatches(draft, req) || isExpired(draft)) throw new ApiError('Something changed while we checked. Please review again.', 409)
       // Only the LIVE run's draft is kept. A superseded run (an edit, a re-render, React's double
       // effect in development) still resolves, and keeping its draft would overwrite the guest's
       // refund key with one for a draft nobody pays: the paid gift's return link would be lost.
@@ -438,7 +427,10 @@ function Review({
     }
     setState({ kind: 'paying', draft, refundSecret: state.kind === 'ready' ? state.refundSecret : undefined })
     try {
-      const { checkoutUrl } = await api.pay(draft.draftId)
+      // G15: a guest's return link goes to their email before Stripe, so a lost tab can't lose it.
+      const refund = state.kind === 'ready' ? state.refundSecret : undefined
+      const link = refund && WALLET_ORIGIN ? returnLink(WALLET_ORIGIN, refund) : undefined
+      const { checkoutUrl } = await api.pay(draft.draftId, link)
       window.location.assign(checkoutUrl)
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(COPY.unreachable, 0)
@@ -470,7 +462,6 @@ function Review({
   const validity = shop.record.voucherValidityDays
   const deadline = claimDeadline(Date.now(), validity, draft.delivery.claimWindowDays)
   const expiry = validity ? day(new Date(Date.now() + validity * 86_400_000)) : 'no expiry'
-  const sessionExpired = form.deliver === 'self' && !session
 
   return (
     <Screen>
@@ -492,7 +483,6 @@ function Review({
       </Section>
 
       <Section title="Recipient" onEdit={() => goForm('deliver')}>
-        {draft.delivery.kind === 'self' && <p data-testid="review-recipient">Your wallet{session ? '' : ' (sign in again to confirm)'}</p>}
         {draft.delivery.kind === 'handle' && draft.delivery.recipientPubkey && (
           <div data-testid="review-recipient">
             <p className="font-medium">{displayHandle(normaliseRecipientHandle(form.handle) ?? '')}</p>
@@ -522,16 +512,18 @@ function Review({
           currency conversion is your card issuer&apos;s.
         </p>
         <p className="mt-2 text-xs text-mono-500">Imani doesn&apos;t give refunds: refunds are {shop.name}&apos;s decision.</p>
-        {!session && <p className="mt-2 text-xs text-mono-500">We&apos;ll email your receipt to {form.buyerEmail}.</p>}
+        <p className="mt-2 text-xs text-mono-500">
+          We&apos;ll email your receipt to {form.buyerEmail}, and tell you when the gift is claimed or if it isn&apos;t.
+        </p>
       </Section>
 
       {/* A guest's refund key exists only in this browser (G3, G-R3): shown BEFORE paying, so a tab
           lost on the way to Stripe cannot cost the buyer their way to take the gift back. */}
-      {state.refundSecret && WALLET_ORIGIN && draft.delivery.kind !== 'self' && (
+      {state.refundSecret && WALLET_ORIGIN && (
         <Section title="Your return link">
           <p className="mb-2 text-sm text-mono-500">
-            Save this now. If the gift isn&apos;t claimed by {day(deadline)}, open it to take the gift back into a wallet. We can&apos;t send it
-            again. Keep it private: it is yours, not the recipient&apos;s.
+            If the gift isn&apos;t claimed by {day(deadline)}, open it to take the gift back into a wallet. We&apos;ll email it to {form.buyerEmail}{' '}
+            when you pay. Keep it private: it is yours, not the recipient&apos;s.
           </p>
           <a className="break-all text-sm underline" href={returnLink(WALLET_ORIGIN, state.refundSecret)} data-testid="review-return-link">
             Take the gift back
@@ -539,15 +531,9 @@ function Review({
         </Section>
       )}
 
-      {sessionExpired ? (
-        <Button size="lg" className="mt-2 w-full" onClick={() => onSignIn(draft.delivery.recipientPubkey)}>
-          Sign in again to pay
-        </Button>
-      ) : (
-        <Button size="lg" className="mt-2 w-full" disabled={state.kind === 'paying'} onClick={() => pay(draft)}>
-          <CreditCard className="mr-2 h-5 w-5" aria-hidden /> {state.kind === 'paying' ? 'Taking you to the payment page…' : `Pay ${money(draft.amountMinor, draft.currency)}`}
-        </Button>
-      )}
+      <Button size="lg" className="mt-2 w-full" disabled={state.kind === 'paying'} onClick={() => pay(draft)}>
+        <CreditCard className="mr-2 h-5 w-5" aria-hidden /> {state.kind === 'paying' ? 'Taking you to the payment page…' : `Pay ${money(draft.amountMinor, draft.currency)}`}
+      </Button>
     </Screen>
   )
 }

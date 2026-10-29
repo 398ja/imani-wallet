@@ -29,7 +29,7 @@ export interface SealBinding {
   recipient: string
 }
 
-export function newGiftSecrets(kind: 'self' | 'handle' | 'email', buyerPubkey: string | null): GiftSecrets {
+export function newGiftSecrets(kind: 'handle' | 'email', buyerPubkey: string | null): GiftSecrets {
   const linkSecret = kind === 'email' ? bytesToHex(generateSecretKey()) : undefined
   if (buyerPubkey) return { linkSecret, refundPubkey: buyerPubkey }
   const r = generateSecretKey()
