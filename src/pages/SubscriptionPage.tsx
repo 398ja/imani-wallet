@@ -8,6 +8,8 @@ import { refreshCatalog, salesPosition, subscriptionSiteUrl, type SalesPosition 
 import { openSisterSite } from '../lib/sisterSiteSigner'
 import { GRACE_WINDOW_SECONDS } from '@imani/licence'
 import { listTransactions, onWalletChanged } from '../lib/wallet'
+import { SUBSCRIPTION_STATUS_EVENT, subscriptionStatusFor } from '../lib/subscriptionStatusStore'
+import type { SubscriptionStatusMessage } from '../lib/subscriptionStatus'
 
 /**
  * Subscription diagnostics: what the licence check believes, and why.
@@ -73,10 +75,25 @@ export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currenc
     return onWalletChanged(() => void check())
   }, [check])
 
+  // The seller's word on renewal (#407): a cancellation made in Stripe reaches this device as a
+  // seller-sealed DM. Re-read when one lands, so the screen changes without a reload.
+  const [renewal, setRenewal] = useState<SubscriptionStatusMessage | null>(null)
+  const subscriptionId = status?.licence?.subscriptionId
+  useEffect(() => {
+    const read = () => setRenewal(subscriptionStatusFor(pubkey, subscriptionId))
+    read()
+    window.addEventListener(SUBSCRIPTION_STATUS_EVENT, read)
+    return () => window.removeEventListener(SUBSCRIPTION_STATUS_EVENT, read)
+  }, [pubkey, subscriptionId])
+
   if (!status) return <Centered>Checking your subscription…</Centered>
 
   const { decision } = status
   const granted = decision.granted
+  // Cancelled but still paid for: the plan works to its end and will not renew. Display only; the
+  // licence alone decides what this device may do (ADR 0007).
+  const cancelled = granted && renewal?.status === 'cancelled'
+  const endsAt = renewal?.endsAt ?? status.licence?.expiresAt
 
   return (
     <Screen>
@@ -94,14 +111,20 @@ export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currenc
               {granted
                 ? decision.source === 'grace'
                   ? 'Working, unconfirmed'
-                  : 'Active'
+                  : cancelled
+                    ? 'Cancelled'
+                    : 'Active'
                 : 'Not active'}
             </p>
             {/* The sentence, not the reason code. `explain` is exhaustive over
                 every reason both modules can produce, so a state added later
                 without wording here fails the build rather than showing a
                 merchant `grace-elapsed`. */}
-            <p className="mt-1 text-sm text-mono-500">{explain(status)}</p>
+            <p className="mt-1 text-sm text-mono-500">
+              {cancelled && endsAt
+                ? `Your plan works until ${formatDate(endsAt)} and will not renew. Choose a plan again any time to keep it.`
+                : explain(status)}
+            </p>
           </div>
         </div>
       </Panel>
@@ -114,13 +137,17 @@ export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currenc
           actually needed. */}
       <Panel className="mb-6 divide-y divide-mono-200 dark:divide-mono-800">
         <DetailRow
-          label="Until"
+          label={cancelled ? 'Ends' : 'Until'}
           value={
             status.licence?.expiresAt
               ? formatDate(status.licence.expiresAt)
               : 'No subscription on this device'
           }
         />
+        {/* Only a bought plan renews; a hand grant (#407 §7) simply runs to its date. */}
+        {granted && status.licence?.grantKind !== 'custom' ? (
+          <DetailRow label="Renews" value={cancelled ? 'No, cancelled' : 'Yes'} />
+        ) : null}
         {granted ? (
           <DetailRow
             label="Unlocks"

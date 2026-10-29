@@ -26,6 +26,7 @@ import type { SubscriptionConfig } from './config.ts'
 import { LicenceIssuer, signCatalog, type LicenceOrder, type Seller } from './issuer.ts'
 import { Ledger, newSubscriptionId, type IssuedLicence, type SubscriptionRow } from './ledger.ts'
 import type { MerchantReader } from './merchantRole.ts'
+import type { StatusNotifier } from './statusNotifier.ts'
 import { verifyStripeSignature, type StripeClient, type StripePrice } from './stripe.ts'
 
 export interface Request {
@@ -51,6 +52,8 @@ export interface AppDeps {
   catalogBody: string
   /** Is this key a merchant (a live, signed `imani:merchant` record)? See merchantRole.ts. */
   merchantStanding: MerchantReader
+  /** Tells the stall's wallet a subscription was cancelled or un-cancelled (statusNotifier.ts). */
+  notifier?: StatusNotifier
   now?: () => number
   log?: (event: Record<string, unknown>) => void
   /** Tests only: NAP server overrides (clock, response padding). */
@@ -224,11 +227,31 @@ export function createApp(deps: AppDeps) {
   async function onSubscriptionChanged(sub: Record<string, unknown>): Promise<Response> {
     const id = String(sub.id ?? '')
     const cancelled = isCancelled(sub)
-    await deps.ledger.update((rows) => {
+    const next = cancelled ? 'cancelled' : 'active'
+    const changed = await deps.ledger.update((rows) => {
       const r = rows.find((x) => x.stripeSubscriptionId === id)
-      if (r && r.status !== 'revoked') r.status = cancelled ? 'cancelled' : 'active'
+      if (!r || r.status === 'revoked' || r.status === next) return null
+      r.status = next
+      return { subscriptionId: r.subscriptionId, stallPubkey: r.stallPubkey }
     })
-    log({ event: 'subscription_changed', stripe_subscription: id, status: cancelled ? 'cancelled' : 'active' })
+    log({ event: 'subscription_changed', stripe_subscription: id, status: next, changed: Boolean(changed) })
+    // Tell the stall's wallet, which cannot learn it from the licence it holds (statusNotifier.ts).
+    // Only on a real change, so Stripe's several `updated` events per action send one message.
+    // Best effort: a lost message never fails the webhook, which Stripe would then retry forever.
+    if (changed && deps.notifier) {
+      const endsAt = endOf(sub)
+      try {
+        await deps.notifier.notify(changed.stallPubkey, {
+          subscriptionId: changed.subscriptionId,
+          status: next,
+          ...(cancelled && endsAt ? { endsAt } : {}),
+          at: now(),
+        })
+        log({ event: 'subscription_status_sent', subscription_id: changed.subscriptionId, status: next })
+      } catch (error) {
+        log({ event: 'subscription_status_failed', subscription_id: changed.subscriptionId, error: String((error as Error).message ?? error) })
+      }
+    }
     // Cancelling never revokes: the licence already paid for runs to its end (#407 §6).
     return json(200, { ok: true })
   }
@@ -477,6 +500,17 @@ export function isCancelled(sub: Record<string, unknown>): boolean {
   if (sub.status === 'canceled' || sub.ended_at) return true
   if (sub.cancel_at_period_end === true) return true
   return typeof sub.cancel_at === 'number' && sub.cancel_at > 0
+}
+
+/** When a cancelled subscription stops, in Unix seconds, from whichever field Stripe set. */
+function endOf(sub: Record<string, unknown>): number | undefined {
+  for (const v of [sub.ended_at, sub.cancel_at, sub.current_period_end]) {
+    if (typeof v === 'number' && Number.isSafeInteger(v) && v > 0) return v
+  }
+  // API 2025-03-31+: the period end lives on the subscription's item.
+  const item = ((sub.items as { data?: Array<Record<string, unknown>> } | undefined)?.data ?? [])[0]
+  const end = item?.current_period_end
+  return typeof end === 'number' && end > 0 ? end : undefined
 }
 
 /** Strict, as `@imani/licence` reads them: an unreadable limit is refused, never read as unlimited. */
