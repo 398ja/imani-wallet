@@ -71,6 +71,18 @@ export function deriveRefundSecret(identitySecret: Uint8Array, i: number): Uint8
   return scalarBytes(scalarFrom(identitySecret, `${REFUND_LABEL}${i}`))
 }
 
+/**
+ * #402: the refund key of checkout-code part `i`, under its own label so it can never equal a
+ * Cashlink's refund key for the same index. The shop holds `S`, so `R` must stay the customer's:
+ * after `x` it is the customer, and only the customer, who takes the part back.
+ */
+export const CHECKOUT_REFUND_LABEL = 'imani-checkout-refund/v1/'
+
+export function deriveCheckoutRefundSecret(identitySecret: Uint8Array, i: number): Uint8Array {
+  if (!Number.isSafeInteger(i) || i < 0) throw new Error('part index must be a non-negative integer')
+  return scalarBytes(scalarFrom(identitySecret, `${CHECKOUT_REFUND_LABEL}${i}`))
+}
+
 /** A random refund key, for an account whose key this wallet cannot read (kept on the link record). */
 export function randomRefundSecret(): Uint8Array {
   for (;;) {
@@ -337,16 +349,47 @@ export interface LinkLockProposal {
  * voucher id and terms, then the locktime, the ONE refund key and the sat bound.
  */
 export function linkLockProposal(p: LinkLockProposal): string {
+  return lockProposal({ ...p, lockPub: p.linkPub }, 'link')
+}
+
+export interface CheckoutLockProposal {
+  giftSecret: string
+  /** `S`, x-only: the stall's online-shop redeem key, read from its profile and nowhere else. */
+  shopPub: string
+  /** x-only. Per part, from {@link deriveCheckoutRefundSecret}. Never `S`. */
+  refundPub: string
+  x: number
+  maxSats: number
+  nonce: string
+}
+
+/**
+ * One part of a checkout code (#402, contract §2): the coupon locked to the shop key `S` instead of
+ * a link key. Byte for byte the link lock's layout, signed by the same gateway route, and built by
+ * the same internal so the two can never drift apart, least of all on the refund rule.
+ */
+export function checkoutLockProposal(p: CheckoutLockProposal): string {
+  return lockProposal({ ...p, lockPub: p.shopPub }, 'shop')
+}
+
+/**
+ * The one builder behind both proposals. `lockPub` is whoever may spend before `x`: the link key
+ * for a Cashlink, `S` for a checkout code. Ends in {@link assertNotOpenAfterLocktime}, the one gate.
+ */
+function lockProposal(
+  p: { giftSecret: string; lockPub: string; refundPub: string; x: number; maxSats: number; nonce: string },
+  lockName: 'link' | 'shop',
+): string {
   const found = lockableVoucher(p.giftSecret)
   if ('problem' in found) throw new Error(`this gift cannot be locked: ${found.problem}`)
-  if (xOnlyOf(p.refundPub) === xOnlyOf(p.linkPub)) throw new CashlinkInvariantError('the refund key must not be the link key')
+  if (xOnlyOf(p.refundPub) === xOnlyOf(p.lockPub)) throw new CashlinkInvariantError(`the refund key must not be the ${lockName} key`)
   if (!Number.isSafeInteger(p.x) || p.x <= 0 || p.x > 2_147_483_647) throw new Error('the expiry is not a usable locktime')
   if (!Number.isSafeInteger(p.maxSats) || p.maxSats <= 0) throw new Error('the sat bound must be a positive integer')
   const secret = JSON.stringify([
     'P2PK_VOUCHER',
     {
       nonce: p.nonce,
-      data: compressed(p.linkPub),
+      data: compressed(p.lockPub),
       tags: [
         ['n_sigs', '1'],
         ['sigflag', 'SIG_ALL'],
