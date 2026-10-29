@@ -50,7 +50,8 @@ reservation row for these and releases nothing, which is correct.
 For `gift.kind`:
 
 - `handle`: lock key = the pinned `recipientPubkey`; `refund_pubkey` = `delivery.refundPubkey`;
-  `locktime` = `claimWindowEnd(mintedAt, claimWindowDays, couponExpiry) / 1000`, refused
+  `locktime` = `claimWindowEnd(mintedAt, claimWindowDays, couponExpiry) / 1000` (G17: half the
+  validity, at most 14 days), refused
   before minting when `windowTooShort`. Delivered by DM to `recipientPubkey` exactly as today
   (`/api/v1/dm/tokens/send`), payload type unchanged (`cashu_token_transfer`).
 - `email`: `openSeal(...)` gives `ℓ`; lock key = `getPublicKey(ℓ)`; same `refund_pubkey`,
