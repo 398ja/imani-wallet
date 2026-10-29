@@ -410,19 +410,34 @@ export function createDmCryptoAdapter(): CryptoAdapter {
             of: chunk.chunk_total,
           }
           switch (offer.kind) {
-            case 'complete':
+            case 'complete': {
               console.log(
                 offer.redelivery
                   ? '[dmCrypto] offering a reassembled coupon again (its last attempt did not finish)'
                   : '[dmCrypto] reassembled a chunked coupon',
                 { transfer: tag.transfer, chunks: chunk.chunk_total, bytes: offer.payload.length },
               )
+              // #410 G14: a gift minted locked can be big enough to arrive in pieces. Reassembled,
+              // it is still a locked gift: filed, never redeemed. Returned with EMPTY content, so
+              // dm-poll marks this completing event processed, which is what confirms the transfer
+              // (`confirmChunkDeliveries`) and releases its stragglers. A failed filing returns null
+              // and the pieces are offered again.
+              const reassembled = asPayload(offer.payload)
+              if (reassembled && isLinkLockedToken(reassembled.token)) {
+                try {
+                  const filed = await (await import('./lockedGiftsApp')).fileIncomingLockedGift(reassembled.token)
+                  if (filed === 'filed') return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+                } catch {
+                  return null
+                }
+              }
               return {
                 eventId: event.id,
                 senderPubkey: rumor.pubkey,
                 content: offer.payload,
                 createdAt: rumor.created_at,
               }
+            }
             case 'done':
               // A straggler from a transfer whose coupon is durably handled
               // (#204: only ever recorded once the completing event is
