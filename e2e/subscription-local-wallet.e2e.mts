@@ -86,6 +86,9 @@ async function main() {
     await upgrade.waitFor({ timeout: 20_000 })
     const href = await upgrade.getAttribute('href')
     check('Upgrade my plan points at the site this environment configured', href === SITE, String(href))
+    // A new stall holds no licence: the wallet names the free tier as the website does.
+    const before = await text(wallet)
+    check('a new stall’s wallet shows the Starter plan, never "Free" or "Basic"', /Plan Starter/.test(before) && !/Plan Free|Basic/.test(before), before.slice(0, 400))
 
     const [site] = await Promise.all([context.waitForEvent('page'), upgrade.click()])
     await site.getByRole('button', { name: 'Choose Essentials' }).waitFor({ timeout: 30_000 })
@@ -104,6 +107,7 @@ async function main() {
     await site.getByRole('radio', { name: /Monthly/ }).click()
     const monthly = await text(site)
     check('monthly, in pounds: Essentials £8/month, Pro £11/month', /£8\/month/.test(monthly) && /£11\/month/.test(monthly), monthly.slice(0, 500))
+    check('the plans page never says Basic', !/Basic/.test(yearly) && !/Basic/.test(monthly))
 
     await site.getByRole('button', { name: 'Choose Essentials' }).click()
     await fillStripe(site, `${handle}@example.com`)
@@ -117,6 +121,7 @@ async function main() {
       account = await text(site)
     }
     check('the local gateway minted and delivered it: account page says Sent', /Essentials/.test(account) && /Sent/.test(account), account.slice(0, 300))
+    check('the account page never says Basic', !/Basic/.test(account), account.slice(0, 300))
 
     let plan = ''
     for (let i = 0; i < 20 && !/Essentials/.test(plan); i++) {
@@ -125,6 +130,7 @@ async function main() {
       plan = await text(wallet)
     }
     check('the plan arrived in this local wallet: Settings › Subscription shows Essentials', /Essentials/.test(plan), plan.slice(0, 400))
+    check('the wallet’s plan screen never says Basic', !/Basic/.test(plan), plan.slice(0, 400))
 
     // The notice the wallet raised for it names the plan, never a key (owner rule: no npubs).
     await wallet.locator('summary[aria-label^="Notifications"]').click()
