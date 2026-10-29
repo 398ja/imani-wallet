@@ -7,14 +7,14 @@ case "$STRIPE_SECRET_KEY" in sk_test_*) ;; *) echo "refusing: not a test key" >&
 API=https://api.stripe.com/v1
 auth=(-u "$STRIPE_SECRET_KEY:")
 
-product() { # name tier -> id. Found by its tier metadata; renamed in place if the name changed.
-  local id
-  id=$(curl -s "${auth[@]}" "$API/products/search" --data-urlencode "query=metadata['imani_tier']:'$2'" -G | sed -n 's/.*"id": "\(prod_[^"]*\)".*/\1/p' | head -1)
-  if [ -n "$id" ]; then
-    curl -s "${auth[@]}" "$API/products/$id" -d name="$1" >/dev/null
-  else
-    id=$(curl -s "${auth[@]}" "$API/products" -d name="$1" -d "metadata[imani_tier]=$2" | sed -n 's/.*"id": "\(prod_[^"]*\)".*/\1/p' | head -1)
-  fi
+product() { # name tier -> id. Found by its tier metadata; EVERY product of that tier is renamed in
+  # place, so an older duplicate (an earlier run, an old price) never shows a stale name on an
+  # invoice or the customer portal.
+  local ids id
+  ids=$(curl -s "${auth[@]}" "$API/products/search" --data-urlencode "query=metadata['imani_tier']:'$2'" -G | sed -n 's/.*"id": "\(prod_[^"]*\)".*/\1/p')
+  for id in $ids; do curl -s "${auth[@]}" "$API/products/$id" -d name="$1" >/dev/null; done
+  id=$(echo "$ids" | head -1)
+  [ -n "$id" ] || id=$(curl -s "${auth[@]}" "$API/products" -d name="$1" -d "metadata[imani_tier]=$2" | sed -n 's/.*"id": "\(prod_[^"]*\)".*/\1/p' | head -1)
   echo "$id"
 }
 price() { # product tier term amount interval -> id
