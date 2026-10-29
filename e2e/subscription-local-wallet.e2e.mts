@@ -142,6 +142,59 @@ async function main() {
       bell.slice(0, 400),
     )
     check('no uncaught page errors', errors.length === 0, errors.join(' | '))
+
+    // ---- Cancel in the REAL Stripe customer portal: the webhook must reach this wallet (#407).
+    await site.goto(`${SITE}/account`)
+    await site.getByRole('button', { name: 'Card, invoices and cancellation' }).click()
+    await site.waitForURL(/billing\.stripe\.com/, { timeout: 30_000 })
+    await site.getByRole('link', { name: /cancel subscription/i }).or(site.getByRole('button', { name: /cancel subscription/i })).first().click()
+    await site.waitForURL(/\/cancel/, { timeout: 30_000 })
+    const stripeSub = new URL(site.url()).pathname.match(/sub_[A-Za-z0-9]+/)?.[0] ?? ''
+    const key = process.env.STRIPE_SECRET_KEY ?? ''
+    if (!key || !stripeSub) throw new Error('set STRIPE_SECRET_KEY (test) so the e2e can read the subscription at Stripe')
+    const atStripe = async () =>
+      (await (await fetch(`https://api.stripe.com/v1/subscriptions/${stripeSub}`, { headers: { Authorization: `Bearer ${key}` } })).json()) as { cancel_at: number | null }
+    // As this account's portal does it (seen 2026-10-29): a "why are you leaving?" dialog with a
+    // custom Reason dropdown, then "Continue to cancellation", then the review page's own
+    // "Cancel subscription" button (`data-testid=confirm`), which is what cancels.
+    const continueStep = site.getByText('Continue to cancellation')
+    if (await continueStep.isVisible({ timeout: 8_000 }).catch(() => false)) {
+      await site.getByText('Choose an option').click()
+      await site.getByRole('option').first().click()
+      await continueStep.click()
+    }
+    await site.locator('[data-testid=confirm]').click({ timeout: 20_000 })
+    let cancelAt: number | null = null
+    for (let i = 0; i < 20 && !cancelAt; i++) {
+      await site.waitForTimeout(1500)
+      cancelAt = (await atStripe()).cancel_at
+    }
+    check('cancelled in the real Stripe customer portal (Stripe has a cancel date)', Boolean(cancelAt), String(cancelAt))
+
+    const until = async (want: RegExp, label: string) => {
+      let screen = ''
+      for (let i = 0; i < 24 && !want.test(screen); i++) {
+        await wallet.goto(`${WALLET}/settings/subscription`, { waitUntil: 'load' })
+        await wallet.waitForTimeout(5000)
+        screen = await text(wallet)
+      }
+      check(label, want.test(screen), screen.slice(0, 500))
+      return screen
+    }
+    const cancelled = await until(/Cancelled/, 'the wallet says Cancelled, from the webhook, with no other step')
+    check('it says when the plan ends and that it will not renew', /works until .* and will not renew/.test(cancelled) && /Renews No, cancelled/.test(cancelled), cancelled.slice(0, 500))
+    check('the plan still works to its end: still Essentials, still unlocks', /Essentials/.test(cancelled) && /Unlocks/.test(cancelled), cancelled.slice(0, 500))
+
+    // ---- Undo it: the same `customer.subscription.updated` webhook, cancel_at cleared. Done through
+    // Stripe's API (the portal on this account offers no "renew" button), so Stripe itself sends it.
+    const undo = await fetch(`https://api.stripe.com/v1/subscriptions/${stripeSub}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'cancel_at=',
+    })
+    check('cancellation undone at Stripe', undo.ok, String(undo.status))
+    const back = await until(/\bActive\b/, 'the wallet says Active again once the cancellation is undone')
+    check('and Renews Yes', /Renews Yes/.test(back), back.slice(0, 500))
   } catch (e) {
     if (!(e instanceof Error && results.some(([n, ok]) => !ok && n === e.message))) console.log(`FAIL  flow  (${String(e).slice(0, 300)})`)
     for (const p of context.pages()) console.log(`--- ${p.url()}\n${(await text(p).catch(() => '')).slice(0, 500)}`)

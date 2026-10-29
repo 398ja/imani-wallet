@@ -10,11 +10,22 @@
  * is best effort and never fails the webhook; a lost message only means the wallet keeps saying
  * "Active" until the plan ends, which is what it did before this existed.
  */
-import { Relay, type Event } from 'nostr-tools'
+// BOTH from `nostr-tools/relay`, the module that publishes: `nostr-tools` and its subpaths are
+// separate module instances, each with its own `_WebSocket` (audit-api/server.ts measured it).
+import { Relay, useWebSocketImplementation } from 'nostr-tools/relay'
+import type { Event } from 'nostr-tools'
+import WebSocketImpl from 'ws'
 
 import { wrapMessage } from '../../src/lib/giftWrap.ts'
 import { subscriptionStatusJson, type SubscriptionStatusMessage } from '../../src/lib/subscriptionStatus.ts'
 import type { Seller } from './issuer.ts'
+
+/**
+ * nostr-tools reaches relays through a GLOBAL `WebSocket`, which Node 20 does not have. Without this
+ * the publish threw "WebSocket is not defined" in the built image (seen 2026-10-29 on the local
+ * deployment, a real portal cancellation), while every unit test passed with a stubbed publish.
+ */
+useWebSocketImplementation(WebSocketImpl)
 
 export interface StatusNotifier {
   notify(stallPubkey: string, message: SubscriptionStatusMessage): Promise<void>
