@@ -93,12 +93,15 @@ describe('an unclaimed gift comes back to the buyer after x', () => {
     at(w, X + 1)
     await takeBackLockedGift(w.ports, R, gift)
     const after = parseVoucherToken(w.kept[0].token).voucher
-    expect({ issuer: after.issuerId, unit: after.unit, face: after.faceValue, id: after.voucherId }).toEqual({
+    expect({ issuer: after.issuerId, unit: after.unit, face: after.faceValue, id: after.voucherId, expires: after.expiresAt }).toEqual({
       issuer: before.issuerId,
       unit: before.unit,
       face: before.faceValue,
       id: before.voucherId,
+      // NOT renewed: a gift taken back keeps the coupon's own expiry (the stall's signed term).
+      expires: before.expiresAt,
     })
+    expect(after.expiresAt).toBeDefined()
   })
 
   it('long after x (weeks), it still comes back', async () => {
