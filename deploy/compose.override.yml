@@ -657,6 +657,10 @@ services:
       GATEWAY_CUSTOMER_WALLET_STATE_MINT_URL: "${MINT_URL:-http://imani-mint-rest:7777}"
       GATEWAY_WALLET_MINT_URL: "${MINT_URL:-http://imani-mint-rest:7777}"
       GATEWAY_CUSTOMER_WALLET_NOSTR_ENABLED: "true"
+      # The Cashlink refund relay (#295 phase 3): a sender's pre-signed take-back waits here and is
+      # posted at x + 60 s, so an unclaimed gift comes back without the sender running anything.
+      # Off by default everywhere; on locally so Send by link (app and #366's API senders) ARMS.
+      GATEWAY_CUSTOMER_CASHLINK_REFUND_RELAY_ENABLED: "${CASHLINK_REFUND_RELAY_ENABLED:-true}"
       GATEWAY_CUSTOMER_WALLET_NOSTR_RELAYS: "ws://nostr-relay:7777"
       # Must match GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN above.
       CUSTOMER_WALLET_SVC_CRED_ATOMIC_OPS: "dev-atomic-ops-token-local-only"

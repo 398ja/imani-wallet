@@ -497,6 +497,8 @@ export default defineConfig({
     include: [
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',
+      // The server-side SDKs (#366 @imani/cashlink-sender) reuse the app's engine, so they run here.
+      'sdk/**/*.test.{ts,tsx}',
       // The gifting site (#410), and the subscription site (#407) once it lands: their own pages and
       // libraries, tested against the wallet's real modules.
       'apps/**/src/**/*.test.{ts,tsx}',
