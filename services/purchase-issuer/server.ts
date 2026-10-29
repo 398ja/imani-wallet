@@ -110,6 +110,7 @@ export function giftTrackerFor(config: IssuerConfig, fetchImpl: typeof fetch = f
       checkStates: httpCheckStates(g.mintTransportUrl, fetchImpl),
       sendMail: (req) => mailer.send(req),
       now: () => Date.now(),
+      ...(g.sweepEveryMs ? { sweepEveryMs: g.sweepEveryMs } : {}),
     })
     trackers.set(config, t)
   }
