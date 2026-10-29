@@ -305,12 +305,14 @@ export async function discharge(
   const mintedAt = ports.now()
 
   // G14: the lock, from a DURABLE anchor so every retry asks for the same locktime (another
-  // locktime is another body under the same warrant nonce, which gc refuses).
+  // locktime is another body under the same warrant nonce, which gc refuses). Keyed on the PAYMENT,
+  // like the idempotency key and the warrant nonce: two Stripe events for one payment intent (or a
+  // reconciler re-drive) are one mint and must ask for one locktime.
   let giftLock: GiftLock | null = null
   if (giftKind !== null) {
     let anchor: number
     try {
-      anchor = await ports.gifts!.anchor(obligation.id, mintedAt)
+      anchor = await ports.gifts!.anchor(purchaseIdempotencyKey(obligation.processorReference!), mintedAt)
     } catch (error) {
       return { kind: 'owed', reason: `gift mint anchor unavailable: ${describe(error)}`, ambiguous: false }
     }
@@ -534,7 +536,8 @@ async function deliverGift(
   const handed = await handBuyerTheGift(gifts, {
     refundPubkey: lock.refundPubkey,
     token,
-    stall: (await gifts.stallName(obligation.stallPubkey)) ?? obligation.stallPubkey,
+    // Shown to the buyer: a name, never a key.
+    stall: (await gifts.stallName(obligation.stallPubkey)) ?? 'a local stall',
     to: delivery.recipientEmail ?? null,
     claimBy: lock.locktime,
   })
