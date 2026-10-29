@@ -1,6 +1,6 @@
 # A gift to an email is a Cashlink whose refund key the buyer holds
 
-Status: accepted (owner decisions G3, G4, G10 on #410, 2026-10-28; G14, G15, 2026-10-29)
+Status: accepted (owner decisions G3, G4, G10 on #410, 2026-10-28; G14, G15, G17, 2026-10-29)
 
 A voucher bought on the gifting page for an email address is delivered as a
 **Cashlink** (#295): locked to a link key `L`, with `refund = [R]` and
@@ -93,8 +93,13 @@ Purchase Issuer's gift tracker) carry no link and no key.
   (`purchase.gifting.kinds=self`), and purchase-issuer blocks a handle or email
   gift **before minting** rather than delivering it unlocked.
 - Handle gifts (G7) use the same lock with the recipient's pinned pubkey in
-  place of `L`, and the same window `x`: 30 days, capped by the voucher expiry
-  minus 24 h (G11).
+  place of `L`, and the same window `x`.
+- **The window is half the voucher's validity, at most 14 days (G17).** A gift
+  taken back is the same voucher, so it keeps its original expiry; with the
+  earlier "30 days, capped by expiry minus 24 h" a 30-day stall's buyer got it
+  back with a day left. The buyer is told the date it keeps (review page,
+  return-link email, expired notice, return page). Re-issuing it with a fresh
+  expiry was rejected: a new mint, outside the stall's own term.
 - Copy says "if it isn't claimed by <date>, you can take it back", never "it
   comes back to you".
 - The buyer never sees the claim link (G8). The return page and the return link
