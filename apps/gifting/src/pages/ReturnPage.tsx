@@ -49,9 +49,7 @@ export function ReturnPage() {
   const where =
     draft === 'gone'
       ? 'the recipient you chose'
-      : draft.delivery.kind === 'self'
-        ? 'your wallet. Open the Imani wallet to see it'
-        : draft.delivery.kind === 'email'
+      : draft.delivery.kind === 'email'
           ? `${draft.delivery.email}, with a link to claim it`
           : 'their wallet'
 
@@ -63,7 +61,7 @@ export function ReturnPage() {
         It can take a minute. If it isn&apos;t claimed in time, you can take it back after the claim date: your wallet does it for you if you
         were signed in. Otherwise use your return link below.
       </p>
-      {refundSecret && WALLET_ORIGIN && draft !== 'gone' && draft.delivery.kind !== 'self' && (
+      {refundSecret && WALLET_ORIGIN && draft !== 'gone' && (
         <div className="mt-6 rounded-2xl border border-mono-200 p-4 dark:border-mono-800" data-testid="return-link">
           <p className="mb-2 text-sm font-medium">Your return link</p>
           <p className="mb-2 text-sm text-mono-500">

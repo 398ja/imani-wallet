@@ -156,13 +156,13 @@ describe('form validation', () => {
     expect(toMinorUnits('500', 0)).toBe(500)
     expect(toMinorUnits('5.5', 0)).toBeNull()
   })
-  it('"Myself" needs a session', () => {
-    expect(validate(form({ deliver: 'self' }), { signedIn: false }).deliver).toBe('Sign in to send to yourself.')
-    expect(validate(form({ deliver: 'self' }), { signedIn: true }).deliver).toBeUndefined()
-  })
-  it('guests must give an email; signed-in buyers need not', () => {
-    expect(validate(form({ buyerEmail: '' }), { signedIn: false }).buyerEmail).toBeDefined()
-    expect(validate(form({ buyerEmail: '' }), { signedIn: true }).buyerEmail).toBeUndefined()
+  it('every sender gives an email, signed in or not (G15)', () => {
+    for (const deliver of ['handle', 'email'] as const) {
+      for (const signedIn of [false, true]) {
+        expect(validate(form({ deliver, buyerEmail: '' }), { signedIn }).buyerEmail).toBe("We need your email to tell you when it's claimed.")
+        expect(validate(form({ deliver, buyerEmail: 'me@example.com' }), { signedIn }).buyerEmail).toBeUndefined()
+      }
+    }
   })
   it('handle to the stall itself is refused', () => {
     expect(validate(form({ handle: 'alice' }), { signedIn: false, stallNip05: 'alice@imani.casa' }).handle).toMatch(/can't send/)
@@ -189,12 +189,11 @@ describe('draft pinning', () => {
     expect(req).toMatchObject({ amountMinor: 2000, currency: 'EUR', delivery: { kind: 'handle', handle: 'bob@example.com', refundPubkey: BOB }, message: 'hi', buyerEmail: 'me@example.com' })
     expect(req.delivery.sealed).toBeUndefined()
   })
-  it('email gifts carry the seal and no handle; self carries no refund key', () => {
+  it('email gifts carry the seal and no handle; a signed-in sender still sends their email (G15)', () => {
     const e = draftRequest(form({ deliver: 'email', email: 'bob@example.com' }), { ...ctx, sealed: 'v1.x.y' })
     expect(e.delivery).toEqual({ kind: 'email', email: 'bob@example.com', refundPubkey: BOB, sealed: 'v1.x.y' })
-    const s = draftRequest(form({ deliver: 'self' }), { ...ctx, signedIn: true })
-    expect(s.delivery).toEqual({ kind: 'self' })
-    expect(s.buyerEmail).toBeUndefined()
+    const s = draftRequest(form({ deliver: 'handle', handle: 'bob@example.com' }), { ...ctx, signedIn: true })
+    expect(s.buyerEmail).toBe('me@example.com')
   })
   const draft = (over: Partial<Draft['delivery']> = {}, top: Partial<Draft> = {}): Draft => ({
     draftId: 'd1',
@@ -292,7 +291,7 @@ describe('api', () => {
   it('signs a draft with NIP-98 over the exact body when signed in, not for guests', async () => {
     const f = vi.fn(async () => json(201, {}))
     const signer = { pubkey: BOB, signEvent: vi.fn(async (t: unknown) => ({ ...(t as object), pubkey: BOB, sig: 's', id: 'i' })) }
-    const req = draftRequest(form({ deliver: 'self' }), { stallPubkey: STALL, stallHandle: 'alice@imani.casa', currency: 'EUR', terms: 't', signedIn: true })
+    const req = draftRequest(form({ deliver: 'handle', handle: 'bob@example.com' }), { stallPubkey: STALL, stallHandle: 'alice@imani.casa', currency: 'EUR', terms: 't', refundPubkey: BOB, signedIn: true })
     await giftingApi(f as unknown as typeof fetch).createDraft(req, signer)
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit]
     const auth = (init.headers as Record<string, string>).Authorization

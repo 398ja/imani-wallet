@@ -8,7 +8,8 @@
 
 import { isNip05, normaliseRecipientHandle } from './handle'
 
-export type DeliveryKind = 'self' | 'handle' | 'email'
+/** Who a gift goes to. There is no "to myself" (owner, 2026-10-29): the wallet's Buy page does that. */
+export type DeliveryKind = 'handle' | 'email'
 
 export interface GiftForm {
   amount: string
@@ -65,7 +66,6 @@ export function validate(
 ): FormErrors {
   const errors: FormErrors = {}
   if (toMinorUnits(form.amount, ctx.decimals) === null) errors.amount = 'Enter an amount like 25.00.'
-  if (form.deliver === 'self' && !ctx.signedIn) errors.deliver = 'Sign in to send to yourself.'
   if (form.deliver === 'handle') {
     const h = normaliseRecipientHandle(form.handle)
     if (!h) errors.handle = 'Enter a handle like name@domain.'
@@ -75,7 +75,10 @@ export function validate(
   const m = messageProblem(form.message)
   if (m) errors.message = m
   if (form.from.length > FROM_MAX) errors.from = `Keep the name to ${FROM_MAX} characters.`
-  if (!ctx.signedIn && !isEmail(form.buyerEmail)) errors.buyerEmail = 'We need your email for the receipt and the return link.'
+  // G15: every gift needs the sender's email (the receipt, a guest's return link, and the claimed /
+  // not-claimed notices), signed in or not.
+  if (!isEmail(form.buyerEmail)) errors.buyerEmail = "We need your email to tell you when it's claimed."
+
   return errors
 }
 
@@ -139,7 +142,7 @@ export function draftRequest(
   const delivery: DraftRequest['delivery'] = { kind: form.deliver }
   if (form.deliver === 'handle') delivery.handle = normaliseRecipientHandle(form.handle) ?? undefined
   if (form.deliver === 'email') delivery.email = form.email.trim()
-  if (form.deliver !== 'self') delivery.refundPubkey = ctx.refundPubkey
+  delivery.refundPubkey = ctx.refundPubkey
   if (form.deliver === 'email') delivery.sealed = ctx.sealed
   return {
     stallPubkey: ctx.stallPubkey,
@@ -150,7 +153,7 @@ export function draftRequest(
     delivery,
     message: form.message.trim() || undefined,
     from: form.from.trim() || undefined,
-    buyerEmail: ctx.signedIn ? undefined : form.buyerEmail.trim(),
+    buyerEmail: form.buyerEmail.trim(),
   }
 }
 
@@ -163,7 +166,7 @@ export function draftMatches(draft: Draft, req: DraftRequest, expectedRecipient?
   if (draft.currency.toUpperCase() !== req.currency) return false
   if (draft.delivery.kind !== req.delivery.kind) return false
   if (req.delivery.kind === 'email' && draft.delivery.email?.toLowerCase() !== req.delivery.email?.toLowerCase()) return false
-  if (req.delivery.kind !== 'self' && draft.delivery.refundPubkey !== req.delivery.refundPubkey) return false
+  if (draft.delivery.refundPubkey !== req.delivery.refundPubkey) return false
   if (expectedRecipient && draft.delivery.recipientPubkey !== expectedRecipient) return false
   return true
 }

@@ -60,7 +60,8 @@ async function call<T>(path: string, method: string, payload: unknown, signer: R
   if (signer) headers.Authorization = await nip98(signer, url, method, body)
   let response: Response
   try {
-    response = await fetchImpl(url, { method, body, headers })
+    // Same origin: the session cookie (if any) rides along; credentials 'same-origin' is the default.
+    response = await fetchImpl(url, { method, body, headers, credentials: 'same-origin' })
   } catch {
     throw new ApiError(COPY.unreachable, 0)
   }
@@ -81,12 +82,15 @@ export function giftingApi(fetchImpl: typeof fetch = (...a) => fetch(...a)) {
   return {
     /** The Purchase Issuer's public key, for sealing `ℓ` (G4). */
     issuerKey: () => call<{ pubkey: string }>(ISSUER_KEY_PATH, 'GET', undefined, null, fetchImpl).then((r) => r.pubkey),
-    createDraft: (req: DraftRequest, signer: RemoteSigner | null) => call<Draft>(DRAFTS_PATH, 'POST', req, signer, fetchImpl),
+    /** Rides the session cookie when signed in (`session.ts`); a guest's has none. */
+    createDraft: (req: DraftRequest, signer: RemoteSigner | null = null) => call<Draft>(DRAFTS_PATH, 'POST', req, signer, fetchImpl),
     getDraft: (id: string) => call<Draft>(`${DRAFTS_PATH}/${encodeURIComponent(id)}`, 'GET', undefined, null, fetchImpl),
     invalidate: (id: string) =>
       call<unknown>(`${DRAFTS_PATH}/${encodeURIComponent(id)}`, 'DELETE', undefined, null, fetchImpl).catch(() => undefined),
     /** One Checkout Session per draft: a second call answers the same URL (G-R6). */
-    pay: (draftId: string) => call<{ checkoutUrl: string; reference: string }>(PURCHASE_PATH, 'POST', { draftId }, null, fetchImpl),
+    /** One Checkout Session per draft. `returnLink` (a guest's own, G15) is emailed to them first. */
+    pay: (draftId: string, returnLink?: string) =>
+      call<{ checkoutUrl: string; reference: string }>(PURCHASE_PATH, 'POST', returnLink ? { draftId, returnLink } : { draftId }, null, fetchImpl),
     resolve: async (nip05: string): Promise<string | null> => {
       const r = await fetchImpl(`/api/v1/resolve/${encodeURIComponent(nip05)}`)
       if (r.status === 404 || r.status === 400) return null
