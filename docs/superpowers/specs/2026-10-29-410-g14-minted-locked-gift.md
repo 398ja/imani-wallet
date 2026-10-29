@@ -93,3 +93,63 @@ For `gift.kind`:
     before) takes it back into the wallet it opens/creates, same mechanics with R = `r`.
   - Before `x`, neither buyer can take it back (no `ℓ`). Copy: "You can take it back after
     <date> if it isn't claimed."
+
+## 4. G15: sender email, return link by email, claimed/expired notices (owner, 2026-10-29)
+
+### 4.1 Sender email is required (gifting SPA + payment-adapter)
+
+- Form field "Your email" (`buyerEmail` on the wire, unchanged name) is REQUIRED for `handle` and
+  `email` deliveries, signed in or not. Optional for `self`. Prefill: nothing (no NAP email).
+- payment-adapter `POST /api/v1/gifting/drafts` refuses a handle/email draft without a valid
+  `buyerEmail` (422 "We need your email to tell you when it's claimed."), and stores it for signed-in
+  buyers too. It is carried on the owed purchase to purchase-issuer as today (`delivery.buyerEmail`).
+
+### 4.2 Guest return link by email, at Pay (payment-adapter + gifting SPA)
+
+- `POST /api/v1/gifting/purchase` (pay) body gains optional `returnLink: string`. When the draft's
+  buyer is a guest (no buyerPubkey) and the delivery is handle/email, it is REQUIRED (400 if missing).
+  Validation: `^<allowed wallet origin>/gift-return#r=[0-9a-f]{64}$`, where the 64-hex `r` must satisfy
+  `getPublicKey(r) == draft.refundPubkey` (secp256k1 x-only; payment-adapter checks this with its
+  existing nostr/crypto deps). Mismatch: 400.
+- Before creating the Checkout Session (and only on the FIRST pay call for a draft; a repeat pay that
+  answers the existing URL sends nothing new), payment-adapter sends imani-mailer `gift-return-link`
+  to `draft.buyerEmail` with `idempotencyKey = <draftId>:return-link`, fields
+  `{stall, claimBy, returnUrl}`. If the mailer refuses or is unreachable: 503 "We couldn't email your
+  return link. Try again." and NO checkout (the guest must not pay without the link on its way).
+- `returnLink` (it contains R) is never stored, never logged, never echoed; held only for that call.
+- Config: `purchase.gifting.mailer-url`, `purchase.gifting.mailer-token` (env
+  `PURCHASE_GIFTING_MAILER_URL/_TOKEN`), `purchase.gifting.wallet-origin`; email/handle guest
+  drafts are refused (503) when unset. imani-mailer gets a second client `payment-adapter` scoped
+  to `gift-return-link` only.
+- SPA: Pay sends `returnLink` (built with `returnLink(WALLET_ORIGIN, R)`) for guests; the review copy
+  says "We'll also email this to <buyerEmail> when you pay."
+
+### 4.3 Claimed / expired notices (purchase-issuer)
+
+- New templates in imani-mailer builtins:
+  - `gift-claimed`: subject `Your {{stall}} gift was claimed`; text
+    `{{recipient}} claimed the {{amount}} voucher for {{stall}} you sent.`; fields stall, amount,
+    recipient (line, max 320).
+  - `gift-expired`: subject `Your {{stall}} gift wasn't claimed`; text
+    `Your {{amount}} voucher for {{stall}} to {{recipient}} wasn't claimed by {{claimBy}}.` then
+    `{{howBack}}`; fields stall, amount, recipient, claimBy, howBack (text). howBack for a guest:
+    "Take it back with the return link we emailed you on {{date}} (subject \"If your … gift isn't
+    claimed\")."; signed in: "Open your Imani wallet: it takes it back for you."
+  - No url field in either (no link, no key).
+- purchase-issuer: after a gift is discharged, record a tracked gift in a durable file store
+  (`PURCHASE_GIFT_TRACKER_PATH`, 0600, atomic like the anchors), one row per draftId:
+  `{draftId, kind, mintUrl, ys:[hash_to_curve(secret) of every proof], claimBy, buyerEmail
+  (AES-GCM encrypted with the existing vault key), recipientDisplay (email address or @handle),
+  stall, amount, guest:boolean, returnMailDate, notified:{claimed?:ts, expired?:ts}}`. No token, no
+  secret.
+- A sweep in the worker loop (every pass, rate-limited to once per 10 min per gift): NUT-07 checkstate
+  at the mint for `ys` (mint URL from the coupon; reach it via the gateway's mint URL config the issuer
+  already has, or the coupon's mint with the same trusted-mint rule).
+  - all SPENT and now < claimBy → send `gift-claimed` (idempotency `<draftId>:claimed`), mark done.
+  - now ≥ claimBy and all UNSPENT → send `gift-expired` (`<draftId>:expired`), keep tracking (a later
+    SPENT after x is the take-back or a late claim: no further email), then drop the row.
+  - any SPENT after claimBy without a prior claimed notice → no email, drop the row.
+  - UNKNOWN/PENDING → try next pass.
+  - Rows are deleted (and the encrypted email with them) at a terminal state or claimBy + 7 d.
+- Metrics: closed labels only (notices sent by kind, sweep errors). No address, draft id or amount
+  in logs.
