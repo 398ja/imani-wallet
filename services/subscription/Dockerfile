@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7-labs
 # subscription.imani.casa: the API and the site, one origin.
 #
 #   docker build -f services/subscription/Dockerfile -t imani-subscription .
@@ -17,6 +18,10 @@ COPY shared ./shared
 # All workspace packages: the site uses wallet components (IdentityInline) that reach several.
 COPY packages ./packages
 COPY apps/subscription ./apps/subscription
+# The root tsconfig.json references every app's tsconfig (e.g. apps/gifting once #410 lands), and
+# Vite's esbuild reads that reference graph. Only the tsconfig files are needed for it to resolve,
+# so the image never ships another site's code.
+COPY --parents apps/*/tsconfig.json ./
 # Baked into the site bundle: the ONE wallet origin the site accepts a NAP signer from (#411). The
 # wallet opens this site and signs its login over postMessage; a signer anywhere else is ignored.
 # Per environment (e.g. https://wallet.imani.casa in production), so REQUIRED: a site built without
