@@ -283,6 +283,16 @@ export function lockWindowProblem(x: number, couponExpiresAt: number | undefined
   return null
 }
 
+/**
+ * The latest `x` {@link lockWindowProblem} accepts for one coupon, or null when no `x` would do.
+ * Derived from the same constants, so the two answers cannot disagree (#402 `maxExpiryFor`).
+ */
+export function latestLockX(couponExpiresAt: number | undefined, nowS: number): number | null {
+  let x = nowS + 30 * DAY_S
+  if (couponExpiresAt !== undefined) x = Math.min(x, couponExpiresAt - DAY_S - CLOCK_SLACK_S)
+  return lockWindowProblem(x, couponExpiresAt, nowS) === null ? x : null
+}
+
 // ─── Building the two proposals ─────────────────────────────────────────────
 
 /** Tags that decide who can spend, or that the issuer sets. Never terms. */
