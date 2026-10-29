@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { VoucherRow } from '@imani/wallet-storage'
 
@@ -181,6 +181,58 @@ describe('reaching the screen without a subscription', () => {
 })
 
 describe('a licence that arrived', () => {
+  it('says Cancelled, when it ends and that it will not renew, once the seller says so (#407)', async () => {
+    const { rememberSubscriptionStatus } = await import('../../lib/subscriptionStatusStore')
+    const { subscriptionStatusJson } = await import('../../lib/subscriptionStatus')
+    const { row, issuerPublicKey } = mintRow(terms(), SOLD_AT + YEAR)
+    rows = [row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', issuerPublicKey)
+    localStorage.clear()
+    rememberSubscriptionStatus(CUSTOMER, subscriptionStatusJson({ subscriptionId: 'sub_9f2c11', status: 'cancelled', endsAt: SOLD_AT + YEAR, at: SOLD_AT }))
+
+    renderPage()
+
+    expect(await screen.findByText('Cancelled')).toBeTruthy()
+    expect(screen.queryByText('Active')).toBeNull()
+    expect(screen.getByText(/works until .* and will not renew/)).toBeTruthy()
+    expect(screen.getByText('No, cancelled')).toBeTruthy()
+    expect(screen.getByText('Ends')).toBeTruthy()
+    // Still paid for: the licence keeps granting, so the plan still works.
+    expect(screen.getByText('terminals')).toBeTruthy()
+  })
+
+  it('goes back to Active when the cancellation is undone, without a reload', async () => {
+    const { rememberSubscriptionStatus } = await import('../../lib/subscriptionStatusStore')
+    const { subscriptionStatusJson } = await import('../../lib/subscriptionStatus')
+    const { row, issuerPublicKey } = mintRow(terms(), SOLD_AT + YEAR)
+    rows = [row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', issuerPublicKey)
+    localStorage.clear()
+    rememberSubscriptionStatus(CUSTOMER, subscriptionStatusJson({ subscriptionId: 'sub_9f2c11', status: 'cancelled', at: SOLD_AT }))
+
+    renderPage()
+    await screen.findByText('Cancelled')
+    act(() => {
+      rememberSubscriptionStatus(CUSTOMER, subscriptionStatusJson({ subscriptionId: 'sub_9f2c11', status: 'active', at: SOLD_AT + 60 }))
+    })
+    expect(await screen.findByText('Active')).toBeTruthy()
+    expect(screen.getByText('Yes')).toBeTruthy()
+  })
+
+  it('ignores a status for another subscription', async () => {
+    const { rememberSubscriptionStatus } = await import('../../lib/subscriptionStatusStore')
+    const { subscriptionStatusJson } = await import('../../lib/subscriptionStatus')
+    const { row, issuerPublicKey } = mintRow(terms(), SOLD_AT + YEAR)
+    rows = [row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', issuerPublicKey)
+    localStorage.clear()
+    rememberSubscriptionStatus(CUSTOMER, subscriptionStatusJson({ subscriptionId: 'sub_other', status: 'cancelled', at: SOLD_AT }))
+
+    renderPage()
+
+    expect(await screen.findByText('Active')).toBeTruthy()
+  })
+
   it('unlocks the screen with no step the customer takes', async () => {
     const { row, issuerPublicKey } = mintRow(terms(), SOLD_AT + YEAR)
     rows = [row]

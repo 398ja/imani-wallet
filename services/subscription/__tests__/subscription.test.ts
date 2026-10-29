@@ -21,7 +21,11 @@ import { LicenceIssuer, sellerFrom } from '../issuer.ts'
 import { Ledger } from '../ledger.ts'
 import { type MerchantStanding } from '../merchantRole.ts'
 import { stripeSignatureHeader, type StripeClient } from '../stripe.ts'
+import { relayStatusNotifier } from '../statusNotifier.ts'
 import { catalogSignatureValid } from '../../../src/lib/entitlement.ts'
+import { unwrapSealed } from '../../../src/lib/giftWrap.ts'
+import { parseSubscriptionStatus } from '../../../src/lib/subscriptionStatus.ts'
+import type { Event } from 'nostr-tools'
 
 const ORIGIN = 'https://subscription.test'
 const WALLET = 'http://gateway:8082'
@@ -142,6 +146,9 @@ let stripe: ReturnType<typeof fakeStripe>
 let app: ReturnType<typeof createApp>
 let ledger: Ledger
 let logs: Array<Record<string, unknown>>
+/** Wraps the service published, as the relay would receive them. */
+let published: Event[]
+let relayDown = false
 
 function makeApp(over: { catalogBody?: string; prices?: Record<string, string> } = {}) {
   const config: SubscriptionConfig = {
@@ -168,6 +175,14 @@ function makeApp(over: { catalogBody?: string; prices?: Record<string, string> }
     catalogBody: over.catalogBody ?? CATALOG,
     issuer: new LicenceIssuer({ walletUrl: WALLET, edgeSecret: 'edge', internalRelay: 'ws://relay', seller: SELLER, fetch: gateway.fetchImpl, sleep: async () => {} }),
     merchantStanding: standing,
+    notifier: relayStatusNotifier({
+      seller: SELLER,
+      relayUrl: 'ws://relay',
+      publish: async (_url, event) => {
+        if (relayDown) throw new Error('relay down')
+        published.push(event)
+      },
+    }),
     napServerOptions: { minAuthResponseMillis: 0 },
     log: (e) => logs.push(e),
   })
@@ -177,6 +192,8 @@ beforeEach(async () => {
   gateway = fakeGateway()
   stripe = fakeStripe()
   logs = []
+  published = []
+  relayDown = false
   ledger = new Ledger(join(await mkdtemp(join(tmpdir(), 'sub-')), 'ledger.json'))
   app = makeApp()
   merchants = new Set([STALL, ADMIN])
@@ -461,6 +478,57 @@ describe('buying a plan', () => {
       })
       await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at: null }))
       expect(await status()).toBe('revoked')
+      expect(published).toHaveLength(0)
+    })
+  })
+
+  describe('the webhook tells the stall’s wallet (a seller-sealed DM)', () => {
+    const event = (type: string, object: Record<string, unknown>) => {
+      const body = JSON.stringify({ type, data: { object: { id: 'sub_stripe_1', ...object } } })
+      return { method: 'POST', path: '/v1/stripe/webhook', body, headers: { 'stripe-signature': stripeSignatureHeader(body, WEBHOOK_SECRET) } }
+    }
+    const opened = (i: number) => unwrapSealed(published[i], STALL_SK)
+
+    it('a cancellation is sent to the stall, sealed by the seller, with the date it ends', async () => {
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      const row = (await ledger.all())[0]
+      await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at_period_end: false, cancel_at: 1_802_000_000 }))
+      expect(published).toHaveLength(1)
+      expect(published[0].tags).toContainEqual(['p', STALL])
+      const o = opened(0)
+      expect(o?.sealer).toBe(SELLER.pk)
+      expect(parseSubscriptionStatus(o!.rumor.content)).toMatchObject({ subscriptionId: row.subscriptionId, status: 'cancelled', endsAt: 1_802_000_000 })
+      // Only the stall can open it.
+      expect(unwrapSealed(published[0], CUSTOMER_SK)).toBeNull()
+    })
+
+    it('Stripe’s several events for one cancellation send ONE message', async () => {
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      const cancel = { status: 'active', cancel_at: 1_802_000_000 }
+      await app.handle(event('customer.subscription.updated', cancel))
+      await app.handle(event('customer.subscription.updated', { ...cancel, cancellation_details: { feedback: 'unused' } }))
+      expect(published).toHaveLength(1)
+    })
+
+    it('undoing it sends "active", and the wallet can tell which came last', async () => {
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at: 1_802_000_000 }))
+      await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at: null }))
+      expect(published).toHaveLength(2)
+      const [a, b] = [0, 1].map((i) => parseSubscriptionStatus(opened(i)!.rumor.content)!)
+      expect([a.status, b.status]).toEqual(['cancelled', 'active'])
+      expect(b.at).toBeGreaterThanOrEqual(a.at)
+    })
+
+    it('nothing is sent when nothing changed, and a relay that is down never fails the webhook', async () => {
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      await app.handle(event('customer.subscription.updated', { status: 'active' }))
+      expect(published).toHaveLength(0)
+      relayDown = true
+      const out = await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at: 1_802_000_000 }))
+      expect(out.status).toBe(200)
+      expect((await ledger.all())[0].status).toBe('cancelled')
+      expect(logs).toContainEqual(expect.objectContaining({ event: 'subscription_status_failed' }))
     })
   })
 

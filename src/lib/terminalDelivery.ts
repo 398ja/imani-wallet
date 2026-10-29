@@ -1,5 +1,4 @@
-import { finalizeEvent, nip44, verifyEvent, type Event } from 'nostr-tools'
-import { getPublicKey } from 'nostr-tools'
+import { type Event } from 'nostr-tools'
 
 import { parseTerminalMetadata, type TerminalMetadata } from './terminalCredential'
 import { checkCode } from './terminalMint'
@@ -88,62 +87,13 @@ export const IDLE_LOCK_CHOICES = [0, 5, 10, 15, 30, 60] as const
 
 const HEX64 = /^[0-9a-f]{64}$/
 
-/** A kind-14 rumor, as unwrapped. Unsigned by design. */
-export interface Rumor {
-  kind: number
-  pubkey: string
-  created_at: number
-  content: string
-  tags: string[][]
-}
-
 /**
- * Unwrap a NIP-17 gift wrap and verify who sealed it. NEVER THROWS.
- *
- * @returns the rumor and the seal's author, or null when the wrap is not for this key, the
- *   seal's signature fails, or the rumor claims a different author than the seal
+ * A kind-14 rumor (unsigned by design), and the NIP-17 wrap / verified unwrap. They live in
+ * `giftWrap.ts`, which has no wallet imports, so the subscription service seals with the very code
+ * this wallet unwraps with.
  */
-export function unwrapSealed(wrap: Event, key: Uint8Array): { rumor: Rumor; sealer: string } | null {
-  try {
-    const seal = JSON.parse(nip44.decrypt(wrap.content, nip44.getConversationKey(key, wrap.pubkey))) as Event
-    if (seal.kind !== 13 || !verifyEvent(seal)) return null
-    const rumor = JSON.parse(
-      nip44.decrypt(seal.content, nip44.getConversationKey(key, seal.pubkey)),
-    ) as Rumor
-    if (rumor.pubkey !== seal.pubkey) return null
-    return { rumor, sealer: seal.pubkey }
-  } catch {
-    return null
-  }
-}
-
-/** Gift-wrap a kind-14 message from `senderKey` to `recipient` (NIP-17, NIP-59). */
-export function wrapMessage(senderKey: Uint8Array, recipient: string, content: string): Event {
-  const sender = getPublicKey(senderKey)
-  const now = Math.floor(Date.now() / 1000)
-  const rumor = { kind: 14, pubkey: sender, created_at: now, content, tags: [['p', recipient]] }
-  const seal = finalizeEvent(
-    {
-      kind: 13,
-      // NIP-59 tweaks `created_at` to blur timing. Kept within the 24-hour
-      // window the device enforces, which it reads from the RUMOR anyway.
-      created_at: now - Math.floor(Math.random() * 600),
-      tags: [],
-      content: nip44.encrypt(JSON.stringify(rumor), nip44.getConversationKey(senderKey, recipient)),
-    },
-    senderKey,
-  )
-  const throwaway = crypto.getRandomValues(new Uint8Array(32))
-  return finalizeEvent(
-    {
-      kind: 1059,
-      created_at: now - Math.floor(Math.random() * 600),
-      tags: [['p', recipient]],
-      content: nip44.encrypt(JSON.stringify(seal), nip44.getConversationKey(throwaway, recipient)),
-    },
-    throwaway,
-  )
-}
+export { unwrapSealed, wrapMessage, type Rumor } from './giftWrap'
+import { wrapMessage, type Rumor } from './giftWrap'
 
 /** What the owner sends the device. */
 export interface CredentialMessage {

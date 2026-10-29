@@ -14,6 +14,7 @@ import { isTillSaleMessage } from './tillSales'
 import { buildValidationRecord } from './voucherValidationRecord'
 import { terminalCredentialFromToken } from './notMoney'
 import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
+import { parseSubscriptionStatus, SUBSCRIPTION_STATUS_DM_TYPE } from './subscriptionStatus'
 import {
   heldWrapDecision,
   holdTransferSignatureWrap,
@@ -27,6 +28,15 @@ import {
   type ParsedVoucherToken,
   type VoucherValidation,
 } from './voucherToken'
+
+/**
+ * The licence seller this build pins, as `licenceStatus.licenceSellerPubkey` reads it. Read here
+ * rather than imported: licenceStatus pulls in the wallet store statically, and this module is on
+ * the DM path, which loads its heavier modules lazily.
+ */
+function pinnedLicenceSeller(): string {
+  return ((import.meta.env.VITE_LICENCE_SELLER_PUBKEY as string | undefined) ?? '').trim().toLowerCase()
+}
 
 /** `terminalDelivery.ENROLLED_DM_TYPE`, matched here without loading the delivery module. */
 function isEnrolledMessage(content: string): boolean {
@@ -46,6 +56,11 @@ function isCredentialMessage(content: string): boolean {
   }
 }
 
+/** `subscriptionStatus.SUBSCRIPTION_STATUS_DM_TYPE`: the seller on a subscription's renewal (#407). */
+function isSubscriptionStatusMessage(content: string): boolean {
+  return parseSubscriptionStatus(content) !== null
+}
+
 /**
  * One of the app's OWN non-payment messages: a terminal credential, renewal, renew request, sale
  * record or enrolled notice (`imani-terminal-*`), or a transfer signature. None of them is a
@@ -60,7 +75,10 @@ function typedAppMessage(content: string): boolean {
   try {
     const parsed = JSON.parse(content) as { type?: unknown } | null
     const type = parsed && typeof parsed === 'object' ? parsed.type : undefined
-    return typeof type === 'string' && (type.startsWith('imani-terminal-') || type === TRANSFER_SIGNATURE_TYPE)
+    return (
+      typeof type === 'string' &&
+      (type.startsWith('imani-terminal-') || type === TRANSFER_SIGNATURE_TYPE || type === SUBSCRIPTION_STATUS_DM_TYPE)
+    )
   } catch {
     return false
   }
@@ -516,6 +534,23 @@ export function createDmCryptoAdapter(): CryptoAdapter {
           // AWAITED (#393): once this unwrap returns, dm-poll marks the wrap processed. Fired and
           // forgotten, a reload in between aborted the chunk load and the bell row was never written.
           await import('./notMoneyNotice').then((m) => m.announceTerminalDm(rumor.content, me)).catch(() => false)
+        }
+
+        /**
+         * The seller saying a subscription was cancelled in Stripe, or un-cancelled (#407). Display
+         * only (it never grants or refuses), but still only believed from the PINNED seller, and
+         * the seller is read from the verified SEAL: `rumor.pubkey` is whatever the sender wrote.
+         * Awaited for the same reason as above: it must be stored before the wrap is marked done.
+         */
+        if (isSubscriptionStatusMessage(rumor.content)) {
+          const seller = pinnedLicenceSeller()
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          if (seller && sealAuthor === seller && rumor.pubkey === seller) {
+            const me = getSigner().pubkey
+            await import('./subscriptionStatusStore').then((m) => m.rememberSubscriptionStatus(me, rumor.content)).catch(() => false)
+          } else {
+            console.warn('[dmCrypto] subscription status not sealed by the pinned licence seller: ignored')
+          }
         }
 
         const transferSignature = parseTransferSignature(rumor.content)

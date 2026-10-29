@@ -15,6 +15,7 @@ import { extname, join, normalize } from 'node:path'
 import { createApp } from './app.ts'
 import { readConfig, ConfigError } from './config.ts'
 import { LicenceIssuer, sellerFrom } from './issuer.ts'
+import { relayStatusNotifier } from './statusNotifier.ts'
 import { Ledger } from './ledger.ts'
 import { cachedMerchantReader, readMerchantStanding } from './merchantRole.ts'
 import { stripeClient } from './stripe.ts'
@@ -50,6 +51,9 @@ async function main() {
     catalogBody: (await readFile(config.catalogPath, 'utf8')).trim(),
     // gateway-customer serves the public `POST /api/v1/nostr/query` the role is read from.
     merchantStanding: cachedMerchantReader((pubkey) => readMerchantStanding(config.walletUrl, pubkey)),
+    // A cancellation in Stripe reaches the wallet as a seller-sealed DM on the relay the gateway
+    // indexes for its DM poll (the same relay licences are delivered on).
+    notifier: relayStatusNotifier({ seller, relayUrl: config.internalRelay }),
   })
   const staticDir = process.env.SUBSCRIPTION_STATIC_DIR?.trim()
   const base = config.basePath
