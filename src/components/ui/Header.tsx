@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 
 import { Avatar } from './Avatar'
+import { ImaniMark } from './ImaniMark'
 import { NotificationBell } from './NotificationBell'
 import { SkeletonLine } from './Skeleton'
 import { profileHandle, profileName, profileUnknown, type Profile } from '../../lib/profile'
@@ -124,13 +125,7 @@ export function Header({
           aria-label="Imani home"
           className="pressable flex shrink-0 items-center gap-2 font-semibold tracking-tight text-mono-900 dark:text-mono-50"
         >
-          <svg viewBox="0 0 48 48" className="h-5 w-5 shrink-0" aria-hidden="true" focusable="false">
-            <path
-              fill="currentColor"
-              fillRule="evenodd"
-              d="M10 2 H24 A8 8 0 0 1 32 10 V24 A8 8 0 0 1 24 32 H10 A8 8 0 0 1 2 24 V10 A8 8 0 0 1 10 2 Z M24 16 H38 A8 8 0 0 1 46 24 V38 A8 8 0 0 1 38 46 H24 A8 8 0 0 1 16 38 V24 A8 8 0 0 1 24 16 Z"
-            />
-          </svg>
+          <ImaniMark className="h-5 w-5 shrink-0" />
           imani
         </Link>
 
