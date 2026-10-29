@@ -26,6 +26,7 @@ import type { SubscriptionConfig } from './config.ts'
 import { LicenceIssuer, signCatalog, type LicenceOrder, type Seller } from './issuer.ts'
 import { Ledger, newSubscriptionId, type IssuedLicence, type SubscriptionRow } from './ledger.ts'
 import type { MerchantReader } from './merchantRole.ts'
+import { countStatusMessage, countTransition, renderMetrics } from './metrics.ts'
 import type { StatusNotifier } from './statusNotifier.ts'
 import { verifyStripeSignature, type StripeClient, type StripePrice } from './stripe.ts'
 
@@ -186,8 +187,9 @@ export function createApp(deps: AppDeps) {
     const validTo = Number(period.end) || validFrom + TERM_SECONDS[term]
     const key = `inv:${String(invoice.id)}`
 
-    const { row, licence } = await deps.ledger.update((rows) => {
+    const { row, licence, created } = await deps.ledger.update((rows) => {
       let r = rows.find((x) => x.stripeSubscriptionId === stripeSub)
+      const isNew = !r
       if (!r) {
         r = {
           subscriptionId: newSubscriptionId(),
@@ -215,8 +217,11 @@ export function createApp(deps: AppDeps) {
         l = { key, validFrom, validTo, state: 'owed', attempts: 0 }
         r.licences.push(l)
       }
-      return { row: structuredClone(r), licence: structuredClone(l) }
+      return { row: structuredClone(r), licence: structuredClone(l), created: isNew }
     })
+    // Counted once, when the ledger row is first written: a renewal or a replayed invoice.paid finds
+    // the row and is not a new subscription.
+    if (created) countTransition('created', row.tier, row.term)
     if (row.status === 'revoked') return json(200, { ignored: 'subscription revoked' })
     if (licence.state === 'delivered') return json(200, { duplicate: true })
     const done = await issue(row, licence)
@@ -232,9 +237,12 @@ export function createApp(deps: AppDeps) {
       const r = rows.find((x) => x.stripeSubscriptionId === id)
       if (!r || r.status === 'revoked' || r.status === next) return null
       r.status = next
-      return { subscriptionId: r.subscriptionId, stallPubkey: r.stallPubkey }
+      if (next === 'cancelled') r.cancelledAt = now()
+      else delete r.cancelledAt
+      return { subscriptionId: r.subscriptionId, stallPubkey: r.stallPubkey, tier: r.tier, term: r.term }
     })
     log({ event: 'subscription_changed', stripe_subscription: id, status: next, changed: Boolean(changed) })
+    if (changed) countTransition(next === 'cancelled' ? 'cancelled' : 'reactivated', changed.tier, changed.term)
     // Tell the stall's wallet, which cannot learn it from the licence it holds (statusNotifier.ts).
     // Only on a real change, so Stripe's several `updated` events per action send one message.
     // Best effort: a lost message never fails the webhook, which Stripe would then retry forever.
@@ -250,8 +258,10 @@ export function createApp(deps: AppDeps) {
           at: deps.now?.() ?? Date.now(),
         })
         log({ event: 'subscription_status_sent', subscription_id: changed.subscriptionId, status: next })
+        countStatusMessage('sent')
       } catch (error) {
         log({ event: 'subscription_status_failed', subscription_id: changed.subscriptionId, error: String((error as Error).message ?? error) })
+        countStatusMessage('failed')
       }
     }
     // Cancelling never revokes: the licence already paid for runs to its end (#407 §6).
@@ -282,6 +292,15 @@ export function createApp(deps: AppDeps) {
     switch (route) {
       case 'GET /health':
         return json(200, { ok: true })
+      case 'GET /metrics':
+        // Prometheus exposition, as text (server.ts writes a string body as-is). Closed labels only:
+        // no stall, subscription id or amount (metrics.ts). Scraped on the internal network; the
+        // edge must not route it.
+        return {
+          status: 200,
+          body: renderMetrics(await deps.ledger.all(), now()),
+          headers: { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' },
+        }
       case 'GET /v1/catalog':
         // Readable from any origin: the wallet (wallet.imani.casa) fetches it cross-origin now that
         // this site has its own (#411). Safe to open: it is public and signed by the seller, the

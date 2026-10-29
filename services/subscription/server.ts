@@ -73,7 +73,7 @@ async function main() {
       return
     }
     const url = new URL((base ? full.pathname.slice(base.length) || '/' : full.pathname) + full.search, 'http://x')
-    if (!url.pathname.startsWith('/v1/') && url.pathname !== '/health' && staticDir) {
+    if (!url.pathname.startsWith('/v1/') && url.pathname !== '/health' && url.pathname !== '/metrics' && staticDir) {
       return serveStatic(staticDir, url.pathname, res)
     }
     const chunks: Buffer[] = []
@@ -94,7 +94,8 @@ async function main() {
         body: Buffer.concat(chunks).toString('utf8'),
       })
       res.writeHead(out.status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...(out.headers ?? {}) })
-      res.end(JSON.stringify(out.body))
+      // A string body is already text (Prometheus exposition); anything else is JSON.
+      res.end(typeof out.body === 'string' ? out.body : JSON.stringify(out.body))
     } catch (error) {
       console.error(JSON.stringify({ event: 'request_failed', path: url.pathname, error: String(error) }))
       res.writeHead(500, { 'Content-Type': 'application/json' }).end('{"error":"internal error"}')
