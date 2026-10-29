@@ -176,12 +176,18 @@ export function isExpired(draft: Pick<Draft, 'expiresAt'>, now = Date.now()): bo
   return !Number.isFinite(t) || t <= now
 }
 
-/** G11: 30 days, capped by the voucher expiry minus 24 h. `validityDays` 0 means it never expires. */
-export function claimDeadline(issuedAt: number, validityDays: number, windowDays = 30): Date {
-  const window = issuedAt + windowDays * 86_400_000
+/** G17: the most a gift waits to be claimed. */
+export const MAX_CLAIM_WINDOW_DAYS = 14
+
+/**
+ * G11 + G17: half the voucher's validity, at most {@link MAX_CLAIM_WINDOW_DAYS} (and never more than
+ * `windowDays`), so a gift taken back unclaimed keeps half its life: the voucher keeps its original
+ * expiry. `validityDays` 0 means it never expires. Mirrors purchase-issuer's `claimWindowEnd`.
+ */
+export function claimDeadline(issuedAt: number, validityDays: number, windowDays = MAX_CLAIM_WINDOW_DAYS): Date {
+  const window = issuedAt + Math.min(windowDays, MAX_CLAIM_WINDOW_DAYS) * 86_400_000
   if (!validityDays) return new Date(window)
-  const cap = issuedAt + validityDays * 86_400_000 - 86_400_000
-  return new Date(Math.min(window, cap))
+  return new Date(Math.min(window, issuedAt + Math.floor((validityDays * 86_400_000) / 2)))
 }
 
 export { isNip05 }

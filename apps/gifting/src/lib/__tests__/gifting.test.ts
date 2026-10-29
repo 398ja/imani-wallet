@@ -225,11 +225,13 @@ describe('draft pinning', () => {
     expect(termsVersion(record())).toBe('EUR:90:100')
     expect(termsVersion(record({ voucherValidityDays: 30 }))).not.toBe(termsVersion(record()))
   })
-  it('G11: 30 days, capped by voucher expiry minus 24h', () => {
+  it('G11 + G17: half the validity, at most 14 days', () => {
     const t = Date.UTC(2026, 0, 1)
-    expect(claimDeadline(t, 90).getTime()).toBe(t + 30 * 86_400_000)
-    expect(claimDeadline(t, 10).getTime()).toBe(t + 9 * 86_400_000)
-    expect(claimDeadline(t, 0).getTime()).toBe(t + 30 * 86_400_000)
+    expect(claimDeadline(t, 90).getTime()).toBe(t + 14 * 86_400_000)
+    expect(claimDeadline(t, 90, 30).getTime()).toBe(t + 14 * 86_400_000)
+    expect(claimDeadline(t, 20).getTime()).toBe(t + 10 * 86_400_000)
+    expect(claimDeadline(t, 10).getTime()).toBe(t + 5 * 86_400_000)
+    expect(claimDeadline(t, 0).getTime()).toBe(t + 14 * 86_400_000)
   })
   it('keeps the form across sign-in and Edit, and survives blocked storage', () => {
     const store = new Map<string, string>()
