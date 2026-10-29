@@ -22,6 +22,7 @@ import { dirname } from 'node:path'
 
 import type { SendOutcome, SendRequest } from '../imani-mailer/mailer.ts'
 import { giftSentRumor, wrapForLink } from './giftLock'
+import type { TrackInput } from './giftTracker'
 
 export const NOSTR_EVENTS_PATH = '/api/v1/nostr/events'
 export const NOSTR_QUERY_PATH = '/api/v1/nostr/query'
@@ -58,6 +59,8 @@ export interface GiftPorts {
   anchor(eventId: string, nowMs: number): Promise<number>
   /** The stall's display name for the email, or null. */
   stallName(stallPubkey: string): Promise<string | null>
+  /** G15 §4.3: record a delivered gift for claimed/expired notices (`giftTracker.ts`). Optional. */
+  track?(input: TrackInput, mintUrl: string): Promise<void>
 }
 
 export type StepResult = { ok: true } | { ok: false; reason: string; permanent: boolean }

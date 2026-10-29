@@ -71,6 +71,10 @@ export interface IssuerConfig {
     mailerToken: string
     /** Durable mint anchors for gift locktimes. */
     anchorsPath: string
+    /** G15: durable tracked gifts for claimed/expired notices. */
+    trackerPath: string
+    /** Optional origin replacing the coupon's mint URL for NUT-07 (local stacks). */
+    mintTransportUrl: string | null
   } | null
 }
 
@@ -143,7 +147,15 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
     if (mailerToken === '') missing.push('PURCHASE_MAILER_TOKEN: imani-mailer bearer token (required with PURCHASE_GIFT_SEAL_KEY)')
     const anchorsPath = (env.PURCHASE_GIFT_ANCHORS_PATH ?? '').trim()
     if (anchorsPath === '') missing.push('PURCHASE_GIFT_ANCHORS_PATH: durable gift mint anchors, on a persistent volume')
-    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath }
+    const trackerPath = (env.PURCHASE_GIFT_TRACKER_PATH ?? '').trim()
+    if (trackerPath === '') missing.push('PURCHASE_GIFT_TRACKER_PATH: durable tracked gifts for claimed/expired notices, on a persistent volume')
+    const rawTransport = (env.PURCHASE_MINT_TRANSPORT_URL ?? '').trim()
+    let mintTransportUrl: string | null = null
+    if (rawTransport !== '') {
+      mintTransportUrl = origin(rawTransport) === null ? null : rawTransport.replace(/\/+$/, '')
+      if (mintTransportUrl === null) missing.push('PURCHASE_MINT_TRANSPORT_URL: must be a URL')
+    }
+    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, mintTransportUrl }
   }
 
   if (missing.length > 0) throw new ConfigError(missing)

@@ -35,6 +35,7 @@ import { formatGiftLink, giftLockFor, openSeal, SealRefused, verifyLockedGift, t
 import { handBuyerTheGift, publishLinkWrap, sendClaimEmail, type GiftPorts } from './giftDelivery'
 import type { GiftDelivery } from './purchasesApi'
 import { getPublicKey } from 'nostr-tools'
+import { displayDate, tokenMintUrl } from './giftTracker'
 import { hexToBytes } from '@noble/hashes/utils'
 
 /** One coupon a stall owes because a card payment cleared. */
@@ -555,7 +556,52 @@ async function deliverGift(
       console.warn(JSON.stringify({ event: 'gift_seal_not_scrubbed', event_id: obligation.id }))
     }
   }
+  await trackGift(gifts, obligation, token, lock)
   return { kind: 'discharged', voucherId, ...(eventId ? { eventId } : {}), ...minted }
+}
+
+/**
+ * G15 §4.3: remember the delivered gift so the buyer hears when it is claimed or expires. Best
+ * effort: the gift is delivered, and failing the discharge here would only re-deliver it. Logged
+ * with no address, draft id or amount.
+ */
+async function trackGift(gifts: GiftPorts, obligation: Obligation, token: string, lock: GiftLock): Promise<void> {
+  if (!gifts.track) return
+  const delivery = obligation.gift!.delivery!
+  const draftId = obligation.gift!.draftId
+  const kind = obligation.gift!.kind as 'handle' | 'email'
+  if (!draftId || !delivery.buyerEmail) {
+    console.warn(JSON.stringify({ event: 'gift_not_tracked', kind, reason: draftId ? 'no buyer email' : 'no draft' }))
+    return
+  }
+  const recipientDisplay =
+    kind === 'email'
+      ? delivery.recipientEmail ?? 'the recipient'
+      : delivery.recipientHandle
+        ? delivery.recipientHandle.includes('@') ? delivery.recipientHandle : `@${delivery.recipientHandle}`
+        : 'the recipient'
+  // Guest: no signed-in buyer, or a refund key that is not the buyer's wallet key (it is R).
+  const guest = !delivery.buyerPubkey || delivery.buyerPubkey.toLowerCase() !== lock.refundPubkey.toLowerCase()
+  try {
+    const mintUrl = tokenMintUrl(token)
+    await gifts.track(
+      {
+        draftId,
+        kind,
+        token,
+        claimBy: lock.locktime * 1000,
+        buyerEmail: delivery.buyerEmail,
+        recipientDisplay,
+        stall: (await gifts.stallName(obligation.stallPubkey)) ?? 'a local stall',
+        amount: formatAmount(obligation.faceValue, obligation.faceDecimals, obligation.faceUnit),
+        guest,
+        returnMailDate: guest && delivery.draftCreatedAt ? displayDate(delivery.draftCreatedAt) : null,
+      },
+      mintUrl,
+    )
+  } catch (error) {
+    console.warn(JSON.stringify({ event: 'gift_not_tracked', kind, reason: error instanceof Error ? error.name : 'error' }))
+  }
 }
 
 function claimLink(walletOrigin: string, linkSecretHex: string, x: number): string | null {

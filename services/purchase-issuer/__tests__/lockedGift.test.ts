@@ -336,7 +336,87 @@ describe('config: email gifts fail closed', () => {
     }
   })
   it('fully configured', () => {
-    const c = readConfig({ ...base, PURCHASE_GIFT_SEAL_KEY: ISSUER_HEX, PURCHASE_WALLET_ORIGIN: 'https://imani.casa/', PURCHASE_MAILER_URL: 'http://mailer', PURCHASE_MAILER_TOKEN: 'm', PURCHASE_GIFT_ANCHORS_PATH: '/tmp/a.json' })
+    const c = readConfig({ ...base, PURCHASE_GIFT_SEAL_KEY: ISSUER_HEX, PURCHASE_WALLET_ORIGIN: 'https://imani.casa/', PURCHASE_MAILER_URL: 'http://mailer', PURCHASE_MAILER_TOKEN: 'm', PURCHASE_GIFT_ANCHORS_PATH: '/tmp/a.json', PURCHASE_GIFT_TRACKER_PATH: '/tmp/t.json' })
     expect(c.gifts).toMatchObject({ walletOrigin: 'https://imani.casa', mailerUrl: 'http://mailer' })
+  })
+})
+
+describe('G15 §4.3: a delivered gift is tracked for the buyer\'s notices', () => {
+  const tracking = () => {
+    const tracked: Array<{ input: Record<string, unknown>; mintUrl: string }> = []
+    return { tracked, track: async (input: never, mintUrl: string) => void tracked.push({ input, mintUrl }) }
+  }
+
+  it('signed-in handle gift: @handle display, not guest, claimBy = x, Ys of the token, mint URL', async () => {
+    const t = tracking()
+    const g = fakeGifts({ track: t.track })
+    fakeGateway(honestMint)
+    const d = delivery({ buyerEmail: 'ann@example.com', recipientHandle: 'bob', buyerPubkey: BUYER })
+    const out = await discharge('http://gw', obligation('handle', d), portsWith(g.ports))
+    expect(out.kind).toBe('discharged')
+    expect(t.tracked).toHaveLength(1)
+    expect(t.tracked[0].mintUrl).toBe('https://mint.example')
+    expect(t.tracked[0].input).toMatchObject({
+      draftId: '11111111-2222-3333-4444-555555555555', kind: 'handle', claimBy: X * 1000, buyerEmail: 'ann@example.com',
+      recipientDisplay: '@bob', stall: 'Alice Bakery', amount: '€20.00', guest: false, returnMailDate: null,
+    })
+  })
+
+  it('a NIP-05 handle is shown as typed; never a key', async () => {
+    const t = tracking()
+    fakeGateway(honestMint)
+    await discharge('http://gw', obligation('handle', delivery({ buyerEmail: 'a@b.co', recipientHandle: 'bob@example.com', buyerPubkey: BUYER })), portsWith(fakeGifts({ track: t.track }).ports))
+    expect(t.tracked[0].input.recipientDisplay).toBe('bob@example.com')
+    const t2 = tracking()
+    await discharge('http://gw', obligation('handle', delivery({ buyerEmail: 'a@b.co', buyerPubkey: BUYER })), portsWith(fakeGifts({ track: t2.track }).ports))
+    expect(t2.tracked[0].input.recipientDisplay).toBe('the recipient')
+  })
+
+  it('guest email gift: recipient address, guest, return-mail date from the draft created time', async () => {
+    const t = tracking()
+    fakeGateway(honestMint)
+    const d = { ...emailDelivery(), buyerEmail: 'guest@example.com', draftCreatedAt: Date.UTC(2026, 9, 28, 9) }
+    const out = await discharge('http://gw', obligation('email', d), portsWith(fakeGifts({ track: t.track }).ports))
+    expect(out.kind).toBe('discharged')
+    expect(t.tracked[0].input).toMatchObject({ kind: 'email', recipientDisplay: 'bob@example.com', guest: true, returnMailDate: '28 Oct 2026' })
+  })
+
+  it('a refund key that is not the buyer key is a guest; no created time means no date', async () => {
+    const t = tracking()
+    fakeGateway(honestMint)
+    const other = getPublicKey(generateSecretKey())
+    await discharge('http://gw', obligation('handle', delivery({ buyerEmail: 'a@b.co', buyerPubkey: other })), portsWith(fakeGifts({ track: t.track }).ports))
+    expect(t.tracked[0].input).toMatchObject({ guest: true, returnMailDate: null })
+  })
+
+  it('no buyer email: not tracked, still discharged, and the log names no address or draft', async () => {
+    const t = tracking()
+    fakeGateway(honestMint)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const out = await discharge('http://gw', obligation('handle', delivery()), portsWith(fakeGifts({ track: t.track }).ports))
+    expect(out.kind).toBe('discharged')
+    expect(t.tracked).toHaveLength(0)
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/11111111|@/)
+  })
+
+  it('a failing tracker never undoes the discharge', async () => {
+    fakeGateway(honestMint)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const g = fakeGifts({ track: async () => { throw new Error('disk full for ann@example.com') } })
+    const out = await discharge('http://gw', obligation('handle', delivery({ buyerEmail: 'ann@example.com' })), portsWith(g.ports))
+    expect(out.kind).toBe('discharged')
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/ann@example|11111111/)
+  })
+})
+
+describe('config: G15 tracker', () => {
+  const base = { PURCHASE_API_URL: 'http://pa', PURCHASE_API_TOKEN: 't', PURCHASE_GATEWAY_URL: 'http://gw', PURCHASE_VAULT_KEY: 'a'.repeat(64), PURCHASE_LIVEMODE: 'false' }
+  const gifts = { ...base, PURCHASE_GIFT_SEAL_KEY: ISSUER_HEX, PURCHASE_WALLET_ORIGIN: 'https://imani.casa', PURCHASE_MAILER_URL: 'http://mailer', PURCHASE_MAILER_TOKEN: 'm', PURCHASE_GIFT_ANCHORS_PATH: '/tmp/a.json' }
+  it('PURCHASE_GIFT_TRACKER_PATH is required with gifts', () => {
+    expect(() => readConfig(gifts)).toThrow(/PURCHASE_GIFT_TRACKER_PATH/)
+  })
+  it('PURCHASE_MINT_TRANSPORT_URL is optional', () => {
+    expect(readConfig({ ...gifts, PURCHASE_GIFT_TRACKER_PATH: '/tmp/t.json' }).gifts).toMatchObject({ trackerPath: '/tmp/t.json', mintTransportUrl: null })
+    expect(readConfig({ ...gifts, PURCHASE_GIFT_TRACKER_PATH: '/tmp/t.json', PURCHASE_MINT_TRANSPORT_URL: 'http://localhost:27777/' }).gifts?.mintTransportUrl).toBe('http://localhost:27777')
   })
 })

@@ -117,6 +117,35 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       claimSubject: { type: 'line', max: 250, required: true },
     },
   },
+  // G15 §4.3: the buyer's notices from purchase-issuer. No url field in either: no link, no key.
+  'gift-claimed': {
+    fromName: 'Imani gifts',
+    subject: 'Your {{stall}} gift was claimed',
+    text: ['{{recipient}} claimed the {{amount}} voucher for {{stall}} you sent.', '', FOOTER].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      recipient: { type: 'line', max: 320, required: true },
+    },
+  },
+  'gift-expired': {
+    fromName: 'Imani gifts',
+    subject: "Your {{stall}} gift wasn't claimed",
+    text: [
+      "Your {{amount}} voucher for {{stall}} to {{recipient}} wasn't claimed by {{claimBy}}.",
+      '',
+      '{{howBack}}',
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      recipient: { type: 'line', max: 320, required: true },
+      claimBy: { type: 'line', max: 60, required: true },
+      howBack: { type: 'text', max: 400, required: true },
+    },
+  },
   'gift-reminder': {
     fromName: 'Imani gifts',
     subject: 'Your {{stall}} gift: {{when}}',
