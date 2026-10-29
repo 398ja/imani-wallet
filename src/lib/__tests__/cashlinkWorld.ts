@@ -421,7 +421,8 @@ export class FakeGateway implements CashlinkGateway {
     const lock = readLinkLock(b.proof.secret)
     if (isOpenAfterLocktime(b.proof.secret)) return refused(422, 'LOCKTIME_WITHOUT_REFUND')
     if (!lock) return refused(422, 'NOT_A_LINK_LOCK')
-    if (signedBy !== lock.linkPub) return refused(403, 'NOT_SIGNED_BY_LINK_KEY')
+    // Mirrors imani-gateway-customer since imani-wallet#402: the lock key or the refund key may deposit.
+    if (signedBy !== lock.linkPub && signedBy !== lock.refundPub) return refused(403, 'NOT_SIGNED_BY_LOCK_OR_REFUND_KEY')
     if (b.outputs.some((o) => !this.mint.keysets.find((k) => k.id === o.id)?.active)) return refused(422, 'KEYSET_INACTIVE')
     const msg = sigAllMessage(b.proof.secret, b.proof.C, b.outputs)
     if (witnessBy(b.proof.witness, lock.linkPub, msg)) return refused(422, 'WITNESS_BY_LINK_KEY')
