@@ -205,6 +205,14 @@ describe('toMerchantPass', () => {
     expect(pass.storeCard.backFields).toBeUndefined()
   })
 
+  it('carries no shop blurb as its description (#419)', () => {
+    const pass = toMerchantPass(merchantFrom([row()]), {
+      storeDescription: 'Organic veg, Tue & Sat',
+    })
+
+    expect(pass.description).toBe('')
+  })
+
   it('is keyed by the shop, not by a voucher', () => {
     const pass = toMerchantPass(merchantFrom([row()]))
 

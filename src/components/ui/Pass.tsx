@@ -18,12 +18,12 @@ import { SkeletonLine } from './Skeleton'
  * auxiliary expiry, and a barcode. See `src/lib/pass.ts` for why the record is
  * built client-side.
  *
- * The stall's picture FILLS THE CARD (#419). It used to be a 40px circle under
- * the stall's banner, cropped to a 96px strip above a flat black block, so the
- * one image a customer recognises was the smallest thing on the voucher. The
- * banner strip is gone from the card. Every printed character carries a shadow
- * (`printShadow`), because the picture can be anything, a white background
- * under white text included.
+ * The stall's BANNER FILLS THE CARD (#419). It used to be cropped to a 96px
+ * strip above a flat black block, so most of it was lost and the card read as a
+ * black slab. Now it is drawn full-bleed behind everything; the avatar stays the
+ * 40px circle beside the name. Every printed character carries a shadow
+ * (`printShadow`), because the banner can be anything, a white background under
+ * white text included.
  *
  * Colours arrive as `rgb(r,g,b)` strings on the pass and are applied inline,
  * because they are *data* about a merchant, not app theme. Everything else stays
@@ -140,6 +140,7 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
   const expiry = pass.storeCard.auxiliaryFields?.[0]
   const code = pass.barcodes?.[0]
   const logoUrl = pass.userInfo.logoUrl
+  const bannerUrl = pass.userInfo.stripUrl
   const issuer = pass.userInfo.issuer
   const nip05 = pass.userInfo.issuerNip05
 
@@ -158,7 +159,10 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
   const nameIsKey = /^[0-9a-f]{64}$/i.test(pass.organizationName)
   const waiting = Boolean(loadingIssuer) && nameIsKey
   // The same rule as the avatar: no picture from a profile that has not arrived.
-  const picture = waiting ? undefined : logoUrl
+  const picture = waiting ? undefined : bannerUrl
+  // The line under the name. Optional: a merchant card has none (#419), the
+  // stall's `about` blurb does not belong on a voucher.
+  const description = pass.description?.trim() ? pass.description : undefined
 
   const card = (
     <div
@@ -213,9 +217,11 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
               <>
                 {/* The name's line, at the card's own weight and size. */}
                 <SkeletonLine text="text-base font-semibold" width="w-36" />
-                <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>
-                  {pass.description}
-                </p>
+                {description && (
+                  <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>
+                    {description}
+                  </p>
+                )}
                 {/* Unlike IdentityInline, a second bar here is honest: every
                     stall has a profile, so on a card with an issuer the handle
                     line is about to render. */}
@@ -224,9 +230,11 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
             ) : (
               <>
             <p className="truncate font-semibold">{displayName(pass.organizationName)}</p>
-            <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>
-              {pass.description}
-            </p>
+            {description && (
+              <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>
+                {description}
+              </p>
+            )}
             {/*
               WHO, under the name. kind-0 is self-published and unverified: a
               second pubkey can publish the same name and picture, and coupons

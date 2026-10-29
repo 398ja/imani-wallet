@@ -219,8 +219,8 @@ function organizationName(row: VoucherRow, branding: MerchantBranding): string {
  * The merchant's kind-0 `about` is deliberately NOT a fallback here, though the
  * Java mapper allows it: a shop's standing blurb ("Organic veg, Tue & Sat") is
  * about the shop, not about this voucher, and on the coupon card it sat in the
- * one line the holder reads to tell one coupon from another. It still carries
- * the merchant card on the home deck, where it is about the right thing.
+ * one line the holder reads to tell one coupon from another. It is off the
+ * merchant card too (#419): the stall's profile page is where it is read.
  */
 function description(row: VoucherRow): string {
   return present(row.memo) ? row.memo : DEFAULT_DESCRIPTION
@@ -381,9 +381,10 @@ export function toMerchantPass(
     passTypeIdentifier: PASS_TYPE_IDENTIFIER,
     teamIdentifier: TEAM_IDENTIFIER,
     serialNumber: merchant.pubkey,
-    description: present(branding.storeDescription)
-      ? branding.storeDescription
-      : DEFAULT_DESCRIPTION,
+    // Empty, and the card prints no line for it (#419). The stall's kind-0
+    // `about` used to sit here, a shop blurb on a voucher, where it does not
+    // belong: the stall's profile page is where it is read.
+    description: '',
     organizationName: present(branding.organizationName)
       ? branding.organizationName
       : merchant.name || merchant.pubkey,
