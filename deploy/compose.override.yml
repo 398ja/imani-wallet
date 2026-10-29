@@ -105,7 +105,17 @@ services:
   # ---------------------------------------------------------------------------
   imani-vault-jpa:
     image: ${VAULT_JPA_IMAGE:-docker.398ja.xyz/staging/cashu-vault-jpa:latest}
+    depends_on: !override
+      mint-db:
+        condition: service_healthy
     environment:
+      # Two database servers (see the end of this file): the vault lives on mint-db.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://mint-db:5432/imani_vault
+      SPRING_DATASOURCE_USERNAME: vault
+      SPRING_DATASOURCE_PASSWORD: vault
+      # Bearer token required on /vault/** by current cashu-vault-jpa (audit C-2); it refuses to
+      # start without one. Local value in imani-deploy/.env.local; the mint presents the same.
+      VAULT_API_TOKEN: "${VAULT_API_TOKEN:?set VAULT_API_TOKEN in imani-deploy/.env.local}"
       # A vault at 0.11.1 runs migration V3, which DROPS t_key.private_key and
       # moves key material to HashiCorp Vault — the migration the block above
       # describes.
@@ -164,7 +174,19 @@ services:
     # Deliberately a different NAME rather than a rebuild of the registry tag, so
     # `latest` stays whatever was pulled and this cannot be mistaken for it.
     image: ${GATEWAY_PORTAL_IMAGE:-imani-gateway-portal:acl-local}
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      cashback-claim:
+        condition: service_healthy
+      gateway-customer:
+        condition: service_healthy
+      nostr-relay:
+        condition: service_started
     environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/imani_portal
+      SPRING_DATASOURCE_USERNAME: portal
+      SPRING_DATASOURCE_PASSWORD: portal
       # The portal authenticates merchants either by NIP-98 or by trusting the
       # edge proxy, which forwards the NAP-verified pubkey as X-Auth-Pubkey
       # alongside X-Edge-Auth (the raw shared secret). With no secret configured
@@ -174,7 +196,7 @@ services:
       #
       # We do not run edge-proxy here (Vite proxies straight to host ports), so
       # the seed script stands in for it. Dev-only value on a local stack.
-      GATEWAY_PORTAL_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      GATEWAY_PORTAL_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
       # The cashback mint reads a voucher back to finalize it, and that read now
       # goes to customer-wallet's /internal/v1/wallet/vouchers/{id} instead of the
       # NIP-98-protected public one. /internal/v1/** is .authenticated() whether or
@@ -182,6 +204,8 @@ services:
       # unset means 401 UNKNOWN_SERVICE, not a bypass. Same secret as
       # CUSTOMER_WALLET_SVC_CRED_MERCHANT_PORTAL below.
       CUSTOMER_WALLET_SERVICE_TOKEN: "dev-merchant-portal-token-local-only"
+      # imani-security >= 0.2.0 refuses to boot without it (SEC-02); the wallet dev origin.
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
 
   # Two changes:
   #
@@ -283,15 +307,29 @@ services:
     #
     # Same database and credentials as gateway-core, since it IS gateway-core's
     # image running a second role.
-    depends_on:
-      imani-gateway-db:
+    #
+    # Restarts on failure: on a FRESH app-db the first boot runs initdb and restarts Postgres
+    # once, and an account-app that connects in that window exits for good.
+    restart: unless-stopped
+    depends_on: !override
+      app-db:
         condition: service_healthy
     networks:
       - imani-internal
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://imani-gateway-db:5432/imani_core
-      SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: postgres
+      # TrustedIssuerKeysGuard refuses to boot without the voucher issuer key(s) it trusts.
+      # Local-only key, generated into imani-deploy/.env.local (gitignored).
+      GATEWAY_FULFILMENT_TRUSTED_ISSUER_PUBKEYS: "${VOUCHER_ISSUER_PUBKEYS:?set VOUCHER_ISSUER_PUBKEYS in imani-deploy/.env.local}"
+      # Refuses the shipped default outside a dev profile. Local value in imani-deploy/.env.local.
+      GATEWAY_API_KEY_MASTER_KEY: "${ACCOUNT_MASTER_KEY:?set ACCOUNT_MASTER_KEY in imani-deploy/.env.local}"
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      # TrustedMintUrlsGuard: the mint this gateway's coupons are stamped with (as gateway-core).
+      GATEWAY_WALLET_MINT_PUBLIC_URL: "${MINT_URL:-http://127.0.0.1.mint:7777}"
+      # Exact-origin CORS since gateway-core 0.3x: the wallet dev server is not a production origin.
+      GATEWAY_CORE_CORS_ADDITIONAL_ORIGINS: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/imani_core
+      SPRING_DATASOURCE_USERNAME: core
+      SPRING_DATASOURCE_PASSWORD: core
       GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_ENABLED: "true"
       GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_SERVICE_TOKEN: "dev-atomic-ops-token-local-only"
       # Needed only once account-app is built from current gateway-core source
@@ -408,7 +446,30 @@ services:
       # rather than failing loudly as an unset variable. .env.test carries the
       # current ip and deploy/up.sh resolves it dynamically.
       - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      bottin-api:
+        condition: service_healthy
+      bottin-seed:
+        condition: service_completed_successfully
     environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/imani_core
+      SPRING_DATASOURCE_USERNAME: core
+      SPRING_DATASOURCE_PASSWORD: core
+      GATEWAY_API_KEY_DB_URL: jdbc:postgresql://app-db:5432/imani_core
+      GATEWAY_API_KEY_DB_USERNAME: core
+      GATEWAY_API_KEY_DB_PASSWORD: core
+      # Same local voucher issuer key as account-app (TrustedIssuerKeysGuard).
+      GATEWAY_FULFILMENT_TRUSTED_ISSUER_PUBKEYS: "${VOUCHER_ISSUER_PUBKEYS:?set VOUCHER_ISSUER_PUBKEYS in imani-deploy/.env.local}"
+      # imani-security >= 0.2.0 binds NIP-98 `u` to this origin. Locally that is the wallet dev
+      # server, which proxies /api with the browser's Host (vite.config.ts, changeOrigin false).
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      GATEWAY_CORE_CORS_ADDITIONAL_ORIGINS: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      # gateway-customer calls /internal/v1 (merchant standing on receive, incoming
+      # notifications) with GATEWAY_CUSTOMER_SERVICE_TOKEN. Without this gateway-core answers
+      # 401 internal_auth_unknown_service and the customer's receive fails with 503.
+      GATEWAY_CORE_SVC_CRED_CUSTOMER_WALLET: "dev-customer-notify-token-local-only"
       GATEWAY_DEV_MODE: "false"
       # Web Push, so /api/v1/push/vapid-key answers with a key instead of 503.
       #
@@ -455,7 +516,7 @@ services:
       # which tier logged it, so setting the variable it names on gateway-core
       # changes nothing and the warning persists — which is exactly the wrong
       # turn this comment exists to save the next person.
-      GATEWAY_CORE_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      GATEWAY_CORE_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
       # The real NIP-17 DM publisher, without which the atomic-send saga has no
       # way to deliver.
       #
@@ -493,7 +554,13 @@ services:
       BLOSSOM_SERVER_URL: ${BLOSSOM_SERVER_URL:-http://localhost:28089}
 
   bottin-api:
+    depends_on: !override
+      app-db:
+        condition: service_healthy
     environment:
+      BOTTIN_DATABASE_URL: jdbc:postgresql://app-db:5432/bottin
+      BOTTIN_DATABASE_USER: bottin
+      BOTTIN_DATABASE_PASSWORD: bottin
       BOTTIN_API_USER: ${BOTTIN_ADMIN_USERNAME:-imani}
       BOTTIN_API_PASSWORD: ${BOTTIN_ADMIN_PASSWORD:-test-bottin-admin-9ace19b7fb61b5007225f745}
 
@@ -525,6 +592,8 @@ services:
   imani-mint-rest:
     image: ${MINT_REST_IMAGE:-docker.398ja.xyz/imani-mint-rest:latest}
     environment:
+      # Presented by VaultClient on every vault call (audit C-2); must match the vault's.
+      VAULT_API_TOKEN: "${VAULT_API_TOKEN:?set VAULT_API_TOKEN in imani-deploy/.env.local}"
       # The MINT bundles cashu-vault-hashi and resolves key material itself:
       # imani-vault-jpa serves the row (privateKey null, vaultPath set) and the
       # mint reads the secret at that path. So these belong here, not only on
@@ -611,7 +680,28 @@ services:
       # rather than failing loudly as an unset variable. .env.test carries the
       # current ip and deploy/up.sh resolves it dynamically.
       - "127.0.0.1.mint:${MINT_HOST_IP:?set MINT_HOST_IP to the mint container ip}"
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      gateway-core:
+        condition: service_healthy
+      nostr-relay:
+        condition: service_started
     environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/imani_customer
+      SPRING_DATASOURCE_USERNAME: customer
+      SPRING_DATASOURCE_PASSWORD: customer
+      # Seals the wallet's proofs and pending voucher recipes; current builds refuse to start
+      # without it. Losing it locks the wallet database (that is what happened to the old one,
+      # backed up in ~/imani-backups). Local value in imani-deploy/.env.local.
+      WALLET_PASSPHRASE: "${WALLET_PASSPHRASE:?set WALLET_PASSPHRASE in imani-deploy/.env.local}"
+      # wallet-lib >= 0.3 validates every mint URL (MintUrlValidator) and fails closed WITHOUT a
+      # log line when plaintext http or an internal address is involved: finalize then throws
+      # "Wallet request validation failed" and the voucher sits PENDING forever. The local mint
+      # is plaintext on a private Docker address, so allow exactly that host. Local stack only.
+      WALLET_MINT_ALLOWLIST: "127.0.0.1.mint"
+      JAVA_TOOL_OPTIONS: "-Dwallet.mint.allowPlaintextHttp=true -Dwallet.mint.allowInternalAddresses=true"
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
       # See the gateway-core note above.
       GATEWAY_DEV_MODE: "false"
       # Where to reach gateway-core for the calls this tier delegates rather
@@ -631,7 +721,12 @@ services:
       # and fails closed the same way: without it the identity the edge
       # established is discarded on this tier too. All three names must hold the
       # same value — application.yml puts it as "one nap_auth.lua, one secret".
-      GATEWAY_CUSTOMER_EDGE_SHARED_SECRET: "dev-edge-secret-local-only"
+      GATEWAY_CUSTOMER_EDGE_SHARED_SECRET: "dev-edge-secret-local-only-32-plus-chars"
+      # The licence seller (imani-subscriptions) allowed to mint licences and whose licences count
+      # (#197, #407). Locally: deploy/subscription-local mints through THIS gateway as that seller.
+      # The same identity as staging's (scripts/sell-subscription.mjs), so a seller nsec from
+      # imani-deploy/.env.staging works here unchanged. Public key, not a secret.
+      GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS: "${LICENCE_SELLER_PUBKEYS:-62dd912f098cb439e97e0bfe3e6513b27b0cecc9f262a1778635c6fe18545c01}"
       # Defaults to the service name, which the published image accepts. The
       # rebuilt image carries cashu-wallet 0.7.0, whose MintUrlValidator refuses
       # a non-localhost http:// mint — correct, and not relaxed here. For that
@@ -680,5 +775,204 @@ services:
 # Declared here because the service that uses it is declared here. Named rather
 # than a bind mount so blobs survive `up.sh down` without leaving a
 # root-owned directory in the repo.
+
+  # imani-security >= 0.2.0 refuses to boot without the origin NIP-98 `u` tags are bound to.
+  # The wallet calls merchant-service through the dev server, so that origin.
+  merchant-service:
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      bottin-api:
+        condition: service_healthy
+      payment-adapter:
+        condition: service_healthy
+    environment:
+      GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      # Its own database, as in prod. The test compose pointed it at imani_gateway, a database
+      # it shared with nothing but whose name it never owned.
+      MERCHANT_DB_URL: jdbc:postgresql://app-db:5432/imani_merchant
+      MERCHANT_DB_USERNAME: merchant
+      MERCHANT_DB_PASSWORD: merchant
+
+  # ---------------------------------------------------------------------------
+  # TWO database servers, as in prod and demo (imani-deploy 70f2704):
+  #
+  #   app-db   one database and login per app service: imani_core (gateway-core and
+  #            account-app), imani_customer, imani_portal, imani_merchant,
+  #            payment_gateway, bottin, imani_cashback_claim
+  #   mint-db  the mint's data, kept apart: imani_vault (and cashu_mint, unused locally)
+  #
+  # They replace the test compose's four servers (imani-gateway-db, imani-vault-db,
+  # imani-payment-db, bottin-db), removed here with !reset. Databases and roles are
+  # created by deploy/initdb/{app,mint}/01-databases.sh on an EMPTY volume only; to start
+  # over: ./deploy/up.sh down && docker volume rm imani-test_app-db-data imani-test_mint-db-data
+  # ---------------------------------------------------------------------------
+  app-db:
+    image: postgres:16
+    container_name: app-db-test
+    restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=200"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - app-db-data:/var/lib/postgresql/data
+      - ${WALLET_DEPLOY_DIR:-.}/initdb/app:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1: over TCP, as the services connect. During first-boot initdb Postgres
+      # listens only on its socket, so a socket check reports healthy too early.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks:
+      - imani-internal
+
+  mint-db:
+    image: postgres:16
+    container_name: mint-db-test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - mint-db-data:/var/lib/postgresql/data
+      - ${WALLET_DEPLOY_DIR:-.}/initdb/mint:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1: over TCP, as the services connect. During first-boot initdb Postgres
+      # listens only on its socket, so a socket check reports healthy too early.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks:
+      - imani-internal
+
+  imani-gateway-db: !reset null
+  imani-vault-db: !reset null
+  imani-payment-db: !reset null
+  bottin-db: !reset null
+
+  payment-adapter:
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+      stripe-mock:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://app-db:5432/payment_gateway
+      SPRING_DATASOURCE_USERNAME: payment
+      SPRING_DATASOURCE_PASSWORD: payment
+      # The signing secret of the local `stripe listen` below (STRIPE_WEBHOOK_SECRET in
+      # imani-deploy/.env.local, from `stripe listen --print-secret`). Without a forwarder nothing
+      # delivers checkout.session.completed here, so a paid card sale is never recorded and its
+      # voucher never issued: the buyer sees "Your payment went through" and nothing arrives.
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+
+  # Fake SMTP for every local email (#410: imani-mailer's claim, receipt and return-link mails).
+  # Accepts anything on mailpit:1025 with no auth or TLS, delivers nothing, and shows every message
+  # at http://localhost:8025 (API: /api/v1/messages, for e2e assertions). Services point
+  # SMTP_HOST=mailpit SMTP_PORT=1025; a host process uses localhost:1025.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mailpit-test
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+      MP_MAX_MESSAGES: "2000"
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - imani-internal
+
+  # imani-mailer (#410): the shared mailer, sending through Mailpit locally. Build the image from
+  # the gifting branch (services/imani-mailer lands with #410):
+  #
+  #   docker build -f services/imani-mailer/Dockerfile -t imani-mailer:local .
+  #
+  # Callers use http://imani-mailer:8095 with MAILER_TOKEN; MAILER_CLIENTS holds only its sha256
+  # (both in imani-deploy/.env.local, `npx tsx services/imani-mailer/cli.ts token <id> <templates>`).
+  # Profile `mailer`, so a stack without the image still starts.
+  imani-mailer:
+    image: ${MAILER_IMAGE:-imani-mailer:local}
+    container_name: imani-mailer-test
+    profiles: ["mailer"]
+    depends_on:
+      mailpit:
+        condition: service_started
+    environment:
+      MAILER_ENV: development
+      MAILER_TRANSPORT: smtp
+      MAILER_SMTP_HOST: mailpit
+      MAILER_SMTP_PORT: "1025"
+      MAILER_SMTP_SECURITY: none
+      MAILER_FROM_ADDRESS: gifts@imani.local
+      MAILER_FROM_NAME: Imani
+      MAILER_LINK_HOSTS: "localhost:5173,localhost:5181"
+      MAILER_LINK_ALLOW_HTTP: "true"
+      MAILER_CLIENTS: "${MAILER_CLIENTS:?set MAILER_CLIENTS in imani-deploy/.env.local}"
+      MAILER_TAG_KEY: "${MAILER_TAG_KEY:?set MAILER_TAG_KEY in imani-deploy/.env.local}"
+    volumes:
+      - imani-mailer-state:/var/lib/imani-mailer
+    ports:
+      - "8095:8095"
+    networks:
+      - imani-internal
+
+  # Stripe test-mode events for payment-adapter's /webhook/stripe, against a real sk_test_ key
+  # only (with stripe-mock there is nothing to listen to): COMPOSE_PROFILES=stripe-test. Card
+  # sales run on the stall's connected account, so Connect events go to the same endpoint.
+  stripe-listen:
+    image: stripe/stripe-cli:latest
+    container_name: stripe-listen-test
+    profiles: ["stripe-test"]
+    command:
+      - listen
+      - --api-key
+      - "${STRIPE_SECRET_KEY:-}"
+      - --forward-to
+      - http://payment-adapter:8080/webhook/stripe
+      - --forward-connect-to
+      - http://payment-adapter:8080/webhook/stripe
+      - --events
+      - checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired,payment_intent.payment_failed,charge.refunded,charge.dispute.created
+    networks:
+      - imani-internal
+
+  cashback-claim:
+    depends_on: !override
+      app-db:
+        condition: service_healthy
+    environment:
+      CASHBACK_CLAIM_DB_URL: jdbc:postgresql://app-db:5432/imani_cashback_claim
+      CASHBACK_CLAIM_DB_USER: cashback
+      CASHBACK_CLAIM_DB_PASSWORD: cashback
+
+  # Seeds the dev keyset rows the mint's preload file names, now into mint-db.
+  vault-seed:
+    command:
+      - "until pg_isready -h mint-db -U vault; do sleep 1; done && PGPASSWORD=vault psql -h mint-db -U vault -d imani_vault -f /seed-vault.sql && echo 'Vault seeded successfully'"
+
+  # Seeds bottin's imani.local domain (deploy/seed-bottin.sql) once bottin-api has migrated,
+  # so a blank stack can register handles. gateway-core, which registers them, waits for it.
+  bottin-seed:
+    image: postgres:16
+    container_name: bottin-seed-test
+    depends_on:
+      bottin-api:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: bottin
+    entrypoint: ["psql", "-v", "ON_ERROR_STOP=1", "-h", "app-db", "-U", "bottin", "-d", "bottin", "-f", "/seed-bottin.sql"]
+    volumes:
+      - ${WALLET_DEPLOY_DIR:-.}/seed-bottin.sql:/seed-bottin.sql:ro
+    restart: "no"
+    networks:
+      - imani-internal
+
 volumes:
+  imani-mailer-state:
   blossom-data:
+  app-db-data:
+  mint-db-data:

@@ -37,7 +37,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const KEYS = join(HERE, '..', '.seed-keys.json')
 const PORTAL = process.env.PORTAL_URL ?? 'http://localhost:28084'
 /** Must match GATEWAY_PORTAL_EDGE_SHARED_SECRET in deploy/compose.override.yml. */
-const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only'
+const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only-32-plus-chars'
 const WALLET = process.env.WALLET_URL ?? 'http://localhost:28082'
 /**
  * Where NAP auth lives, which is NOT under the portal prefix — see the login

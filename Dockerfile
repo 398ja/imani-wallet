@@ -70,6 +70,15 @@ ENV VITE_VOUCHER_ISSUER_PUBKEYS=$VITE_VOUCHER_ISSUER_PUBKEYS
 ARG VITE_LICENCE_SELLER_PUBKEY=
 ENV VITE_LICENCE_SELLER_PUBKEY=$VITE_LICENCE_SELLER_PUBKEY
 
+# The sister sites (#411, src/lib/sisterSites.ts): where Settings › Subscription › "Upgrade my plan"
+# goes, and the only origins the wallet will sign a NAP login for. Per environment, e.g.
+# https://subscription.imani.casa in production. Not secrets. Empty: that site is not part of this
+# deployment, and the wallet says so rather than opening a guess.
+ARG VITE_SUBSCRIPTION_SITE_URL=
+ENV VITE_SUBSCRIPTION_SITE_URL=$VITE_SUBSCRIPTION_SITE_URL
+ARG VITE_GIFTING_SITE_URL=
+ENV VITE_GIFTING_SITE_URL=$VITE_GIFTING_SITE_URL
+
 # The public website, without a trailing path (src/lib/terms.ts): every new account accepts the
 # Terms and Conditions at <this>/terms.html, today https://www.imani.casa/terms.html. Not a secret.
 # REQUIRED (#357): a bundle without it cannot link to the terms, so it refuses to create any

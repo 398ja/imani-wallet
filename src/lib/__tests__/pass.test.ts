@@ -73,12 +73,13 @@ describe('toCouponPass', () => {
     expect(pass.storeCard.auxiliaryFields![0].label).toBe('EXPIRES')
   })
 
-  it('omits the expiry group entirely when there is no expiry', () => {
-    // Absent groups stay undefined rather than empty — PassJson's own rule.
+  it('says "No expiry" when there is none, rather than dropping the line (#419)', () => {
     const pass = toCouponPass(row({ expires_at: undefined }))
 
     expect(pass.expirationDate).toBeUndefined()
-    expect(pass.storeCard.auxiliaryFields).toBeUndefined()
+    expect(pass.storeCard.auxiliaryFields).toEqual([
+      { key: 'expires', label: 'EXPIRES', value: 'No expiry' },
+    ])
   })
 
   it.each([
@@ -203,6 +204,14 @@ describe('toMerchantPass', () => {
 
     expect(pass.barcodes).toBeUndefined()
     expect(pass.storeCard.backFields).toBeUndefined()
+  })
+
+  it('carries no shop blurb as its description (#419)', () => {
+    const pass = toMerchantPass(merchantFrom([row()]), {
+      storeDescription: 'Organic veg, Tue & Sat',
+    })
+
+    expect(pass.description).toBe('')
   })
 
   it('is keyed by the shop, not by a voucher', () => {

@@ -1,5 +1,6 @@
 import {
   DENIAL_REASONS,
+  type LicenceLimits,
   type LicenceVerdict,
   type LicenceVoucher,
   type VerifyOptions,
@@ -145,8 +146,20 @@ export function verifyLicence(
     }
   }
 
+  // Before its window opens: a renewal delivered early (#407 §6) sits here until it starts. Signed,
+  // so an answer rather than an outage. `<` because the opening instant belongs to the window.
+  if (typeof voucher.validFrom === 'number' && Number.isFinite(voucher.validFrom) && options.now < voucher.validFrom) {
+    return {
+      granted: false,
+      reason: DENIAL_REASONS.NOT_YET_VALID,
+      detail: `this licence starts at ${voucher.validFrom}`,
+    }
+  }
+
   const features = voucher.features ?? []
-  if (features.length === 0) {
+  // A hand grant may lift only a LIMIT ("raise this stall to £200", #407 §7) and name no feature,
+  // so a licence confers something if it names a feature OR a limit.
+  if (features.length === 0 && !hasAnyLimit(voucher.limits)) {
     return {
       granted: false,
       reason: DENIAL_REASONS.NO_FEATURES,
@@ -163,6 +176,22 @@ export function verifyLicence(
       subscriptionId: voucher.subscriptionId,
       expiresAt: voucher.expiresAt,
       pilot: voucher.pilot === true,
+      ...(voucher.limits ? { limits: copyLimits(voucher.limits) } : {}),
+      ...(voucher.tier ? { tier: voucher.tier } : {}),
+      ...(typeof voucher.validFrom === 'number' ? { validFrom: voucher.validFrom } : {}),
+      ...(voucher.badge ? { badge: voucher.badge } : {}),
     },
   }
+}
+
+function hasAnyLimit(limits: LicenceLimits | undefined): boolean {
+  return !!limits && (limits.sales !== undefined || limits.terminals !== undefined)
+}
+
+function copyLimits(limits: LicenceLimits): LicenceLimits {
+  const out: LicenceLimits = {}
+  if (limits.terminals !== undefined) out.terminals = limits.terminals
+  if (limits.sales === null) out.sales = null
+  else if (limits.sales) out.sales = { period: limits.sales.period, amounts: { ...limits.sales.amounts } }
+  return out
 }

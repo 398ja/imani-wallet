@@ -194,7 +194,7 @@ describe('the subscription gate, at the point of enrolment', () => {
     if (!check.ready) {
       expect(check.reason).toBe(ENROLMENT_REFUSAL.NOT_ALLOWED)
       expect(check.message).toMatch(/free till/)
-      expect(check.message).toMatch(/get in touch/)
+      expect(check.message).toMatch(/Settings › Subscription/)
     }
   })
 

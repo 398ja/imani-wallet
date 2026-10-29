@@ -110,6 +110,27 @@ beforeEach(async () => {
 })
 
 describe('the drain loop', () => {
+  it('does not announce the licence seller\'s delivery as a payment: the plan has its own notice', async () => {
+    vi.stubEnv('VITE_LICENCE_SELLER_PUBKEY', SENDER)
+    const acked = respondWith([envelope()])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+
+    expect(toasts).toHaveLength(0)
+    // Acked all the same, so the server stops redelivering it.
+    expect(acked[0]).toEqual([envelope().notificationId])
+    vi.unstubAllEnvs()
+  })
+
+  it('announces the same envelope from anyone else, and when no seller is pinned', async () => {
+    vi.stubEnv('VITE_LICENCE_SELLER_PUBKEY', 'a'.repeat(64))
+    respondWith([envelope()])
+    startIncomingNotifications(RECIPIENT)
+    await settle()
+    expect(toasts).toHaveLength(1)
+    vi.unstubAllEnvs()
+  })
+
   it('announces a pending payment once', async () => {
     respondWith([envelope()])
     startIncomingNotifications(RECIPIENT)

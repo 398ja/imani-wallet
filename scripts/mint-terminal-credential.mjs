@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const KEYS = join(HERE, '..', '.seed-keys.json')
 const WALLET = process.env.WALLET_URL ?? 'http://localhost:28082'
-const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only'
+const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only-32-plus-chars'
 
 function arg(flag, fallback) {
   const i = process.argv.indexOf(flag)

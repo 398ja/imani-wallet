@@ -13,6 +13,13 @@
  *       --subscription-id sub_9f2c11          # a RENEWAL, or a re-issue
  *   node scripts/sell-subscription.mjs --revoke sub_9f2c11 --reason "refund"   # a REFUND
  *
+ * Tiers and hand grants (#407):
+ *
+ *   ... --customer-pubkey <hex> --paid 1500 --tier basic --term monthly
+ *   ... --customer-pubkey <hex> --paid 0 --sales-limit 200:GBP --days 30   # raise a free stall to 200
+ *   ... --customer-pubkey <hex> --paid 0 --terminals 5 --days 90            # five tills for a quarter
+ *   ... --valid-from 2027-02-01                                             # an early renewal
+ *
  * The deployed seller (staging): its nsec is IMANI_SUBSCRIPTIONS_SELLER_NSEC in the deploy env file,
  * and only that line is read:
  *
@@ -74,7 +81,7 @@ const KEYS = join(HERE, '..', '.seed-keys.json')
 /** The seller's record of what was sold, read by notify-expiring.mjs. */
 const SOLD = join(HERE, '..', '.sold-subscriptions.json')
 const WALLET = process.env.WALLET_URL ?? 'http://localhost:28082'
-const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only'
+const EDGE_SECRET = process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only-32-plus-chars'
 const INTERNAL_RELAY = process.env.INTERNAL_RELAY_URL ?? 'ws://nostr-relay:7777'
 
 function arg(flag, fallback) {
@@ -94,19 +101,83 @@ const flag = (name) => process.argv.includes(name)
  * without a build step, so the shape is restated here and the pair is guarded
  * by `--self-check` below, which fails loudly if they ever disagree.
  */
-export function licenceMetadata({ lockKey, subscriptionId, features, pilot, paidAmountMinor, paidCurrency }) {
+export function licenceMetadata({
+  lockKey,
+  subscriptionId,
+  features,
+  pilot,
+  paidAmountMinor,
+  paidCurrency,
+  tier,
+  validFrom,
+  limits,
+  grantKind,
+}) {
   if (!lockKey) throw new Error('a licence must be locked to the customer key')
   if (!subscriptionId) throw new Error('a licence must carry a subscription id')
-  if (!features?.length) throw new Error('a licence must confer at least one feature')
+  if (!features?.length && !limits) throw new Error('a licence must confer at least one feature')
 
   return JSON.stringify({
     subscription_id: subscriptionId,
-    features,
+    features: features ?? [],
     lock_key: lockKey,
     ...(pilot ? { pilot: true } : {}),
     paid_amount_minor: paidAmountMinor,
     paid_currency: paidCurrency,
+    ...(tier ? { tier } : {}),
+    ...(validFrom !== undefined ? { valid_from: validFrom } : {}),
+    ...(limits ? { limits: limitsJson(limits) } : {}),
+    ...(grantKind ? { grant_kind: grantKind } : {}),
   })
+}
+
+/** As `limitsJson` in licenceIssue.ts: fixed key order, currencies sorted. */
+function limitsJson(limits) {
+  const out = {}
+  if (limits.sales === null) out.sales = null
+  else if (limits.sales) {
+    const amounts = {}
+    for (const c of Object.keys(limits.sales.amounts).sort()) amounts[c] = limits.sales.amounts[c]
+    out.sales = { period: limits.sales.period, amounts }
+  }
+  if (limits.terminals !== undefined) out.terminals = limits.terminals
+  return out
+}
+
+/**
+ * A hand grant's limits from the command line (#407 §7), or undefined when none was asked for.
+ *
+ *   --sales-limit 200:GBP          window-long allowance of 200.00 GBP
+ *   --sales-limit 20000:GBP,20000:EUR
+ *   --sales-limit unlimited
+ *   --terminals 5 | unlimited
+ */
+export function grantLimits({ salesLimit, terminals }) {
+  const limits = {}
+  if (salesLimit) {
+    if (salesLimit === 'unlimited') limits.sales = null
+    else {
+      const amounts = {}
+      for (const part of salesLimit.split(',')) {
+        const [major, currency] = part.split(':')
+        const minor = Math.round(Number(major) * 100)
+        if (!Number.isSafeInteger(minor) || minor < 0 || !/^[A-Z]{3}$/.test(currency ?? '')) {
+          throw new Error(`bad --sales-limit '${part}': use <amount>:<CUR>, e.g. 200:GBP`)
+        }
+        amounts[currency] = minor
+      }
+      limits.sales = { period: 'window', amounts }
+    }
+  }
+  if (terminals) {
+    if (terminals === 'unlimited') limits.terminals = null
+    else {
+      const n = Number(terminals)
+      if (!Number.isSafeInteger(n) || n < 0) throw new Error(`bad --terminals '${terminals}'`)
+      limits.terminals = n
+    }
+  }
+  return Object.keys(limits).length ? limits : undefined
 }
 
 /** Random, so it says nothing about the customer it belongs to. */
@@ -115,6 +186,9 @@ function newSubscriptionId() {
 }
 
 const TERM_DAYS = { annual: 365, monthly: 30 }
+
+/** Features each bought tier carries, mirroring BUNDLED_CATALOG in packages/licence. */
+const TIER_FEATURES = { basic: ['terminals'], pro: ['terminals', 'api', 'ecommerce'] }
 
 // ---------------------------------------------------------------- auth
 
@@ -312,7 +386,7 @@ async function revoke(seller, subscriptionId, reason) {
  * The seller's own `merchant` warrant over the sale goes inside: since #159 every wallet refuses a
  * coupon with no usable authorisation from its stall, a licence included.
  */
-export function licenceIssueBody(seller, { paidAmountMinor, paidCurrency, term, metadata }) {
+export function licenceIssueBody(seller, { paidAmountMinor, paidCurrency, term, metadata, days }) {
   const faceDecimals = paidCurrency === 'sat' ? 0 : 2
   return {
     face_value: paidAmountMinor,
@@ -321,7 +395,7 @@ export function licenceIssueBody(seller, { paidAmountMinor, paidCurrency, term, 
     backing_strategy: 'FIXED',
     issuer_id: seller.pk,
     memo: `Imani subscription (${term})`,
-    expires_in_days: TERM_DAYS[term],
+    expires_in_days: days ?? TERM_DAYS[term],
     merchant_metadata: JSON.parse(metadata),
     issuance_warrant: sellerWarrant(seller, paidAmountMinor, faceDecimals, paidCurrency),
   }
@@ -341,9 +415,9 @@ function sellerWarrant(seller, saleTotal, faceDecimals, unit) {
   })
 }
 
-async function mintLicence(seller, { paidAmountMinor, paidCurrency, term, metadata }) {
+async function mintLicence(seller, { paidAmountMinor, paidCurrency, term, metadata, days }) {
   const url = `${WALLET}/api/v1/wallet/vouchers`
-  const body = JSON.stringify(licenceIssueBody(seller, { paidAmountMinor, paidCurrency, term, metadata }))
+  const body = JSON.stringify(licenceIssueBody(seller, { paidAmountMinor, paidCurrency, term, metadata, days }))
 
   const response = await fetch(url, { method: 'POST', headers: authHeaders(seller, url, 'POST', body), body })
   const text = await response.text()
@@ -584,6 +658,9 @@ async function main() {
 
   const paidAmountMinor = Number(arg('--paid', '0'))
   const paidCurrency = arg('--currency', 'GBP')
+  // gateway-customer refuses a face value of 0 (VALIDATION_001, seen on staging 2026-10-27), so a
+  // free grant or pilot is minted at 1 minor unit. `paid_amount_minor` still records 0.
+  const faceMinor = Math.max(1, paidAmountMinor)
   const pilot = flag('--pilot')
   // Supplied = this is a RENEWAL or a re-issue to a replacement key. Omitted = a
   // new customer. Getting this wrong is silent: a renewal with a fresh id mints
@@ -601,13 +678,43 @@ async function main() {
   }
 
   const seller = sellerKey()
+  // #407: a tier (bought plans read their numbers from the catalog), or a hand grant with its own
+  // limits and window. A hand grant names no feature unless --features is given.
+  const tier = arg('--tier', '')
+  let limits
+  try {
+    limits = grantLimits({ salesLimit: arg('--sales-limit', ''), terminals: arg('--terminals', '') })
+  } catch (e) {
+    console.error(e.message)
+    process.exitCode = 1
+    return
+  }
+  const validFromArg = arg('--valid-from', '')
+  // A hand grant's sales period is its own window, so it must start somewhere: now, unless told.
+  // Without a start every sale the stall ever made would count against it.
+  const validFrom = validFromArg
+    ? Math.floor(Date.parse(validFromArg) / 1000)
+    : limits && !tier
+      ? Math.floor(Date.now() / 1000)
+      : undefined
+  if (validFromArg && !Number.isFinite(validFrom)) {
+    console.error(`bad --valid-from '${validFromArg}': use an ISO date, e.g. 2027-01-01`)
+    process.exitCode = 1
+    return
+  }
+  const featuresArg = arg('--features', '')
+  const features = featuresArg ? featuresArg.split(',') : limits && !tier ? [] : TIER_FEATURES[tier] ?? ['terminals']
   const metadata = licenceMetadata({
     lockKey: customerPubkey,
     subscriptionId,
-    features: arg('--features', 'terminals').split(','),
+    features,
     pilot,
     paidAmountMinor,
     paidCurrency,
+    tier: tier || (limits ? 'custom' : undefined),
+    validFrom,
+    limits,
+    grantKind: limits && !tier ? 'custom' : tier ? 'subscription' : undefined,
   })
 
   console.log(`seller        ${seller.name} (${seller.pk.slice(0, 12)}…)`)
@@ -618,13 +725,26 @@ async function main() {
   console.log(`term          ${term} (${TERM_DAYS[term]} days)`)
   console.log(`paid          ${paidAmountMinor} ${paidCurrency}${pilot ? '   [PILOT]' : ''}`)
 
-  const created = await mintLicence(seller, { paidAmountMinor, paidCurrency, term, metadata })
+  const daysArg = arg('--days', '')
+  const days = daysArg ? Number(daysArg) : undefined
+  if (daysArg && !(Number.isSafeInteger(days) && days > 0)) {
+    console.error(`bad --days '${daysArg}'`)
+    process.exitCode = 1
+    return
+  }
+  const created = await mintLicence(seller, { paidAmountMinor: faceMinor, paidCurrency, term, metadata, days })
   console.log(`\nminted ${created.voucher_id}, waiting for settlement…`)
 
   const ready = await waitForToken(seller, created.voucher_id)
+  // For verification runs: keep the exact token the customer receives (as e2e/licenceGate does).
+  if (process.env.LICENCE_TOKEN_OUT) writeFileSync(process.env.LICENCE_TOKEN_OUT, `${ready.token}\n`)
   const result = await deliver(seller, ready, customerPubkey)
 
-  const expiry = toEpochSeconds(ready.expires_at)
+  // `expires_at` can still be null on the ISSUED read (see waitForToken); the signed token carries
+  // it regardless. Fall back to the term asked for, so the reminder ledger is never left without one.
+  const expiry =
+    toEpochSeconds(ready.expires_at) ??
+    Math.floor(Date.now() / 1000) + (days ?? TERM_DAYS[term]) * 86_400
   console.log(
     `delivered ${String(result.event_id ?? result.eventId ?? '(printed)').slice(0, 12)}…  ` +
       `expires ${expiry ? new Date(expiry * 1000).toISOString().slice(0, 10) : 'NEVER — a licence with no expiry grants NOTHING'}`,

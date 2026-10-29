@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { VoucherRow } from '@imani/wallet-storage'
 
@@ -25,6 +25,7 @@ const SOLD_AT = 1_800_000_000
 const YEAR = 365 * 86400
 
 let rows: VoucherRow[] = []
+let txRows: Array<Record<string, unknown>> = []
 let storeThrows = false
 let walletListeners: Array<() => void> = []
 
@@ -33,6 +34,7 @@ vi.mock('../../lib/wallet', () => ({
     if (storeThrows) throw new Error('storage unavailable')
     return rows
   },
+  listTransactions: async () => txRows,
   onWalletChanged: (listener: () => void) => {
     walletListeners.push(listener)
     return () => {
@@ -109,6 +111,9 @@ function renderPage() {
 
 beforeEach(() => {
   rows = []
+  txRows = []
+  // The screen first asks the subscription site for a newer catalog. No site here: answer at once.
+  vi.stubGlobal('fetch', async () => new Response('{}', { status: 404 }))
   storeThrows = false
   walletListeners = []
   forgetLicenceParses()
@@ -123,6 +128,7 @@ afterEach(() => {
   forgetVerification(CUSTOMER)
   vi.useRealTimers()
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 describe('reaching the screen without a subscription', () => {
@@ -137,11 +143,28 @@ describe('reaching the screen without a subscription', () => {
   })
 
   it('says how to get one, rather than offering a button that does nothing', async () => {
+    // Where the site is comes from this environment's build config, never from code.
+    vi.stubEnv('VITE_SUBSCRIPTION_SITE_URL', 'https://plans.example.test/')
     renderPage()
 
     await screen.findByText('Not active')
-    // Selling is out-of-band while this is a pilot.
-    expect(screen.getByText(/arranged directly with us/)).toBeTruthy()
+    // Bought on the subscription site, its own origin, in a named tab the wallet signs in (#411).
+    const link = screen.getByRole('link', { name: 'Upgrade my plan' })
+    expect(link.getAttribute('href')).toBe('https://plans.example.test')
+    expect(link.getAttribute('target')).toBe('imani-subscription')
+    // The opener is kept on purpose: it is the channel the wallet signs the site's login over.
+    expect(link.getAttribute('rel')).toBe('opener')
+    vi.unstubAllEnvs()
+  })
+
+  it('a build with no subscription site says so, and links nowhere', async () => {
+    vi.stubEnv('VITE_SUBSCRIPTION_SITE_URL', '')
+    renderPage()
+
+    await screen.findByText('Not active')
+    expect(screen.queryByRole('link', { name: 'Upgrade my plan' })).toBeNull()
+    expect(screen.getByText(/no subscription site is set up/)).toBeTruthy()
+    vi.unstubAllEnvs()
   })
 
   it('refuses a licence that is not ours, however well-formed', async () => {
@@ -158,6 +181,58 @@ describe('reaching the screen without a subscription', () => {
 })
 
 describe('a licence that arrived', () => {
+  it('says Cancelled, when it ends and that it will not renew, once the seller says so (#407)', async () => {
+    const { rememberSubscriptionStatus } = await import('../../lib/subscriptionStatusStore')
+    const { subscriptionStatusJson } = await import('../../lib/subscriptionStatus')
+    const { row, issuerPublicKey } = mintRow(terms(), SOLD_AT + YEAR)
+    rows = [row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', issuerPublicKey)
+    localStorage.clear()
+    rememberSubscriptionStatus(CUSTOMER, subscriptionStatusJson({ subscriptionId: 'sub_9f2c11', status: 'cancelled', endsAt: SOLD_AT + YEAR, at: SOLD_AT }))
+
+    renderPage()
+
+    expect(await screen.findByText('Cancelled')).toBeTruthy()
+    expect(screen.queryByText('Active')).toBeNull()
+    expect(screen.getByText(/works until .* and will not renew/)).toBeTruthy()
+    expect(screen.getByText('No, cancelled')).toBeTruthy()
+    expect(screen.getByText('Ends')).toBeTruthy()
+    // Still paid for: the licence keeps granting, so the plan still works.
+    expect(screen.getByText('terminals')).toBeTruthy()
+  })
+
+  it('goes back to Active when the cancellation is undone, without a reload', async () => {
+    const { rememberSubscriptionStatus } = await import('../../lib/subscriptionStatusStore')
+    const { subscriptionStatusJson } = await import('../../lib/subscriptionStatus')
+    const { row, issuerPublicKey } = mintRow(terms(), SOLD_AT + YEAR)
+    rows = [row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', issuerPublicKey)
+    localStorage.clear()
+    rememberSubscriptionStatus(CUSTOMER, subscriptionStatusJson({ subscriptionId: 'sub_9f2c11', status: 'cancelled', at: SOLD_AT }))
+
+    renderPage()
+    await screen.findByText('Cancelled')
+    act(() => {
+      rememberSubscriptionStatus(CUSTOMER, subscriptionStatusJson({ subscriptionId: 'sub_9f2c11', status: 'active', at: SOLD_AT + 60 }))
+    })
+    expect(await screen.findByText('Active')).toBeTruthy()
+    expect(screen.getByText('Yes')).toBeTruthy()
+  })
+
+  it('ignores a status for another subscription', async () => {
+    const { rememberSubscriptionStatus } = await import('../../lib/subscriptionStatusStore')
+    const { subscriptionStatusJson } = await import('../../lib/subscriptionStatus')
+    const { row, issuerPublicKey } = mintRow(terms(), SOLD_AT + YEAR)
+    rows = [row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', issuerPublicKey)
+    localStorage.clear()
+    rememberSubscriptionStatus(CUSTOMER, subscriptionStatusJson({ subscriptionId: 'sub_other', status: 'cancelled', at: SOLD_AT }))
+
+    renderPage()
+
+    expect(await screen.findByText('Active')).toBeTruthy()
+  })
+
   it('unlocks the screen with no step the customer takes', async () => {
     const { row, issuerPublicKey } = mintRow(terms(), SOLD_AT + YEAR)
     rows = [row]
@@ -325,5 +400,20 @@ describe('a subscription the seller revoked (review of imani-wallet#226, W-1)', 
     } finally {
       forgetRevocations(CUSTOMER)
     }
+  })
+})
+
+describe('the plan (#407)', () => {
+  it('shows a free stall its one-off allowance and what it has used of it', async () => {
+    txRows = [{ id: 'issued:a', type: 'issued', direction: 'out', timestamp: SOLD_AT * 1000, amount: 8200, unit: 'GBP' }]
+    render(
+      <MemoryRouter>
+        <SubscriptionPage pubkey={CUSTOMER} currency="GBP" />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('Starter')).toBeTruthy()
+    expect(screen.getByText(/82\.00 of .*100\.00/)).toBeTruthy()
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('82')
+    expect(screen.getByText('1 besides this device')).toBeTruthy()
   })
 })

@@ -16,6 +16,7 @@ import { terminalCredentialFromToken } from './notMoney'
 import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
 import { isOpenAfterLocktime, readLinkLock } from './cashlinkLock'
 import { parseGiftSent } from './lockedGifts'
+import { parseSubscriptionStatus, SUBSCRIPTION_STATUS_DM_TYPE } from './subscriptionStatus'
 import {
   heldWrapDecision,
   holdTransferSignatureWrap,
@@ -31,6 +32,15 @@ import {
   type VoucherValidation,
 } from './voucherToken'
 
+/**
+ * The licence seller this build pins, as `licenceStatus.licenceSellerPubkey` reads it. Read here
+ * rather than imported: licenceStatus pulls in the wallet store statically, and this module is on
+ * the DM path, which loads its heavier modules lazily.
+ */
+function pinnedLicenceSeller(): string {
+  return ((import.meta.env.VITE_LICENCE_SELLER_PUBKEY as string | undefined) ?? '').trim().toLowerCase()
+}
+
 /** Whether a token's proofs are link-locked (#410 G14), read without trusting anything yet. */
 function isLinkLockedToken(token: string): boolean {
   try {
@@ -39,6 +49,11 @@ function isLinkLockedToken(token: string): boolean {
   } catch {
     return false
   }
+}
+
+/** `subscriptionStatus.SUBSCRIPTION_STATUS_DM_TYPE`: the seller on a subscription's renewal (#407). */
+function isSubscriptionStatusMessage(content: string): boolean {
+  return parseSubscriptionStatus(content) !== null
 }
 
 /** `terminalDelivery.ENROLLED_DM_TYPE`, matched here without loading the delivery module. */
@@ -73,7 +88,10 @@ function typedAppMessage(content: string): boolean {
   try {
     const parsed = JSON.parse(content) as { type?: unknown } | null
     const type = parsed && typeof parsed === 'object' ? parsed.type : undefined
-    return typeof type === 'string' && (type.startsWith('imani-terminal-') || type === TRANSFER_SIGNATURE_TYPE)
+    return (
+      typeof type === 'string' &&
+      (type.startsWith('imani-terminal-') || type === TRANSFER_SIGNATURE_TYPE || type === SUBSCRIPTION_STATUS_DM_TYPE)
+    )
   } catch {
     return false
   }
@@ -569,6 +587,23 @@ export function createDmCryptoAdapter(): CryptoAdapter {
             if (filed === 'filed') return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
           } catch {
             return null
+          }
+        }
+
+        /**
+         * The seller saying a subscription was cancelled in Stripe, or un-cancelled (#407). Display
+         * only (it never grants or refuses), but still only believed from the PINNED seller, and
+         * the seller is read from the verified SEAL: `rumor.pubkey` is whatever the sender wrote.
+         * Awaited for the same reason as above: it must be stored before the wrap is marked done.
+         */
+        if (isSubscriptionStatusMessage(rumor.content)) {
+          const seller = pinnedLicenceSeller()
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          if (seller && sealAuthor === seller && rumor.pubkey === seller) {
+            const me = getSigner().pubkey
+            await import('./subscriptionStatusStore').then((m) => m.rememberSubscriptionStatus(me, rumor.content)).catch(() => false)
+          } else {
+            console.warn('[dmCrypto] subscription status not sealed by the pinned licence seller: ignored')
           }
         }
 

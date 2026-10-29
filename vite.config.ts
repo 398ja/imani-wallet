@@ -47,7 +47,10 @@ const imani = (name: string) => r(`./packages/${name}/src/index.ts`)
  * Matches GATEWAY_PORTAL_EDGE_SHARED_SECRET in deploy/compose.override.yml and
  * MERCHANT_EDGE_SHARED_SECRET in imani-deploy's test stack.
  */
-const EDGE_SHARED_SECRET = process.env.PORTAL_EDGE_SECRET ?? 'dev-edge-secret-local-only'
+// 32+ characters: NapProxyAuthFilter refuses anything shorter and then IGNORES
+// X-Auth-Pubkey on every request (`edge_shared_secret_too_weak` at startup), so
+// a 26-character value here silently turned every edge-vouched call anonymous.
+const EDGE_SHARED_SECRET = process.env.PORTAL_EDGE_SECRET ?? 'dev-edge-secret-local-only-32-plus-chars'
 
 /** account-app — the only service that can read the NAP session store. */
 const ACCOUNT_APP = 'http://localhost:28081'
@@ -399,6 +402,9 @@ export const proxy = {
   // every authenticated wallet call fail with 401 AUTH_002 "URL mismatch" —
   // which reads as a credential problem, not a proxy one.
   '/api': { target: 'http://localhost:28082', changeOrigin: false },
+  // The subscription site (#407, #411) is NOT proxied here any more: it has its own origin, and the
+  // wallet opens it and signs its login over postMessage. Locally, run deploy/subscription-local
+  // (http://localhost:18910) and set VITE_SUBSCRIPTION_SITE_URL=http://localhost:18910.
 }
 
 /**
@@ -460,11 +466,19 @@ export default defineConfig({
   // is the one failure mode a performance suite cannot afford. Listed
   // explicitly for the same reason as `services/`.
   test: {
-    // Per-environment settings are fixed for the suite rather than read from this machine's
-    // `.env.local` (a developer's local-stack values would change what the tests see). The gifting
-    // site reads its handle domain and wallet origin at module load, so they are set here rather
-    // than with `vi.stubEnv`.
+    // The suite must not read THIS machine's `.env.local`. Vite loads it in every mode, and its
+    // values (the local stack's licence issuer and seller keys, the sister-site URLs) are
+    // per-environment config: a developer who points their dev server at a local stack would
+    // otherwise see licence, entitlement and sister-site tests fail, and CI would pass the same
+    // code. Tests set what they need with `vi.stubEnv`. `.env.test` is the place for any
+    // test-wide value; there is none today.
     env: {
+      VITE_LICENCE_ISSUER_PUBKEY: '',
+      VITE_LICENCE_SELLER_PUBKEY: '',
+      VITE_VOUCHER_ISSUER_PUBKEYS: '',
+      VITE_SUBSCRIPTION_SITE_URL: '',
+      VITE_GIFTING_SITE_URL: '',
+      // The gifting site reads these at module load, so they are set here rather than stubbed.
       VITE_GIFTING_HANDLE_DOMAIN: 'imani.casa',
       VITE_WALLET_ORIGIN: 'https://wallet.example.test',
     },
@@ -497,11 +511,11 @@ export default defineConfig({
     include: [
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',
-      // The server-side SDKs (#366 @imani/cashlink-sender) reuse the app's engine, so they run here.
-      'sdk/**/*.test.{ts,tsx}',
       // The gifting site (#410), and the subscription site (#407) once it lands: their own pages and
       // libraries, tested against the wallet's real modules.
       'apps/**/src/**/*.test.{ts,tsx}',
+      // The server-side SDKs (#366 @imani/cashlink-sender) reuse the app's engine, so they run here.
+      'sdk/**/*.test.{ts,tsx}',
       'perf/**/*.test.{ts,tsx}',
       // `deploy/` ships the container's nginx.conf, and its CSP is application
       // behaviour, not decoration: `worker-src 'self'` there silently disabled
