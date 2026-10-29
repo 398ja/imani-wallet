@@ -31,7 +31,7 @@ gateway-customer accepts the seller through `GATEWAY_CUSTOMER_LICENCE_SELLER_PUB
 `up.sh` reads `STRIPE_SECRET_KEY` (test keys only, others are refused) and
 `IMANI_SUBSCRIPTIONS_SELLER_NSEC` from `../../../imani-deploy/.env.staging`. It writes a
 gitignored `.env`, then:
-- creates the Imani Basic and Pro prices in the test account if they are missing (`stripe-prices.sh`,
+- creates the Imani Essentials and Pro prices in the test account if they are missing (`stripe-prices.sh`,
   idempotent by lookup key);
 - starts the `stripe` container, which forwards the account's webhooks to the service.
 
@@ -45,7 +45,7 @@ There is no login page (#411). The site is opened from a wallet, which signs it 
 2. **Open the site from the wallet**: log in to the wallet as a stall from staging, go to Settings ›
    Subscription, tap **Upgrade my plan**. The site opens in a new tab, already signed in. A key
    without a stall record is refused ("Plans are for stalls").
-3. **Choose** Basic or Pro and pay with card `4242 4242 4242 4242`, any future date, any CVC.
+3. **Choose** Essentials or Pro and pay with card `4242 4242 4242 4242`, any future date, any CVC.
 4. **Wait** about 10 seconds. The plan arrives in that stall's wallet on staging (Settings ›
    Subscription), and on `/account` here.
 5. **Cancel or change the card** from `/account` → "Card, invoices and cancellation" (the Stripe

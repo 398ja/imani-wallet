@@ -17,7 +17,7 @@ import type { NotMoneyNoticeType } from './notifications/types'
  *
  *   - a credential: "Terminal setup request from <stall>", to `/terminal/setup`;
  *   - a renewal:    "Terminal renewal from <stall>", to `/terminal/setup`;
- *   - a licence:    "Imani Basic plan activated" (or renewed), to `/settings/subscription`.
+ *   - a licence:    "Imani Essentials plan activated" (or renewed), to `/settings/subscription`.
  *
  * A stall is named by its published name or handle, never by a key: no npub or hex pubkey is
  * shown to end users.
@@ -95,10 +95,13 @@ export function terminalNotice(content: string, stallName?: string): NotMoneyNot
       }
 }
 
-/** The plan's name, as the subscription screen and the site say it. */
-const PLAN_NAMES: Record<string, string> = { basic: 'Basic', pro: 'Pro', custom: 'Custom' }
+/**
+ * The plan's name, as the subscription screen and the site say it. Display only: `basic` is the tier
+ * id a licence carries, and it is sold as Essentials (www.imani.casa/pricing).
+ */
+const PLAN_NAMES: Record<string, string> = { basic: 'Essentials', pro: 'Pro', custom: 'Custom' }
 
-/** "Imani Basic plan", from the licence's signed tier; a hand grant is a "plan grant". */
+/** "Imani Essentials plan", from the licence's signed tier; a hand grant is a "plan grant". */
 export function planName(licence: Pick<LicenceVoucher, 'tier' | 'grantKind'>): string {
   if (licence.grantKind === 'custom' || licence.tier === 'custom') return 'Imani plan grant'
   const tier = licence.tier ? (PLAN_NAMES[licence.tier] ?? licence.tier.charAt(0).toUpperCase() + licence.tier.slice(1)) : ''

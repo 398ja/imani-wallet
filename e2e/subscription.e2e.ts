@@ -14,7 +14,7 @@
  *   signer policy, bundled with esbuild, over an unlocked wallet session (the only stand-in).
  *
  * Then drives Chromium: the stall taps Upgrade in its wallet, the site opens in a new tab and is
- * signed in with no login page and no passphrase; it buys Basic; the licence the service minted is
+ * signed in with no login page and no passphrase; it buys Essentials; the licence the service minted is
  * read back with the wallet's own reader. Also: opened directly (not from the wallet) the site asks
  * to be opened from the wallet; a customer key (no stall record) is refused; no page has a sign-in
  * route; the session cookie is HttpOnly.
@@ -289,7 +289,7 @@ async function main() {
       await page.getByText('Open this from your wallet').waitFor({ timeout: 10_000 }).catch(() => undefined)
       const text = await page.locator('body').innerText()
       check('opened directly, the site asks to be opened from the wallet', /Open this from your wallet/.test(text), text.slice(0, 200))
-      check('and shows no plans or buy buttons without a session', !/Choose Basic/.test(text))
+      check('and shows no plans or buy buttons without a session', !/Choose Essentials/.test(text))
       await page.goto(`${SITE_ORIGIN}/sign-in`, { waitUntil: 'load' })
       await page.getByText('Open this from your wallet').waitFor({ timeout: 10_000 }).catch(() => undefined)
       check('there is no sign-in page: /sign-in is not a route', !/passphrase/i.test(await page.locator('body').innerText()))
@@ -317,19 +317,19 @@ async function main() {
       await context.close()
     }
 
-    // ---- 4. The stall, from its wallet: signed in, buys Basic, sees it on the account page.
+    // ---- 4. The stall, from its wallet: signed in, buys Essentials, sees it on the account page.
     {
       const { context, walletPage, site } = await openFromWallet(stallSk)
-      await site.getByRole('button', { name: 'Choose Basic' }).waitFor({ timeout: 15_000 })
+      await site.getByRole('button', { name: 'Choose Essentials' }).waitFor({ timeout: 15_000 })
       check('opened from the wallet, the site is signed in with no login page and no passphrase', true)
       check('the site is on its own origin, not the wallet’s', new URL(site.url()).origin === SITE_ORIGIN, site.url())
       const plans = await site.locator('main').innerText()
-      check('plans list Starter, Basic and Pro, and no Town / BID partnership', /Starter/.test(plans) && /Basic/.test(plans) && /Pro/.test(plans) && !/Town|BID|Partner/.test(plans), plans.slice(0, 300))
-      check('yearly by default: Basic £70/year, from the Stripe price', /£70\/year/.test(plans), plans.slice(0, 400))
-      check('Basic: unlimited voucher issuance and 3 tills', /Unlimited voucher issuance/.test(plans) && /plus 3 tills/.test(plans), plans.slice(0, 400))
+      check('plans list Starter, Essentials and Pro, and no Town / BID partnership', /Starter/.test(plans) && /Essentials/.test(plans) && /Pro/.test(plans) && !/Town|BID|Partner/.test(plans), plans.slice(0, 300))
+      check('yearly by default: Essentials £70/year, from the Stripe price', /£70\/year/.test(plans), plans.slice(0, 400))
+      check('Essentials: unlimited voucher issuance and 3 tills', /Unlimited voucher issuance/.test(plans) && /plus 3 tills/.test(plans), plans.slice(0, 400))
       await site.getByRole('radio', { name: /Monthly/ }).click()
       const monthly = await site.locator('main').innerText()
-      check('monthly: Basic £8/month and Pro £11/month, in pounds', /£8\/month/.test(monthly) && /£11\/month/.test(monthly), monthly.slice(0, 400))
+      check('monthly: Essentials £8/month and Pro £11/month, in pounds', /£8\/month/.test(monthly) && /£11\/month/.test(monthly), monthly.slice(0, 400))
 
       const cookies = await context.cookies(SITE_ORIGIN)
       const session = cookies.find((c) => c.name === 'imani_subscription_session')
@@ -337,7 +337,7 @@ async function main() {
       check('script on the site cannot read it', !(await site.evaluate(() => document.cookie)).includes('imani_subscription_session'))
       check('the wallet tab is still open', !walletPage.isClosed())
 
-      await site.getByRole('button', { name: 'Choose Basic' }).click()
+      await site.getByRole('button', { name: 'Choose Essentials' }).click()
       await site.waitForURL(/\/done/, { timeout: 15_000 })
       check(
         'checkout carried the stall key, tier, term, card only, tax on, charged in GBP (no adaptive pricing)',
@@ -358,12 +358,12 @@ async function main() {
           currency: 'GBP',
           now: Math.floor(Date.now() / 1000) + 5,
         })
-      check('the wallet reads it as Basic: unlimited issuance, 3 tills', ent?.tier === 'basic' && ent.terminals === 3 && ent.sales === null, JSON.stringify(ent))
+      check('the wallet reads it as Essentials: unlimited issuance, 3 tills', ent?.tier === 'basic' && ent.terminals === 3 && ent.sales === null, JSON.stringify(ent))
 
       await site.getByRole('link', { name: 'See my plan' }).click()
       await site.getByText('Active').waitFor({ timeout: 10_000 })
       const account = await site.locator('body').innerText()
-      check('account page shows Basic, active, sent to the wallet', /Basic/.test(account) && /Active/.test(account) && /Sent/.test(account), account.slice(0, 400))
+      check('account page shows Essentials, active, sent to the wallet', /Essentials/.test(account) && /Active/.test(account) && /Sent/.test(account), account.slice(0, 400))
       await site.getByRole('button', { name: 'Send my plan to my wallet again' }).click()
       await site.getByText(/Sent to your wallet again/).waitFor()
       check('re-send delivers again without a second mint', minted.length === 1 && delivered.length === 2)

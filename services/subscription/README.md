@@ -16,7 +16,7 @@ react-router and `src/components/ui`.
   stall that retires its record loses access.
 - **Buy** a tier by card through Stripe Checkout, using Billing for renewals and Tax for VAT.
 - **The plans** are the ones www.imani.casa/pricing publishes: Starter (the catalog's `free`
-  tier), Basic and Pro. `GET /v1/plans` lists Starter and every catalog tier that has a price in
+  tier), Essentials (the `basic` tier) and Pro. `GET /v1/plans` lists Starter and every catalog tier that has a price in
   `SUBSCRIPTION_PRICES`, with the amount read from Stripe. A tier with no card price (Town / BID
   Partner, "Contact us") is never offered, even if the catalog defines it for hand grants. Every
   price is in **GBP**: a Stripe price in any other currency is neither listed nor sold.
@@ -51,7 +51,7 @@ docker build -f services/subscription/Dockerfile -t imani-subscription .
 | `EDGE_SECRET` | edge secret gateway-customer trusts |
 | `IMANI_SUBSCRIPTIONS_SELLER_NSEC` | the seller (`GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`); also signs the catalog; wallets pin it as `VITE_LICENCE_SELLER_PUBKEY` |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | webhook events: `invoice.paid`, `customer.subscription.updated`, `customer.subscription.deleted` |
-| `SUBSCRIPTION_PRICES` | `basic:monthly=price_…,basic:annual=price_…,pro:monthly=price_…,pro:annual=price_…`. GBP prices only (Basic £8/£70, Pro £11/£100, VAT inclusive; `deploy/subscription-local/stripe-prices.sh` creates them in test mode). A tier the catalog does not define, or `free`, is refused at boot |
+| `SUBSCRIPTION_PRICES` | `basic:monthly=price_…,basic:annual=price_…,pro:monthly=price_…,pro:annual=price_…`. GBP prices only (Essentials £8/£70, Pro £11/£100, VAT inclusive; `deploy/subscription-local/stripe-prices.sh` creates them in test mode). A tier the catalog does not define, or `free`, is refused at boot |
 | `SUBSCRIPTION_ADMIN_PUBKEYS` | hex pubkeys allowed to issue grants and revoke |
 | `SUBSCRIPTION_AUTOMATIC_TAX` | `on` (default) or `off` |
 | `SUBSCRIPTION_CATALOG_PATH`, `SUBSCRIPTION_LEDGER_PATH`, `SUBSCRIPTION_STATIC_DIR` | set in the image |
