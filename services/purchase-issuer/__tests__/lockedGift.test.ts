@@ -6,6 +6,7 @@ import { discharge, GIFT_MAX_ATTEMPTS, type Obligation, type Ports } from '../di
 import { formatGiftLink, giftLockFor, verifyLockedGift, wrapForLink, DAY_MS } from '../giftLock'
 import type { GiftPorts, WrapEvent } from '../giftDelivery'
 import { issueBody } from '../issuer'
+import { saleRecordJson } from '../saleRecord'
 import { readConfig, ConfigError } from '../config'
 import type { GiftDelivery } from '../purchasesApi'
 import { encodePlainTokenV4 } from '../../../src/lib/plainToken'
@@ -176,6 +177,20 @@ describe('handle gift', () => {
     expect(rumor).toMatchObject({ type: 'imani_gift_sent', v: 1, stall: 'Alice Bakery', claimBy: X })
     expect(typeof rumor.token).toBe('string')
     expect(g.mails).toHaveLength(0)
+  })
+
+  it('the stall’s sale record names no recipient (G9)', async () => {
+    fakeGateway(honestMint)
+    const sales: Array<Record<string, unknown>> = []
+    const fileSale = async (_c: unknown, sale: Record<string, unknown>) => {
+      sales.push(sale)
+      return true
+    }
+    const gift = await discharge('http://gw', obligation('handle', delivery()), { ...portsWith(fakeGifts().ports), fileSale: fileSale as never })
+    expect(gift.kind).toBe('discharged')
+    expect(sales).toHaveLength(1)
+    expect(sales[0].recipientPubkey).toBeUndefined()
+    expect(saleRecordJson(sales[0] as never, 'cred')).not.toContain(BOB)
   })
 
   it('a mis-locked token is never delivered and is parked', async () => {
