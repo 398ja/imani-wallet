@@ -203,7 +203,18 @@ export class LicenceIssuer {
    */
   async storeEvent(event: { id: string; pubkey: string; created_at: number; kind: number; tags: string[][]; content: string; sig: string }): Promise<void> {
     const url = `${this.deps.walletUrl}/api/v1/nostr/events`
-    const body = JSON.stringify(event)
+    // The gateway's NostrEventDto reads `createdAt` (camelCase) and ignores unknown fields, so a
+    // NIP-01 `created_at` arrives as 0 and the recomputed id never matches (EVENT_ID_MISMATCH, seen
+    // on the local deployment). Send the DTO's own names.
+    const body = JSON.stringify({
+      id: event.id,
+      pubkey: event.pubkey,
+      createdAt: event.created_at,
+      kind: event.kind,
+      tags: event.tags,
+      content: event.content,
+      sig: event.sig,
+    })
     const r = await this.fetch(url, { method: 'POST', headers: this.headers(url, 'POST', body), body })
     if (!r.ok) throw new Error(`store event failed ${r.status}: ${(await r.text()).slice(0, 300)}`)
   }
