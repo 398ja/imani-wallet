@@ -482,6 +482,8 @@ export default defineConfig({
     include: [
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',
+      // The server-side SDKs (#366 @imani/cashlink-sender) reuse the app's engine, so they run here.
+      'sdk/**/*.test.{ts,tsx}',
       'perf/**/*.test.{ts,tsx}',
       // `deploy/` ships the container's nginx.conf, and its CSP is application
       // behaviour, not decoration: `worker-src 'self'` there silently disabled
