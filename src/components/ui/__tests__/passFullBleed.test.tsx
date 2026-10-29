@@ -103,17 +103,42 @@ describe('the avatar on the card', () => {
 })
 
 describe('the imani mark', () => {
-  it('sits top right in a white framed circle with no fill, the bare mark with no wordmark', () => {
+  it('is a white mark with a black border on its own edges, no circle, no wordmark', () => {
     const { getByRole } = draw(coupon())
     const mark = getByRole('img', { name: 'imani' })
     expect(mark.className).toMatch(/absolute right-5 top-5/)
-    expect(mark.className).toMatch(/rounded-full/)
-    expect(mark.className).toMatch(/ring-white/)
-    expect(mark.className).toMatch(/bg-transparent/)
-    expect(mark.className).not.toMatch(/bg-white/)
-    expect(mark.className).toMatch(/shadow-md/)
+    expect(mark.className).toMatch(/text-white/)
+    expect(mark.className).not.toMatch(/rounded-full|ring-|bg-/)
+    const path = mark.querySelector('svg path') as SVGPathElement
+    expect(path.getAttribute('stroke')).toBe('black')
+    expect(path.getAttribute('paint-order')).toBe('stroke')
+    expect((mark.querySelector('svg') as SVGElement).style.filter).toMatch(/drop-shadow/)
     expect(mark.querySelector('svg')).not.toBeNull()
     expect(mark.textContent).toBe('')
+  })
+})
+
+describe('the expiry on a coupon card', () => {
+  it('prints the date', () => {
+    const pass = coupon({
+      storeCard: {
+        primaryFields: [{ key: 'balance', label: 'BALANCE', value: 5 }],
+        auxiliaryFields: [{ key: 'expires', label: 'EXPIRES', value: '2026-11-10T21:37:19.000Z', dateStyle: 'PKDateStyleMedium' }],
+      },
+    })
+    const { getByText } = draw(pass)
+    expect(getByText('EXPIRES')).toBeTruthy()
+    expect(getByText(/2026/)).toBeTruthy()
+  })
+
+  it('prints "No expiry" when there is none', () => {
+    const pass = coupon({
+      storeCard: {
+        primaryFields: [{ key: 'balance', label: 'BALANCE', value: 5 }],
+        auxiliaryFields: [{ key: 'expires', label: 'EXPIRES', value: 'No expiry' }],
+      },
+    })
+    expect(draw(pass).getByText('No expiry')).toBeTruthy()
   })
 })
 
