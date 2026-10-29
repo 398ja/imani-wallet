@@ -74,6 +74,14 @@ const fake = createServer(async (req, res) => {
     const q = JSON.parse(body) as { authors?: string[] }
     return send(200, { events: q.authors?.includes(stall) ? [stallRecord] : [] })
   }
+  // GET /v1/prices/:id: the published plan, in GBP (www.imani.casa/pricing).
+  const priceMatch = /^\/v1\/prices\/([A-Za-z0-9_]+)$/.exec(req.url ?? '')
+  if (req.method === 'GET' && priceMatch) {
+    const amounts: Record<string, [number, string]> = { price_basicM: [800, 'month'], price_basicA: [7000, 'year'], price_proM: [1100, 'month'] }
+    const p = amounts[priceMatch[1]]
+    if (!p) return send(404, { error: { message: 'No such price' } })
+    return send(200, { id: priceMatch[1], unit_amount: p[0], currency: 'gbp', recurring: { interval: p[1] } })
+  }
   if (req.url === '/v1/checkout/sessions') {
     const p = new URLSearchParams(body)
     pendingCheckout = {
@@ -315,8 +323,12 @@ async function main() {
       check('opened from the wallet, the site is signed in with no login page and no passphrase', true)
       check('the site is on its own origin, not the wallet’s', new URL(site.url()).origin === SITE_ORIGIN, site.url())
       const plans = await site.locator('main').innerText()
-      check('plans list Free, Basic and Pro from the catalog', /Free/.test(plans) && /Basic/.test(plans) && /Pro/.test(plans), plans.slice(0, 200))
-      check('Basic says 1,000 a month and 3 tills', /£1,000 a month/.test(plans) && /plus 3 tills/.test(plans), plans.slice(0, 300))
+      check('plans list Starter, Basic and Pro, and no Town / BID partnership', /Starter/.test(plans) && /Basic/.test(plans) && /Pro/.test(plans) && !/Town|BID|Partner/.test(plans), plans.slice(0, 300))
+      check('yearly by default: Basic £70/year, from the Stripe price', /£70\/year/.test(plans), plans.slice(0, 400))
+      check('Basic: unlimited voucher issuance and 3 tills', /Unlimited voucher issuance/.test(plans) && /plus 3 tills/.test(plans), plans.slice(0, 400))
+      await site.getByRole('radio', { name: /Monthly/ }).click()
+      const monthly = await site.locator('main').innerText()
+      check('monthly: Basic £8/month and Pro £11/month, in pounds', /£8\/month/.test(monthly) && /£11\/month/.test(monthly), monthly.slice(0, 400))
 
       const cookies = await context.cookies(SITE_ORIGIN)
       const session = cookies.find((c) => c.name === 'imani_subscription_session')
@@ -345,7 +357,7 @@ async function main() {
           currency: 'GBP',
           now: Math.floor(Date.now() / 1000) + 5,
         })
-      check('the wallet reads it as Basic: 1,000/month, 3 tills', ent?.tier === 'basic' && ent.terminals === 3 && ent.sales?.amount === 100000, JSON.stringify(ent))
+      check('the wallet reads it as Basic: unlimited issuance, 3 tills', ent?.tier === 'basic' && ent.terminals === 3 && ent.sales === null, JSON.stringify(ent))
 
       await site.getByRole('link', { name: 'See my plan' }).click()
       await site.getByText('Active').waitFor({ timeout: 10_000 })

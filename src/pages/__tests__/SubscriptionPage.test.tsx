@@ -359,7 +359,7 @@ describe('the plan (#407)', () => {
         <SubscriptionPage pubkey={CUSTOMER} currency="GBP" />
       </MemoryRouter>,
     )
-    expect(await screen.findByText('Free')).toBeTruthy()
+    expect(await screen.findByText('Starter')).toBeTruthy()
     expect(screen.getByText(/82\.00 of .*100\.00/)).toBeTruthy()
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('82')
     expect(screen.getByText('1 besides this device')).toBeTruthy()
