@@ -73,6 +73,17 @@ describe('built-in templates', () => {
     expect(() => resolveFields(t, { stall: 's', amount: 'a', recipient: 'r', claimBy: 'c', howBack: 'h', returnUrl: 'https://imani.test/x' }, LINKS)).toThrow(/unknown field "returnUrl"/)
   })
 
+  it('gift-return-link (G17 C): says the expiry a taken-back voucher keeps, only when given', () => {
+    const t = compile('gift-return-link', BUILTIN_TEMPLATES['gift-return-link'])
+    const base = { stall: 'Card Test Bakery', claimBy: '11 November 2026', returnUrl: 'https://wallet.imani.test/gift-return#r=ab' }
+    const plain = render(t, resolveFields(t, base, LINKS)).text
+    expect(plain).not.toMatch(/original expiry/)
+    const g17 = render(t, resolveFields(t, { ...base, spendBy: 'spend it by 26 January 2027' }, LINKS)).text
+    expect(g17).toContain("https://wallet.imani.test/gift-return#r=ab\n\nOnce it's back, it keeps its original expiry: spend it by 26 January 2027.\n\nKeep it private")
+    const never = render(t, resolveFields(t, { ...base, spendBy: "the voucher doesn't expire" }, LINKS)).text
+    expect(never).toContain("Once it's back, it keeps its original expiry: the voucher doesn't expire.")
+  })
+
   it('refuses missing required fields, unknown fields and non-strings', () => {
     expect(() => renderClaim({ ...claimFields, stall: '' })).toThrow(/stall is required/)
     expect(() => renderClaim({ ...claimFields, bcc: 'x@y.z' })).toThrow(/unknown field "bcc"/)
