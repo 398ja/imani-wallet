@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.3] - 2026-10-29
+
+A **patch**: the wallet-api image did not build on 0.40.x (#425). No behaviour change.
+
+### Fixed
+
+- The wallet-api image guard checks `from '@imani/...'` imports only; a comment naming the
+  caller-side `@imani/cashlink-sender` (#366) had failed the build.
+
 ## [0.40.2] - 2026-10-29
 
 A **patch**: the purchase-issuer image did not build on 0.40.x (#423). No behaviour change.
