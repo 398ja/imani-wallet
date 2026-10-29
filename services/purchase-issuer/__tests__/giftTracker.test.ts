@@ -323,3 +323,25 @@ describe('httpCheckStates (NUT-07)', () => {
     await expect(httpCheckStates(null, f)('https://m', YS)).rejects.toThrow(/500/)
   })
 })
+
+describe('owner: notices go to EVERY sender, signed in or guest', () => {
+  it('a signed-in buyer gets gift-claimed for one gift and gift-expired for another; guest only changes howBack', async () => {
+    const h = harness()
+    await h.tracker.track(input({ draftId: 'signed-claimed', guest: false }), 'm')
+    await h.tracker.track(input({ draftId: 'signed-expired', guest: false }), 'm')
+    // First gift: both proofs spent before claimBy.
+    h.setStates(() => ['SPENT', 'SPENT'])
+    await h.tracker.sweep()
+    expect(h.mails.map((m) => [m.template, m.to, m.idempotencyKey])).toEqual([
+      ['gift-claimed', BUYER_EMAIL, 'signed-claimed:claimed'],
+      ['gift-claimed', BUYER_EMAIL, 'signed-expired:claimed'],
+    ])
+    const h2 = harness()
+    await h2.tracker.track(input({ draftId: 'signed-expired', guest: false }), 'm')
+    h2.at(CLAIM_BY)
+    await h2.tracker.sweep()
+    expect(h2.mails).toHaveLength(1)
+    expect(h2.mails[0]).toMatchObject({ template: 'gift-expired', to: BUYER_EMAIL, idempotencyKey: 'signed-expired:expired' })
+    expect(h2.mails[0].fields!.howBack).toBe('Open your Imani wallet: it takes it back for you.')
+  })
+})
