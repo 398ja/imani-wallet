@@ -1163,8 +1163,11 @@ async function wrongPathCredential(owner: Page, ownerSk: string, stall: string, 
     return out
   }, minted.voucherId)
   const setupRow = rows.find((r) => r.type === 'terminal_setup_request')
+  // The stall's name or handle when C has its profile, else "a stall": never a key (#407 bdcb939,
+  // "no notice shows a key"). An npub here would now be the bug.
   check('E13 C\'s bell reads "Terminal setup request from <stall>", linking to setup', noticed && !!setupRow &&
-    /^Terminal setup request from (Test Stall|@|npub1)/.test(setupRow.title) && setupRow.url === '/terminal/setup', JSON.stringify(rows))
+    /^Terminal setup request from (Test Stall|@|a stall)/.test(setupRow.title) && !/npub1|[0-9a-f]{64}/.test(setupRow.title) &&
+    setupRow.url === '/terminal/setup', JSON.stringify(rows))
   check('E13 C files no "Payment received" for it', !rows.some((r) => r.type === 'voucher_received' || /Payment/.test(r.title)), JSON.stringify(rows))
   // Given the poller every chance to have redeemed it, the mint still holds it unspent.
   await customer.waitForTimeout(5_000)
