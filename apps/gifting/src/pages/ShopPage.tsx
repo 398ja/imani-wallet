@@ -462,6 +462,8 @@ function Review({
   const validity = shop.record.voucherValidityDays
   const deadline = claimDeadline(Date.now(), validity, draft.delivery.claimWindowDays)
   const expiry = validity ? day(new Date(Date.now() + validity * 86_400_000)) : 'no expiry'
+  // G17 (C): a gift taken back keeps the voucher's original expiry, so say what that leaves.
+  const keeps = validity ? ` It keeps its original expiry, so you'd have until ${expiry} to spend it.` : " It doesn't expire."
 
   return (
     <Screen>
@@ -487,15 +489,19 @@ function Review({
           <div data-testid="review-recipient">
             <p className="font-medium">{displayHandle(normaliseRecipientHandle(form.handle) ?? '')}</p>
             <p className="text-xs text-mono-500">Check this is the right person. The gift goes to their wallet as it is now.</p>
-            <p className="mt-1 text-sm text-mono-500">If they don&apos;t take it by {day(deadline)}, you can take it back.</p>
+            <p className="mt-1 text-sm text-mono-500" data-testid="review-take-back">
+              If they don&apos;t take it by {day(deadline)}, you can take it back.{keeps}
+            </p>
           </div>
         )}
         {draft.delivery.kind === 'email' && (
           <div data-testid="review-recipient">
             <p className="break-all text-title font-semibold">{draft.delivery.email}</p>
             <p className="mt-1 text-sm text-mono-500">
-              We&apos;ll email a link to claim it. If it isn&apos;t claimed by {day(deadline)}, you can take it back. They may need to check their spam
-              folder.
+              We&apos;ll email a link to claim it. They may need to check their spam folder.
+            </p>
+            <p className="mt-1 text-sm text-mono-500" data-testid="review-take-back">
+              If it isn&apos;t claimed by {day(deadline)}, you can take it back.{keeps}
             </p>
           </div>
         )}

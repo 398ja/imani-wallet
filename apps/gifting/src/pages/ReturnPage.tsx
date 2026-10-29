@@ -65,7 +65,7 @@ export function ReturnPage() {
         <div className="mt-6 rounded-2xl border border-mono-200 p-4 dark:border-mono-800" data-testid="return-link">
           <p className="mb-2 text-sm font-medium">Your return link</p>
           <p className="mb-2 text-sm text-mono-500">
-            If it isn&apos;t claimed in time, open this link after the claim date to take the gift back into a wallet. Save it now: we can&apos;t send it again. Keep it private: it is yours, not the recipient&apos;s.
+            If it isn&apos;t claimed in time, open this link after the claim date to take the gift back into a wallet. We&apos;ve also emailed it to you. Keep it private: it is yours, not the recipient&apos;s.
           </p>
           <a className="break-all text-sm underline" href={returnLink(WALLET_ORIGIN, refundSecret)}>
             Take the gift back
