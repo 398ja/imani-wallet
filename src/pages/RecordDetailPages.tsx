@@ -192,7 +192,9 @@ export function CouponPage() {
           ['Expires', expiresValue],
           // The sender's note, off the card since #419 (the card's line was
           // mostly the "Gift Card" placeholder). Dropped when there is none.
-          ['Memo', row.memo],
+          // `memo` is not a declared VoucherRow field (it arrives untyped through
+          // the store), so only a non-empty string is shown.
+          ['Memo', typeof row.memo === 'string' && row.memo.trim() !== '' ? row.memo : undefined],
           // The id identifies the record, so it stays visible rather than
           // collapsing into Details with the derived and diagnostic fields.
           ['Voucher id', row.token_id],

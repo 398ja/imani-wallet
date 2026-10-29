@@ -11,9 +11,7 @@ import {
   type SignedCatalog,
   type TierCatalog,
 } from '@imani/licence'
-import { schnorr } from '@noble/curves/secp256k1.js'
-import { sha256 } from '@noble/hashes/sha2.js'
-import { hexToBytes } from '@noble/hashes/utils'
+import { catalogSignedBy } from './catalogSignature'
 import type { TransactionRow } from '@imani/wallet-storage'
 
 import { licenceSellerPubkey, type LicenceStatus } from './licenceStatus'
@@ -84,17 +82,7 @@ export function adoptCatalog(signed: SignedCatalog): boolean {
  * stays on the bundled one: the safe direction.
  */
 export function catalogSignatureValid(signed: SignedCatalog, sellerPublicKey = licenceSellerPubkey()): boolean {
-  const issuerPublicKey = sellerPublicKey
-  if (!/^[0-9a-f]{64}$/i.test(issuerPublicKey) || !/^[0-9a-f]{128}$/i.test(signed.signature)) return false
-  try {
-    return schnorr.verify(
-      hexToBytes(signed.signature),
-      sha256(new TextEncoder().encode(signed.body)),
-      hexToBytes(issuerPublicKey),
-    )
-  } catch {
-    return false
-  }
+  return catalogSignedBy(signed, sellerPublicKey)
 }
 
 /** Forget an adopted catalog. For tests and a wipe. */
