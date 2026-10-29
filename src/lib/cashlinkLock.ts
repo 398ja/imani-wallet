@@ -72,9 +72,12 @@ export function deriveRefundSecret(identitySecret: Uint8Array, i: number): Uint8
 }
 
 /**
- * #402: the refund key of checkout-code part `i`, under its own label so it can never equal a
- * Cashlink's refund key for the same index. The shop holds `S`, so `R` must stay the customer's:
- * after `x` it is the customer, and only the customer, who takes the part back.
+ * #402: the refund key of the `i`-th checkout part this wallet ever locks, under its own label so it
+ * can never equal a Cashlink's refund key for the same index. The shop holds `S`, so `R` must stay
+ * the customer's: after `x` it is the customer, and only the customer, who takes the part back.
+ *
+ * `i` is a wallet-wide counter, never the part's index within one code: reusing it across codes
+ * would put the same `R` on parts of different codes, and the relay could link them to one customer.
  */
 export const CHECKOUT_REFUND_LABEL = 'imani-checkout-refund/v1/'
 
