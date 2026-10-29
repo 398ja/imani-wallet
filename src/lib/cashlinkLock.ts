@@ -109,7 +109,7 @@ const xOnlyOf = (key: string): string => (key.length === 66 ? key.slice(2) : key
  * What a derived value is for. Separate labels, so no two steps can ever produce the same output:
  * a refund output that equalled a burn output would let one swap's restore answer for the other.
  */
-export type DerivedPurpose = 'burn' | 'refund' | 'takeback' | 'mint-link' | 'mint-refund' | 'lock' | 'resign-link' | 'resign-refund'
+export type DerivedPurpose = 'burn' | 'refund' | 'takeback' | 'mint-link' | 'mint-refund' | 'lock' | 'resign-link' | 'resign-refund' | 'unlock-burn' | 'unlock' | 'mint-unlock'
 
 const anchorOf = (secret: string) => bytesToHex(sha256(utf8(secret)))
 
@@ -479,6 +479,8 @@ const verifySigned = (v: SignedVoucherFields): boolean => verifyVoucher(v).signa
 
 export const CASHLINK_LOCK_TAG = 'imani/voucher-cashlink-lock/v1'
 export const CASHLINK_RESIGN_TAG = 'imani/voucher-cashlink-resign/v1'
+/** #402 contract §5: a returned checkout coupon locked to `R`, unlocked by `R`. */
+export const CHECKOUT_UNLOCK_TAG = 'imani/voucher-checkout-unlock/v1'
 
 /** `sha256(TAG || u32be(len) || predecessor || u32be(len) || proposed)`, as `LockAuthorization`. */
 export function cashlinkDigest(tag: string, predecessor: string, proposed: string): Uint8Array {

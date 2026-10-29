@@ -24,6 +24,7 @@ import { hashToCurve, pointFromHex } from '@cashu/crypto/modules/common'
 import { createDLEQProof } from '@cashu/crypto/modules/mint/NUT12'
 
 import {
+  CHECKOUT_UNLOCK_TAG,
   CASHLINK_LOCK_TAG,
   CASHLINK_RESIGN_TAG,
   cashlinkDigest,
@@ -134,7 +135,7 @@ export class FakeMint implements CashlinkMint {
     if (!p.secret.startsWith('["P2PK')) return true
     if (isOpenAfterLocktime(p.secret)) return true // The hazard: anyone. The wallet must never make one.
     const lock = readLinkLock(p.secret)
-    if (!lock) return false
+    if (!lock) return this.verifyReturned(p)
     const digest = sha256(utf8(sigAllMessage(p.secret, p.C, outputs)))
     let sigs: string[] = []
     try {
@@ -151,6 +152,18 @@ export class FakeMint implements CashlinkMint {
     })
     if (by(lock.linkPub)) return true
     return this.now > lock.locktime && this.now >= this.clockBehindUntil && by(lock.refundPub)
+  }
+
+  /** #402: `P2PK_VOUCHER(data = 02‖K)`, no locktime, no refund, SIG_INPUTS: only K over the secret. */
+  private verifyReturned(p: TokenProof & { witness?: string }): boolean {
+    const K = returnedKey(p.secret)
+    if (!K) return false
+    try {
+      const sigs = (JSON.parse(p.witness ?? '{}') as { signatures?: string[] }).signatures ?? []
+      return sigs.some((s) => safeVerify(s, sha256(utf8(p.secret)), K))
+    } catch {
+      return false
+    }
   }
 
   async activeKeysetId(): Promise<string> {
@@ -360,6 +373,7 @@ export class FakeGateway implements CashlinkGateway {
       return forced
     }
     if (path.endsWith('/vouchers/cashlink/lock')) return this.routes ? this.lock(body as LockBody) : { status: 404, body: null }
+    if (path.endsWith('/vouchers/checkout/unlock')) return this.routes && this.unlockRoute ? this.unlock(body as LockBody, signedBy) : { status: 404, body: null }
     if (path.endsWith('/vouchers/cashlink/resign')) return this.routes ? this.resign(body as LockBody) : { status: 404, body: null }
     if (path.endsWith('/cashlink/refunds') && method === 'POST') return this.deposit(body as DepositBody, signedBy)
     if (path.includes('/cashlink/refunds/') && method === 'GET') return this.fetch(path.split('/').pop()!, signedBy)
@@ -412,6 +426,25 @@ export class FakeGateway implements CashlinkGateway {
   }
 
   callerIsIssuer?: (issuer: string) => boolean
+  /** #402: gateway-customer feat/402-checkout-settle. Off to model a gateway without it. */
+  unlockRoute = true
+  unlocks = new Map<string, { proposed: string; signed: string }>()
+
+  /** Contract §5 unlock: K-locked, no locktime/refund, authorised by K, spent by K, same terms. */
+  private unlock(b: LockBody, signedBy?: string): GatewayAnswer {
+    const K = returnedKey(b.predecessor_secret)
+    if (!K) return refused(422, 'WRONG_PREDECESSOR')
+    if (!safeVerify(b.authorization, cashlinkDigest(CHECKOUT_UNLOCK_TAG, b.predecessor_secret, b.proposed_secret), K)) return refused(422, 'NOT_AUTHORISED')
+    const issuer = voucherOfSecret(b.predecessor_secret)?.issuerId
+    if (issuer && signedBy && issuer.toLowerCase() === signedBy.toLowerCase()) return refused(422, 'ISSUER_SELF_SWAP')
+    const witness = this.mint.witnessOf(b.predecessor_secret)
+    if (witness === undefined) return refused(409, 'PREDECESSOR_NOT_SPENT')
+    const prior = this.unlocks.get(b.predecessor_secret)
+    if (prior) return prior.proposed === b.proposed_secret ? { status: 200, body: { signed_secret: prior.signed } } : refused(422, 'PREDECESSOR_ALREADY_CLAIMED')
+    const signed = signUnlocked(b.proposed_secret)
+    this.unlocks.set(b.predecessor_secret, { proposed: b.proposed_secret, signed })
+    return { status: 200, body: { signed_secret: signed } }
+  }
 
   private deposit(b: DepositBody, signedBy?: string): GatewayAnswer {
     if (!this.relayOn) return refused(503, 'RELAY_DISABLED')
@@ -472,6 +505,18 @@ interface LockBody {
 interface DepositBody {
   proof: TokenProof & { witness: string }
   outputs: Array<{ amount: number; id: string; B_: string }>
+}
+
+/** The key a returned coupon is locked to (`P2PK_VOUCHER`, no locktime, no refund), x-only, or null. */
+export function returnedKey(secret: string): string | null {
+  try {
+    const [kind, body] = JSON.parse(secret) as [string, { data?: string; tags?: string[][] }]
+    if (kind !== 'P2PK_VOUCHER' || !/^02[0-9a-f]{64}$/i.test(body.data ?? '')) return null
+    if ((body.tags ?? []).some((t) => t[0] === 'locktime' || t[0] === 'refund' || t[0] === 'sigflag')) return null
+    return body.data!.slice(2).toLowerCase()
+  } catch {
+    return null
+  }
 }
 
 const refused = (status: number, refusal: string): GatewayAnswer => ({ status, body: { refusal } })
@@ -537,4 +582,132 @@ export function world(nowS = 1_800_000_000): World {
 export function at(w: World, nowS: number): void {
   w.clock.now = nowS
   w.mint.now = nowS
+}
+
+// --- #402: the checkout-code store ---------------------------------------------
+
+export const STORE_KEY = hexToBytes('c5'.repeat(32))
+export const STORE_PUB = bytesToHex(schnorr.getPublicKey(STORE_KEY))
+
+export interface StoredCode {
+  code: string
+  status: 'reserved' | 'held' | 'redeemed' | 'cancelling' | 'cancelled' | 'expired'
+  body: { idempotency_key: string; stall_pubkey: string; shop_key: string; unit: string; amount: number; expires_at: number; parts: Array<{ token: string; amount: number }> }
+}
+
+/**
+ * `imani-checkout-codes`, from contract §3: verifies every part (the §2 shape locked to `shop_key`
+ * until `expires_at`, unspent at the mint, amount = credited face value), all or nothing, and
+ * replays the same answer for the same idempotency key.
+ */
+export class FakeCodeStore {
+  codes = new Map<string, StoredCode>()
+  calls: Array<{ method: string; path: string; body: unknown }> = []
+  down = false
+  /** Answer the next deposit with this, once. */
+  nextDeposit?: GatewayAnswer
+  private n = 0
+
+  constructor(readonly mint: FakeMint) {}
+
+  async call(method: 'GET' | 'POST', path: string, body?: unknown): Promise<GatewayAnswer> {
+    if (this.down) throw new Error('store unreachable')
+    this.calls.push({ method, path, body })
+    if (path === '/v1/checkout-codes/info') return { status: 200, body: { pubkey: STORE_PUB } }
+    if (path === '/v1/checkout-codes/mine') return { status: 200, body: [...this.codes.values()].map((c) => ({ code: c.code, status: c.status, amount: c.body.amount })) as unknown as Record<string, unknown> }
+    if (path === '/v1/checkout-codes' && method === 'POST') return this.deposit(body as StoredCode['body'])
+    const cancel = /^\/v1\/checkout-codes\/([^/]+)\/cancel$/.exec(path)
+    if (cancel && method === 'POST') {
+      const c = this.byCode(cancel[1])
+      if (!c) return refused(404, 'NOT_FOUND')
+      if (c.status === 'held') return refused(409, 'HELD')
+      if (c.status !== 'reserved') return refused(409, c.status.toUpperCase())
+      c.status = 'cancelling'
+      return { status: 200, body: { status: 'cancelling' } }
+    }
+    return { status: 404, body: null }
+  }
+
+  private async deposit(b: StoredCode['body']): Promise<GatewayAnswer> {
+    const forced = this.nextDeposit
+    if (forced) {
+      this.nextDeposit = undefined
+      return forced
+    }
+    const prior = this.codes.get(b.idempotency_key)
+    if (prior) return { status: 201, body: { code: prior.code, status: prior.status, expires_at: b.expires_at } }
+    if (!Array.isArray(b.parts) || b.parts.length < 1 || b.parts.length > 20) return { status: 422, body: { refusal: 'TOO_MANY_PARTS' } }
+    if (b.parts.reduce((n, p) => n + p.amount, 0) !== b.amount) return { status: 422, body: { refusal: 'AMOUNT_MISMATCH' } }
+    for (const [i, part] of b.parts.entries()) {
+      let proofs: TokenProof[]
+      try {
+        const { tokenProofs, parseVoucherToken, creditableFaceValue } = await import('../voucherToken')
+        proofs = tokenProofs(part.token)
+        if (creditableFaceValue(parseVoucherToken(part.token)).faceValue !== part.amount) return { status: 422, body: { refusal: 'AMOUNT_MISMATCH', part: i } }
+      } catch {
+        return { status: 422, body: { refusal: 'MALFORMED', part: i } }
+      }
+      for (const p of proofs) {
+        if (isOpenAfterLocktime(p.secret)) return { status: 422, body: { refusal: 'LOCKTIME_WITHOUT_REFUND', part: i } }
+        const lock = readLinkLock(p.secret)
+        if (!lock) return { status: 422, body: { refusal: 'NOT_A_LOCK', part: i } }
+        if (lock.linkPub !== b.shop_key) return { status: 422, body: { refusal: 'WRONG_LOCK_KEY', part: i } }
+        if (lock.locktime !== b.expires_at) return { status: 422, body: { refusal: 'MIXED_EXPIRY', part: i } }
+        if (voucherOfSecret(p.secret)?.issuerId.toLowerCase() !== b.stall_pubkey) return { status: 422, body: { refusal: 'WRONG_ISSUER', part: i } }
+      }
+      const states = await this.mint.states(MINT_URL, proofs.map((p) => p.secret))
+      if (states.some((s) => s !== 'UNSPENT')) return { status: 422, body: { refusal: 'ALREADY_SPENT', part: i } }
+    }
+    const code = await this.newCode()
+    this.codes.set(b.idempotency_key, { code, status: 'reserved', body: b })
+    return { status: 201, body: { code, status: 'reserved', expires_at: b.expires_at } }
+  }
+
+  private async newCode(): Promise<string> {
+    const { checkSymbol, display } = await import('../checkoutCode')
+    const data = String(this.n++).padStart(11, '0')
+    return display(`IMANI${data}${checkSymbol(data)}`)
+  }
+
+  byCode(code: string): StoredCode | undefined {
+    const compact = code.replace(/-/g, '')
+    return [...this.codes.values()].find((c) => c.code.replace(/-/g, '') === compact)
+  }
+}
+
+/**
+ * The shop's side of a cancel or change, enough for the wallet's tests: every locked proof of a
+ * part, spent by `S` (as `checkout/settle` would allow), comes back as a coupon locked to its `R`
+ * with no locktime, minted at the mint. Returns the tokens the store would deliver.
+ */
+export function returnToCustomer(mint: FakeMint, lockedTokens: string[]): string[] {
+  const out: string[] = []
+  for (const token of lockedTokens) {
+    const proofs = decodeProofs(token)
+    const returned = proofs.map((p, n) => {
+      const lock = readLinkLock(p.secret)!
+      const [, body] = JSON.parse(p.secret) as [string, { nonce: string; data: string; tags: string[][] }]
+      const tags = body.tags.filter((t) => !['locktime', 'refund', 'sigflag', 'issuer_sig', 'issuer_pubkey'].includes(t[0]))
+      const proposal = JSON.stringify(['P2PK_VOUCHER', { nonce: `ret${n}${body.nonce.slice(0, 8)}`, data: `02${lock.refundPub}`, tags }])
+      // The shop's burn of the S-locked proof.
+      mint.spent.set(hashToCurve(utf8(p.secret)).toHex(true), { witness: '{"signatures":[]}' })
+      return mint.issue(signLocked(proposal), p.amount)
+    })
+    out.push(tokenOf(returned))
+  }
+  return out
+}
+
+/** The shop redeemed: every locked proof is spent by `S`. */
+export function shopSpends(mint: FakeMint, lockedTokens: string[]): void {
+  for (const token of lockedTokens) for (const p of decodeProofs(token)) mint.spent.set(hashToCurve(utf8(p.secret)).toHex(true), { witness: '{"signatures":[]}' })
+}
+
+let decodeProofs: (token: string) => TokenProof[] = () => {
+  throw new Error('call loadTokenReader() first')
+}
+/** The token reader, loaded lazily so this file stays importable before its mocks are set. */
+export async function loadTokenReader(): Promise<void> {
+  const { tokenProofs } = await import('../voucherToken')
+  decodeProofs = tokenProofs
 }
