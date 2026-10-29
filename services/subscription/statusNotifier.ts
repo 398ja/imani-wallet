@@ -52,6 +52,13 @@ export function relayStatusNotifier(opts: {
   relayUrl: string
   timeoutMs?: number
   publish?: (url: string, event: Event) => Promise<void>
+  /**
+   * Also hand the wrap to gateway-customer's index (`POST /api/v1/nostr/events`, signature-checked),
+   * which is where the wallet's DM poll reads. The index answers from its cache while it holds any
+   * recent wrap for the stall and only then consults the relay, so a second status published only
+   * to the relay seconds after the first was not visible (seen 2026-10-29, the undo of a cancel).
+   */
+  store?: (event: Event) => Promise<void>
 }): StatusNotifier {
   const publish = opts.publish ?? ((url, event) => publishTo(url, event, opts.timeoutMs ?? 5000))
   return {
@@ -60,7 +67,12 @@ export function relayStatusNotifier(opts: {
       // would never fetch an undo whose wrap was backdated behind the cancellation it had seen.
       // The timing it would hide is already public: the seller acts when Stripe's webhook fires.
       const wrap = wrapMessage(opts.seller.sk, stallPubkey, subscriptionStatusJson(message), 0)
-      await publish(opts.relayUrl, wrap)
+      // Both, and either is enough for the wallet to see it: the index serves the poll at once, the
+      // relay is the record of truth the index refills from. Fail only if neither took it.
+      const results = await Promise.allSettled([publish(opts.relayUrl, wrap), opts.store?.(wrap) ?? Promise.reject(new Error('no index'))])
+      if (results.every((r) => r.status === 'rejected')) {
+        throw new Error(results.map((r) => (r as PromiseRejectedResult).reason?.message ?? r).join('; '))
+      }
     },
   }
 }
