@@ -10,7 +10,11 @@ import { nip17 } from 'nostr-tools'
  * `imani_gift_sent` notice records an outgoing gift (never balance), the sweep claims / takes back,
  * and the guest return page finds the gift through a wrap to getPublicKey(R).
  */
-const h = vi.hoisted(() => ({ privkey: '', rows: new Map<string, Record<string, unknown>>() }))
+const h = vi.hoisted(() => ({ privkey: '', rows: new Map<string, Record<string, unknown>>(), published: [] as Array<Record<string, unknown>> }))
+
+// The relay backup: a settled gift's row must go back out, or the next login's restore reads the
+// old copy (see lockedGiftBackup.test.ts).
+vi.mock('../txRecords', () => ({ publishTx: async (row: Record<string, unknown>) => void h.published.push(row) }))
 
 vi.mock('../trustedMint', () => ({ checkTokenBacking: () => ({ outcome: 'accept' }), loadTrustedMints: async () => {}, checkMintAndUnit: () => 'trusted' }))
 vi.mock('../issuerAllowlist', () => ({ checkIssuer: () => 'ok' }))
@@ -35,7 +39,11 @@ vi.mock('../wallet', () => ({
   getWallet: () => ({
     getTransaction: async (id: string) => h.rows.get(id) ?? null,
     addTransaction: async (r: Record<string, unknown>) => void h.rows.set(String(r.id), r),
-    updateTransaction: async (id: string, patch: Record<string, unknown>) => void h.rows.set(id, { ...h.rows.get(id), ...patch }),
+    updateTransaction: async (id: string, patch: Record<string, unknown>) => {
+      const next = { ...h.rows.get(id), ...patch }
+      h.rows.set(id, next)
+      return next
+    },
     getAllTransactions: async () => [...h.rows.values()],
   }),
 }))
@@ -148,6 +156,9 @@ describe('signed-in buyer through dm-poll', () => {
     expect((await app.sweepLockedGifts()).returned).toBe(1)
     expect(only().lockedGift.status).toBe('returned')
     expect(w.kept[0].why).toBe('returned')
+    const last = h.published.at(-1) as { lockedGift: { status: string }; memo: string }
+    expect(last.lockedGift.status).toBe('returned')
+    expect(last.memo).toBe('Not claimed, taken back into your wallet')
   })
 
   it('claimed by the recipient before x: recorded as claimed', async () => {

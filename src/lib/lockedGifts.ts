@@ -21,7 +21,7 @@ import { claimLockedGift, OWN_KEY_CLAIM, settleLockedGift, type CashlinkPorts, t
 import type { ProofState } from './giftLink'
 import { checkTokenBacking } from './trustedMint'
 import { creditableFaceValue, parseVoucherToken, tokenProofs, verifyVoucher } from './voucherToken'
-import { formatDate } from './format'
+import { lockedGiftMemo, type LockedGiftRecord } from './lockedGiftRecord'
 import { encodePlainTokenV4 } from './plainToken'
 
 export const GIFT_SENT_TYPE = 'imani_gift_sent'
@@ -125,57 +125,9 @@ export function acceptGiftSent(
 
 // --- Records -----------------------------------------------------------------
 
-export type LockedGiftStatus = 'waiting' | 'returning' | 'claimed' | 'returned' | 'gone'
-
-/** A minted-locked gift on a history row. The token is harmless without the matching key. */
-export interface LockedGiftRecord {
-  dir: 'in' | 'out'
-  token: string
-  x: number
-  status: LockedGiftStatus
-  stall?: string
-  to?: string | null
-  closedAt?: number
-}
+export { asLockedGiftRecord, lockedGiftMemo, type LockedGiftRecord, type LockedGiftStatus } from './lockedGiftRecord'
 
 export const lockedGiftRowId = (dir: 'in' | 'out', token: string): string => `locked-gift:${dir}:${secretHash(tokenProofs(token)[0].secret).slice(0, 32)}`
-
-export function asLockedGiftRecord(v: unknown): LockedGiftRecord | undefined {
-  const r = v as LockedGiftRecord | null
-  if (!r || typeof r !== 'object' || (r.dir !== 'in' && r.dir !== 'out') || typeof r.token !== 'string' || typeof r.x !== 'number') return undefined
-  if (!['waiting', 'returning', 'claimed', 'returned', 'gone'].includes(r.status)) return undefined
-  return r
-}
-
-/** The Activity line for a gift. Never a key. */
-export function lockedGiftMemo(r: Pick<LockedGiftRecord, 'dir' | 'status' | 'x' | 'to' | 'stall'>): string {
-  const date = formatDate(r.x)
-  if (r.dir === 'out') {
-    const who = r.to || 'your recipient'
-    switch (r.status) {
-      case 'waiting':
-        return `Sent to ${who}, claim by ${date}`
-      case 'returning':
-        return 'Not claimed, coming back to you'
-      case 'claimed':
-        return `Claimed by ${who}`
-      case 'returned':
-        return 'Not claimed, taken back into your wallet'
-      case 'gone':
-        return 'Gift no longer available'
-    }
-  }
-  const from = r.stall ? `Gift from ${r.stall}` : 'Gift'
-  switch (r.status) {
-    case 'waiting':
-    case 'returning':
-      return `${from}, claim by ${date}`
-    case 'claimed':
-      return `${from}, added to your wallet`
-    default:
-      return `${from}, not claimed in time and returned to the buyer`
-  }
-}
 
 /** The history row for a gift (not a balance: no voucher row exists for it until it is claimed). */
 export function lockedGiftRow(rec: LockedGiftRecord, nowMs: number): Record<string, unknown> {
