@@ -99,6 +99,37 @@ describe('handle recipient through dm-poll', () => {
     expect(only().voucherId).toBeUndefined()
   })
 
+  it('a locked gift big enough to arrive in chunks is filed too, not redeemed (found on the local stack)', async () => {
+    // The gateway splits a DM over its direct limit into cashu_dm_chunk pieces. The reassembled
+    // payload used to go straight to redemption, which can never spend a locked proof ("API request
+    // failed" on every poll), so the recipient never saw the gift.
+    h.privkey = bytesToHex(ME)
+    const token = minted(ME, BUYER)
+    const payload = transfer(token)
+    const original = new TextEncoder().encode(payload)
+    const digest = bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', original)))
+    const b64 = btoa(String.fromCharCode(...original))
+    const half = Math.ceil(b64.length / 2)
+    const pieces = [b64.slice(0, half), b64.slice(half)].map((fragment, index) =>
+      JSON.stringify({
+        type: 'cashu_dm_chunk', version: '1.0', payload_type: 'cashu_token_transfer', payload_version: '1.0',
+        transfer_id: 'a1b2c3d4-0000-4000-8000-000000000001', chunk_index: index, chunk_total: 2,
+        content_encoding: 'identity', content_length: original.length, content_sha256: digest, payload: fragment,
+      }),
+    )
+    const dm = createDmCryptoAdapter()
+    const first = await dm.unwrapNip17Dm(wrapTo(ISSUER, ME, pieces[0]) as never, '')
+    // Held for its sibling (never a coupon, never processed).
+    expect(first === null || (first as { hold?: boolean }).hold === true || first.content === '').toBe(true)
+    expect(h.rows.size).toBe(0)
+    const done = await dm.unwrapNip17Dm(wrapTo(ISSUER, ME, pieces[1]) as never, '')
+    expect(done?.content).toBe('')
+    expect(only().lockedGift.status).toBe('waiting')
+    await app.sweepLockedGifts()
+    expect(only().lockedGift.status).toBe('claimed')
+    expect(w.kept).toHaveLength(1)
+  })
+
   it('a key that cannot be lent: stays "Claim by", no balance; claims once the key is readable', async () => {
     h.privkey = bytesToHex(ME)
     const token = minted(ME, BUYER)
