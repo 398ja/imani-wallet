@@ -207,7 +207,8 @@ function UpgradeLink({ label, variant }: { label: string; variant: 'primary' | '
   )
 }
 
-const TIER_NAMES: Record<string, string> = { free: 'Free', basic: 'Basic', pro: 'Pro', custom: 'Custom' }
+/** As www.imani.casa/pricing names them: the catalog's `free` tier is the Starter plan. */
+const TIER_NAMES: Record<string, string> = { free: 'Starter', basic: 'Basic', pro: 'Pro', custom: 'Custom' }
 
 /**
  * The plan, in the numbers a merchant checks against their own day: what tier, how much has been

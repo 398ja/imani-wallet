@@ -24,11 +24,15 @@ function call(path: string, method: 'GET' | 'POST', payload?: unknown): Promise<
   })
 }
 
+export type Term = 'monthly' | 'annual'
+
 export interface Plan {
   tier: string
   features: string[]
   limits: LicenceLimits
-  terms: Array<'monthly' | 'annual'>
+  terms: Term[]
+  /** What Stripe Checkout charges, per term, in minor units. Absent while Stripe cannot be read. */
+  prices?: Partial<Record<Term, { amount: number; currency: string }>>
 }
 
 export interface MySubscription {
@@ -84,29 +88,83 @@ export function toPubkeyHex(input: string): string | null {
   }
 }
 
-export const TIER_NAMES: Record<string, string> = { free: 'Free', basic: 'Basic', pro: 'Pro', custom: 'Custom' }
+/**
+ * Plan names as www.imani.casa/pricing publishes them. The catalog's `free` tier is sold as Starter.
+ * Only the tiers the service lists are shown: a partnership tier (Town / BID Partner) is arranged
+ * with us, has no card price, and is never offered on this site.
+ */
+export const TIER_NAMES: Record<string, string> = { free: 'Starter', basic: 'Basic', pro: 'Pro', custom: 'Custom' }
+
+/**
+ * What each plan includes beyond the limits the licence enforces, as the pricing page lists it.
+ * These are services we provide (the badge, the listing, support), so they are copy, not catalog:
+ * the wallet has nothing to enforce. Limits and paid features always come from the catalog.
+ */
+export const PLAN_COPY: Record<string, { bestFor: string; includes: string[] }> = {
+  free: { bestFor: 'Trying Imani', includes: ['Help centre and YouTube video tutorials'] },
+  basic: {
+    bestFor: 'Independent shops, cafés, salons',
+    includes: ['Verified business badge', 'Standard listing on the Imani gifting site', 'Setup help from our support team', 'Email support'],
+  },
+  pro: {
+    bestFor: 'Busy shops, multi-site and online sellers',
+    includes: ['Verified business badge', 'Featured placement on the Imani gifting site', 'Setup help from our support team', 'Email support'],
+  },
+}
+
+/** The plan the pricing page highlights. */
+export const HIGHLIGHTED_TIER = 'pro'
+
+export function money(minor: number, currency: string, fraction = false): string {
+  const whole = minor % 100 === 0 && !fraction
+  return new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: whole ? 0 : 2,
+    maximumFractionDigits: whole ? 0 : 2,
+  }).format(minor / 100)
+}
+
+/** "£8/month", "£70/year": a plan's price for a term, or null when it has none. */
+export function priceLine(plan: Plan, term: Term): string | null {
+  const p = plan.prices?.[term]
+  if (!p) return null
+  return `${money(p.amount, p.currency)}/${term === 'monthly' ? 'month' : 'year'}`
+}
+
+/** Percent saved by paying yearly instead of twelve months, rounded down. Null if not both. */
+export function yearlySaving(plan: Plan): number | null {
+  const m = plan.prices?.monthly
+  const y = plan.prices?.annual
+  if (!m || !y || m.currency !== y.currency || m.amount <= 0) return null
+  const pct = Math.floor((1 - y.amount / (12 * m.amount)) * 100)
+  return pct > 0 ? pct : null
+}
 
 export function featureName(f: string): string {
   return f === 'api' ? 'API access' : f === 'ecommerce' ? 'Online shop checkout codes' : f === 'terminals' ? 'Extra tills' : f
 }
 
-/** "£1,000 a month", "£100 in total", "No limit": the plan's sales limit in words. */
+/** "Up to £100 of vouchers in total", "Unlimited voucher issuance": the plan's sales limit in words. */
 export function salesLine(limits: LicenceLimits, currency = 'GBP'): string {
   const s = limits.sales
-  if (s === null) return 'Sell without limit'
+  if (s === null) return 'Unlimited voucher issuance'
   if (!s) return ''
-  const amount = s.amounts[currency] ?? s.amounts.USD
-  const money = new Intl.NumberFormat(undefined, { style: 'currency', currency: s.amounts[currency] ? currency : 'USD', maximumFractionDigits: 0 }).format(
-    (amount ?? 0) / 100,
-  )
-  return s.period === 'month' ? `Sell up to ${money} a month` : s.period === 'lifetime' ? `Sell up to ${money} in total` : `Sell up to ${money}`
+  const own = s.amounts[currency] !== undefined
+  const amount = (own ? s.amounts[currency] : s.amounts.USD) ?? 0
+  const value = money(amount, own ? currency : 'USD')
+  return s.period === 'month'
+    ? `Up to ${value} of vouchers a month`
+    : s.period === 'lifetime'
+      ? `Up to ${value} of vouchers in total`
+      : `Up to ${value} of vouchers`
 }
 
 export function tillsLine(limits: LicenceLimits): string {
   const t = limits.terminals
-  if (t === null) return 'As many tills as you need'
+  if (t === null) return 'Unlimited tills'
   if (t === undefined) return ''
-  return t === 1 ? 'Your own device plus 1 till' : `Your own device plus ${t} tills`
+  return t === 1 ? 'Your device plus 1 till' : `Your device plus ${t} tills`
 }
 
 export function date(seconds: number): string {

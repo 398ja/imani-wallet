@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "overshoot_pct": 10,
   "tiers": {
     "free": {
@@ -11,10 +11,7 @@
     },
     "basic": {
       "features": ["terminals"],
-      "limits": {
-        "sales": { "period": "month", "amounts": { "AUD": 100000, "CAD": 100000, "CHF": 100000, "EUR": 100000, "GBP": 100000, "USD": 100000 } },
-        "terminals": 3
-      }
+      "limits": { "sales": null, "terminals": 3 }
     },
     "pro": {
       "features": ["terminals", "api", "ecommerce"],

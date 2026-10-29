@@ -6,7 +6,7 @@
  *
  * Routes:
  *   GET  /v1/catalog                 public: the signed tier catalog wallets adopt
- *   GET  /v1/plans                   public: tiers and prices for the site
+ *   GET  /v1/plans                   public: the plans a stall can choose here (Starter and tiers with a card price), with prices
  *   POST /v1/stripe/webhook          Stripe-signed: invoice.paid / subscription updates
  *   /v1/auth/*                       NAP login (auth.ts): init, complete, session, logout
  *   GET  /v1/me                      session, merchant: this stall's subscriptions and licences
@@ -19,14 +19,14 @@
  * Every route that is not public needs a NAP session whose role is `merchant` (#411). There is no
  * per-request signature any more: the session is the authentication.
  */
-import { parseCatalog, type LicenceLimits, type TierCatalog } from '@imani/licence'
+import { FREE_TIER, parseCatalog, type LicenceLimits, type TierCatalog } from '@imani/licence'
 
 import { SubscriptionAuth } from './auth.ts'
 import type { SubscriptionConfig } from './config.ts'
 import { LicenceIssuer, signCatalog, type LicenceOrder, type Seller } from './issuer.ts'
 import { Ledger, newSubscriptionId, type IssuedLicence, type SubscriptionRow } from './ledger.ts'
 import type { MerchantReader } from './merchantRole.ts'
-import { verifyStripeSignature, type StripeClient } from './stripe.ts'
+import { verifyStripeSignature, type StripeClient, type StripePrice } from './stripe.ts'
 
 export interface Request {
   method: string
@@ -60,6 +60,11 @@ export interface AppDeps {
 const HEX64 = /^[0-9a-f]{64}$/
 const MAX_BODY = 16 * 1024
 const TERM_SECONDS = { monthly: 31 * 86_400, annual: 366 * 86_400 } as const
+const TERMS = ['monthly', 'annual'] as const
+/** Every subscription is priced in pounds (www.imani.casa/pricing). A price in anything else is never sold. */
+export const SUBSCRIPTION_CURRENCY = 'GBP'
+/** How long a Stripe Price's amount is reused for the plans page. Prices are immutable; ids rotate. */
+const PRICE_TTL_MS = 10 * 60_000
 
 export function createApp(deps: AppDeps) {
   const now = () => Math.floor((deps.now?.() ?? Date.now()) / 1000)
@@ -68,6 +73,13 @@ export function createApp(deps: AppDeps) {
     throw new Error('the published catalog does not parse (parseCatalog returned null)')
   })()
   const signedCatalog = signCatalog(deps.catalogBody, deps.seller)
+  // A price for a tier the catalog does not define would sell a licence the wallet cannot read.
+  for (const key of Object.keys(deps.config.prices)) {
+    const tier = key.split(':')[0]
+    if (!catalog.tiers[tier] || tier === FREE_TIER) {
+      throw new Error(`SUBSCRIPTION_PRICES names '${tier}', which the catalog does not sell`)
+    }
+  }
 
   const json = (status: number, body: unknown): Response => ({ status, body })
   /** The public URL of a path on this site: origin + mount path + path. */
@@ -254,7 +266,7 @@ export function createApp(deps: AppDeps) {
           headers: { 'Cache-Control': 'public, max-age=300', 'Access-Control-Allow-Origin': '*' },
         }
       case 'GET /v1/plans':
-        return json(200, plans())
+        return json(200, await plans())
       case 'POST /v1/stripe/webhook':
         return webhook(req)
     }
@@ -293,20 +305,63 @@ export function createApp(deps: AppDeps) {
 
   const isAdmin = (pk: string) => deps.config.adminPubkeys.includes(pk)
 
-  function plans() {
-    return Object.entries(catalog.tiers).map(([name, t]) => ({
-      tier: name,
-      features: t.features,
-      limits: t.limits,
-      terms: (['monthly', 'annual'] as const).filter((term) => deps.config.prices[`${name}:${term}`]),
-    }))
+  /**
+   * The plans a stall can choose here: the free tier (Starter), and every tier with a card price.
+   *
+   * Being in the catalog is not enough. The catalog also defines what hand grants and partnerships
+   * carry, and a tier that is arranged with us (Town / BID Partner: "Contact us" on
+   * www.imani.casa/pricing) has no Stripe price, so it is never offered as an option here.
+   */
+  async function plans() {
+    const listed = Object.entries(catalog.tiers).filter(
+      ([name]) => name === FREE_TIER || TERMS.some((term) => deps.config.prices[`${name}:${term}`]),
+    )
+    return Promise.all(
+      listed.map(async ([name, t]) => {
+        const terms = TERMS.filter((term) => deps.config.prices[`${name}:${term}`])
+        const prices: Partial<Record<(typeof TERMS)[number], { amount: number; currency: string }>> = {}
+        for (const term of terms) {
+          const p = await priceOf(deps.config.prices[`${name}:${term}`])
+          if (p) prices[term] = { amount: p.unitAmount, currency: p.currency }
+        }
+        return { tier: name, features: t.features, limits: t.limits, terms, prices }
+      }),
+    )
+  }
+
+  const priceCache = new Map<string, { at: number; price: StripePrice }>()
+  /**
+   * A Price's amount from Stripe, so the page shows what Checkout charges. Null if Stripe is down,
+   * and null for a price that is not in GBP: that is a configuration mistake, never something sold.
+   */
+  async function priceOf(id: string): Promise<StripePrice | null> {
+    const hit = priceCache.get(id)
+    const at = deps.now?.() ?? Date.now()
+    if (hit && at - hit.at < PRICE_TTL_MS) return hit.price
+    try {
+      const price = await deps.stripe.getPrice(id)
+      if (price.currency !== SUBSCRIPTION_CURRENCY) {
+        log({ event: 'price_not_gbp', price: id, currency: price.currency })
+        return null
+      }
+      priceCache.set(id, { at, price })
+      return price
+    } catch (error) {
+      log({ event: 'price_unavailable', price: id, error: String((error as Error).message ?? error) })
+      return hit?.price ?? null
+    }
   }
 
   async function checkout(pubkey: string, body: Record<string, unknown>): Promise<Response> {
     const tier = String(body.tier ?? '')
     const term = String(body.term ?? '')
-    const priceId = deps.config.prices[`${tier}:${term}`]
+    const priceId = catalog.tiers[tier] ? deps.config.prices[`${tier}:${term}`] : undefined
     if (!priceId) return json(400, { error: `no ${term} price for the ${tier} plan` })
+    // Only a price Stripe confirms is in GBP is sold. Stripe being unreachable fails below anyway.
+    if (!(await priceOf(priceId))) {
+      log({ event: 'checkout_refused_price', tier, term })
+      return json(502, { error: 'Checkout is unavailable right now. Please try again in a few minutes.' })
+    }
     const existing = (await deps.ledger.forStall(pubkey)).find((r) => r.stripeCustomerId)
     let session: { url: string }
     try {

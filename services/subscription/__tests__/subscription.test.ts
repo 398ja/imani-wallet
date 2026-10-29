@@ -109,10 +109,24 @@ function fakeGateway() {
   return { fetchImpl, minted, delivered, setFailDelivery: (v: boolean) => (failDelivery = v) }
 }
 
-const fakeStripe = (): StripeClient & { checkouts: unknown[] } => {
+const fakeStripe = (): StripeClient & { checkouts: unknown[]; priceReads: string[]; prices: Map<string, { unitAmount: number; currency: string }> } => {
   const checkouts: unknown[] = []
+  const priceReads: string[] = []
+  // The published plan (www.imani.casa/pricing), in GBP: Basic £8/month, Pro £100/year.
+  const prices = new Map([
+    ['price_b_m', { unitAmount: 800, currency: 'GBP' }],
+    ['price_p_a', { unitAmount: 10000, currency: 'GBP' }],
+  ])
   return {
     checkouts,
+    priceReads,
+    prices,
+    async getPrice(id) {
+      priceReads.push(id)
+      const p = prices.get(id)
+      if (!p) throw new Error(`stripe /prices/${id} 404: No such price`)
+      return p
+    },
     async createCheckout(i) {
       checkouts.push(i)
       return { id: 'cs_1', url: 'https://checkout.stripe.test/cs_1' }
@@ -127,11 +141,9 @@ let gateway: ReturnType<typeof fakeGateway>
 let stripe: ReturnType<typeof fakeStripe>
 let app: ReturnType<typeof createApp>
 let ledger: Ledger
+let logs: Array<Record<string, unknown>>
 
-beforeEach(async () => {
-  gateway = fakeGateway()
-  stripe = fakeStripe()
-  ledger = new Ledger(join(await mkdtemp(join(tmpdir(), 'sub-')), 'ledger.json'))
+function makeApp(over: { catalogBody?: string; prices?: Record<string, string> } = {}) {
   const config: SubscriptionConfig = {
     publicOrigin: ORIGIN,
     basePath: '',
@@ -141,24 +153,32 @@ beforeEach(async () => {
     sellerNsec: '',
     stripeSecretKey: 'sk',
     stripeWebhookSecret: WEBHOOK_SECRET,
-    prices: { 'basic:monthly': 'price_b_m', 'pro:annual': 'price_p_a' },
+    prices: over.prices ?? { 'basic:monthly': 'price_b_m', 'pro:annual': 'price_p_a' },
     adminPubkeys: [ADMIN],
     ledgerPath: '',
     catalogPath: '',
     port: 0,
     automaticTax: true,
   }
-  app = createApp({
+  return createApp({
     config,
     ledger,
     seller: SELLER,
     stripe,
-    catalogBody: CATALOG,
+    catalogBody: over.catalogBody ?? CATALOG,
     issuer: new LicenceIssuer({ walletUrl: WALLET, edgeSecret: 'edge', internalRelay: 'ws://relay', seller: SELLER, fetch: gateway.fetchImpl, sleep: async () => {} }),
     merchantStanding: standing,
     napServerOptions: { minAuthResponseMillis: 0 },
-    log: () => {},
+    log: (e) => logs.push(e),
   })
+}
+
+beforeEach(async () => {
+  gateway = fakeGateway()
+  stripe = fakeStripe()
+  logs = []
+  ledger = new Ledger(join(await mkdtemp(join(tmpdir(), 'sub-')), 'ledger.json'))
+  app = makeApp()
   merchants = new Set([STALL, ADMIN])
   gatewayDown = false
   cookies = new Map()
@@ -331,7 +351,7 @@ describe('buying a plan', () => {
       currency: 'GBP',
       now: start + 1,
     })
-    expect(ent).toMatchObject({ tier: 'basic', terminals: 3, sales: { amount: 100000, period: 'month' } })
+    expect(ent).toMatchObject({ tier: 'basic', terminals: 3, sales: null })
   })
 
   it('mints nothing twice when Stripe replays the event', async () => {
@@ -449,6 +469,64 @@ describe('hand grants (#407 §7)', () => {
   })
 })
 
+describe('the plans offered (www.imani.casa/pricing)', () => {
+  type ListedPlan = { tier: string; terms: string[]; limits: Record<string, unknown>; prices: Record<string, { amount: number; currency: string }> }
+  const listPlans = async (a = app) => (await a.handle({ method: 'GET', path: '/v1/plans', headers: {}, body: '' })).body as ListedPlan[]
+
+  it('are Starter (free), Basic and Pro, with Basic issuing without limit on 3 tills', async () => {
+    const plans = await listPlans()
+    expect(plans.map((p) => p.tier)).toEqual(['free', 'basic', 'pro'])
+    expect(plans[0]).toMatchObject({ terms: [], prices: {}, limits: { terminals: 1, sales: { period: 'lifetime', amounts: { GBP: 10000 } } } })
+    expect(plans[1].limits).toEqual({ sales: null, terminals: 3 })
+    expect(plans[2].limits).toEqual({ sales: null, terminals: null })
+  })
+
+  it('show the amount Stripe will charge, in GBP', async () => {
+    const [, basic, pro] = await listPlans()
+    expect(basic).toMatchObject({ terms: ['monthly'], prices: { monthly: { amount: 800, currency: 'GBP' } } })
+    expect(pro).toMatchObject({ terms: ['annual'], prices: { annual: { amount: 10000, currency: 'GBP' } } })
+  })
+
+  it('read each Stripe price once, not on every page view', async () => {
+    await listPlans()
+    await listPlans()
+    expect(stripe.priceReads.sort()).toEqual(['price_b_m', 'price_p_a'])
+  })
+
+  it('never offer a tier with no card price: a Town / BID partnership in the catalog stays off the list', async () => {
+    const withPartner = JSON.parse(CATALOG) as { version: number; tiers: Record<string, unknown> }
+    withPartner.version += 1
+    withPartner.tiers.partner = { features: ['terminals', 'api', 'ecommerce'], limits: { sales: null, terminals: null } }
+    app = makeApp({ catalogBody: JSON.stringify(withPartner) })
+    expect((await listPlans()).map((p) => p.tier)).toEqual(['free', 'basic', 'pro'])
+    const out = await app.handle(await req(STALL_SK, 'POST', '/v1/checkout', { tier: 'partner', term: 'annual' }))
+    expect(out.status).toBe(400)
+    expect(stripe.checkouts).toHaveLength(0)
+  })
+
+  it('refuse at boot a price for a tier the catalog does not sell, or for Starter', () => {
+    expect(() => makeApp({ prices: { 'partner:annual': 'price_x' } })).toThrow(/partner/)
+    expect(() => makeApp({ prices: { 'free:monthly': 'price_x' } })).toThrow(/free/)
+  })
+
+  it('never list or sell a price that is not in GBP', async () => {
+    stripe.prices.set('price_b_m', { unitAmount: 900, currency: 'EUR' })
+    const [, basic] = await listPlans()
+    expect(basic.prices).toEqual({})
+    const out = await app.handle(await req(STALL_SK, 'POST', '/v1/checkout', { tier: 'basic', term: 'monthly' }))
+    expect(out.status).toBe(502)
+    expect(stripe.checkouts).toHaveLength(0)
+    expect(logs).toContainEqual(expect.objectContaining({ event: 'price_not_gbp', price: 'price_b_m', currency: 'EUR' }))
+  })
+
+  it('still list the plans, without an amount, when Stripe cannot be read', async () => {
+    stripe.prices.clear()
+    const plans = await listPlans()
+    expect(plans.map((p) => p.tier)).toEqual(['free', 'basic', 'pro'])
+    expect(plans[1].prices).toEqual({})
+  })
+})
+
 describe('the published catalog', () => {
   it('is signed so the WALLET adopts it, and a tampered copy is refused', async () => {
     const out = await app.handle({ method: 'GET', path: '/v1/catalog', headers: {}, body: '' })
@@ -457,5 +535,7 @@ describe('the published catalog', () => {
     expect(acceptCatalog(signed, { verifySignature: (s) => catalogSignatureValid(s, SELLER.pk), current: BUNDLED_CATALOG }).accepted).toBe(true)
     expect(catalogSignatureValid({ ...signed, body: signed.body.replace('10000', '99999') }, SELLER.pk)).toBe(false)
     expect(parseCatalog(signed.body)?.fx?.XAF).toEqual({ perUsd: 600, decimals: 0 })
+    expect(parseCatalog(signed.body)?.version).toBe(3)
+    expect(Object.keys(parseCatalog(signed.body)!.tiers)).toEqual(['free', 'basic', 'pro'])
   })
 })

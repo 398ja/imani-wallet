@@ -57,8 +57,10 @@ export function AccountPage({ me, onRefresh }: { me: Me | null; onRefresh: () =>
 
       {subs.length === 0 ? (
         <Panel className="mb-6 p-5">
-          <p className="font-medium">You are on the Free plan.</p>
-          <p className="mt-1 text-sm text-mono-500">Sell up to 100 in total and run one till. Upgrade whenever you need more.</p>
+          <p className="font-medium">You are on the Starter plan.</p>
+          <p className="mt-1 text-sm text-mono-500">
+            Issue up to £100 of vouchers in total and run one till besides your device. Upgrade whenever you need more.
+          </p>
           <Link to="/plans" className={`${buttonClasses('primary', 'md')} mt-4 w-full`}>
             See plans
           </Link>

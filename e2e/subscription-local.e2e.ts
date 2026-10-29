@@ -195,7 +195,7 @@ async function main() {
       check('it verifies for this stall, sold by the staging seller', verdict.granted)
       if (verdict.granted) {
         const e = entitlementOf({ catalog: BUNDLED_CATALOG, grants: [verdict.grant], currency: 'GBP', now })
-        check('the wallet reads it as Basic: 1,000 GBP a month, 3 tills', e.tier === 'basic' && e.terminals === 3 && e.sales?.amount === 100000 && e.sales.period === 'month', JSON.stringify(e))
+        check('the wallet reads it as Basic: unlimited issuance, 3 tills', e.tier === 'basic' && e.terminals === 3 && e.sales === null, JSON.stringify(e))
       }
     }
 

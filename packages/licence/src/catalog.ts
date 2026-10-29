@@ -47,9 +47,9 @@ const USD_DECIMALS = 2
 /**
  * The catalog compiled into the app, used until a signed one has been fetched.
  *
- * Mirrors what #407 decided: 100 one-off (Free), 1,000 a month and 3 tills (Basic), no limits plus
- * API and e-commerce (Pro), in the major currencies, with a 10 % overshoot. Version 1, so any
- * catalog we publish replaces it.
+ * Mirrors the published plans (www.imani.casa/pricing): 100 one-off and 1 till (Starter, the `free`
+ * tier), no sales limit and 3 tills (Basic), no limits plus API and e-commerce (Pro), in the major
+ * currencies, with a 10 % overshoot. Version 1, so any catalog we publish replaces it.
  *
  * The free tier's terminal allowance is 1 ENROLLED terminal on top of the owner's own device, which
  * is how `terminalAllowance` has always counted (the owner's device is counted, never converted).
@@ -64,7 +64,7 @@ export const BUNDLED_CATALOG: TierCatalog = {
     },
     basic: {
       features: ['terminals'],
-      limits: { sales: { period: 'month', amounts: majors(1000_00) }, terminals: 3 },
+      limits: { sales: null, terminals: 3 },
     },
     pro: {
       features: ['terminals', 'api', 'ecommerce'],

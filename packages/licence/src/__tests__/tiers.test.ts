@@ -161,9 +161,18 @@ describe('the effective entitlement', () => {
     expect(e.sales).toMatchObject({ period: 'lifetime', amount: 100_00, periodStart: 0, overshoot: 10_00 })
   })
 
-  it('takes Basic from the catalog: 1,000 a month from the 1st (UTC), three tills', () => {
+  it('takes Basic from the catalog: unlimited issuance, three tills (www.imani.casa/pricing)', () => {
     const e = ask([grant({ tier: 'basic', features: ['terminals'] })])
     expect(e).toMatchObject({ tier: 'basic', terminals: 3 })
+    expect(e.sales).toBeNull()
+  })
+
+  it('meters a monthly tier from the 1st (UTC), when a catalog defines one', () => {
+    const monthly: TierCatalog = {
+      ...BUNDLED_CATALOG,
+      tiers: { ...BUNDLED_CATALOG.tiers, basic: { features: ['terminals'], limits: { sales: { period: 'month', amounts: { GBP: 1000_00 } }, terminals: 3 } } },
+    }
+    const e = ask([grant({ tier: 'basic', features: ['terminals'] })], 'GBP', monthly)
     expect(e.sales).toMatchObject({ period: 'month', amount: 1000_00, periodStart: Date.UTC(2027, 0, 1) / 1000 })
   })
 
@@ -195,7 +204,7 @@ describe('the effective entitlement', () => {
   it('keeps a licence sold before #407 at unlimited tills and Basic sales', () => {
     const e = ask([grant({ features: ['terminals'] })])
     expect(e.terminals).toBeNull()
-    expect(e.sales?.amount).toBe(1000_00)
+    expect(e.sales).toBeNull()
   })
 
   it('refuses to sell rather than reading an unpriceable currency as unlimited', () => {

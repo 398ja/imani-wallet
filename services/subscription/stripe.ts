@@ -22,6 +22,17 @@ export interface StripeClient {
     customerId?: string
   }): Promise<{ id: string; url: string }>
   createPortal(input: { customerId: string; returnUrl: string }): Promise<{ url: string }>
+  /** A Price's amount, so the site shows what Checkout will charge, never a copy of it. */
+  getPrice(priceId: string): Promise<StripePrice>
+}
+
+export interface StripePrice {
+  /** Minor units, e.g. 800 for £8. */
+  unitAmount: number
+  /** ISO 4217, upper case. */
+  currency: string
+  /** `month` or `year` for a recurring price. */
+  interval?: string
 }
 
 /** Stripe's form encoding, nested keys as `a[b][c]`. */
@@ -55,7 +66,25 @@ export function stripeClient(secretKey: string, fetchImpl: typeof fetch = fetch)
     }
     return json
   }
+  const get = async (path: string) => {
+    const r = await fetchImpl(`${API}${path}`, { headers: { Authorization: `Bearer ${secretKey}` } })
+    const json = (await r.json()) as Record<string, unknown>
+    if (!r.ok) {
+      const err = json.error as { message?: string } | undefined
+      throw new Error(`stripe ${path} ${r.status}: ${err?.message ?? 'error'}`)
+    }
+    return json
+  }
   return {
+    async getPrice(id) {
+      const p = await get(`/prices/${encodeURIComponent(id)}`)
+      const unitAmount = Number(p.unit_amount)
+      if (!Number.isSafeInteger(unitAmount) || unitAmount < 0 || typeof p.currency !== 'string') {
+        throw new Error(`stripe price ${id} has no fixed amount`)
+      }
+      const interval = (p.recurring as { interval?: string } | null | undefined)?.interval
+      return { unitAmount, currency: p.currency.toUpperCase(), ...(interval ? { interval } : {}) }
+    },
     async createCheckout(i) {
       // The stall pubkey travels in metadata on the SESSION and on the SUBSCRIPTION, so every
       // later invoice (each renewal) can be tied back to the key its licence must be locked to.

@@ -14,11 +14,16 @@ product() { # name -> id
   echo "$id"
 }
 price() { # product tier term amount interval -> id
-  local key="imani_$2_$3" id
+  # The currency and amount are in the lookup key, so a price change makes a NEW Price (Stripe
+  # prices are immutable) instead of finding the old one. Every plan is priced in GBP.
+  local key="imani_$2_$3_gbp$4" id
   id=$(curl -s "${auth[@]}" -G "$API/prices" -d "lookup_keys[]=$key" | sed -n 's/.*"id": "\(price_[^"]*\)".*/\1/p' | head -1)
   [ -n "$id" ] || id=$(curl -s "${auth[@]}" "$API/prices" -d product="$1" -d currency=gbp -d unit_amount="$4" \
     -d "recurring[interval]=$5" -d lookup_key="$key" -d tax_behavior=inclusive | sed -n 's/.*"id": "\(price_[^"]*\)".*/\1/p' | head -1)
   echo "$id"
 }
+# As published on www.imani.casa/pricing, VAT inclusive: Basic £8/month or £70/year, Pro £11/month
+# or £100/year. Starter is free and has no price. Town / BID Partner is arranged with us ("Contact
+# us") and is never sold by card, so it has no price here either.
 basic=$(product "Imani Basic" basic); pro=$(product "Imani Pro" pro)
-echo "SUBSCRIPTION_PRICES=basic:monthly=$(price "$basic" basic monthly 900 month),basic:annual=$(price "$basic" basic annual 9000 year),pro:monthly=$(price "$pro" pro monthly 2900 month),pro:annual=$(price "$pro" pro annual 29000 year)"
+echo "SUBSCRIPTION_PRICES=basic:monthly=$(price "$basic" basic monthly 800 month),basic:annual=$(price "$basic" basic annual 7000 year),pro:monthly=$(price "$pro" pro monthly 1100 month),pro:annual=$(price "$pro" pro annual 10000 year)"
