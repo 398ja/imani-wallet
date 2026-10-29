@@ -225,6 +225,11 @@ NIP-98 by any key (the authority is `authorization`). Body:
 Signed only when every rule holds:
 
 1. The predecessor is the §2 shape (LinkLock), issued by this gateway, not a credential.
+   Note: before `x`, `S` can already move a part anywhere with the generic re-sign route (it is the
+   holder). This route exists because that route keeps `locktime`/`refund`, so a successor sent to
+   the stall would still be refundable by the customer after `x`. Restricting `K` here is defence
+   in depth, not the boundary: the boundary is R5 (a shop key is a revocable terminal, exposure
+   bounded by its outstanding codes).
 2. `authorization` is BIP-340 by `S` (the predecessor's `data`) over
    `sha256("imani/voucher-checkout-settle/v1" ‖ predecessor ‖ each proposal)`, length-prefixed
    the same way as `cashlinkDigest`.
@@ -248,7 +253,8 @@ amount it re-locks (for example 200 sats to the stall = 128 + 64 + 8, three prop
 
 It turns a returned coupon locked to `R` back into an ordinary, unlocked one:
 
-1. The predecessor is `P2PK_VOUCHER(data = 02‖K)` with no locktime and no refund, issued here.
+1. The predecessor is `P2PK_VOUCHER(data = 02‖K)` with no locktime and no refund, issued here,
+   and not a credential (licence or terminal: `isCredential`, as the split and re-sign routes).
 2. `authorization` is by `K` over `sha256("imani/voucher-checkout-unlock/v1" ‖ …)`.
 3. The mint reports it SPENT, and only `K` could have spent it.
 4. The proposal is the unlocked `VOUCHER` with the same terms (as `cashlink/resign` builds it),
