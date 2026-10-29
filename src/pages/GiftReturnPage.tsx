@@ -25,6 +25,11 @@ function readOnce(): ReturnType<typeof parseReturnFragment> {
   return parsed
 }
 
+/** G17 (C): a gift taken back keeps the voucher's original expiry. */
+function keepsExpiry(expiresAt: number | null): string {
+  return expiresAt === null ? "The voucher doesn't expire." : `It keeps its original expiry: spend it by ${formatDate(expiresAt)}.`
+}
+
 export function GiftReturnPage({ authed }: { authed: boolean }) {
   const navigate = useNavigate()
   const [link] = useState(readOnce)
@@ -69,7 +74,9 @@ export function GiftReturnPage({ authed }: { authed: boolean }) {
   if (read.kind === 'unreachable') return <Outcome tone="unavailable" title="Try again" body="We could not reach the voucher service. Try again in a moment." onDone={goHome} />
   if (read.kind === 'refused') return <Outcome tone="unavailable" title="Gift unavailable" body="This gift could not be verified, so it cannot be taken back here." onDone={goHome} />
   if (step === 'taking') return <Centered>Taking your gift back…</Centered>
-  if (step === 'returned') return <Outcome tone="success" title="Gift taken back" body="It is back in your wallet as a voucher." onDone={goHome} />
+  if (step === 'returned') {
+    return <Outcome tone="success" title="Gift taken back" body={`It is back in your wallet as a voucher. ${keepsExpiry(read.view.expiresAt)}`} onDone={goHome} />
+  }
   if (step === 'claimed' || read.view.state === 'claimed') return <Outcome tone="unavailable" title="Gift claimed" body="Your recipient has claimed this gift." onDone={goHome} />
 
   const { view } = read
@@ -81,6 +88,7 @@ export function GiftReturnPage({ authed }: { authed: boolean }) {
         <h1 className="text-xl font-semibold">{view.stall ? `Your gift from ${view.stall}` : 'Your gift'}</h1>
         <p className="mt-2 text-2xl tabular-nums">{face}</p>
         {view.state === 'waiting' && <p className="mt-4 text-sm text-mono-500">Not claimed yet. You can take it back after {date} if it isn't claimed.</p>}
+        {(view.state === 'waiting' || view.state === 'ready') && <p className="mt-2 text-sm text-mono-500">{keepsExpiry(view.expiresAt)}</p>}
         {view.state === 'unknown' && <p className="mt-4 text-sm text-mono-500">We could not check this gift right now. Try again in a moment.</p>}
         {view.state === 'ready' && (
           <>
