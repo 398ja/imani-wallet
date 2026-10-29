@@ -88,10 +88,18 @@ For `gift.kind`:
     before `x`: claimed. Lane owns the derivations (reuse `cashlinkFlow.settleLockedGift`
     with refundSecret = the wallet key; it needs linkSecret only for the before-x path, which
     the buyer never takes; pass a dummy-free variant).
-  - guest: the return-link email (`gift-return-link`) URL is
-    `<walletOrigin>/gift-return#r=<R hex>&t=<locked token>`; the wallet's `/gift-return` page
-    reads both from the fragment, shows the gift and its state (NUT-07), and after `x` (or never
-    before) takes it back into the wallet it opens/creates, same mechanics with R = `r`.
+  - guest (decided in the purchase-issuer lane, least custody): the issuer does NOT hold `R`
+    and never puts a token in an email. It sends the guest the SAME `imani_gift_sent` NIP-17 wrap,
+    p-tagged to the refund key `getPublicKey(R)`, signed by its seal key (pubkey at
+    payment-adapter `GET /api/v1/gifting/issuer-key`). The guest's return link is the one the
+    gifting SPA already shows, `<walletOrigin>/gift-return#r=<R hex>` (made in the browser, never
+    sealed, never sent to a server). The wallet's `/gift-return` page reads `r`, queries kind 1059
+    with `pTags=[getPublicKey(R)]` (NIP-98 by `R`), unwraps the token with `R`, shows the gift and
+    its state (NUT-07), and after `x` (never before) takes it back, same mechanics with R = `r`.
+    An optional `&t=<locked token>` in the fragment is accepted but nobody needs to send it. One
+    delivery path covers both buyers: the wrap goes to the refund key, whoever holds it. Rejected:
+    an issuer email with `#t=` (a token in a mailbox, and a second link the guest must pair with the
+    first) and sealing `R` (G-R3).
   - Before `x`, neither buyer can take it back (no `ℓ`). Copy: "You can take it back after
     <date> if it isn't claimed."
 

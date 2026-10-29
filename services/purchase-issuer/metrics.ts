@@ -81,7 +81,24 @@ export function attemptCount(outcome: Outcome): number {
   return attempts.get(outcome) ?? 0
 }
 
+/** G15 §4.3: buyer notices sent by kind, and sweep errors. Closed labels only. */
+export const GIFT_NOTICES = ['claimed', 'expired'] as const
+export type GiftNotice = (typeof GIFT_NOTICES)[number]
+const giftNotices = new Map<GiftNotice, number>(GIFT_NOTICES.map((k) => [k, 0]))
+let giftSweepErrors = 0
+export function countGiftNotice(kind: GiftNotice): void {
+  giftNotices.set(kind, (giftNotices.get(kind) ?? 0) + 1)
+}
+export function countGiftSweepError(): void {
+  giftSweepErrors += 1
+}
+export function giftNoticeCount(kind: GiftNotice): number {
+  return giftNotices.get(kind) ?? 0
+}
+
 export function resetMetricsForTest(): void {
+  for (const k of GIFT_NOTICES) giftNotices.set(k, 0)
+  giftSweepErrors = 0
   for (const o of OUTCOMES) attempts.set(o, 0)
   for (const r of PASS_RESULTS) passes.set(r, 0)
   for (const s of STANDINGS) standings.set(s, 0)
@@ -113,5 +130,15 @@ export function renderMetrics(): string {
     '# TYPE imani_purchase_issuer_enrolments_total counter',
   )
   for (const r of ENROLMENT_RESULTS) lines.push(`imani_purchase_issuer_enrolments_total{result="${r}"} ${enrolments.get(r)}`)
+  lines.push(
+    '# HELP imani_purchase_issuer_gift_notices_total Buyer gift notices sent, by kind.',
+    '# TYPE imani_purchase_issuer_gift_notices_total counter',
+  )
+  for (const k of GIFT_NOTICES) lines.push(`imani_purchase_issuer_gift_notices_total{kind="${k}"} ${giftNotices.get(k)}`)
+  lines.push(
+    '# HELP imani_purchase_issuer_gift_sweep_errors_total Gift notice sweep errors (mint or mailer).',
+    '# TYPE imani_purchase_issuer_gift_sweep_errors_total counter',
+    `imani_purchase_issuer_gift_sweep_errors_total ${giftSweepErrors}`,
+  )
   return lines.join('\n') + '\n'
 }

@@ -59,6 +59,8 @@ export interface OwedPurchase {
    * Purchase Draft at review: nothing here may change who receives the voucher.
    */
   delivery?: GiftDelivery | null
+  /** The gifting draft this debt answers, or null for a wallet purchase (the claim email's idempotency key). */
+  draftId?: string | null
 }
 
 /**
@@ -74,6 +76,12 @@ export interface GiftDelivery {
   from: string | null
   buyerEmail: string | null
   claimWindowDays: number
+  /** The recipient's handle as the buyer typed it (`bob@example.com` NIP-05 or `@bob`), for notices. Optional. */
+  recipientHandle?: string | null
+  /** The signed-in buyer's wallet key, or null for a guest. Optional (absent reads as guest). */
+  buyerPubkey?: string | null
+  /** When the draft was created, unix ms (the guest's return-link mail date, approximately). Optional. */
+  draftCreatedAt?: number | null
 }
 
 export type DischargeOutcome =
@@ -178,8 +186,12 @@ export function parseOwedPurchase(row: unknown): OwedPurchase | null {
     if (delivery.kind === 'email' ? recipientPubkey !== null : recipientPubkey === null) return null
   }
 
+  const draftId = r.draftId === null || r.draftId === undefined ? null : r.draftId
+  if (draftId !== null && (typeof draftId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(draftId))) return null
+
   return {
     delivery,
+    draftId,
     eventId,
     paymentRequestId,
     stallPubkey: stallPubkey as string | null,
@@ -208,7 +220,17 @@ export function parseGiftDelivery(raw: unknown): GiftDelivery | null {
   const message = optStr(d.message, 280)
   const from = optStr(d.from, 80)
   const buyerEmail = optStr(d.buyerEmail, 320)
-  if ([recipientEmail, sealed, message, from, buyerEmail].includes(undefined)) return null
+  const recipientHandle = optStr(d.recipientHandle, 320)
+  const buyerPubkey = optStr(d.buyerPubkey, 64)
+  if ([recipientEmail, sealed, message, from, buyerEmail, recipientHandle, buyerPubkey].includes(undefined)) return null
+  if (buyerPubkey !== null && !HEX64.test(buyerPubkey as string)) return null
+  const rawCreated = d.draftCreatedAt
+  let draftCreatedAt: number | null = null
+  if (rawCreated !== null && rawCreated !== undefined) {
+    // Seconds or ms on the wire; anything else is dropped (it only dates a sentence in an email).
+    const n = typeof rawCreated === 'number' ? rawCreated : typeof rawCreated === 'string' ? Date.parse(rawCreated) : NaN
+    if (Number.isFinite(n) && n > 0) draftCreatedAt = n < 1e12 ? n * 1000 : n
+  }
   const claimWindowDays = typeof d.claimWindowDays === 'number' && Number.isInteger(d.claimWindowDays) && d.claimWindowDays > 0 && d.claimWindowDays <= 365 ? d.claimWindowDays : null
   if (claimWindowDays === null) return null
   return {
@@ -220,6 +242,9 @@ export function parseGiftDelivery(raw: unknown): GiftDelivery | null {
     from: from as string | null,
     buyerEmail: buyerEmail as string | null,
     claimWindowDays,
+    recipientHandle: recipientHandle as string | null,
+    buyerPubkey: buyerPubkey === null ? null : (buyerPubkey as string).toLowerCase(),
+    draftCreatedAt,
   }
 }
 

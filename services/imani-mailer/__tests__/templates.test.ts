@@ -45,6 +45,45 @@ describe('built-in templates', () => {
     expect(() => resolveFields(t, { ...fields, claimUrl: claimFields.claimUrl }, LINKS)).toThrow(/unknown field "claimUrl"/)
   })
 
+  it('gift-claimed (G15): exact copy, no url field', () => {
+    const t = compile('gift-claimed', BUILTIN_TEMPLATES['gift-claimed'])
+    expect(Object.values(t.def.fields).some((f) => f.type === 'url')).toBe(false)
+    expect(Object.keys(t.def.fields).sort()).toEqual(['amount', 'recipient', 'stall'])
+    expect(t.def.fields.recipient).toMatchObject({ type: 'line', max: 320 })
+    const r = render(t, resolveFields(t, { stall: 'Card Test Bakery', amount: '£5.00', recipient: '@bob' }, LINKS))
+    expect(r.subject).toBe('Your Card Test Bakery gift was claimed')
+    expect(r.text).toMatch(/^@bob claimed the £5\.00 voucher for Card Test Bakery you sent\./)
+    expect(r.text).not.toMatch(/https?:/)
+  })
+
+  it('gift-expired (G15): exact copy, howBack as text, no url field', () => {
+    const t = compile('gift-expired', BUILTIN_TEMPLATES['gift-expired'])
+    expect(Object.values(t.def.fields).some((f) => f.type === 'url')).toBe(false)
+    expect(Object.keys(t.def.fields).sort()).toEqual(['amount', 'claimBy', 'howBack', 'recipient', 'spendBy', 'stall'])
+    expect(t.def.fields.howBack.type).toBe('text')
+    const howBack = 'Open your Imani wallet: it takes it back for you.'
+    const r = render(t, resolveFields(t, { stall: 'Card Test Bakery', amount: '£5.00', recipient: 'bob@example.com', claimBy: '28 Nov 2026', howBack }, LINKS))
+    expect(r.subject).toBe("Your Card Test Bakery gift wasn't claimed")
+    expect(r.text).toMatch(/^Your £5\.00 voucher for Card Test Bakery to bob@example\.com wasn't claimed by 28 Nov 2026\.\n\nOpen your Imani wallet: it takes it back for you\.\n\n/)
+    // G17 (C): the spend-by line, right under how to take it back, only when given.
+    const spendBy = "Once it's back, it keeps its original expiry: spend it by 27 Jan 2027."
+    const g17 = render(t, resolveFields(t, { stall: 'Card Test Bakery', amount: '£5.00', recipient: 'bob@example.com', claimBy: '28 Nov 2026', howBack, spendBy }, LINKS))
+    expect(g17.text).toContain(`${howBack}\n\n${spendBy}\n\n`)
+    expect(r.text).not.toMatch(/spend it by/)
+    expect(() => resolveFields(t, { stall: 's', amount: 'a', recipient: 'r', claimBy: 'c', howBack: 'h', returnUrl: 'https://imani.test/x' }, LINKS)).toThrow(/unknown field "returnUrl"/)
+  })
+
+  it('gift-return-link (G17 C): says the expiry a taken-back voucher keeps, only when given', () => {
+    const t = compile('gift-return-link', BUILTIN_TEMPLATES['gift-return-link'])
+    const base = { stall: 'Card Test Bakery', claimBy: '11 November 2026', returnUrl: 'https://wallet.imani.test/gift-return#r=ab' }
+    const plain = render(t, resolveFields(t, base, LINKS)).text
+    expect(plain).not.toMatch(/original expiry/)
+    const g17 = render(t, resolveFields(t, { ...base, spendBy: 'spend it by 26 January 2027' }, LINKS)).text
+    expect(g17).toContain("https://wallet.imani.test/gift-return#r=ab\n\nOnce it's back, it keeps its original expiry: spend it by 26 January 2027.\n\nKeep it private")
+    const never = render(t, resolveFields(t, { ...base, spendBy: "the voucher doesn't expire" }, LINKS)).text
+    expect(never).toContain("Once it's back, it keeps its original expiry: the voucher doesn't expire.")
+  })
+
   it('refuses missing required fields, unknown fields and non-strings', () => {
     expect(() => renderClaim({ ...claimFields, stall: '' })).toThrow(/stall is required/)
     expect(() => renderClaim({ ...claimFields, bcc: 'x@y.z' })).toThrow(/unknown field "bcc"/)
