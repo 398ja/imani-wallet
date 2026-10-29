@@ -41,6 +41,8 @@ export interface WrapEvent {
 export interface GiftPorts {
   /** This issuer's seal key (G4), hex. Opens the sealed ℓ and signs the buyer's wrap. */
   sealSecretHex: string
+  /** TEST MODE ONLY: the claim window in seconds (`PURCHASE_TEST_CLAIM_WINDOW_SECONDS`). */
+  testWindowSeconds?: number | null
   /** The wallet's public origin, for the claim link. */
   walletOrigin: string
   /** POST a signed event to the gateway relay, NIP-98 by `signer`. True when stored. */

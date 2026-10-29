@@ -307,6 +307,15 @@ describe('pure parts', () => {
     expect(giftLockFor({ lockPubkey: BOB, refundPubkey: BUYER, mintedAtMs: NOW, nowMs: NOW, claimWindowDays: 30, couponExpiresAtMs: null })).toEqual({ lockPubkey: BOB, refundPubkey: BUYER, locktime: X })
     expect(giftLockFor({ lockPubkey: BOB, refundPubkey: BUYER, mintedAtMs: NOW, nowMs: NOW + 29.5 * DAY_MS, claimWindowDays: 30, couponExpiresAtMs: null })).toEqual({ problem: 'window_too_short' })
   })
+  it('test mode: a claim window in seconds from the anchor (so an e2e can watch it end)', () => {
+    expect(giftLockFor({ lockPubkey: BOB, refundPubkey: BUYER, mintedAtMs: NOW, nowMs: NOW, claimWindowDays: 30, couponExpiresAtMs: null, testWindowSeconds: 120 })).toEqual({
+      lockPubkey: BOB,
+      refundPubkey: BUYER,
+      locktime: Math.floor(NOW / 1000) + 120,
+    })
+    // The key checks still apply in test mode.
+    expect(giftLockFor({ lockPubkey: BOB, refundPubkey: BOB, mintedAtMs: NOW, nowMs: NOW, claimWindowDays: 30, couponExpiresAtMs: null, testWindowSeconds: 120 })).toEqual({ problem: 'refund_is_lock_key' })
+  })
   it('the gift link and the wrap match the wallet byte for byte', () => {
     const s = hexToBytes(ELL)
     expect(formatGiftLink('https://imani.casa/x', s, X)).toBe(walletFormatGiftLink('https://imani.casa/x', s, X))
@@ -337,7 +346,18 @@ describe('config: email gifts fail closed', () => {
   })
   it('fully configured', () => {
     const c = readConfig({ ...base, PURCHASE_GIFT_SEAL_KEY: ISSUER_HEX, PURCHASE_WALLET_ORIGIN: 'https://imani.casa/', PURCHASE_MAILER_URL: 'http://mailer', PURCHASE_MAILER_TOKEN: 'm', PURCHASE_GIFT_ANCHORS_PATH: '/tmp/a.json', PURCHASE_GIFT_TRACKER_PATH: '/tmp/t.json' })
-    expect(c.gifts).toMatchObject({ walletOrigin: 'https://imani.casa', mailerUrl: 'http://mailer' })
+    expect(c.gifts).toMatchObject({ walletOrigin: 'https://imani.casa', mailerUrl: 'http://mailer', testWindowSeconds: null })
+  })
+  const full = { ...base, PURCHASE_GIFT_SEAL_KEY: ISSUER_HEX, PURCHASE_WALLET_ORIGIN: 'https://imani.casa/', PURCHASE_MAILER_URL: 'http://mailer', PURCHASE_MAILER_TOKEN: 'm', PURCHASE_GIFT_ANCHORS_PATH: '/tmp/a.json', PURCHASE_GIFT_TRACKER_PATH: '/tmp/t.json' }
+  it('a test claim window is test mode only: refused in live mode, bounded', () => {
+    expect(readConfig({ ...full, PURCHASE_TEST_CLAIM_WINDOW_SECONDS: '120' }).gifts?.testWindowSeconds).toBe(120)
+    for (const env of [
+      { ...full, PURCHASE_LIVEMODE: 'true', PURCHASE_API_URL: 'https://pa', PURCHASE_TEST_CLAIM_WINDOW_SECONDS: '120' },
+      { ...full, PURCHASE_TEST_CLAIM_WINDOW_SECONDS: '5' },
+      { ...full, PURCHASE_TEST_CLAIM_WINDOW_SECONDS: 'soon' },
+    ]) {
+      expect(() => readConfig(env)).toThrow(/PURCHASE_TEST_CLAIM_WINDOW_SECONDS/)
+    }
   })
 })
 

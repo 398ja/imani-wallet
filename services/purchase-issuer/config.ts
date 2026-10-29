@@ -77,6 +77,8 @@ export interface IssuerConfig {
     mintTransportUrl: string | null
     /** Per-gift re-check interval, or null for the default. */
     sweepEveryMs: number | null
+    /** TEST MODE ONLY: the claim window in seconds instead of the draft's days. */
+    testWindowSeconds: number | null
   } | null
 }
 
@@ -164,7 +166,19 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
     if (sweepEveryMs !== null && (!Number.isInteger(sweepEveryMs) || sweepEveryMs < 5_000)) {
       missing.push('PURCHASE_GIFT_SWEEP_MS: whole milliseconds, at least 5000')
     }
-    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, mintTransportUrl, sweepEveryMs }
+    // TEST MODE ONLY: a claim window in seconds, so an end-to-end test sees it end. Live mode
+    // refuses to boot with it (a real buyer's recipient always gets the stall's window).
+    const rawTestWindow = (env.PURCHASE_TEST_CLAIM_WINDOW_SECONDS ?? '').trim()
+    let testWindowSeconds: number | null = null
+    if (rawTestWindow !== '') {
+      testWindowSeconds = Number(rawTestWindow)
+      if (!Number.isInteger(testWindowSeconds) || testWindowSeconds < 30 || testWindowSeconds > 86_400) {
+        missing.push('PURCHASE_TEST_CLAIM_WINDOW_SECONDS: whole seconds, 30 to 86400')
+      } else if (livemodeRaw === 'true') {
+        missing.push('PURCHASE_TEST_CLAIM_WINDOW_SECONDS: test mode only, never with PURCHASE_LIVEMODE=true')
+      }
+    }
+    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, mintTransportUrl, sweepEveryMs, testWindowSeconds }
   }
 
   if (missing.length > 0) throw new ConfigError(missing)
