@@ -52,6 +52,7 @@ import { sendSaleRecord } from './saleRecord'
 import { ENROLMENT_PREFIX, EnrolmentService, MAX_BODY_BYTES } from './enrolment'
 import { cachedValidityReader, readStallValidity, type ValidityReader } from './stallValidity'
 import { CredentialVault } from './vault'
+import { fileTrackerStore, GiftTracker, httpCheckStates } from './giftTracker'
 import { runPass, type WorkerDeps } from './worker'
 
 /** Build the real ports from config. Exported so a test can see the wiring. */
@@ -94,7 +95,25 @@ function giftPortsFor(config: IssuerConfig, g: NonNullable<IssuerConfig['gifts']
     scrubSeal: httpScrub(config.purchasesUrl, config.purchasesToken, fetchImpl),
     anchor: fileAnchors(g.anchorsPath),
     stallName: httpStallName(config.gatewayUrl, fetchImpl),
+    track: (input, mintUrl) => giftTrackerFor(config, fetchImpl).track(input, mintUrl),
   }
+}
+
+/** One tracker per config, shared by discharge (track) and the worker loop (sweep). */
+const trackers = new WeakMap<IssuerConfig, GiftTracker>()
+export function giftTrackerFor(config: IssuerConfig, fetchImpl: typeof fetch = fetch): GiftTracker {
+  const g = config.gifts!
+  let t = trackers.get(config)
+  if (!t) {
+    const mailer = mailerClient({ baseUrl: g.mailerUrl, token: g.mailerToken, fetchImpl })
+    t = new GiftTracker(config.vaultKeyHex, fileTrackerStore(g.trackerPath), {
+      checkStates: httpCheckStates(g.mintTransportUrl, fetchImpl),
+      sendMail: (req) => mailer.send(req),
+      now: () => Date.now(),
+    })
+    trackers.set(config, t)
+  }
+  return t
 }
 
 /** The stall-validity reader, one per process so the mint and `/ready` share its cache (#312). */
@@ -136,6 +155,7 @@ export function depsFor(
       baseBackoffMs: config.deliveryBaseBackoffMs,
       now: () => Date.now(),
     }),
+    ...(config.gifts ? { giftTracker: giftTrackerFor(config) } : {}),
   }
 }
 

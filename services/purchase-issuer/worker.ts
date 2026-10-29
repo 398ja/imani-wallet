@@ -12,7 +12,7 @@ import { hostname } from 'node:os'
 import { getDecimals } from '@imani/money'
 
 import { discharge, type Obligation, type Outcome, type Ports } from './discharge'
-import { countAttempt, setOwedUnenrolled } from './metrics'
+import { countAttempt, countGiftSweepError, setOwedUnenrolled } from './metrics'
 import type { DeliveryOutbox } from './outbox'
 import type { PurchasesApi, OwedPurchase } from './purchasesApi'
 
@@ -41,6 +41,8 @@ export interface WorkerDeps {
    * with nothing to re-send it (the pre-U8 behaviour, kept for tests and tools only).
    */
   outbox?: DeliveryOutbox
+  /** G15 §4.3: claimed/expired notices for delivered gifts, swept once per pass. Absent, nothing is swept. */
+  giftTracker?: { sweep(): Promise<unknown> }
 }
 
 /** Host and process, which is what an operator needs to find the claimant. */
@@ -305,6 +307,15 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
   }
 
   setOwedUnenrolled(owedUnenrolled)
+  if (deps.giftTracker) {
+    // Never fails the pass: a notice is late, never lost (the row stays until claimBy + 7 d).
+    try {
+      await deps.giftTracker.sweep()
+    } catch (error) {
+      countGiftSweepError()
+      console.warn(JSON.stringify({ event: 'gift_sweep_failed', reason: error instanceof Error ? error.name : 'error' }))
+    }
+  }
   return result
 }
 
