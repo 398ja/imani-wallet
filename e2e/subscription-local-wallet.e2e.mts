@@ -144,6 +144,9 @@ async function main() {
     check('no uncaught page errors', errors.length === 0, errors.join(' | '))
 
     // ---- Cancel in the REAL Stripe customer portal: the webhook must reach this wallet (#407).
+    // At the wallet's phone width the portal's confirm button sits under its sticky footer and a
+    // click never lands; the probe that first cancelled through the portal ran at desktop width.
+    await site.setViewportSize({ width: 1280, height: 900 })
     await site.goto(`${SITE}/account`)
     await site.getByRole('button', { name: 'Card, invoices and cancellation' }).click()
     await site.waitForURL(/billing\.stripe\.com/, { timeout: 30_000 })
@@ -158,10 +161,16 @@ async function main() {
     // custom Reason dropdown, then "Continue to cancellation", then the review page's own
     // "Cancel subscription" button (`data-testid=confirm`), which is what cancels.
     const continueStep = site.getByText('Continue to cancellation')
-    if (await continueStep.isVisible({ timeout: 8_000 }).catch(() => false)) {
+    // `isVisible` does not wait (its timeout is ignored), so it read "no dialog" before the dialog
+    // had opened, and the dialog then covered the confirm button. Wait for it to appear.
+    const asksReason = await continueStep.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true, () => false)
+    if (asksReason) {
       await site.getByText('Choose an option').click()
       await site.getByRole('option').first().click()
       await continueStep.click()
+      // The dialog animates away; until it has, it is what a click on the confirm button lands on.
+      await site.getByText('Continue to cancellation').waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => undefined)
+      await site.waitForTimeout(1500)
     }
     await site.locator('[data-testid=confirm]').click({ timeout: 20_000 })
     let cancelAt: number | null = null

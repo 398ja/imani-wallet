@@ -245,7 +245,9 @@ export function createApp(deps: AppDeps) {
           subscriptionId: changed.subscriptionId,
           status: next,
           ...(cancelled && endsAt ? { endsAt } : {}),
-          at: now(),
+          // Milliseconds, not seconds: Stripe's cancel and undo can land in the same second, and the
+          // wallet keeps the newest by `at`, so a seconds clock let the undo lose a tie.
+          at: deps.now?.() ?? Date.now(),
         })
         log({ event: 'subscription_status_sent', subscription_id: changed.subscriptionId, status: next })
       } catch (error) {
