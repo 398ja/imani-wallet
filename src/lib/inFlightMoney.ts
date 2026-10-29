@@ -36,6 +36,8 @@ export const sendIntentsKey = (pubkey: string) => `imani-wallet:send-intents:${p
  */
 export const cashlinkClaimsKey = (pubkey: string) => `imani-wallet:cashlink-claims:${pubkey}`
 export const cashlinkMovingKey = (pubkey: string) => `imani-wallet:cashlink-moving:${pubkey}`
+/** #402: the customer's checkout codes; one not yet finished is value only its record can bring back. */
+export const checkoutCodesLedgerKey = (pubkey: string) => `imani-wallet:checkout-codes:${pubkey}`
 
 /** pay.ts's own window: a send unanswered after this is never going to answer (#127). */
 export const PENDING_SEND_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
@@ -87,6 +89,23 @@ function allEntries(key: string): number {
   }
 }
 
+/** Checkout codes not yet finished (`done`). Unreadable storage counts as one. */
+function outstandingCodes(key: string): number {
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(key)
+  } catch {
+    return 1
+  }
+  if (!raw) return 0
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((r) => !(r as { done?: unknown } | null)?.done).length : 1
+  } catch {
+    return 1
+  }
+}
+
 /** Live (unexpired) entries in each ledger. Never throws. */
 export function moneyInFlight(pubkey: string): { sends: number; swaps: number; cashlinks: number } {
   return {
@@ -94,6 +113,7 @@ export function moneyInFlight(pubkey: string): { sends: number; swaps: number; c
       liveEntries(pendingSendsKey(pubkey), PENDING_SEND_LIFETIME_MS) +
       liveEntries(sendIntentsKey(pubkey), SEND_INTENT_LIFETIME_MS),
     swaps: liveEntries(swapIntentsKey(pubkey), SWAP_INTENT_LIFETIME_MS),
-    cashlinks: allEntries(cashlinkClaimsKey(pubkey)) + allEntries(cashlinkMovingKey(pubkey)),
+    // #402: an outstanding checkout code counts with the Cashlinks: the same kind of locked value.
+    cashlinks: allEntries(cashlinkClaimsKey(pubkey)) + allEntries(cashlinkMovingKey(pubkey)) + outstandingCodes(checkoutCodesLedgerKey(pubkey)),
   }
 }

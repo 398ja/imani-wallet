@@ -10,12 +10,14 @@
  * - logout is refused while any code is outstanding (`checkoutCodesInFlight`, `inFlightMoney.ts`),
  *   because logout sweeps localStorage and this record is the only map back to the value.
  *
- * No imports on purpose (as `inFlightMoney.ts`): pay.ts and logout read this on every call.
+ * Only `inFlightMoney.ts` is imported (the key lives there, so logout cannot drift from it).
  * Nothing secret is kept: `R` is re-derived from `i`. A part's bearer source token is kept only
  * until it is locked, the same class as the coupon row it came from.
  */
 
-export const checkoutCodesKey = (pubkey: string) => `imani-wallet:checkout-codes:${pubkey}`
+import { checkoutCodesLedgerKey } from './inFlightMoney'
+
+export const checkoutCodesKey = checkoutCodesLedgerKey
 export const checkoutRefundCounterKey = (pubkey: string) => `imani-wallet:checkout-refund-next:${pubkey}`
 
 export type CheckoutPartState =
