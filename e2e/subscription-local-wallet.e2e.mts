@@ -102,11 +102,11 @@ async function main() {
       /Starter/.test(yearly) && /Essentials/.test(yearly) && /Pro/.test(yearly) && !/Town|BID|Partner/.test(yearly),
       yearly.slice(0, 400),
     )
-    check('yearly by default, in pounds: Essentials £70/year, Pro £100/year', /£70\/year/.test(yearly) && /£100\/year/.test(yearly), yearly.slice(0, 500))
+    check('yearly by default, in pounds: Essentials £70/year, Pro £250/year', /£70\/year/.test(yearly) && /£250\/year/.test(yearly), yearly.slice(0, 500))
     check('Essentials issues without limit on 3 tills', /Unlimited voucher issuance/.test(yearly) && /plus 3 tills/.test(yearly), yearly.slice(0, 500))
     await site.getByRole('radio', { name: /Monthly/ }).click()
     const monthly = await text(site)
-    check('monthly, in pounds: Essentials £8/month, Pro £11/month', /£8\/month/.test(monthly) && /£11\/month/.test(monthly), monthly.slice(0, 500))
+    check('monthly, in pounds: Essentials £8/month, Pro £25/month', /£8\/month/.test(monthly) && /£25\/month/.test(monthly), monthly.slice(0, 500))
     check('the plans page never says Basic', !/Basic/.test(yearly) && !/Basic/.test(monthly))
 
     await site.getByRole('button', { name: 'Choose Essentials' }).click()
