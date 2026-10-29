@@ -7,7 +7,7 @@
  *
  * Registers a fresh stall in the wallet dev server, opens Settings › Subscription, taps "Upgrade my
  * plan" (whose URL comes from VITE_SUBSCRIPTION_SITE_URL in .env.local), and checks the site opens
- * in its own tab already signed in as that stall. Pays Basic monthly on Stripe's hosted Checkout
+ * in its own tab already signed in as that stall. Pays Essentials monthly on Stripe's hosted Checkout
  * with the 4242 test card, then waits for the plan, minted and DM'd by the LOCAL gateway-customer,
  * to show in that same wallet's Settings › Subscription.
  */
@@ -51,9 +51,10 @@ async function registerStall(page: Page): Promise<string> {
 async function fillStripe(page: Page, email: string) {
   await page.waitForURL(/checkout\.stripe\.com/, { timeout: 30_000 })
   await page.locator('#email').waitFor({ timeout: 30_000 })
-  // What Stripe itself will charge: the published Basic monthly price, in pounds.
+  // What Stripe itself will charge: the published Essentials monthly price, in pounds.
   const summary = (await page.locator('body').innerText()).replace(/\s+/g, ' ')
-  check('Stripe Checkout charges £8.00 a month for Basic', /£8\.00/.test(summary) && /month/i.test(summary), summary.slice(0, 300))
+  check('Stripe Checkout charges £8.00 a month for Essentials', /£8\.00/.test(summary) && /month/i.test(summary), summary.slice(0, 300))
+  check('Stripe Checkout names the plan "Imani Essentials", never Basic', /Imani Essentials/.test(summary) && !/Basic/.test(summary), summary.slice(0, 300))
   await page.locator('#email').fill(email)
   await page.locator('#cardNumber').fill('4242424242424242')
   await page.locator('#cardExpiry').fill('12 / 34')
@@ -87,24 +88,24 @@ async function main() {
     check('Upgrade my plan points at the site this environment configured', href === SITE, String(href))
 
     const [site] = await Promise.all([context.waitForEvent('page'), upgrade.click()])
-    await site.getByRole('button', { name: 'Choose Basic' }).waitFor({ timeout: 30_000 })
+    await site.getByRole('button', { name: 'Choose Essentials' }).waitFor({ timeout: 30_000 })
     check('the site opened in its own tab, signed in, with no login page', new URL(site.url()).origin === SITE)
 
     // The plans as www.imani.casa/pricing publishes them, with the amounts read from REAL Stripe.
     await site.getByText('£70/year').waitFor({ timeout: 15_000 })
     const yearly = await text(site)
     check(
-      'plans are Starter, Basic and Pro, with no Town / BID partnership',
-      /Starter/.test(yearly) && /Basic/.test(yearly) && /Pro/.test(yearly) && !/Town|BID|Partner/.test(yearly),
+      'plans are Starter, Essentials and Pro, with no Town / BID partnership',
+      /Starter/.test(yearly) && /Essentials/.test(yearly) && /Pro/.test(yearly) && !/Town|BID|Partner/.test(yearly),
       yearly.slice(0, 400),
     )
-    check('yearly by default, in pounds: Basic £70/year, Pro £100/year', /£70\/year/.test(yearly) && /£100\/year/.test(yearly), yearly.slice(0, 500))
-    check('Basic issues without limit on 3 tills', /Unlimited voucher issuance/.test(yearly) && /plus 3 tills/.test(yearly), yearly.slice(0, 500))
+    check('yearly by default, in pounds: Essentials £70/year, Pro £100/year', /£70\/year/.test(yearly) && /£100\/year/.test(yearly), yearly.slice(0, 500))
+    check('Essentials issues without limit on 3 tills', /Unlimited voucher issuance/.test(yearly) && /plus 3 tills/.test(yearly), yearly.slice(0, 500))
     await site.getByRole('radio', { name: /Monthly/ }).click()
     const monthly = await text(site)
-    check('monthly, in pounds: Basic £8/month, Pro £11/month', /£8\/month/.test(monthly) && /£11\/month/.test(monthly), monthly.slice(0, 500))
+    check('monthly, in pounds: Essentials £8/month, Pro £11/month', /£8\/month/.test(monthly) && /£11\/month/.test(monthly), monthly.slice(0, 500))
 
-    await site.getByRole('button', { name: 'Choose Basic' }).click()
+    await site.getByRole('button', { name: 'Choose Essentials' }).click()
     await fillStripe(site, `${handle}@example.com`)
     await site.waitForURL(new RegExp(`${SITE.replace(/[/.:]/g, '\\$&')}/done`), { timeout: 60_000 })
     check('paid on real Stripe test Checkout, back on the site still signed in', true)
@@ -115,23 +116,23 @@ async function main() {
       await site.waitForTimeout(3000)
       account = await text(site)
     }
-    check('the local gateway minted and delivered it: account page says Sent', /Basic/.test(account) && /Sent/.test(account), account.slice(0, 300))
+    check('the local gateway minted and delivered it: account page says Sent', /Essentials/.test(account) && /Sent/.test(account), account.slice(0, 300))
 
     let plan = ''
-    for (let i = 0; i < 20 && !/Basic/.test(plan); i++) {
+    for (let i = 0; i < 20 && !/Essentials/.test(plan); i++) {
       await wallet.goto(`${WALLET}/settings/subscription`, { waitUntil: 'load' })
       await wallet.waitForTimeout(5000)
       plan = await text(wallet)
     }
-    check('the plan arrived in this local wallet: Settings › Subscription shows Basic', /Basic/.test(plan), plan.slice(0, 400))
+    check('the plan arrived in this local wallet: Settings › Subscription shows Essentials', /Essentials/.test(plan), plan.slice(0, 400))
 
     // The notice the wallet raised for it names the plan, never a key (owner rule: no npubs).
     await wallet.locator('summary[aria-label^="Notifications"]').click()
     await wallet.waitForTimeout(500)
     const bell = (await wallet.locator('details:has(summary[aria-label^="Notifications"])').innerText()).replace(/\s+/g, ' ')
     check(
-      'the notice names the plan ("Imani Basic plan activated"), shows no key, and is not a payment',
-      /Imani Basic plan activated/.test(bell) && !/npub1|Licence from|\b[0-9a-f]{12,}\b|Payment on its way/.test(bell),
+      'the notice names the plan ("Imani Essentials plan activated"), shows no key, and is not a payment',
+      /Imani Essentials plan activated/.test(bell) && !/npub1|Licence from|\b[0-9a-f]{12,}\b|Payment on its way/.test(bell),
       bell.slice(0, 400),
     )
     check('no uncaught page errors', errors.length === 0, errors.join(' | '))

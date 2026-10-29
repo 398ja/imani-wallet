@@ -278,7 +278,7 @@ function handleInboundEnvelope(raw: unknown, recipientPubkeyHex: string): string
 
   // A plan, not a payment (#407). The licence seller's delivery goes through the same gateway
   // route as a sale, so the gateway announces it as "Payment on its way". The wallet announces
-  // the licence itself when it lands ("Imani Basic plan activated", dmPoll.ts), so this advance
+  // the licence itself when it lands ("Imani Essentials plan activated", dmPoll.ts), so this advance
   // notice is dropped. Keyed on the sender being THIS build's pinned licence seller: an envelope
   // carries no token, so that is the only signal, and it is the same key the licence must name.
   if (isLicenceSeller(env.sender.pubkeyHex)) return env.notificationId

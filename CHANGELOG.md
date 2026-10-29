@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   £70/year and Pro £11/month or £100/year, all in GBP. The site shows each price as Stripe will
   charge it, and the service never lists or sells a price that is not in GBP. The free tier is
   called Starter on the site and in the wallet.
+- **Basic is now called Essentials** (#407), on the subscription site, the wallet's plan screen,
+  the plan notice ("Imani Essentials plan activated") and the Stripe product. Only the name changed:
+  the tier id is still `basic`, so every licence already sold keeps working and now reads as
+  Essentials.
 
 ## [0.39.5] - 2026-10-26
 

@@ -21,7 +21,7 @@ import {
 } from '../lib/api'
 
 /**
- * The plans, as www.imani.casa/pricing publishes them: Starter, Basic and Pro.
+ * The plans, as www.imani.casa/pricing publishes them: Starter, Essentials and Pro.
  *
  * Which plans appear, and their limits, come from the service (the catalog the wallet enforces,
  * filtered to tiers with a card price). Prices come from Stripe, in GBP, so the page shows what
@@ -138,7 +138,7 @@ export function PlansPage({ me, onSessionEnded }: { me: Me | null; onSessionEnde
 
       <p className="mt-6 text-sm text-mono-500">
         Starter: when you have issued £100 in vouchers, upgrade to keep selling. Vouchers you have already sold stay valid.
-        We check every Basic and Pro business before its verified badge goes live.
+        We check every Essentials and Pro business before its verified badge goes live.
       </p>
       <p className="mt-2 text-sm text-mono-500">
         Prices are in pounds sterling and include VAT where it applies; business customers can add a VAT number at

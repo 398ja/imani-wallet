@@ -112,7 +112,7 @@ function fakeGateway() {
 const fakeStripe = (): StripeClient & { checkouts: unknown[]; priceReads: string[]; prices: Map<string, { unitAmount: number; currency: string }> } => {
   const checkouts: unknown[] = []
   const priceReads: string[] = []
-  // The published plan (www.imani.casa/pricing), in GBP: Basic £8/month, Pro £100/year.
+  // The published plan (www.imani.casa/pricing), in GBP: Essentials (`basic`) £8/month, Pro £100/year.
   const prices = new Map([
     ['price_b_m', { unitAmount: 800, currency: 'GBP' }],
     ['price_p_a', { unitAmount: 10000, currency: 'GBP' }],

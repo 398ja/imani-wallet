@@ -111,8 +111,8 @@ describe('a licence is announced by the plan it is', () => {
   it('names the plan and its end date, links to the subscription, carries no amount and no key', () => {
     showNotice(licenceNotice('sub:v', { tier: 'basic', expiresAt: END }, { now: NOW }), ME)
     const row = recorded[0]
-    expect(row).toMatchObject({ type: 'licence_received', title: 'Imani Basic plan activated', url: '/settings/subscription' })
-    expect(String(row.body)).toMatch(/^Your stall is on the Imani Basic plan until .*2026\. It is not part of your balance\.$/)
+    expect(row).toMatchObject({ type: 'licence_received', title: 'Imani Essentials plan activated', url: '/settings/subscription' })
+    expect(String(row.body)).toMatch(/^Your stall is on the Imani Essentials plan until .*2026\. It is not part of your balance\.$/)
     expect(`${row.title} ${row.body}`).not.toMatch(/npub|[0-9a-f]{16}|Licence from/)
     expect(toasts[0].kind).toBe('plain')
   })
@@ -120,6 +120,12 @@ describe('a licence is announced by the plan it is', () => {
   it('a renewal says renewed; a plan that starts later says when', () => {
     expect(licenceNotice('sub:v2', { tier: 'pro', expiresAt: END }, { renewal: true, now: NOW }).title).toBe('Imani Pro plan renewed')
     expect(licenceNotice('sub:v3', { tier: 'basic', validFrom: NOW + 86_400 * 3, expiresAt: END }, { now: NOW }).body).toMatch(/, from .* until /)
+  })
+
+  it('the `basic` tier is sold as Essentials: a licence sold before the rename never says Basic', () => {
+    const n = licenceNotice('sub:v4', { tier: 'basic', expiresAt: END }, { renewal: true, now: NOW })
+    expect(n.title).toBe('Imani Essentials plan renewed')
+    expect(`${n.title} ${n.body}`).not.toMatch(/basic/i)
   })
 
   it('a hand grant is a plan grant, and a licence with no tier is still a plan', () => {

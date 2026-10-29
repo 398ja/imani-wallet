@@ -1344,7 +1344,7 @@ function redemptionAdapter(): RedemptionAdapter {
       // written from the coupon itself, and nothing here touches it. A coupon
       // with no usable declaration takes the plain `announceArrival` path.
       // A licence is not a payment either: no money toast, no "+…" and no `voucher_received`
-      // row, but its own notice naming the PLAN ("Imani Basic plan activated", or "renewed"), from
+      // row, but its own notice naming the PLAN ("Imani Essentials plan activated", or "renewed"), from
       // the token's signed metadata, as `licences.ts` reads it for the balance. Never the seller's
       // key: no npub is shown to end users.
       const licence = licenceFromToken(token)

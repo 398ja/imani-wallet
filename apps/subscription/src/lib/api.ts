@@ -89,11 +89,13 @@ export function toPubkeyHex(input: string): string | null {
 }
 
 /**
- * Plan names as www.imani.casa/pricing publishes them. The catalog's `free` tier is sold as Starter.
+ * Plan names as www.imani.casa/pricing publishes them. Display only: the tier ids (`free`, `basic`,
+ * `pro`) are what licences, the catalog and Stripe metadata carry, and they never change, so a
+ * licence sold under an older name still reads. `free` is sold as Starter and `basic` as Essentials.
  * Only the tiers the service lists are shown: a partnership tier (Town / BID Partner) is arranged
  * with us, has no card price, and is never offered on this site.
  */
-export const TIER_NAMES: Record<string, string> = { free: 'Starter', basic: 'Basic', pro: 'Pro', custom: 'Custom' }
+export const TIER_NAMES: Record<string, string> = { free: 'Starter', basic: 'Essentials', pro: 'Pro', custom: 'Custom' }
 
 /**
  * What each plan includes beyond the limits the licence enforces, as the pricing page lists it.

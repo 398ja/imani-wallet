@@ -7,7 +7,7 @@
  *
  * A fresh stall publishes its stall record to staging (so the service sees a merchant), then its
  * "wallet" tab (the wallet's REAL `openSisterSite`, bundled, over an unlocked session) taps Upgrade.
- * The site opens in a new tab on its own origin, signed in by the wallet with no login page; Basic
+ * The site opens in a new tab on its own origin, signed in by the wallet with no login page; Essentials
  * monthly is paid on Stripe's hosted Checkout with the 4242 test card; the forwarded invoice.paid
  * mints through staging; the licence in the stall's staging inbox is verified with the wallet's
  * own code.
@@ -169,9 +169,9 @@ async function main() {
         SITE,
       ),
     ])
-    await page.getByRole('button', { name: 'Choose Basic' }).waitFor({ timeout: 30_000 })
+    await page.getByRole('button', { name: 'Choose Essentials' }).waitFor({ timeout: 30_000 })
     check('opened from the wallet, signed in with no login page', true)
-    await page.getByRole('button', { name: 'Choose Basic' }).click()
+    await page.getByRole('button', { name: 'Choose Essentials' }).click()
     await fillStripe(page)
     check('real Stripe Checkout loaded and accepted the test card', true)
     await page.waitForURL(new RegExp(`${SITE.replace(/[/.:]/g, '\\$&')}/done`), { timeout: 60_000 })
@@ -195,14 +195,14 @@ async function main() {
       check('it verifies for this stall, sold by the staging seller', verdict.granted)
       if (verdict.granted) {
         const e = entitlementOf({ catalog: BUNDLED_CATALOG, grants: [verdict.grant], currency: 'GBP', now })
-        check('the wallet reads it as Basic: unlimited issuance, 3 tills', e.tier === 'basic' && e.terminals === 3 && e.sales === null, JSON.stringify(e))
+        check('the wallet reads it as Essentials: unlimited issuance, 3 tills', e.tier === 'basic' && e.terminals === 3 && e.sales === null, JSON.stringify(e))
       }
     }
 
     await page.getByRole('link', { name: 'See my plan' }).click()
     await page.getByText('Active').waitFor({ timeout: 15_000 })
     const account = await page.locator('body').innerText()
-    check('account page: Basic, active, sent', /Basic/.test(account) && /Active/.test(account) && /Sent/.test(account), account.slice(0, 300))
+    check('account page: Essentials, active, sent', /Essentials/.test(account) && /Active/.test(account) && /Sent/.test(account), account.slice(0, 300))
     check('Stripe portal offered for the card subscription', await page.getByRole('button', { name: 'Card, invoices and cancellation' }).isVisible())
   } catch (e) {
     check('flow completed', false, String(e).slice(0, 300))
