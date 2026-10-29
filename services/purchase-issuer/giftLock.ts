@@ -121,12 +121,21 @@ export function giftLockFor(input: {
   nowMs: number
   claimWindowDays: number
   couponExpiresAtMs: number | null
+  /**
+   * TEST MODE ONLY (`PURCHASE_TEST_CLAIM_WINDOW_SECONDS`, refused in live mode): a claim window in
+   * seconds instead of days, so an end-to-end test can watch it end and the buyer take the gift
+   * back. Skips the one-day minimum; the gateway still applies its own lead.
+   */
+  testWindowSeconds?: number | null
 }): GiftLock | { problem: GiftLockProblem } {
   const lock = input.lockPubkey.toLowerCase()
   const refund = input.refundPubkey?.toLowerCase() ?? null
   if (refund === null) return { problem: 'no_refund_key' }
   if (!XONLY.test(lock) || !XONLY.test(refund)) return { problem: 'malformed_key' }
   if (refund === lock) return { problem: 'refund_is_lock_key' }
+  if (input.testWindowSeconds) {
+    return { lockPubkey: lock, refundPubkey: refund, locktime: Math.floor(input.mintedAtMs / 1000) + input.testWindowSeconds }
+  }
   const end = claimWindowEnd(input.mintedAtMs, input.claimWindowDays, input.couponExpiresAtMs)
   // Measured from NOW: a retry days after the payment must still leave the recipient a real window.
   if (windowTooShort(input.nowMs, end)) return { problem: 'window_too_short' }

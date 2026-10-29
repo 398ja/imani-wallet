@@ -324,6 +324,7 @@ export async function discharge(
       nowMs: mintedAt,
       claimWindowDays: giftDelivery!.claimWindowDays,
       couponExpiresAtMs: couponExpiresAtMs(anchor, expiresInDays),
+      testWindowSeconds: ports.gifts!.testWindowSeconds ?? null,
     })
     if ('problem' in lock) {
       return { kind: 'attention', reason: `${giftKind} gift cannot be locked (${lock.problem}); nothing minted, refund or issue by hand` }

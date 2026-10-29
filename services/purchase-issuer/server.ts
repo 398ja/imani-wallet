@@ -89,6 +89,7 @@ function giftPortsFor(config: IssuerConfig, g: NonNullable<IssuerConfig['gifts']
   return {
     sealSecretHex: g.sealKeyHex,
     walletOrigin: g.walletOrigin,
+    testWindowSeconds: g.testWindowSeconds,
     publishEvent: httpPublishEvent(config.gatewayUrl, fetchImpl),
     queryWraps: httpQueryWraps(config.gatewayUrl, fetchImpl),
     sendMail: (req) => mailer.send(req),
