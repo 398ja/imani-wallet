@@ -1,6 +1,7 @@
 import type { TransactionRow } from '@imani/wallet-storage'
 import type { VoucherValidation } from './voucherToken'
 import { displayDecimals } from './format'
+import { asLockedGiftRecord, lockedGiftMemo, type LockedGiftRecord } from './lockedGiftRecord'
 
 /**
  * A transaction, in the shape the screens actually need.
@@ -116,6 +117,12 @@ export interface WalletTransaction {
    */
   exactValue?: number
   memo?: string
+  /**
+   * A minted-locked gift on a `gift_sent` / `gift_pending` row (#410 G14). When present, `memo`
+   * is read from it, never from the stored text: the stored memo is a copy that a restore of an
+   * older backup can leave behind.
+   */
+  lockedGift?: LockedGiftRecord
   bundleId?: string
   /**
    * The NUT-18V payment request this settles, when it settles one.
@@ -199,6 +206,10 @@ function isValidation(value: unknown): value is VoucherValidation {
   )
 }
 
+function lockedOf(r: Record<string, unknown>): LockedGiftRecord | undefined {
+  return asLockedGiftRecord(r.lockedGift)
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
@@ -254,7 +265,8 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     attestationAt: r.attestationAt === undefined ? undefined : toEpochMs(r.attestationAt),
     exactValue:
       typeof r.exactValue === 'number' && Number.isFinite(r.exactValue) ? r.exactValue : undefined,
-    memo: str(r.memo),
+    memo: lockedOf(r) ? lockedGiftMemo(lockedOf(r)!) : str(r.memo),
+    ...(lockedOf(r) ? { lockedGift: lockedOf(r) } : {}),
     recipientName: str(r.recipientName),
     bundleId: str(r.bundleId) ?? str(r.bundle_id),
     paymentId: str(r.paymentId) ?? str(r.requestId) ?? str(r.request_id),

@@ -7,6 +7,7 @@ import { nip17 } from 'nostr-tools'
 
 import { getSigner } from './nap'
 import { getWallet, notifyWalletChanged } from './wallet'
+import { publishTx } from './txRecords'
 import { beginReceive } from './receiveGate'
 import { tokenStates, type CashlinkPorts, type ReturnOutcome } from './cashlinkFlow'
 import { xOnlyPub } from './cashlinkLock'
@@ -55,7 +56,10 @@ async function save(rec: LockedGiftRecord, nowMs: number): Promise<void> {
   const id = lockedGiftRowId(rec.dir, rec.token)
   const prior = await wallet.getTransaction(id)
   if (prior) {
-    await wallet.updateTransaction(id, { lockedGift: rec, memo: lockedGiftMemo(rec) } as never)
+    // Re-published: `updateTransaction` bypasses the backup hook, and the relay's newest copy is
+    // what a restore on any device (this one, at its next login) reads back.
+    const merged = await wallet.updateTransaction(id, { lockedGift: rec, memo: lockedGiftMemo(rec) } as never)
+    if (merged) void publishTx(merged)
   } else {
     await wallet.addTransaction(lockedGiftRow(rec, nowMs) as never)
   }
