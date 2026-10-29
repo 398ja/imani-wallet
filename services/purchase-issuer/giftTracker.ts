@@ -45,6 +45,8 @@ export interface TrackedGift {
   guest: boolean
   /** Display date the guest's return link was mailed, or null when not known. */
   returnMailDate: string | null
+  /** G17: the voucher's own expiry (unix ms), kept by a gift taken back unclaimed; null = never. Absent on rows tracked before G17. */
+  spendBy?: number | null
   notified: { claimed?: number; expired?: number }
   /** Last time the mint was asked (rate limit), unix ms. */
   checkedAt?: number
@@ -62,6 +64,8 @@ export interface TrackInput {
   amount: string
   guest: boolean
   returnMailDate: string | null
+  /** G17: the voucher's own expiry, unix ms; null when it never expires. */
+  spendBy?: number | null
 }
 
 export interface TrackerStore {
@@ -100,6 +104,16 @@ export function howBack(row: Pick<TrackedGift, 'guest' | 'stall' | 'returnMailDa
   if (!row.guest) return 'Open your Imani wallet: it takes it back for you.'
   const when = row.returnMailDate ? ` on ${row.returnMailDate}` : ''
   return `Take it back with the return link we emailed you${when} (subject "If your ${row.stall} gift isn't claimed").`
+}
+
+/**
+ * G17 (C): what a gift taken back still has. It keeps its original expiry, so the buyer is told
+ * the date. Null when unknown (a row from before G17): the email then says nothing rather than guess.
+ */
+export function spendByLine(row: Pick<TrackedGift, 'spendBy'>): string | null {
+  if (row.spendBy === undefined) return null
+  if (row.spendBy === null) return "Once it's back, the voucher doesn't expire."
+  return `Once it's back, it keeps its original expiry: spend it by ${displayDate(row.spendBy)}.`
 }
 
 export class GiftTracker {
@@ -156,6 +170,7 @@ export class GiftTracker {
       amount: input.amount,
       guest: input.guest,
       returnMailDate: input.returnMailDate,
+      ...(input.spendBy !== undefined ? { spendBy: input.spendBy } : {}),
       notified: {},
     }
     return this.serial(async () => {
@@ -244,6 +259,7 @@ export class GiftTracker {
             recipient: row.recipientDisplay,
             claimBy: displayDate(row.claimBy),
             howBack: howBack(row),
+            ...(spendByLine(row) ? { spendBy: spendByLine(row)! } : {}),
           }
     let res: SendOutcome
     try {

@@ -206,6 +206,27 @@ describe('the sweep (contract §4.3 rules)', () => {
     expect(h.store.rows).toEqual({})
   })
 
+  it('G17 (C): the expired notice says the expiry a taken-back voucher keeps, and nothing for an old row', async () => {
+    const spendBy = Date.UTC(2027, 0, 27)
+    const h = harness()
+    await h.tracker.track(input({ spendBy }), 'm')
+    h.at(CLAIM_BY)
+    await h.tracker.sweep()
+    expect(h.mails[0].fields!.spendBy).toBe("Once it's back, it keeps its original expiry: spend it by 27 Jan 2027.")
+
+    const never = harness()
+    await never.tracker.track(input({ spendBy: null }), 'm')
+    never.at(CLAIM_BY)
+    await never.tracker.sweep()
+    expect(never.mails[0].fields!.spendBy).toBe("Once it's back, the voucher doesn't expire.")
+
+    const old = harness()
+    await old.tracker.track(input(), 'm')
+    old.at(CLAIM_BY)
+    await old.tracker.sweep()
+    expect(old.mails[0].fields).not.toHaveProperty('spendBy')
+  })
+
   it('any SPENT after claimBy without a claimed notice: no email, dropped', async () => {
     const h = harness({ states: () => ['SPENT', 'UNSPENT'] })
     await h.tracker.track(input(), 'm')

@@ -135,6 +135,9 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       "Your {{amount}} voucher for {{stall}} to {{recipient}} wasn't claimed by {{claimBy}}.",
       '',
       '{{howBack}}',
+      '{{#spendBy}}',
+      '{{spendBy}}',
+      '{{/spendBy}}',
       '',
       FOOTER,
     ].join('\n'),
@@ -144,6 +147,8 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       recipient: { type: 'line', max: 320, required: true },
       claimBy: { type: 'line', max: 60, required: true },
       howBack: { type: 'text', max: 400, required: true },
+      // G17: the expiry a taken-back voucher keeps. Optional: absent on gifts tracked before it.
+      spendBy: { type: 'line', max: 120 },
     },
   },
   'gift-reminder': {

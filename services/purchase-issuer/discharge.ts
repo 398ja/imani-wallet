@@ -445,7 +445,10 @@ export async function discharge(
   }
 
   if (giftLock !== null) {
-    return deliverGift(baseUrl, credential, obligation, coupon.voucherId, token, giftLock, linkSecret, ports, minted)
+    // G17 (C): the voucher's own expiry, which a gift taken back unclaimed keeps (the gateway counts
+    // `expires_in_days` from its mint instant, as the sale record above does).
+    const spendByMs = couponExpiresAtMs(mintedAt, expiresInDays)
+    return deliverGift(baseUrl, credential, obligation, coupon.voucherId, token, giftLock, linkSecret, ports, minted, spendByMs)
   }
 
   try {
@@ -491,6 +494,7 @@ async function deliverGift(
   linkSecret: string | null,
   ports: Ports,
   minted: Minted,
+  spendByMs: number | null,
 ): Promise<Outcome> {
   const gifts = ports.gifts!
   const delivery = obligation.gift!.delivery!
@@ -559,7 +563,7 @@ async function deliverGift(
       console.warn(JSON.stringify({ event: 'gift_seal_not_scrubbed', event_id: obligation.id }))
     }
   }
-  await trackGift(gifts, obligation, token, lock)
+  await trackGift(gifts, obligation, token, lock, spendByMs)
   return { kind: 'discharged', voucherId, ...(eventId ? { eventId } : {}), ...minted }
 }
 
@@ -568,7 +572,7 @@ async function deliverGift(
  * effort: the gift is delivered, and failing the discharge here would only re-deliver it. Logged
  * with no address, draft id or amount.
  */
-async function trackGift(gifts: GiftPorts, obligation: Obligation, token: string, lock: GiftLock): Promise<void> {
+async function trackGift(gifts: GiftPorts, obligation: Obligation, token: string, lock: GiftLock, spendByMs: number | null): Promise<void> {
   if (!gifts.track) return
   const delivery = obligation.gift!.delivery!
   const draftId = obligation.gift!.draftId
@@ -599,6 +603,7 @@ async function trackGift(gifts: GiftPorts, obligation: Obligation, token: string
         amount: formatAmount(obligation.faceValue, obligation.faceDecimals, obligation.faceUnit),
         guest,
         returnMailDate: guest && delivery.draftCreatedAt ? displayDate(delivery.draftCreatedAt) : null,
+        spendBy: spendByMs,
       },
       mintUrl,
     )
