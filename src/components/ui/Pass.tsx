@@ -5,6 +5,7 @@ import type { PassField, PassJson } from '../../lib/pass'
 import { formatDate, formatFace, handleLabel, UNKNOWN_STALL } from '../../lib/format'
 import { printShadow } from '../../lib/printShadow'
 import { Avatar } from './Avatar'
+import { ImaniMark } from './ImaniMark'
 import { RemoteImage } from './RemoteImage'
 import { SkeletonLine } from './Skeleton'
 
@@ -163,6 +164,21 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
 
       <div className="relative p-5">
         {/*
+          The imani mark, top right (#419): whose wallet this voucher lives in,
+          beside whose stall issued it. In the same white circular frame and
+          shadow as the avatar (`Avatar framed`), so it reads on any banner, and
+          the bare mark with no wordmark. Outside the issuer link: it is not
+          the stall.
+        */}
+        <span
+          role="img"
+          aria-label="imani"
+          className="absolute right-5 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-white text-mono-900 shadow-md shadow-black/40 ring-2 ring-white"
+        >
+          <ImaniMark className="h-5 w-5" />
+        </span>
+
+        {/*
           The stall's name and picture are the way back to the stall. Holding a
           coupon and being unable to reach who issued it is the gap this closes:
           the back arrow went there, but only from a screen the customer had
@@ -172,6 +188,8 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
           The whole block, not just the avatar. A 40px circle is a small target
           on a phone, and the name beside it is part of the same idea.
         */}
+        {/* Clear of the mark in the top right, so a long name truncates before it. */}
+        <div className="pr-12">
         <IssuerBlock to={linkIssuer ? issuerTo : undefined}>
           <Avatar
             src={waiting ? undefined : logoUrl}
@@ -221,6 +239,7 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
             )}
           </div>
         </IssuerBlock>
+        </div>
 
         {balance && (
           // The amount alone (#419): the big figure on a voucher is plainly

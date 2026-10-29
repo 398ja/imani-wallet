@@ -102,6 +102,19 @@ describe('the avatar on the card', () => {
   })
 })
 
+describe('the imani mark', () => {
+  it('sits top right in a white framed circle, the bare mark with no wordmark', () => {
+    const { getByRole } = draw(coupon())
+    const mark = getByRole('img', { name: 'imani' })
+    expect(mark.className).toMatch(/absolute right-5 top-5/)
+    expect(mark.className).toMatch(/rounded-full/)
+    expect(mark.className).toMatch(/bg-white/)
+    expect(mark.className).toMatch(/shadow-md/)
+    expect(mark.querySelector('svg')).not.toBeNull()
+    expect(mark.textContent).toBe('')
+  })
+})
+
 describe('the balance', () => {
   it('prints the face value it is given, without the "Balance" label', () => {
     const pass = coupon({
