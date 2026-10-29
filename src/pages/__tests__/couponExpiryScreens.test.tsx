@@ -137,10 +137,10 @@ describe('coupon detail (#265)', () => {
     expect(screen.queryByText(/It can no longer be spent\.$/)).toBeNull()
   })
 
-  it('a coupon with no expiry still says so', async () => {
+  it('a coupon with no expiry still says so, on the card (#419) and in the list', async () => {
     h.rows = [row('never', undefined)]
     openCoupon('never')
-    await screen.findByText('No expiry')
+    expect(await screen.findAllByText('No expiry')).toHaveLength(2)
   })
 })
 
