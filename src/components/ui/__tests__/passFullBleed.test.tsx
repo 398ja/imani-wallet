@@ -80,6 +80,14 @@ describe('the line under the name', () => {
   })
 })
 
+describe('the balance', () => {
+  it('prints the amount without the "Balance" label', () => {
+    const { container, queryByText } = draw(coupon())
+    expect(queryByText(/balance/i)).toBeNull()
+    expect(container.querySelector('.text-amount')?.textContent).toBeTruthy()
+  })
+})
+
 describe('every printed character has a shadow', () => {
   it('is set once on the card, so every field inherits it', () => {
     const { container } = draw(coupon({}, { stripUrl: BANNER }))

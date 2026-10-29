@@ -262,13 +262,10 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
         </IssuerBlock>
 
         {balance && (
+          // The amount alone (#419): the big figure on a voucher is plainly
+          // what it is worth, so the "Balance" label is not printed. It stays on
+          // the pass record, which mirrors the Java mapper.
           <div className="mt-5">
-            <p
-              className="text-xs font-medium tracking-wide"
-              style={{ color: pass.labelColor, opacity: 0.7 }}
-            >
-              {balance.label}
-            </p>
             <p className="text-amount">{fieldValue(balance)}</p>
           </div>
         )}
