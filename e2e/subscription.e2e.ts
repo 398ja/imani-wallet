@@ -90,6 +90,7 @@ const fake = createServer(async (req, res) => {
       term: p.get('metadata[term]') ?? '',
       tax: p.get('automatic_tax[enabled]') ?? '',
       pm: p.get('payment_method_types[0]') ?? '',
+      adaptive: p.get('adaptive_pricing[enabled]') ?? '',
     }
     return send(200, { id: 'cs_e2e', url: `http://localhost:${FAKE}/pay?return=${encodeURIComponent(p.get('success_url') ?? '')}` })
   }
@@ -339,8 +340,8 @@ async function main() {
       await site.getByRole('button', { name: 'Choose Basic' }).click()
       await site.waitForURL(/\/done/, { timeout: 15_000 })
       check(
-        'checkout carried the stall key, tier, term, card only, tax on',
-        pendingCheckout?.stall === stall && pendingCheckout?.tier === 'basic' && pendingCheckout?.term === 'monthly' && pendingCheckout?.pm === 'card' && pendingCheckout?.tax === 'true',
+        'checkout carried the stall key, tier, term, card only, tax on, charged in GBP (no adaptive pricing)',
+        pendingCheckout?.stall === stall && pendingCheckout?.tier === 'basic' && pendingCheckout?.term === 'monthly' && pendingCheckout?.pm === 'card' && pendingCheckout?.tax === 'true' && pendingCheckout?.adaptive === 'false',
         JSON.stringify(pendingCheckout),
       )
       // A full page load back from Stripe: the app checks its session cookie, then renders /done.
