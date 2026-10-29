@@ -407,7 +407,9 @@ export async function discharge(
       faceUnit: obligation.faceUnit,
       faceDecimals: obligation.faceDecimals,
       memo: obligation.memo,
-      recipientPubkey: obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
+      // Never for a gifting-site gift (G9): the stall learns nothing of the buyer or the
+      // recipient, and a handle recipient's key would name them on the stall's vouchers list.
+      recipientPubkey: giftKind === null && obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
       at,
       // The gateway counts `expires_in_days` from its own mint instant, so this is
       // the coupon's expiry to within the mint's latency. Without it the merchant
