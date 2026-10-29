@@ -884,7 +884,7 @@ export async function finishPendingCashlinkClaims(pubkey: string): Promise<numbe
     return 0
   }
   try {
-    return await finishCashlinkClaims(await cashlinkSeam.ports(), pubkey)
+    return await finishCashlinkClaims(await cashlinkSeam.ports(), pubkey, identitySecret)
   } catch {
     return 0
   } finally {
@@ -1217,6 +1217,13 @@ export async function reconcileGiftLinks(
     )
   } catch (error) {
     console.warn('[gift] could not check outstanding links', error instanceof Error ? error.message : String(error))
+  }
+  // #410 G14: gifts minted already locked, run from the same place: claim the ones locked to this
+  // wallet, take back the unclaimed ones it bought. Never throws.
+  try {
+    reclaimed += (await (await import('./lockedGiftsApp')).sweepLockedGifts()).returned
+  } catch {
+    // Next run.
   }
   return { claimed, reclaimed }
 }
