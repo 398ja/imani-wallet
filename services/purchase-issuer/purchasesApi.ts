@@ -54,6 +54,34 @@ export interface OwedPurchase {
    * payment-adapter recorded none.
    */
   processorReference: string | null
+  /**
+   * A gifting-site purchase's PINNED delivery (#410), or null for a wallet purchase. Pinned in the
+   * Purchase Draft at review: nothing here may change who receives the voucher.
+   */
+  delivery?: GiftDelivery | null
+  /** The gifting draft this debt answers, or null for a wallet purchase (the claim email's idempotency key). */
+  draftId?: string | null
+}
+
+/**
+ * How a gift is delivered (#410 §4). `sealed` is the link secret sealed to this issuer (G4), opened
+ * only to arm and email, then scrubbed. Never logged: see `describeGift`.
+ */
+export interface GiftDelivery {
+  kind: 'self' | 'handle' | 'email'
+  refundPubkey: string | null
+  recipientEmail: string | null
+  sealed: string | null
+  message: string | null
+  from: string | null
+  buyerEmail: string | null
+  claimWindowDays: number
+  /** The recipient's handle as the buyer typed it (`bob@example.com` NIP-05 or `@bob`), for notices. Optional. */
+  recipientHandle?: string | null
+  /** The signed-in buyer's wallet key, or null for a guest. Optional (absent reads as guest). */
+  buyerPubkey?: string | null
+  /** When the draft was created, unix ms (the guest's return-link mail date, approximately). Optional. */
+  draftCreatedAt?: number | null
 }
 
 export type DischargeOutcome =
@@ -150,7 +178,20 @@ export function parseOwedPurchase(row: unknown): OwedPurchase | null {
     processorReference = rawRef
   }
 
+  let delivery: GiftDelivery | null = null
+  if (r.delivery !== null && r.delivery !== undefined) {
+    delivery = parseGiftDelivery(r.delivery)
+    if (delivery === null) return null
+    // A handle or self gift has a pinned key; an email gift never does (the link key is made at arm).
+    if (delivery.kind === 'email' ? recipientPubkey !== null : recipientPubkey === null) return null
+  }
+
+  const draftId = r.draftId === null || r.draftId === undefined ? null : r.draftId
+  if (draftId !== null && (typeof draftId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(draftId))) return null
+
   return {
+    delivery,
+    draftId,
     eventId,
     paymentRequestId,
     stallPubkey: stallPubkey as string | null,
@@ -161,6 +202,55 @@ export function parseOwedPurchase(row: unknown): OwedPurchase | null {
     attempts,
     processorReference,
   }
+}
+
+const optStr = (v: unknown, max: number): string | null | undefined =>
+  v === null || v === undefined ? null : typeof v === 'string' && v.length <= max ? v : undefined
+
+/** Strict, like the rest of this parser: a malformed delivery drops the row, loudly. */
+export function parseGiftDelivery(raw: unknown): GiftDelivery | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const d = raw as Record<string, unknown>
+  if (d.kind !== 'self' && d.kind !== 'handle' && d.kind !== 'email') return null
+  const refundPubkey = optStr(d.refundPubkey, 64)
+  if (refundPubkey === undefined || (refundPubkey !== null && !HEX64.test(refundPubkey))) return null
+  if (d.kind !== 'self' && refundPubkey === null) return null
+  const recipientEmail = optStr(d.recipientEmail, 320)
+  const sealed = optStr(d.sealed, 2048)
+  const message = optStr(d.message, 280)
+  const from = optStr(d.from, 80)
+  const buyerEmail = optStr(d.buyerEmail, 320)
+  const recipientHandle = optStr(d.recipientHandle, 320)
+  const buyerPubkey = optStr(d.buyerPubkey, 64)
+  if ([recipientEmail, sealed, message, from, buyerEmail, recipientHandle, buyerPubkey].includes(undefined)) return null
+  if (buyerPubkey !== null && !HEX64.test(buyerPubkey as string)) return null
+  const rawCreated = d.draftCreatedAt
+  let draftCreatedAt: number | null = null
+  if (rawCreated !== null && rawCreated !== undefined) {
+    // Seconds or ms on the wire; anything else is dropped (it only dates a sentence in an email).
+    const n = typeof rawCreated === 'number' ? rawCreated : typeof rawCreated === 'string' ? Date.parse(rawCreated) : NaN
+    if (Number.isFinite(n) && n > 0) draftCreatedAt = n < 1e12 ? n * 1000 : n
+  }
+  const claimWindowDays = typeof d.claimWindowDays === 'number' && Number.isInteger(d.claimWindowDays) && d.claimWindowDays > 0 && d.claimWindowDays <= 365 ? d.claimWindowDays : null
+  if (claimWindowDays === null) return null
+  return {
+    kind: d.kind,
+    refundPubkey,
+    recipientEmail: recipientEmail as string | null,
+    sealed: sealed as string | null,
+    message: message as string | null,
+    from: from as string | null,
+    buyerEmail: buyerEmail as string | null,
+    claimWindowDays,
+    recipientHandle: recipientHandle as string | null,
+    buyerPubkey: buyerPubkey === null ? null : (buyerPubkey as string).toLowerCase(),
+    draftCreatedAt,
+  }
+}
+
+/** A gift for a log line: kind and refund key only. Never the email, message or seal (#410). */
+export function describeGift(d: GiftDelivery | null | undefined): string {
+  return d ? `${d.kind} gift, refund ${d.refundPubkey ? `${d.refundPubkey.slice(0, 8)}…` : 'none'}` : 'wallet purchase'
 }
 
 export class PurchasesApi {
