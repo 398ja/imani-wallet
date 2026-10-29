@@ -1,6 +1,7 @@
 import type { TransactionRow } from '@imani/wallet-storage'
 import type { VoucherValidation } from './voucherToken'
 import { displayDecimals } from './format'
+import { asLockedGiftRecord, lockedGiftMemo, type LockedGiftRecord } from './lockedGiftRecord'
 
 /**
  * A transaction, in the shape the screens actually need.
@@ -116,6 +117,12 @@ export interface WalletTransaction {
    */
   exactValue?: number
   memo?: string
+  /**
+   * A minted-locked gift on a `gift_sent` / `gift_pending` row (#410 G14). When present, `memo`
+   * is read from it, never from the stored text: the stored memo is a copy that a restore of an
+   * older backup can leave behind.
+   */
+  lockedGift?: LockedGiftRecord
   bundleId?: string
   /**
    * The NUT-18V payment request this settles, when it settles one.
@@ -199,6 +206,10 @@ function isValidation(value: unknown): value is VoucherValidation {
   )
 }
 
+function lockedOf(r: Record<string, unknown>): LockedGiftRecord | undefined {
+  return asLockedGiftRecord(r.lockedGift)
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
@@ -218,7 +229,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // merchant is. 'sent' is the customer's own version of the same thing —
     // a voucher passed to someone else. Anything else is incoming.
     direction:
-      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback'
+      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback' || type === 'gift_sent'
         ? 'out'
         : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
@@ -254,7 +265,8 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     attestationAt: r.attestationAt === undefined ? undefined : toEpochMs(r.attestationAt),
     exactValue:
       typeof r.exactValue === 'number' && Number.isFinite(r.exactValue) ? r.exactValue : undefined,
-    memo: str(r.memo),
+    memo: lockedOf(r) ? lockedGiftMemo(lockedOf(r)!) : str(r.memo),
+    ...(lockedOf(r) ? { lockedGift: lockedOf(r) } : {}),
     recipientName: str(r.recipientName),
     bundleId: str(r.bundleId) ?? str(r.bundle_id),
     paymentId: str(r.paymentId) ?? str(r.requestId) ?? str(r.request_id),
@@ -815,5 +827,8 @@ export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'payment') return 'Paid'
   if (tx.type === 'sent') return 'Sent'
   if (tx.type === 'cashback') return 'Cashlink'
+  // #410 G14: a gift minted locked. Neither row is balance: the memo says where it stands.
+  if (tx.type === 'gift_sent') return 'Gift sent'
+  if (tx.type === 'gift_pending') return 'Gift'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }

@@ -5,8 +5,13 @@
  * the buyer back to.
  */
 
-/** What a visitor with no wallet sees instead of a card form (#267 item 2). */
-export const GUEST_REFUSED = 'Create a wallet first to buy a voucher by card'
+/**
+ * What a visitor with no wallet sees on the wallet's Buy page (#267 item 2, #410).
+ *
+ * Was a refusal ("Create a wallet first"). Guests now buy on the gifting site, which delivers by
+ * handle or by an emailed Cashlink, so the Buy page points there instead of turning them away.
+ */
+export const GUEST_BUY_ELSEWHERE = 'No wallet yet? You can buy this voucher by card on the gifting page, for yourself or as a gift.'
 
 /** Session storage key the Buy page writes before leaving for Stripe. */
 export const PENDING_PURCHASE_KEY = 'imani:pendingPurchase'

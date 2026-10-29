@@ -239,6 +239,13 @@ export const proxy = {
    */
   '/api/v1/checkout': { target: 'http://localhost:28087', changeOrigin: true },
   /*
+   * #410 G14: the Purchase Issuer's public seal key (`GET /api/v1/gifting/issuer-key`), on
+   * payment-adapter. The wallet reads it to accept a bought gift's `imani_gift_sent` DM only from
+   * that key. Without this rule it falls into the '/api' catch-all and the gift DMs wait forever.
+   * Unauthenticated, public data.
+   */
+  '/api/v1/gifting': { target: 'http://localhost:28087', changeOrigin: true },
+  /*
    * Card-sales enrolment and readiness (imani-wallet#298), on purchase-issuer. NOT in the local
    * compose stack: run it from this repo (`npx tsx services/purchase-issuer/server.ts`, default
    * port 8791, with PURCHASE_PUBLIC_ORIGIN=http://localhost:5173). With it down, readiness reads
@@ -471,6 +478,9 @@ export default defineConfig({
       VITE_VOUCHER_ISSUER_PUBKEYS: '',
       VITE_SUBSCRIPTION_SITE_URL: '',
       VITE_GIFTING_SITE_URL: '',
+      // The gifting site reads these at module load, so they are set here rather than stubbed.
+      VITE_GIFTING_HANDLE_DOMAIN: 'imani.casa',
+      VITE_WALLET_ORIGIN: 'https://wallet.example.test',
     },
     // Each package under packages/ ships its OWN vitest.config.ts, and eleven
     // of them were never run by `npm test`. The include globs below only reach
@@ -501,8 +511,11 @@ export default defineConfig({
     include: [
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',
-      // The subscription site (#407): its key handling is tested against the wallet's own formats.
+      // The gifting site (#410), and the subscription site (#407) once it lands: their own pages and
+      // libraries, tested against the wallet's real modules.
       'apps/**/src/**/*.test.{ts,tsx}',
+      // The server-side SDKs (#366 @imani/cashlink-sender) reuse the app's engine, so they run here.
+      'sdk/**/*.test.{ts,tsx}',
       'perf/**/*.test.{ts,tsx}',
       // `deploy/` ships the container's nginx.conf, and its CSP is application
       // behaviour, not decoration: `worker-src 'self'` there silently disabled
@@ -540,6 +553,8 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
     alias: {
       '@': r('./src'),
+      // How apps/* import the wallet's modules (apps/gifting/vite.config.ts aliases it the same).
+      '@wallet': r('./src'),
 
       // imani-apps — wallet core. Order matters: nostr-vouchers must precede
       // any shorter prefix that could shadow it.
