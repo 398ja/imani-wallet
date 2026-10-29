@@ -50,6 +50,10 @@ async function registerStall(page: Page): Promise<string> {
 
 async function fillStripe(page: Page, email: string) {
   await page.waitForURL(/checkout\.stripe\.com/, { timeout: 30_000 })
+  await page.locator('#email').waitFor({ timeout: 30_000 })
+  // What Stripe itself will charge: the published Basic monthly price, in pounds.
+  const summary = (await page.locator('body').innerText()).replace(/\s+/g, ' ')
+  check('Stripe Checkout charges £8.00 a month for Basic', /£8\.00/.test(summary) && /month/i.test(summary), summary.slice(0, 300))
   await page.locator('#email').fill(email)
   await page.locator('#cardNumber').fill('4242424242424242')
   await page.locator('#cardExpiry').fill('12 / 34')
@@ -85,6 +89,20 @@ async function main() {
     const [site] = await Promise.all([context.waitForEvent('page'), upgrade.click()])
     await site.getByRole('button', { name: 'Choose Basic' }).waitFor({ timeout: 30_000 })
     check('the site opened in its own tab, signed in, with no login page', new URL(site.url()).origin === SITE)
+
+    // The plans as www.imani.casa/pricing publishes them, with the amounts read from REAL Stripe.
+    await site.getByText('£70/year').waitFor({ timeout: 15_000 })
+    const yearly = await text(site)
+    check(
+      'plans are Starter, Basic and Pro, with no Town / BID partnership',
+      /Starter/.test(yearly) && /Basic/.test(yearly) && /Pro/.test(yearly) && !/Town|BID|Partner/.test(yearly),
+      yearly.slice(0, 400),
+    )
+    check('yearly by default, in pounds: Basic £70/year, Pro £100/year', /£70\/year/.test(yearly) && /£100\/year/.test(yearly), yearly.slice(0, 500))
+    check('Basic issues without limit on 3 tills', /Unlimited voucher issuance/.test(yearly) && /plus 3 tills/.test(yearly), yearly.slice(0, 500))
+    await site.getByRole('radio', { name: /Monthly/ }).click()
+    const monthly = await text(site)
+    check('monthly, in pounds: Basic £8/month, Pro £11/month', /£8\/month/.test(monthly) && /£11\/month/.test(monthly), monthly.slice(0, 500))
 
     await site.getByRole('button', { name: 'Choose Basic' }).click()
     await fillStripe(site, `${handle}@example.com`)

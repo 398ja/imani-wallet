@@ -103,6 +103,9 @@ export function stripeClient(secretKey: string, fetchImpl: typeof fetch = fetch)
         tax_id_collection: { enabled: i.automaticTax },
         billing_address_collection: i.automaticTax ? 'required' : 'auto',
         payment_method_types: ['card'],
+        // Every plan is charged in GBP. Without this, an account with Adaptive Pricing on shows the
+        // shopper a converted amount (e.g. €9.96 for the £8 Basic, seen on Stripe test Checkout).
+        adaptive_pricing: { enabled: false },
       })
       return { id: String(s.id), url: String(s.url) }
     },
