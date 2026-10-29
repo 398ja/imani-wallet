@@ -249,6 +249,33 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
         break
       }
 
+      case 'gift_undelivered': {
+        // #410 G14: a locked gift exists and did not reach its recipient or buyer this pass.
+        result.deferred += 1
+        countAttempt(outcome.park ? 'blocked' : 'undelivered')
+        if (outcome.park) {
+          const parked = await deps.api.attention(purchase.eventId, 'delivery_exhausted', {
+            voucherId: outcome.voucherId,
+            detail: `locked gift ${outcome.voucherId}: ${outcome.reason}`.slice(0, 500),
+            worker,
+          })
+          if (parked !== 'parked') {
+            await deps.api.reportFailure(purchase.eventId, `locked gift: ${outcome.reason}`, true, outcome.voucherId, { worker })
+          }
+        } else {
+          // Left to lapse, NOT named: the re-claim re-mints under the same idempotency key and
+          // warrant nonce (gc replays this voucher), and every delivery step is idempotent.
+          await deps.api.reportFailure(
+            purchase.eventId,
+            `issued locked gift ${outcome.voucherId}, delivery pending: ${outcome.reason}`,
+            false,
+            undefined,
+            { worker, keepClaim: true },
+          )
+        }
+        break
+      }
+
       case 'blocked':
         result.blocked += 1
         countAttempt('blocked')
@@ -297,7 +324,7 @@ async function enqueue(
       voucherId: outcome.voucherId,
       issuerId: outcome.issuerId,
       stallPubkey: purchase.stallPubkey as string,
-      recipientPubkey: purchase.recipientPubkey as string,
+      recipientPubkey: purchase.recipientPubkey ?? '',
       paymentRequestId: purchase.paymentRequestId,
       deliver: outcome.kind === 'undelivered',
       // The inline attempt counts.
@@ -349,6 +376,6 @@ function toObligation(purchase: OwedPurchase): Obligation {
         : { kind: 'pubkey', pubkey: purchase.recipientPubkey },
     attempts: purchase.attempts,
     processorReference: purchase.processorReference,
-    gift: purchase.delivery ? { kind: purchase.delivery.kind } : null,
+    gift: purchase.delivery ? { kind: purchase.delivery.kind, delivery: purchase.delivery, draftId: purchase.draftId ?? null } : null,
   }
 }

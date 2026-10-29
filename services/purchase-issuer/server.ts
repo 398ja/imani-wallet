@@ -43,6 +43,8 @@ import { tokenFor, FileCredentialStore } from './adapters'
 import { confirmAll, CredentialConfirmer, retryUnconfirmed } from './confirmation'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
+import { fileAnchors, httpPublishEvent, httpQueryWraps, httpScrub, httpStallName, type GiftPorts } from './giftDelivery'
+import { mailerClient } from '../imani-mailer/client.ts'
 import { countPass, renderMetrics } from './metrics'
 import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPass } from './outbox'
 import { PurchasesApi, ReportLostError } from './purchasesApi'
@@ -76,6 +78,22 @@ export function portsFor(
     fileSale: (credential, sale) => sendSaleRecord(config.gatewayUrl, credential, sale, fetchImpl),
     // #312: the stall's own term, from its signed merchant record, cached for minutes.
     validityFor,
+    // #410 G14: locked gift delivery, only when configured (handle/email gifts refused otherwise).
+    ...(config.gifts ? { gifts: giftPortsFor(config, config.gifts, fetchImpl) } : {}),
+  }
+}
+
+function giftPortsFor(config: IssuerConfig, g: NonNullable<IssuerConfig['gifts']>, fetchImpl: typeof fetch): GiftPorts {
+  const mailer = mailerClient({ baseUrl: g.mailerUrl, token: g.mailerToken, fetchImpl })
+  return {
+    sealSecretHex: g.sealKeyHex,
+    walletOrigin: g.walletOrigin,
+    publishEvent: httpPublishEvent(config.gatewayUrl, fetchImpl),
+    queryWraps: httpQueryWraps(config.gatewayUrl, fetchImpl),
+    sendMail: (req) => mailer.send(req),
+    scrubSeal: httpScrub(config.purchasesUrl, config.purchasesToken, fetchImpl),
+    anchor: fileAnchors(g.anchorsPath),
+    stallName: httpStallName(config.gatewayUrl, fetchImpl),
   }
 }
 

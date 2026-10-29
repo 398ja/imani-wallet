@@ -59,6 +59,8 @@ export interface OwedPurchase {
    * Purchase Draft at review: nothing here may change who receives the voucher.
    */
   delivery?: GiftDelivery | null
+  /** The gifting draft this debt answers, or null for a wallet purchase (the claim email's idempotency key). */
+  draftId?: string | null
 }
 
 /**
@@ -178,8 +180,12 @@ export function parseOwedPurchase(row: unknown): OwedPurchase | null {
     if (delivery.kind === 'email' ? recipientPubkey !== null : recipientPubkey === null) return null
   }
 
+  const draftId = r.draftId === null || r.draftId === undefined ? null : r.draftId
+  if (draftId !== null && (typeof draftId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(draftId))) return null
+
   return {
     delivery,
+    draftId,
     eventId,
     paymentRequestId,
     stallPubkey: stallPubkey as string | null,
