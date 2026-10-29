@@ -649,8 +649,14 @@ export type ReturnOutcome =
 
 export interface ReturnContext {
   ports: CashlinkPorts
-  linkSecret: Uint8Array
+  /**
+   * The link key. Absent for a gift minted already locked (#410 G14): the buyer holds only the
+   * refund key, so only the after-`x` refund pathway is open and `takeBackNow` is refused.
+   */
+  linkSecret?: Uint8Array
   refundSecret: Uint8Array
+  /** No refund was ever deposited with the relay (G14): skip its fetch, the mint is the record. */
+  noRelay?: boolean
   /** The locked gift on the link. */
   lockedToken: string
   /** The keyset the refund was deposited with, when it was. */
@@ -676,8 +682,13 @@ async function settle(ctx: ReturnContext): Promise<ReturnOutcome> {
   const proofs = tokenProofs(ctx.lockedToken)
   for (const p of proofs) assertNotOpenAfterLocktime(p.secret)
   const lock = readLinkLock(proofs[0].secret)
-  if (!lock || lock.refundPub !== xOnlyPub(ctx.refundSecret) || lock.linkPub !== linkPubOf(ctx.linkSecret)) {
+  if (!lock || lock.refundPub !== xOnlyPub(ctx.refundSecret) || (ctx.linkSecret && lock.linkPub !== linkPubOf(ctx.linkSecret))) {
     return { kind: 'unknown', why: 'not this wallet’s Cashlink' }
+  }
+  if (!ctx.linkSecret && ctx.takeBackNow) return { kind: 'unknown', why: 'only the refund pathway is open without the link key' }
+  for (const p of proofs.slice(1)) {
+    const other = readLinkLock(p.secret)
+    if (!other || other.refundPub !== lock.refundPub || other.linkPub !== lock.linkPub) return { kind: 'unknown', why: 'not this wallet’s Cashlink' }
   }
   const expired = Math.floor(ports.now() / 1000) >= lock.locktime
   const states = await ports.mint.states(mintUrl, proofs.map((p) => p.secret))
@@ -727,6 +738,7 @@ async function settleProof(ctx: ReturnContext, mintUrl: string, proof: TokenProo
     return 'pending'
   }
   // Before x ("Take it back"): the link key's way, into outputs only this wallet can unblind.
+  if (!ctx.linkSecret) return 'waiting'
   const outs = derivedOutputs(ctx.refundSecret, 'takeback', proof.secret, proof.amount, await ports.mint.activeKeysetId(mintUrl))
   const done = await swapOrRestore(ports.mint, mintUrl, [{ ...proof, witness: sigAllWitness(ctx.linkSecret, proof.secret, proof.C, outs) }], outs)
   if (done.kind === 'proofs') return reform(ctx, mintUrl, proof, done.proofs, outs, 'link')
@@ -764,10 +776,12 @@ async function found(ctx: ReturnContext, mintUrl: string, proof: TokenProof, ref
   const { ports } = ctx
   // The relay's answer first, by sha256(secret), signed by R (only R's fetch shortens its retention).
   let answer: GatewayAnswer | null = null
-  try {
-    answer = await ports.gateway.call('GET', `${REFUNDS_PATH}/${secretHash(proof.secret)}`, undefined, linkKeySigner(ctx.refundSecret))
-  } catch {
-    answer = null
+  if (!ctx.noRelay) {
+    try {
+      answer = await ports.gateway.call('GET', `${REFUNDS_PATH}/${secretHash(proof.secret)}`, undefined, linkKeySigner(ctx.refundSecret))
+    } catch {
+      answer = null
+    }
   }
   if (answer?.status === 200 && answer.body?.state === 'REFUNDED') {
     try {
@@ -785,6 +799,7 @@ async function found(ctx: ReturnContext, mintUrl: string, proof: TokenProof, ref
   // answer that did not verify, or unreachable: the mint is the record. Our refund outputs first,
   // then our take-back outputs.
   for (const [outputs, pathway] of [[refundOutputs, 'refund'], [takeback, 'link']] as const) {
+    if (pathway === 'link' && !ctx.linkSecret) continue
     const mine = await restoreMine(ports.mint, mintUrl, outputs)
     if (mine.length === 0) continue
     if (mine.length !== outputs.length) return 'pending'
@@ -810,6 +825,7 @@ async function reform(
   const purpose: DerivedPurpose = pathway === 'refund' ? 'resign-refund' : 'resign-link'
   const proposed = unlockedProposal(locked.secret, derivedNonce(ctx.refundSecret, purpose, locked.secret))
   const key = pathway === 'refund' ? ctx.refundSecret : ctx.linkSecret
+  if (!key) return 'pending'
   const answer = await signRoute(ports, RESIGN_PATH, {
     predecessor_secret: locked.secret,
     proposed_secret: proposed,
@@ -962,11 +978,17 @@ export async function claimLockedGift(ctx: ClaimContext): Promise<ClaimOutcome> 
   }
 }
 
+/**
+ * The `k` a claim of a gift locked to this wallet's OWN key carries (#410 G14, handle recipient):
+ * the wallet key is never written to the ledger, it is borrowed again from the signer to finish.
+ */
+export const OWN_KEY_CLAIM = 'own-key'
+
 /** Finish every claim this wallet left part way (start-up). Returns how many coupons arrived. */
-export async function finishCashlinkClaims(ports: CashlinkPorts, pubkey: string): Promise<number> {
+export async function finishCashlinkClaims(ports: CashlinkPorts, pubkey: string, ownKey?: () => Uint8Array | null): Promise<number> {
   let done = 0
   for (const claim of loadClaims(pubkey)) {
-    const secret = secretFromText(claim.k)
+    const secret = claim.k === OWN_KEY_CLAIM ? (ownKey?.() ?? null) : secretFromText(claim.k)
     if (!secret) continue
     try {
       if ((await finishClaim(ports, pubkey, secret, claim)) === 'ok') done += 1

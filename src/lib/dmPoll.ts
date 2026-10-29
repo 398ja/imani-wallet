@@ -1554,6 +1554,9 @@ function catchUp(): void {
   const polling = service
   void loadTrustedMints().then(() => polling?.fetchRecentDms())
   void flushUnacknowledgedEscrows()
+  // #410 G14: a gift locked to this wallet whose claim failed (or whose key could not be lent) is
+  // tried again on every catch-up. Never throws.
+  void import('./lockedGiftsApp').then((m) => m.sweepLockedGifts()).catch(() => undefined)
 }
 
 /**
