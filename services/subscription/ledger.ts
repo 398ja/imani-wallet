@@ -45,6 +45,11 @@ export interface SubscriptionRow {
   paidAmountMinor: number
   paidCurrency: string
   createdAt: number
+  /**
+   * Unix SECONDS: when it was last marked cancelled (cleared if a cancellation is undone). Rows
+   * written before this field existed have none; metrics then fall back to "unknown when".
+   */
+  cancelledAt?: number
   licences: IssuedLicence[]
 }
 
