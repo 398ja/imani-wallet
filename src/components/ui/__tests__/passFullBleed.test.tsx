@@ -80,6 +80,21 @@ describe('the line under the name', () => {
   })
 })
 
+describe('the avatar on the card', () => {
+  it('wears a white circular frame with a shadow', () => {
+    const { getByAltText } = draw(coupon({}, { logoUrl: LOGO, stripUrl: BANNER }))
+    const circle = getByAltText('Rosa Green Farm').parentElement as HTMLElement
+    expect(circle.className).toMatch(/rounded-full/)
+    expect(circle.className).toMatch(/ring-white/)
+    expect(circle.className).toMatch(/shadow-md/)
+  })
+
+  it('frames the initials too, when there is no picture', () => {
+    const { getByText } = draw(coupon())
+    expect(getByText('RG').className).toMatch(/ring-white/)
+  })
+})
+
 describe('the balance', () => {
   it('prints the amount without the "Balance" label', () => {
     const { container, queryByText } = draw(coupon())
