@@ -3,6 +3,8 @@ import { Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { Lock, QrCode, Send, Settings } from 'lucide-react'
 
 import { Alert, Button, Centered, Input, PageHeader, Panel, Screen, ListSection, BackLink } from '../components/ui'
+import { Avatar } from '../components/ui/Avatar'
+import { RemoteImage } from '../components/ui/RemoteImage'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
 import { profileName, refreshProfile, type Profile } from '../lib/profile'
 import {
@@ -77,6 +79,9 @@ export function TerminalApp() {
   const [stall, setStall] = useState<MerchantProfile | null>(null)
   // The stall's public name, from its kind-0 profile, as the setup screen showed it.
   const [stallName, setStallName] = useState<string | null>(null)
+  // And its face: picture and banner from the same kind-0 (#418 Q4). The till wears the stall's
+  // avatar, verification badge included, so staff and customers see whose counter this is.
+  const [stallLook, setStallLook] = useState<StallLook>({})
   const navigate = useNavigate()
   // One check function for the life of the till, so the Redeem screen's poll is not restarted on
   // every render. It signs with whichever terminal signer is installed when it runs.
@@ -88,9 +93,11 @@ export function TerminalApp() {
     if (!record) return
     let live = true
     void fetchMerchantRecord(record.stallPubkey).then((m) => live && setStall(m))
-    void publicStallName(record.stallPubkey, (n) => live && setStallName(n)).then(
-      (n) => live && setStallName((shown) => n ?? shown),
-    )
+    void publicStallName(
+      record.stallPubkey,
+      (n) => live && setStallName(n),
+      (look) => live && setStallLook((shown) => ({ ...shown, ...look })),
+    ).then((n) => live && setStallName((shown) => n ?? shown))
     return () => {
       live = false
     }
@@ -176,7 +183,14 @@ export function TerminalApp() {
       <Route
         path="/"
         element={
-          <TerminalHome till={till} stall={stall} stallName={stallName} terminalName={record.name} onLock={lock} />
+          <TerminalHome
+            till={till}
+            stall={stall}
+            stallName={stallName}
+            stallLook={stallLook}
+            terminalName={record.name}
+            onLock={lock}
+          />
         }
       />
       <Route
@@ -247,16 +261,32 @@ function SellUnavailable({ till, stall }: { till: Till; stall: MerchantProfile |
   return <Navigate to="/" replace />
 }
 
+/** The stall's picture and banner, from its kind-0. Either may be missing. */
+interface StallLook {
+  picture?: string
+  banner?: string
+}
+
 /**
  * The stall's public name from its profile, or null. Never throws. `onLater` gets a name that only
- * the slower store had (round 4: a cold till otherwise said "Your stall" for good).
+ * the slower store had (round 4: a cold till otherwise said "Your stall" for good). `onLook` gets
+ * its picture and banner, from either store, as they arrive.
  */
-async function publicStallName(stallPubkey: string, onLater?: (name: string) => void): Promise<string | null> {
+async function publicStallName(
+  stallPubkey: string,
+  onLater?: (name: string) => void,
+  onLook?: (look: StallLook) => void,
+): Promise<string | null> {
   const named = (p: Profile | null) => (!p || (!p.displayName && !p.nip05) ? null : profileName(p))
+  const look = (p: Profile | null) => {
+    if (p && (p.picture || p.banner)) onLook?.({ ...(p.picture ? { picture: p.picture } : {}), ...(p.banner ? { banner: p.banner } : {}) })
+  }
   const profile = await refreshProfile(stallPubkey, (later) => {
+    look(later)
     const n = named(later)
     if (n) onLater?.(n)
   }).catch(() => null)
+  look(profile)
   return named(profile)
 }
 
@@ -376,12 +406,14 @@ function TerminalHome({
   till,
   stall,
   stallName,
+  stallLook = {},
   terminalName,
   onLock,
 }: {
   till: Till
   stall: MerchantProfile | null
   stallName: string | null
+  stallLook?: StallLook
   terminalName?: string
   onLock: () => void
 }) {
@@ -400,6 +432,34 @@ function TerminalHome({
     <Screen>
       <div className="flex min-h-[calc(100svh-6rem)] flex-col justify-center">
         <div className="mb-8 text-center">
+          {/*
+            The stall's banner and avatar (#418 Q4): the till is the stall's counter, and its face
+            carries the verification badge the stall has earned, so a customer at the counter sees
+            the same mark they see in their wallet. The banner is the stall's own URL, so it loads
+            through RemoteImage (no referrer, lazy, a plain band if the link is dead).
+          */}
+          <div className="relative mb-12" data-testid="stall-header">
+            {stallLook.banner ? (
+              <RemoteImage
+                src={stallLook.banner}
+                alt=""
+                className="h-28 w-full overflow-hidden rounded-2xl bg-mono-100 dark:bg-mono-800"
+              />
+            ) : (
+              <div className="h-28 w-full rounded-2xl bg-mono-100 dark:bg-mono-800" aria-hidden="true" />
+            )}
+            <div className="absolute inset-x-0 -bottom-10 flex justify-center">
+              <span className="rounded-full bg-mono-50 p-1 dark:bg-mono-950">
+                <Avatar
+                  src={stallLook.picture}
+                  name={stallName ?? 'Your stall'}
+                  pubkey={till.actor.stallPubkey}
+                  loading={!stallName && !stall}
+                  size="xl"
+                />
+              </span>
+            </div>
+          </div>
           <p className="text-lg font-semibold text-mono-900 dark:text-mono-50" data-testid="terminal-name">
             {terminalName ?? 'Terminal'}
           </p>

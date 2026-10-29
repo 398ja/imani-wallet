@@ -38,6 +38,7 @@ interface LicenceMetadata {
   valid_from?: unknown
   limits?: unknown
   grant_kind?: unknown
+  badge?: unknown
 }
 
 const SALES_PERIODS: readonly SalesPeriod[] = ['lifetime', 'month', 'window']
@@ -139,6 +140,14 @@ export function licenceOf(signed: SignedVoucherFields): LicenceVoucher | null {
     ...(asString(meta.tier) ? { tier: asString(meta.tier) } : {}),
     ...(validFrom !== undefined ? { validFrom } : {}),
     ...(asString(meta.grant_kind) ? { grantKind: asString(meta.grant_kind) } : {}),
+    ...(isBadgeName(meta.badge) ? { badge: meta.badge } : {}),
   }
+}
+
+/** The verification badges a licence or a tier may name (#418). Anything else reads as none. */
+export const BADGE_NAMES = ['bronze', 'silver', 'gold'] as const
+
+export function isBadgeName(value: unknown): value is (typeof BADGE_NAMES)[number] {
+  return typeof value === 'string' && (BADGE_NAMES as readonly string[]).includes(value)
 }
 

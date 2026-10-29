@@ -18,6 +18,7 @@ export function AdminPage() {
   const [days, setDays] = useState('30')
   const [reason, setReason] = useState('')
   const [pilot, setPilot] = useState(false)
+  const [badge, setBadge] = useState('')
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -47,6 +48,7 @@ export function AdminPage() {
         reason,
         currency: currency.toUpperCase(),
         pilot,
+        ...(badge ? { badge } : {}),
       })
       setResult(`Granted ${out.subscription_id}, ${out.state === 'delivered' ? 'delivered to the stall' : `state ${out.state}`}.`)
     } catch (e) {
@@ -80,6 +82,21 @@ export function AdminPage() {
         <Input label="Reason (kept for the audit trail)" value={reason} onChange={(e) => setReason(e.target.value)} />
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={pilot} onChange={(e) => setPilot(e.target.checked)} /> Pilot
+        </label>
+        {/* A grant may carry a verification badge for as long as it lasts (#418). None by default:
+            raising a limit does not by itself make a business verified. */}
+        <label className="block text-sm">
+          <span className="mb-1 block font-medium">Verification badge</span>
+          <select
+            className="w-full rounded-xl border border-mono-200 bg-white px-3 py-2 dark:border-mono-700 dark:bg-mono-900"
+            value={badge}
+            onChange={(e) => setBadge(e.target.value)}
+          >
+            <option value="">None</option>
+            <option value="bronze">Bronze</option>
+            <option value="silver">Silver</option>
+            <option value="gold">Gold</option>
+          </select>
         </label>
         <Button className="w-full" disabled={busy || !reason.trim()} onClick={() => void submit()}>
           {busy ? 'Granting…' : 'Grant'}

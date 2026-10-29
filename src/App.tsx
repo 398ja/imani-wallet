@@ -69,6 +69,8 @@ import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
 import { ClaimLandingPage, ResumeParkedClaim } from './pages/ClaimLandingPage'
 import { takeAfterLogin } from './lib/afterLogin'
+import { refreshOwnBadge, setVerificationOwner } from './lib/verificationReader'
+import { SUBSCRIPTION_STATUS_EVENT } from './lib/subscriptionStatusStore'
 import { GiftLandingPage } from './pages/GiftLandingPage'
 import { finishPendingCashlinkClaims, reconcileGiftLinks, restoreScan } from './lib/giftLinks'
 import { runCashlinkExpiryNoticesAfterReconcile } from './lib/cashlinkExpiryNotice'
@@ -206,6 +208,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // Every change to the terminal list is published, debounced, to the owner's other
         // devices (#160 phase 6). Stopped on logout.
         startRosterSync(pubkey)
+
+        // This account's own avatar reads the licences it holds as well as the public attestation
+        // (#418), so its badge is right the moment a plan arrives, before the service publishes.
+        setVerificationOwner(pubkey)
 
         // Finish any send this wallet stopped waiting for. The 20s poll in
         // pay.ts is not a verdict — a saga can complete minutes later — and
@@ -375,8 +381,28 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       // sign with the previous account's session and file the next account's
       // claims into the wrong inbox.
       stopPaymentReceipts()
+      setVerificationOwner(undefined)
     }
   }, [pubkey, openAttempt])
+
+  // A licence is a voucher, so it arrives as a wallet write: re-read this account's own badge then,
+  // and when the subscription service says a plan changed. Debounced, because a restore writes
+  // hundreds of rows and each would otherwise re-verify every licence held.
+  useEffect(() => {
+    if (!ready) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const later = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(refreshOwnBadge, 1500)
+    }
+    const off = onWalletChanged(later)
+    window.addEventListener(SUBSCRIPTION_STATUS_EVENT, later)
+    return () => {
+      if (timer) clearTimeout(timer)
+      off()
+      window.removeEventListener(SUBSCRIPTION_STATUS_EVENT, later)
+    }
+  }, [ready])
 
 
   /**

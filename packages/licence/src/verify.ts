@@ -179,6 +179,7 @@ export function verifyLicence(
       ...(voucher.limits ? { limits: copyLimits(voucher.limits) } : {}),
       ...(voucher.tier ? { tier: voucher.tier } : {}),
       ...(typeof voucher.validFrom === 'number' ? { validFrom: voucher.validFrom } : {}),
+      ...(voucher.badge ? { badge: voucher.badge } : {}),
     },
   }
 }

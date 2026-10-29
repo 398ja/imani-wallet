@@ -57,6 +57,11 @@ export interface LicenceVoucher {
   limits?: LicenceLimits
   /** `subscription` (bought) or `custom` (issued by hand, #407 §7). */
   grantKind?: string
+  /**
+   * The verification badge a HAND GRANT carries (#418 Q3), signed with it. A bought tier carries none:
+   * its badge is the catalog's, so re-mapping a tier needs no re-issue. Unknown values are dropped.
+   */
+  badge?: string
 }
 
 /**
@@ -93,6 +98,8 @@ export interface LicenceGrant {
   limits?: LicenceLimits
   tier?: string
   validFrom?: number
+  /** The grant's own signed badge (#418), when it is a hand grant that names one. */
+  badge?: string
 }
 
 /**
