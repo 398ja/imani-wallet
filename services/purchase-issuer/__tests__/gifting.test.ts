@@ -73,7 +73,7 @@ const ports = (): Ports => ({
   sleep: async () => {},
 })
 
-describe('a handle or email gift is never minted unlocked (G7, G-R2)', () => {
+describe('without gift ports, a handle or email gift is never minted (G7, G-R2)', () => {
   afterEach(() => vi.restoreAllMocks())
   for (const kind of ['handle', 'email'] as const) {
     it(`${kind}: blocked before anything is minted`, async () => {
@@ -140,9 +140,10 @@ describe('the claim email (G-R4)', () => {
   })
   it('puts the secret in the URL fragment only, never the subject', () => {
     const u = new URL(mail.claimUrl)
-    expect(u.pathname).toBe('/claim')
+    // The wallet's /g link (G14): ℓ base64url in `k`, x in `x`, all in the fragment.
+    expect(u.pathname).toBe('/g')
     expect(u.search).toBe('')
-    expect(u.hash).toBe(`#${link}`)
+    expect(u.hash).toMatch(/^#v=1&k=[A-Za-z0-9_-]{43}&x=\d+$/)
     expect(mail.subject).not.toContain(link)
     expect(mail.subject).toBe('Someone sent you a voucher for Alice Bakery')
   })
