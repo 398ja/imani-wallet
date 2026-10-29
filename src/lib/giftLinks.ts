@@ -6,6 +6,7 @@
  * storage, the counter and the redeem. Nothing here logs a link secret.
  */
 import type { TransactionRow } from '@imani/wallet-storage'
+import { INDIVIDUAL_LIMITS } from '@imani/wallet-core'
 
 import {
   combinedState,
@@ -143,11 +144,15 @@ function refundSecretFor(link: Pick<GiftLinkRecord, 'i'>): Uint8Array | null {
 
 // ─── Limits (Q5) ─────────────────────────────────────────────────────────────
 
-/** Q5: no fee, at most this many outstanding links per wallet. */
-export const MAX_OUTSTANDING_LINKS = 10
+/**
+ * Q5: no fee, at most this many outstanding links per wallet. The app is an individual's wallet, so
+ * these are wallet-core's individual limits (#366): one source with the API senders' limits, so the
+ * two cannot drift. Business senders (employers) send from a server with `@imani/cashlink-sender`.
+ */
+export const MAX_OUTSTANDING_LINKS = INDIVIDUAL_LIMITS.maxOutstanding
 
 /** The restore scan's gap (spec 3.3): `i = 0 … last + 20`. */
-export const RESTORE_GAP = 20
+export const RESTORE_GAP = INDIVIDUAL_LIMITS.restoreGap
 
 export function tooManyLinksMessage(n = MAX_OUTSTANDING_LINKS): string {
   return `You have ${n} links waiting to be claimed. Take one back or wait for it to be claimed.`
@@ -161,7 +166,7 @@ export function tooManyLinksMessage(n = MAX_OUTSTANDING_LINKS): string {
  * Until the take-back is automatic (#295 phase 1 onwards) such a link can still be opened by whoever
  * holds it, which is exactly what the limit bounds (spec 6.7), so these are capped on their own.
  */
-export const MAX_EXPIRED_UNRETURNED = 10
+export const MAX_EXPIRED_UNRETURNED = INDIVIDUAL_LIMITS.maxExpiredUnreturned
 
 export function tooManyExpiredMessage(n = MAX_EXPIRED_UNRETURNED): string {
   return `${n} of your Cashlinks have expired and have not come back yet. Keep Imani open for a minute so it can take them back, then try again.`

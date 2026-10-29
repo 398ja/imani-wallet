@@ -242,6 +242,25 @@ export function linksMintUrl(env: NodeJS.ProcessEnv = process.env): string | nul
   }
 }
 
+/**
+ * Where this service reaches the mint, when that is not the URL the coupons name
+ * (WALLET_API_MINT_TRANSPORT_URL: an internal service name, a local stack's port mapping). Coupons
+ * are still judged against WALLET_API_MINT_URL; only the requests go elsewhere. Null when unset or
+ * not an http(s) URL, and then requests go to the mint URL itself.
+ */
+export function linksMintTransportUrl(env: NodeJS.ProcessEnv = process.env): string | null {
+  return linksMintUrl({ WALLET_API_MINT_URL: env.WALLET_API_MINT_TRANSPORT_URL })
+}
+
+/** A fetch that sends requests for `mintUrl` to `transportUrl` instead; anything else is refused. */
+export function routedMintFetch(mintUrl: string, transportUrl: string, fetchImpl: typeof fetch): typeof fetch {
+  return ((input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (!url.startsWith(`${mintUrl}/`)) return Promise.reject(new Error('only the configured mint is reached'))
+    return fetchImpl(`${transportUrl}${url.slice(mintUrl.length)}`, init)
+  }) as typeof fetch
+}
+
 const MINT_TIMEOUT_MS = Number(process.env.WALLET_API_MINT_TIMEOUT_MS ?? 10_000)
 
 type ProofState = 'UNSPENT' | 'PENDING' | 'SPENT' | 'UNKNOWN'
