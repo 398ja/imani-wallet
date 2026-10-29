@@ -60,14 +60,14 @@ export function ReturnPage() {
       <h1 className="mb-4 mt-8 text-title font-semibold">Thank you</h1>
       <Notice tone="success">Your payment went through. Your voucher is on its way to {where}.</Notice>
       <p className="mt-4 text-sm text-mono-500">
-        It can take a minute. If it isn&apos;t claimed in time, it comes back to you: to your wallet if you were signed in, or through the return link
-        we email you.
+        It can take a minute. If it isn&apos;t claimed in time, you can take it back after the claim date: your wallet does it for you if you
+        were signed in. Otherwise use your return link below.
       </p>
       {refundSecret && WALLET_ORIGIN && draft !== 'gone' && draft.delivery.kind !== 'self' && (
         <div className="mt-6 rounded-2xl border border-mono-200 p-4 dark:border-mono-800" data-testid="return-link">
           <p className="mb-2 text-sm font-medium">Your return link</p>
           <p className="mb-2 text-sm text-mono-500">
-            If it isn&apos;t claimed in time, open this link to take the gift back into a wallet. Keep it private: it is yours, not the recipient&apos;s.
+            If it isn&apos;t claimed in time, open this link after the claim date to take the gift back into a wallet. Save it now: we can&apos;t send it again. Keep it private: it is yours, not the recipient&apos;s.
           </p>
           <a className="break-all text-sm underline" href={returnLink(WALLET_ORIGIN, refundSecret)}>
             Take the gift back

@@ -490,14 +490,14 @@ function Review({
           <div data-testid="review-recipient">
             <p className="font-medium">{displayHandle(normaliseRecipientHandle(form.handle) ?? '')}</p>
             <p className="text-xs text-mono-500">Check this is the right person. The gift goes to their wallet as it is now.</p>
-            <p className="mt-1 text-sm text-mono-500">If they don&apos;t take it by {day(deadline)}, it comes back to you.</p>
+            <p className="mt-1 text-sm text-mono-500">If they don&apos;t take it by {day(deadline)}, you can take it back.</p>
           </div>
         )}
         {draft.delivery.kind === 'email' && (
           <div data-testid="review-recipient">
             <p className="break-all text-title font-semibold">{draft.delivery.email}</p>
             <p className="mt-1 text-sm text-mono-500">
-              We&apos;ll email a link to claim it. If it isn&apos;t claimed by {day(deadline)}, the value comes back to you. They may need to check their spam
+              We&apos;ll email a link to claim it. If it isn&apos;t claimed by {day(deadline)}, you can take it back. They may need to check their spam
               folder.
             </p>
           </div>
