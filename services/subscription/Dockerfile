@@ -51,7 +51,7 @@ RUN npm install --no-package-lock --omit=dev \
       @imani/nap-server@npm:@398ja/nap-server@0.13.0
 
 COPY services/subscription ./services/subscription
-COPY src/lib/licenceIssue.ts src/lib/voucherToken.ts src/lib/giftWrap.ts src/lib/subscriptionStatus.ts ./src/lib/
+COPY src/lib/licenceIssue.ts src/lib/voucherToken.ts src/lib/giftWrap.ts src/lib/subscriptionStatus.ts src/lib/verificationBadge.ts ./src/lib/
 COPY packages/licence ./node_modules/@imani/licence
 COPY --from=site /build/apps/subscription/dist ./site
 RUN rm -rf services/subscription/__tests__
