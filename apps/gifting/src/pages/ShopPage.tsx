@@ -29,9 +29,9 @@ import {
   type GiftForm,
 } from '../lib/draft'
 import { displayHandle, normaliseRecipientHandle } from '../lib/handle'
-import { newGiftSecrets, seal } from '../lib/gift'
+import { newGiftSecrets, returnLink, seal } from '../lib/gift'
 import { loadShop, robotsFor, SHOP_COPY, type Shop, type ShopState } from '../lib/shop'
-import type { Session } from '../lib/signer'
+import { WALLET_ORIGIN, type Session } from '../lib/signer'
 
 const api = giftingApi()
 
@@ -351,7 +351,7 @@ type ReviewState =
   | { kind: 'preparing' }
   | { kind: 'ready'; draft: Draft; refundSecret?: string }
   | { kind: 'error'; message: string; retry: boolean }
-  | { kind: 'paying'; draft: Draft }
+  | { kind: 'paying'; draft: Draft; refundSecret?: string }
 
 /**
  * The review page: creating the draft is entering it (§3). The server re-checks everything and
@@ -407,8 +407,15 @@ function Review({
       const draft = await api.createDraft(req, session)
       const expected = form.deliver === 'self' ? sessionKey ?? undefined : undefined
       if (!draftMatches(draft, req, expected) || isExpired(draft)) throw new ApiError('Something changed while we checked. Please review again.', 409)
+      // Only the LIVE run's draft is kept. A superseded run (an edit, a re-render, React's double
+      // effect in development) still resolves, and keeping its draft would overwrite the guest's
+      // refund key with one for a draft nobody pays: the paid gift's return link would be lost.
+      if (!live) {
+        void api.invalidate(draft.draftId)
+        return
+      }
       keep(shop.canonical, { form, draftId: draft.draftId, refundSecret: secrets.refundSecret })
-      if (live) setState({ kind: 'ready', draft, refundSecret: secrets.refundSecret })
+      setState({ kind: 'ready', draft, refundSecret: secrets.refundSecret })
     })().catch((e: unknown) => {
       if (!live) return
       const err = e instanceof ApiError ? e : new ApiError(COPY.unreachable, 0)
@@ -429,7 +436,7 @@ function Review({
       setRound((n) => n + 1)
       return
     }
-    setState({ kind: 'paying', draft })
+    setState({ kind: 'paying', draft, refundSecret: state.kind === 'ready' ? state.refundSecret : undefined })
     try {
       const { checkoutUrl } = await api.pay(draft.draftId)
       window.location.assign(checkoutUrl)
@@ -517,6 +524,20 @@ function Review({
         <p className="mt-2 text-xs text-mono-500">Imani doesn&apos;t give refunds: refunds are {shop.name}&apos;s decision.</p>
         {!session && <p className="mt-2 text-xs text-mono-500">We&apos;ll email your receipt to {form.buyerEmail}.</p>}
       </Section>
+
+      {/* A guest's refund key exists only in this browser (G3, G-R3): shown BEFORE paying, so a tab
+          lost on the way to Stripe cannot cost the buyer their way to take the gift back. */}
+      {state.refundSecret && WALLET_ORIGIN && draft.delivery.kind !== 'self' && (
+        <Section title="Your return link">
+          <p className="mb-2 text-sm text-mono-500">
+            Save this now. If the gift isn&apos;t claimed by {day(deadline)}, open it to take the gift back into a wallet. We can&apos;t send it
+            again. Keep it private: it is yours, not the recipient&apos;s.
+          </p>
+          <a className="break-all text-sm underline" href={returnLink(WALLET_ORIGIN, state.refundSecret)} data-testid="review-return-link">
+            Take the gift back
+          </a>
+        </Section>
+      )}
 
       {sessionExpired ? (
         <Button size="lg" className="mt-2 w-full" onClick={() => onSignIn(draft.delivery.recipientPubkey)}>
