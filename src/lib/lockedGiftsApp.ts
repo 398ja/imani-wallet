@@ -171,12 +171,14 @@ async function runSweep(): Promise<{ claimed: number; returned: number }> {
         } finally {
           key.fill(0)
         }
-      } catch {
-        // Left for the next run.
+      } catch (error) {
+        // Left for the next run. Said, never silent: a row that never settles is a bug to see.
+        console.warn('[lockedGifts] a gift could not be settled this run:', error instanceof Error ? error.message : String(error))
       }
     }
-  } catch {
+  } catch (error) {
     // Storage not open, or unreadable: next run.
+    console.warn('[lockedGifts] sweep skipped:', error instanceof Error ? error.message : String(error))
   } finally {
     end()
   }
