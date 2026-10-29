@@ -6,6 +6,7 @@ import { getSigner } from './nap'
 import { allAddressable, publish } from './relay'
 import { addRestoredTransaction, getWallet, notifyWalletChanged } from './wallet'
 import { asGiftLinkRecord, toTransaction, type WalletTransaction } from './transactions'
+import { asLockedGiftRecord, laterLockedGift, lockedGiftMemo } from './lockedGiftRecord'
 
 /**
  * The wallet's ledger, backed by the key instead of the browser.
@@ -108,6 +109,13 @@ export type HistoryContent = Nip60HistoryContent & {
    * own NIP-44-encrypted record, like everything else here.
    */
   gift_link?: unknown
+  /**
+   * A minted-locked gift's record (#410 G14) on its `gift_sent` / `gift_pending` row: the locked
+   * token, `x` and where it stands, so a restored device still shows it, sweeps it and never
+   * reopens one already settled. The token is useless without the matching key, and the record is
+   * inside the owner's own NIP-44 encryption like everything else here.
+   */
+  locked_gift?: unknown
   /**
    * What the wallet checked about a received coupon (the issuer signature and
    * the warrant verdict), on `received` rows.
@@ -229,6 +237,7 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     transfer_signature: tx.transferSignature,
     terminal_pubkey: tx.terminalPubkey,
     ...(tx.link ? { gift_link: tx.link } : {}),
+    ...(tx.lockedGift ? { locked_gift: tx.lockedGift } : {}),
     ...(tx.validation ? { validation: tx.validation } : {}),
   }
 }
@@ -277,6 +286,7 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     transferSignature: content.transfer_signature,
     ...(content.terminal_pubkey ? { terminalPubkey: content.terminal_pubkey } : {}),
     ...(asGiftLinkRecord(content.gift_link) ? { link: asGiftLinkRecord(content.gift_link) } : {}),
+    ...(asLockedGiftRecord(content.locked_gift) ? { lockedGift: asLockedGiftRecord(content.locked_gift) } : {}),
     // Read back through `toTransaction`'s own `isValidation` guard, so a
     // garbled value reads as "Not checked", never as a pass.
     ...(content.validation ? { validation: content.validation } : {}),
@@ -370,7 +380,17 @@ export async function restoreTx(pubkey: string): Promise<number> {
     for (const event of events) {
       const record = parseTx(event)
       if (!record) continue
-      await addRestoredTransaction(toRow(record.id, record.content))
+      const row = toRow(record.id, record.content) as unknown as Record<string, unknown>
+      if (row.lockedGift) {
+        // Never reopen a settled gift from an older copy (see `laterLockedGift`).
+        const local = (await getWallet().getTransaction(record.id)) as unknown as Record<string, unknown> | null
+        const kept = laterLockedGift(asLockedGiftRecord(local?.lockedGift), asLockedGiftRecord(row.lockedGift))
+        if (kept) {
+          row.lockedGift = kept
+          row.memo = lockedGiftMemo(kept)
+        }
+      }
+      await addRestoredTransaction(row as unknown as TransactionRow)
       restored += 1
     }
 

@@ -14,6 +14,8 @@ import { isTillSaleMessage } from './tillSales'
 import { buildValidationRecord } from './voucherValidationRecord'
 import { terminalCredentialFromToken } from './notMoney'
 import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
+import { isOpenAfterLocktime, readLinkLock } from './cashlinkLock'
+import { parseGiftSent } from './lockedGifts'
 import { parseSubscriptionStatus, SUBSCRIPTION_STATUS_DM_TYPE } from './subscriptionStatus'
 import {
   heldWrapDecision,
@@ -24,6 +26,7 @@ import {
 } from './transferSignature'
 import {
   parseVoucherToken,
+  tokenProofs,
   verifyVoucher,
   type ParsedVoucherToken,
   type VoucherValidation,
@@ -36,6 +39,21 @@ import {
  */
 function pinnedLicenceSeller(): string {
   return ((import.meta.env.VITE_LICENCE_SELLER_PUBKEY as string | undefined) ?? '').trim().toLowerCase()
+}
+
+/** Whether a token's proofs are link-locked (#410 G14), read without trusting anything yet. */
+function isLinkLockedToken(token: string): boolean {
+  try {
+    const proofs = tokenProofs(token)
+    return proofs.length > 0 && proofs.some((p) => readLinkLock(p.secret) !== null || isOpenAfterLocktime(p.secret))
+  } catch {
+    return false
+  }
+}
+
+/** `subscriptionStatus.SUBSCRIPTION_STATUS_DM_TYPE`: the seller on a subscription's renewal (#407). */
+function isSubscriptionStatusMessage(content: string): boolean {
+  return parseSubscriptionStatus(content) !== null
 }
 
 /** `terminalDelivery.ENROLLED_DM_TYPE`, matched here without loading the delivery module. */
@@ -54,11 +72,6 @@ function isCredentialMessage(content: string): boolean {
   } catch {
     return false
   }
-}
-
-/** `subscriptionStatus.SUBSCRIPTION_STATUS_DM_TYPE`: the seller on a subscription's renewal (#407). */
-function isSubscriptionStatusMessage(content: string): boolean {
-  return parseSubscriptionStatus(content) !== null
 }
 
 /**
@@ -415,19 +428,34 @@ export function createDmCryptoAdapter(): CryptoAdapter {
             of: chunk.chunk_total,
           }
           switch (offer.kind) {
-            case 'complete':
+            case 'complete': {
               console.log(
                 offer.redelivery
                   ? '[dmCrypto] offering a reassembled coupon again (its last attempt did not finish)'
                   : '[dmCrypto] reassembled a chunked coupon',
                 { transfer: tag.transfer, chunks: chunk.chunk_total, bytes: offer.payload.length },
               )
+              // #410 G14: a gift minted locked can be big enough to arrive in pieces. Reassembled,
+              // it is still a locked gift: filed, never redeemed. Returned with EMPTY content, so
+              // dm-poll marks this completing event processed, which is what confirms the transfer
+              // (`confirmChunkDeliveries`) and releases its stragglers. A failed filing returns null
+              // and the pieces are offered again.
+              const reassembled = asPayload(offer.payload)
+              if (reassembled && isLinkLockedToken(reassembled.token)) {
+                try {
+                  const filed = await (await import('./lockedGiftsApp')).fileIncomingLockedGift(reassembled.token)
+                  if (filed === 'filed') return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+                } catch {
+                  return null
+                }
+              }
               return {
                 eventId: event.id,
                 senderPubkey: rumor.pubkey,
                 content: offer.payload,
                 createdAt: rumor.created_at,
               }
+            }
             case 'done':
               // A straggler from a transfer whose coupon is durably handled
               // (#204: only ever recorded once the completing event is
@@ -534,6 +562,32 @@ export function createDmCryptoAdapter(): CryptoAdapter {
           // AWAITED (#393): once this unwrap returns, dm-poll marks the wrap processed. Fired and
           // forgotten, a reload in between aborted the chunk load and the bell row was never written.
           await import('./notMoneyNotice').then((m) => m.announceTerminalDm(rumor.content, me)).catch(() => false)
+        }
+
+        /**
+         * #410 G14: a gift minted already locked. Neither kind is redeemed here (the locked token
+         * is not this wallet's money until it is claimed, nor the buyer's before `x`); each is filed
+         * as a gift row and the sweep acts on it. A filing that fails returns null, so the wrap is
+         * offered again; once filed, an empty non-token DM marks it processed.
+         */
+        const giftSent = parseGiftSent(rumor.content)
+        if (giftSent) {
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          try {
+            await (await import('./lockedGiftsApp')).fileGiftSent(giftSent, sealAuthor)
+          } catch {
+            return null
+          }
+          return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+        }
+        const lockedPayload = asPayload(rumor.content)
+        if (lockedPayload && isLinkLockedToken(lockedPayload.token)) {
+          try {
+            const filed = await (await import('./lockedGiftsApp')).fileIncomingLockedGift(lockedPayload.token)
+            if (filed === 'filed') return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+          } catch {
+            return null
+          }
         }
 
         /**

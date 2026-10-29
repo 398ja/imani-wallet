@@ -121,6 +121,11 @@ export interface IssuePlan {
    * bytes. See `delegatedWarrant.ts`.
    */
   issuanceWarrant?: string
+  /**
+   * #410 G14 (contract §1): mint the voucher already LOCKED to `recipientPubkey` with refund =
+   * `refundPubkey` and locktime `locktime` (unix s). Keys are x-only hex. Absent, a plain coupon.
+   */
+  linkLock?: { recipientPubkey: string; refundPubkey: string; locktime: number }
 }
 
 /**
@@ -230,6 +235,12 @@ export function issueBody(plan: IssuePlan): string {
     // omits `expiry_days`, rather than sent as a zero-day coupon (#312).
     ...(plan.expiresInDays > 0 ? { expires_in_days: plan.expiresInDays } : {}),
     ...(plan.issuanceWarrant ? { issuance_warrant: plan.issuanceWarrant } : {}),
+    ...(plan.linkLock
+      ? {
+          recipient_pubkey: plan.linkLock.recipientPubkey,
+          link_lock: { refund_pubkey: plan.linkLock.refundPubkey, locktime: plan.linkLock.locktime },
+        }
+      : {}),
   })
 }
 

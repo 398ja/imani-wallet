@@ -191,6 +191,23 @@ and whether it takes cards. Plaintext and readable by anyone, so it is what a
 stranger knows before they hold anything.
 _Avoid_: Profile, merchant record, settings
 
+**Gifting page**:
+A stall's public page on gifting.imani.casa, addressed by its handle
+(`/shop/alice`), where anyone buys its voucher by card for themselves, a handle
+or an email address. Never listed in a directory.
+_Avoid_: Shop page, storefront, hexpub link
+
+**Purchase Draft**:
+What a gifting-page buyer reviewed, re-checked and pinned by the server before
+any card form: the amount and, above all, who receives the voucher. Paying
+names the draft and nothing else.
+_Avoid_: Cart, order, quote
+
+**Return link**:
+The link a guest buyer is given to take an unclaimed gift back. It carries the
+gift's refund key, which only the buyer holds; it is never the claim link.
+_Avoid_: Refund link, claim link
+
 ### A note on Stall and Merchant
 
 **Stall** is the word, and everything a customer ever reads says it.
