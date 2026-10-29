@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.1] - 2026-10-29
+
+A **patch**: the 0.40.0 image did not build (`npm run build` runs `tsc -b`, which failed on type
+errors the merged lanes introduced). No behaviour change (#421).
+
+### Fixed
+
+- `tsc -b` is clean: the Cashlink sender SDK has its own project (`tsconfig.sdk.json`), the
+  subscription service test verifies the catalog through a pure module (`catalogSignature.ts`),
+  the gifting app sees the wallet's ambient types, and the coupon page's Memo row shows only a
+  non-empty string.
+
 ## [0.40.0] - 2026-10-29
 
 A **minor**: subscription tiers, the gifting site, API-driven Cashlinks, the verification badge and
