@@ -27,8 +27,8 @@ price() { # product tier term amount interval -> id
   echo "$id"
 }
 # As published on www.imani.casa/pricing, VAT inclusive: Essentials £8/month or £70/year, Pro
-# £11/month or £100/year. Essentials is the `basic` tier (the id licences carry; only the name
+# £25/month or £250/year. Essentials is the `basic` tier (the id licences carry; only the name
 # changed). Starter is free and has no price. Town / BID Partner is arranged with us ("Contact
 # us") and is never sold by card, so it has no price here either.
 basic=$(product "Imani Essentials" basic); pro=$(product "Imani Pro" pro)
-echo "SUBSCRIPTION_PRICES=basic:monthly=$(price "$basic" basic monthly 800 month),basic:annual=$(price "$basic" basic annual 7000 year),pro:monthly=$(price "$pro" pro monthly 1100 month),pro:annual=$(price "$pro" pro annual 10000 year)"
+echo "SUBSCRIPTION_PRICES=basic:monthly=$(price "$basic" basic monthly 800 month),basic:annual=$(price "$basic" basic annual 7000 year),pro:monthly=$(price "$pro" pro monthly 2500 month),pro:annual=$(price "$pro" pro annual 25000 year)"

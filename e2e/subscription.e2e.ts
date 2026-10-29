@@ -329,7 +329,7 @@ async function main() {
       check('Essentials: unlimited voucher issuance and 3 tills', /Unlimited voucher issuance/.test(plans) && /plus 3 tills/.test(plans), plans.slice(0, 400))
       await site.getByRole('radio', { name: /Monthly/ }).click()
       const monthly = await site.locator('main').innerText()
-      check('monthly: Essentials £8/month and Pro £11/month, in pounds', /£8\/month/.test(monthly) && /£11\/month/.test(monthly), monthly.slice(0, 400))
+      check('monthly: Essentials £8/month and Pro £25/month, in pounds', /£8\/month/.test(monthly) && /£25\/month/.test(monthly), monthly.slice(0, 400))
 
       const cookies = await context.cookies(SITE_ORIGIN)
       const session = cookies.find((c) => c.name === 'imani_subscription_session')
