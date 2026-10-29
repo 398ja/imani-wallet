@@ -462,3 +462,59 @@ describe('the seller key comes from the env, never from a repo file (imani-walle
     expect(message).not.toContain('notarealkey')
   })
 })
+
+describe('tiers and hand grants (#407)', () => {
+  const grantLimits = { sales: { period: 'window' as const, amounts: { GBP: 20000 } }, terminals: 5 }
+
+  it('the script restates tier, valid_from, limits and grant_kind byte for byte', async () => {
+    const script = await import('../../../scripts/sell-subscription.mjs')
+    const cases: Partial<LicenceTerms>[] = [
+      { tier: 'basic', grantKind: 'subscription', features: ['terminals'] },
+      { tier: 'pro', validFrom: 1800000000, grantKind: 'subscription', features: ['terminals', 'api', 'ecommerce'] },
+      { tier: 'custom', grantKind: 'custom', limits: grantLimits, validFrom: 1800000000, features: [] },
+      { tier: 'custom', grantKind: 'custom', limits: { sales: null, terminals: null }, features: ['api'] },
+    ]
+    for (const c of cases) {
+      const t = terms(c)
+      expect(script.licenceMetadata({ ...t, features: t.features ?? [] })).toBe(licenceMetadataJson(t))
+    }
+  })
+
+  it('a hand grant with only a limit names no feature by default, and is still a licence', () => {
+    const json = JSON.parse(licenceMetadataJson(terms({ limits: grantLimits })))
+    expect(json.features).toEqual([])
+    expect(json.limits).toEqual({ sales: { period: 'window', amounts: { GBP: 20000 } }, terminals: 5 })
+  })
+
+  it('round-trips a hand grant through a real signed voucher into a grant with its limits', () => {
+    const { token, voucher } = buildVoucherToken({
+      merchantMetadata: licenceMetadataJson(terms({ limits: grantLimits, validFrom: 1799990000, grantKind: 'custom', tier: 'custom' })),
+      faceValue: 0,
+      unit: 'GBP',
+      expiresAt: 1900000000,
+    })
+    const verdict = verifyLicence(licenceFromToken(token), {
+      issuerPublicKey: voucher.issuerPublicKey,
+      now: 1800000000,
+      presenter: CUSTOMER_KEY,
+      verifySignature: licenceSignatureVerifier({ token }),
+    })
+    expect(verdict.granted).toBe(true)
+    if (verdict.granted) {
+      expect(verdict.grant.limits).toEqual(grantLimits)
+      expect(verdict.grant.validFrom).toBe(1799990000)
+    }
+  })
+
+  it('parses --sales-limit and --terminals strictly', async () => {
+    const { grantLimits: parse } = await import('../../../scripts/sell-subscription.mjs')
+    expect(parse({ salesLimit: '200:GBP,150.5:EUR', terminals: '5' })).toEqual({
+      sales: { period: 'window', amounts: { GBP: 20000, EUR: 15050 } },
+      terminals: 5,
+    })
+    expect(parse({ salesLimit: 'unlimited', terminals: 'unlimited' })).toEqual({ sales: null, terminals: null })
+    expect(parse({ salesLimit: '', terminals: '' })).toBeUndefined()
+    expect(() => parse({ salesLimit: '200:gbp' })).toThrow(/sales-limit/)
+    expect(() => parse({ terminals: '-1' })).toThrow(/terminals/)
+  })
+})

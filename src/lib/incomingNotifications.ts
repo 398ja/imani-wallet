@@ -35,6 +35,7 @@ import { createElement } from 'react'
 import { toast } from 'sonner'
 
 import { IncomingPaymentToast } from '../components/ui/IncomingPaymentToast'
+import { licenceSellerPubkey } from './licenceStatus'
 import { createBoundedSet, createPersistentBoundedSet } from './boundedSet'
 import { createAccountStore } from './accountStore'
 import { MISMATCH_NOTE, vouchers } from './bundleWording'
@@ -66,6 +67,12 @@ const TERMINAL_STATES: ReadonlySet<string> = new Set([
 ])
 
 const LOG_PREFIX = '[incoming-notif]'
+
+/** Is this sender the licence seller this build pins (VITE_LICENCE_SELLER_PUBKEY)? Never when unpinned. */
+function isLicenceSeller(pubkeyHex: string): boolean {
+  const seller = licenceSellerPubkey()
+  return seller !== '' && pubkeyHex.toLowerCase() === seller
+}
 
 interface DrainResponse {
   envelopes?: unknown[]
@@ -268,6 +275,13 @@ function handleInboundEnvelope(raw: unknown, recipientPubkeyHex: string): string
   if (!wantsInApp(recipientPubkeyHex, 'voucher_received')) {
     return env.notificationId
   }
+
+  // A plan, not a payment (#407). The licence seller's delivery goes through the same gateway
+  // route as a sale, so the gateway announces it as "Payment on its way". The wallet announces
+  // the licence itself when it lands ("Imani Essentials plan activated", dmPoll.ts), so this advance
+  // notice is dropped. Keyed on the sender being THIS build's pinned licence seller: an envelope
+  // carries no token, so that is the only signal, and it is the same key the licence must name.
+  if (isLicenceSeller(env.sender.pubkeyHex)) return env.notificationId
 
   // One part of a multi-coupon payment: fold it into that payment's one
   // "on its way" toast and bell row (#94). Acked the same way either way.

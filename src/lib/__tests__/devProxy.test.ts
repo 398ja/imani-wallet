@@ -49,6 +49,8 @@ const TEST_STACK: Record<number, string> = {
   27777: 'imani-mint-rest',
   // Not in the compose stack: purchase-issuer is run from this repo on its own default port.
   8791: 'purchase-issuer (npx tsx services/purchase-issuer/server.ts)',
+  // Not in the compose stack either: deploy/subscription-local, the subscription site (#407).
+  18910: 'subscription (deploy/subscription-local)',
 }
 
 function targets(): { rule: string; target: string; port: number }[] {

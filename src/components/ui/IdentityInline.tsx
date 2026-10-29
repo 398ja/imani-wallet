@@ -95,8 +95,9 @@ export function IdentityInline({
     name customers through this component, so this is not hypothetical. The page
     refuses a customer too; this just avoids offering the tap.
 
-    Same hook the badge uses, so a row that shows the merchant badge is exactly
-    a row that links, and the two cannot drift apart.
+    The badge no longer comes from this answer: the avatar wears the verification badge a stall
+    earns by subscribing (#418), while a row links to anyone with a live stall record, subscribed
+    or not.
   */
   const merchant = useIsMerchant(pubkey) && linkToProfile
   const Row = merchant ? Link : 'span'

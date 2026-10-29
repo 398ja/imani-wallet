@@ -38,7 +38,7 @@ EOF
 fi
 
 SERVICES=(
-  imani-gateway-db bottin-db imani-vault-db imani-payment-db
+  app-db mint-db
   bottin-api nostr-relay phoenixd-mock blossom
   imani-vault-jpa payment-adapter imani-mint-rest
   account-app gateway-customer gateway-portal merchant-service
@@ -85,7 +85,14 @@ require_local_image imani-gateway-portal:acl-local imani-gateway-portal gateway-
 #
 # A machine WITHOUT libfix and WITHOUT an existing volume is fine on the
 # default: Flyway creates the schema at whatever version that image knows.
-if [ -z "${VAULT_JPA_IMAGE:-}" ] && docker image inspect imani-vault-jpa:libfix >/dev/null 2>&1; then
+if [ -z "${VAULT_JPA_IMAGE:-}" ] && docker image inspect imani-vault-jpa:local-master >/dev/null 2>&1; then
+  # Built from cashu-vault master. Needed for NUT-02 v2 (66-char) keyset ids: libfix caps the id
+  # length and answers 400 "KeySet ID exceeds maximum length", so the mint cannot sign.
+  #   cd ../cashu-vault && mvn -pl cashu-vault-jpa -am package -DskipTests && \
+  #   mvn -pl cashu-vault-jpa com.google.cloud.tools:jib-maven-plugin:3.4.4:dockerBuild \
+  #       -Djib.from.image=docker://eclipse-temurin:21-jre -Djib.to.image=imani-vault-jpa:local-master
+  export VAULT_JPA_IMAGE=imani-vault-jpa:local-master
+elif [ -z "${VAULT_JPA_IMAGE:-}" ] && docker image inspect imani-vault-jpa:libfix >/dev/null 2>&1; then
   export VAULT_JPA_IMAGE=imani-vault-jpa:libfix
 fi
 

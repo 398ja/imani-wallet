@@ -50,15 +50,24 @@ declare module '*/scripts/sell-subscription.mjs' {
   export function licenceMetadata(terms: {
     lockKey: string
     subscriptionId: string
-    features: string[]
+    features?: readonly string[]
     pilot?: boolean
     paidAmountMinor: number
     paidCurrency: string
+    tier?: string
+    validFrom?: number
+    limits?: import('@imani/licence').LicenceLimits
+    grantKind?: string
   }): string
+  /** A hand grant's limits from `--sales-limit` / `--terminals` (#407). */
+  export function grantLimits(args: {
+    salesLimit?: string
+    terminals?: string
+  }): import('@imani/licence').LicenceLimits | undefined
   /** The issuance request for one licence: FIXED, with the seller's merchant warrant. */
   export function licenceIssueBody(
     seller: { pk: string; sk: string | Uint8Array },
-    sale: { paidAmountMinor: number; paidCurrency: string; term: string; metadata: string },
+    sale: { paidAmountMinor: number; paidCurrency: string; term: string; metadata: string; days?: number },
   ): {
     face_value: number
     face_unit: string

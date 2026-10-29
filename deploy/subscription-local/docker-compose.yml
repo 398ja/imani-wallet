@@ -1,0 +1,56 @@
+# subscription.imani.casa, locally, against REAL Stripe test mode, and the staging gateway or the local
+# stack's (GATEWAY=local).
+#
+#   cd deploy/subscription-local
+#   ./up.sh                 # staging gateway; for e2e/subscription-local.e2e.ts
+#   GATEWAY=local ./up.sh   # the local stack (deploy/up.sh) and the wallet dev server on :5173
+#
+# The site has its OWN origin (http://localhost:18910 here, subscription.imani.casa in production)
+# and no login page (#411). It is opened from the wallet, which signs its NAP login over
+# postMessage; VITE_WALLET_ORIGIN (build arg) is the one wallet origin it accepts that from.
+#
+# - `subscription`: the site and service (services/subscription/Dockerfile).
+# - `stripe`: the Stripe CLI, forwarding the test account's webhooks to the service, so a real
+#   test-card payment in Checkout triggers a real `invoice.paid`.
+# Licences are minted and delivered by STAGING gateway-customer, as the staging seller, so a stall
+# that exists on wallet.staging.398ja.xyz receives the plan in its wallet.
+services:
+  subscription:
+    image: imani-subscription:local
+    build:
+      context: ../..
+      dockerfile: services/subscription/Dockerfile
+      args:
+        # The wallet the site accepts a signer from. GATEWAY=local (up.sh): the wallet dev server on
+        # http://localhost:5173. Staging: the stand-in wallet e2e/subscription-local.e2e.ts serves.
+        VITE_WALLET_ORIGIN: ${VITE_WALLET_ORIGIN:-http://127.0.0.1:18924}
+    ports: ["18910:8090"]
+    env_file: .env
+    environment:
+      # Its own origin (#411), as subscription.imani.casa: no path under the wallet any more.
+      SUBSCRIPTION_PUBLIC_ORIGIN: ${SUBSCRIPTION_PUBLIC_ORIGIN:-http://localhost:18910}
+      SUBSCRIPTION_BASE_PATH: ''
+    volumes: ["ledger:/data"]
+    # On the local stack's network too, so GATEWAY=local reaches gateway-customer and the relay by
+    # name (up.sh creates it when the local stack is not running).
+    networks: [default, imani-internal]
+    restart: unless-stopped
+
+  stripe:
+    image: stripe/stripe-cli:latest
+    command:
+      - listen
+      - --api-key=${STRIPE_SECRET_KEY}
+      - --forward-to=http://subscription:8090/v1/stripe/webhook
+      - --events=invoice.paid,customer.subscription.updated,customer.subscription.deleted
+    env_file: .env
+    depends_on: [subscription]
+    restart: unless-stopped
+
+volumes:
+  ledger:
+
+networks:
+  imani-internal:
+    name: imani-test_imani-internal
+    external: true

@@ -3,16 +3,17 @@ import { User } from 'lucide-react';
 
 import { cn, getInitials } from '../../lib/utils';
 import { OWN_ACCOUNT, UNKNOWN_PERSON, UNKNOWN_STALL } from '../../lib/format';
-import { useIsMerchant } from '../../hooks/useIsMerchant';
+import { BADGE_LABELS, type Badge } from '../../lib/verificationBadge';
+import { useVerificationBadge } from '../../hooks/useVerificationBadge';
 import { Skeleton } from './Skeleton';
 
 interface AvatarProps {
   src?: string;
   name: string;
   /**
-   * Whose avatar this is. Optional: given one, the avatar looks up whether they
-   * trade as a merchant and wears the badge if they do — so no caller has to
-   * know, and every screen showing the same person agrees.
+   * Whose avatar this is. Optional: given one, the avatar looks up the verification badge that key
+   * has earned by subscribing (#418) and wears it while the subscription is valid, so no caller has
+   * to know, and every screen showing the same person agrees.
    */
   pubkey?: string;
   /**
@@ -25,11 +26,17 @@ interface AvatarProps {
    * the placeholder was indistinguishable from the answer.
    */
   loading?: boolean;
+  /**
+   * A white circular frame with a drop shadow, for an avatar sitting on a
+   * picture (the voucher's full-bleed banner, #419), where a bare circle would
+   * melt into whatever is behind it.
+   */
+  framed?: boolean;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
 }
 
-export function Avatar({ src, name, pubkey, loading, size = 'md', className }: AvatarProps) {
+export function Avatar({ src, name, pubkey, loading, framed, size = 'md', className }: AvatarProps) {
   // The only caller passes a URL from a merchant's own Nostr profile, so a dead
   // link is ordinary rather than exceptional. Falling back to the initials keeps
   // a broken-image icon off the card.
@@ -48,7 +55,7 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
   // the bytes are there, and `complete` covers the case the browser had it
   // cached and fired `load` before React attached the handler.
   const [loadedSrc, setLoadedSrc] = useState<string>();
-  const merchant = useIsMerchant(pubkey);
+  const badge = useVerificationBadge(pubkey);
 
   const sizeClasses = {
     sm: 'w-8 h-8 text-xs',
@@ -66,6 +73,11 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
     xl: 'w-7 h-7',
   };
 
+  // On the circle itself, never the merchant wrapper, so the badge sits on the
+  // frame rather than inside it. Ring and shadow compose in Tailwind 3: both
+  // write `box-shadow`, through separate variables.
+  const frame = framed ? 'rounded-full ring-2 ring-white shadow-md shadow-black/40' : undefined;
+
   const face =
     src && src !== failedSrc ? (
       /*
@@ -78,7 +90,7 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
         is at best redundant and at worst contradictory once a caller passes a
         margin.
       */
-      <span className={cn('relative inline-block shrink-0', sizeClasses[size], className)}>
+      <span className={cn('relative inline-block shrink-0', sizeClasses[size], frame, className)}>
         {src !== loadedSrc && (
           <Skeleton className={cn('absolute inset-0 h-full w-full rounded-full')} />
         )}
@@ -128,14 +140,18 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
         />
       </span>
     ) : loading ? (
-      <Skeleton className={cn('shrink-0 rounded-full', sizeClasses[size], className)} />
+      <Skeleton className={cn('shrink-0 rounded-full', sizeClasses[size], frame, className)} />
     ) : (
       <div
         className={cn(
           'rounded-full bg-mono-200 dark:bg-mono-700 flex items-center justify-center font-medium text-mono-600 dark:text-mono-300',
           sizeClasses[size],
+          frame,
           className
         )}
+        // A framed avatar sits on a card that sets a text shadow for every
+        // character; the initials have their own disc, so they opt out.
+        style={framed ? { textShadow: 'none' } : undefined}
       >
         {/* The neutral fallback gets the generic person glyph, not an "S":
             initials of a placeholder word are no more a person than initials
@@ -148,29 +164,52 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
       </div>
     );
 
-  if (!merchant) return face;
+  if (!badge) return face;
 
   return (
     <span className={cn('relative inline-flex shrink-0', className)}>
       {face}
-      {/*
-        The one spot of colour in a monochrome app, which is the point: it marks
-        the handful of people you can buy from. Orange gradient, white glyph and
-        surface-coloured ring are imani-apps' merchant badge verbatim, glyph path
-        included — a customer who uses both should not have to learn two marks.
-      */}
-      <span
-        className={cn(
-          'absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-gradient-to-br from-orange-500 to-orange-600 shadow ring-2 ring-mono-50 dark:ring-mono-950',
-          badgeClasses[size]
-        )}
-        title="Merchant"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-[60%] w-[60%] fill-white">
-          <path d="M19 5v2h-4V5h4M9 5v6H5V5h4m10 8v6h-4v-6h4M9 17v2H5v-2h4M21 3h-8v6h8V3M11 3H3v10h8V3m10 8h-8v10h8V11m-10 4H3v6h8v-6z" />
-        </svg>
-      </span>
-      <span className="sr-only">Merchant</span>
+      <VerificationCheck badge={badge} className={badgeClasses[size]} />
+      <span className="sr-only">{BADGE_LABELS[badge]}</span>
+    </span>
+  );
+}
+
+/**
+ * Bronze, silver and gold as metal rather than flat colour: a light-to-dark gradient reads as a
+ * medal at 12px, where a flat fill reads as a dot. The tick is white on all three, inside a
+ * surface-coloured ring so it separates from any picture behind it.
+ */
+const METAL: Record<Badge, string> = {
+  bronze: 'bg-gradient-to-br from-[#e3a46b] via-[#b8733a] to-[#7a4a22]',
+  silver: 'bg-gradient-to-br from-[#f4f6f8] via-[#b9c0c8] to-[#7d8790]',
+  gold: 'bg-gradient-to-br from-[#fbe38a] via-[#e2b23a] to-[#a8780f]',
+};
+
+/**
+ * The verification badge (#418), replacing the orange merchant badge. It no longer says "this person
+ * has a stall": it says "this business subscribes, and is verified until its plan ends".
+ */
+export function VerificationCheck({ badge, className }: { badge: Badge; className?: string }) {
+  return (
+    <span
+      className={cn(
+        'absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full shadow ring-2 ring-mono-50 dark:ring-mono-950',
+        METAL[badge],
+        className
+      )}
+      title={BADGE_LABELS[badge]}
+      data-badge={badge}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-[62%] w-[62%]" fill="none">
+        <path
+          d="M5 12.5l4.2 4.2L19 7"
+          stroke="white"
+          strokeWidth="3.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
     </span>
   );
 }

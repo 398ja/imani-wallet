@@ -1,5 +1,5 @@
 import { toast } from 'sonner'
-import { nip19 } from 'nostr-tools'
+import type { LicenceVoucher } from '@imani/licence'
 
 import { recordNotification } from './notifications/inbox'
 import { loadProfile, profileName, refreshProfile, type Profile } from './profile'
@@ -17,7 +17,10 @@ import type { NotMoneyNoticeType } from './notifications/types'
  *
  *   - a credential: "Terminal setup request from <stall>", to `/terminal/setup`;
  *   - a renewal:    "Terminal renewal from <stall>", to `/terminal/setup`;
- *   - a licence:    "Licence from <seller>", to `/settings/subscription`.
+ *   - a licence:    "Imani Essentials plan activated" (or renewed), to `/settings/subscription`.
+ *
+ * A stall is named by its published name or handle, never by a key: no npub or hex pubkey is
+ * shown to end users.
  *
  * ## Classified from signed bytes only
  *
@@ -40,14 +43,13 @@ export interface NotMoneyNotice {
   url: string
 }
 
-/** A pubkey's display name: its kind-0 name or NIP-05 handle, else a short npub. */
-export function nameOf(pubkey: string, profile: Profile | null = loadProfile(pubkey)): string {
+/**
+ * A sender's display name: its kind-0 name or NIP-05 handle, else `fallback`. Never a key: an npub
+ * or a hex pubkey names nobody a person knows, and is not shown to end users anywhere.
+ */
+export function nameOf(pubkey: string, profile: Profile | null = loadProfile(pubkey), fallback = 'a stall'): string {
   if (profile && (profile.displayName || profile.nip05)) return profileName(profile)
-  try {
-    return `${nip19.npubEncode(pubkey).slice(0, 12)}…`
-  } catch {
-    return `${pubkey.slice(0, 8)}…`
-  }
+  return fallback
 }
 
 /**
@@ -93,14 +95,46 @@ export function terminalNotice(content: string, stallName?: string): NotMoneyNot
       }
 }
 
-/** The notice for a licence arriving, from its signed seller id. */
-export function licenceNotice(voucherId: string, sellerPubkey: string | undefined, sellerName?: string): NotMoneyNotice {
-  const from = sellerName ?? (sellerPubkey ? nameOf(sellerPubkey) : 'Imani')
+/**
+ * The plan's name, as the subscription screen and the site say it. Display only: `basic` is the tier
+ * id a licence carries, and it is sold as Essentials (www.imani.casa/pricing).
+ */
+const PLAN_NAMES: Record<string, string> = { basic: 'Essentials', pro: 'Pro', custom: 'Custom' }
+
+/** "Imani Essentials plan", from the licence's signed tier; a hand grant is a "plan grant". */
+export function planName(licence: Pick<LicenceVoucher, 'tier' | 'grantKind'>): string {
+  if (licence.grantKind === 'custom' || licence.tier === 'custom') return 'Imani plan grant'
+  const tier = licence.tier ? (PLAN_NAMES[licence.tier] ?? licence.tier.charAt(0).toUpperCase() + licence.tier.slice(1)) : ''
+  return tier ? `Imani ${tier} plan` : 'Imani plan'
+}
+
+/** A date as a person reads it, without the time: "28 Nov 2026". */
+function day(seconds: number): string {
+  return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(seconds * 1000))
+}
+
+/**
+ * The notice for a licence arriving: WHAT arrived (the plan, from the licence's signed fields),
+ * and until when. Not who sent it: the seller is Imani, and its key means nothing to the stall.
+ *
+ * @param renewal true when this stall already held a licence of the same subscription
+ */
+export function licenceNotice(
+  voucherId: string,
+  licence: Pick<LicenceVoucher, 'tier' | 'grantKind' | 'expiresAt' | 'validFrom'>,
+  opts: { renewal?: boolean; now?: number } = {},
+): NotMoneyNotice {
+  const plan = planName(licence)
+  const now = opts.now ?? Math.floor(Date.now() / 1000)
+  const until = licence.expiresAt ? ` until ${day(licence.expiresAt)}` : ''
+  const starts = licence.validFrom && licence.validFrom > now ? `, from ${day(licence.validFrom)}` : ''
+  const custom = licence.grantKind === 'custom' || licence.tier === 'custom'
+  const title = custom ? 'Your Imani plan grant arrived' : opts.renewal ? `${plan} renewed` : `${plan} activated`
   return {
     id: `licence:${voucherId}`,
     type: LICENCE_NOTICE,
-    title: `Licence from ${from}`,
-    body: 'Your subscription licence arrived. It is not part of your balance.',
+    title,
+    body: `Your stall is on the ${plan}${starts}${until}. It is not part of your balance.`,
     url: '/settings/subscription',
   }
 }

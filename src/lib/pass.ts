@@ -39,6 +39,7 @@ export const TERMS = 'Redeemable only at the issuing merchant. Not redeemable at
 export const BARCODE_PREFIX = 'voucher:'
 export const BARCODE_FORMAT_QR = 'PKBarcodeFormatQR'
 export const DATE_STYLE_MEDIUM = 'PKDateStyleMedium'
+export const NO_EXPIRY = 'No expiry'
 
 /**
  * One displayed field.
@@ -219,8 +220,8 @@ function organizationName(row: VoucherRow, branding: MerchantBranding): string {
  * The merchant's kind-0 `about` is deliberately NOT a fallback here, though the
  * Java mapper allows it: a shop's standing blurb ("Organic veg, Tue & Sat") is
  * about the shop, not about this voucher, and on the coupon card it sat in the
- * one line the holder reads to tell one coupon from another. It still carries
- * the merchant card on the home deck, where it is about the right thing.
+ * one line the holder reads to tell one coupon from another. It is off the
+ * merchant card too (#419): the stall's profile page is where it is read.
  */
 function description(row: VoucherRow): string {
   return present(row.memo) ? row.memo : DEFAULT_DESCRIPTION
@@ -253,7 +254,10 @@ function balanceField(minorUnits: number, unit: string, decimals: number): PassF
   }
 }
 
-function expiryField(iso: string): PassField {
+function expiryField(iso: string | undefined): PassField {
+  // No expiry is a fact the holder needs too (#419), not an absent field: a
+  // coupon card always says when it runs out, "No expiry" included.
+  if (iso === undefined) return { key: 'expires', label: 'EXPIRES', value: NO_EXPIRY }
   return { key: 'expires', label: 'EXPIRES', value: iso, dateStyle: DATE_STYLE_MEDIUM }
 }
 
@@ -341,7 +345,7 @@ export function toCouponPass(
           displayDecimals(row.face_unit, row.face_decimals),
         ),
       ],
-      auxiliaryFields: expires === undefined ? undefined : [expiryField(expires)],
+      auxiliaryFields: [expiryField(expires)],
       backFields: backFields(row, voucherId),
     },
     // A voided coupon carries NO redemption code. Its proofs are burnt, so a
@@ -381,9 +385,10 @@ export function toMerchantPass(
     passTypeIdentifier: PASS_TYPE_IDENTIFIER,
     teamIdentifier: TEAM_IDENTIFIER,
     serialNumber: merchant.pubkey,
-    description: present(branding.storeDescription)
-      ? branding.storeDescription
-      : DEFAULT_DESCRIPTION,
+    // Empty, and the card prints no line for it (#419). The stall's kind-0
+    // `about` used to sit here, a shop blurb on a voucher, where it does not
+    // belong: the stall's profile page is where it is read.
+    description: '',
     organizationName: present(branding.organizationName)
       ? branding.organizationName
       : merchant.name || merchant.pubkey,

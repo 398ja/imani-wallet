@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Plans follow www.imani.casa/pricing** (#407). The subscription site offers Starter (free),
+  Basic and Pro only. A Town / BID Partner plan is arranged with us and is never offered as an
+  option: the site lists only tiers that have a card price. Basic now issues vouchers without limit
+  on 3 tills (catalog version 3, and the wallet's bundled catalog). Prices are Basic £8/month or
+  £70/year and Pro £11/month or £100/year, all in GBP. The site shows each price as Stripe will
+  charge it, and the service never lists or sells a price that is not in GBP. The free tier is
+  called Starter on the site and in the wallet.
+- **Basic is now called Essentials** (#407), on the subscription site, the wallet's plan screen,
+  the plan notice ("Imani Essentials plan activated") and the Stripe product. Only the name changed:
+  the tier id is still `basic`, so every licence already sold keeps working and now reads as
+  Essentials.
+
 ## [0.39.5] - 2026-10-26
 
 A **patch**: the #401 fix (#403) on top of 0.39.4.
