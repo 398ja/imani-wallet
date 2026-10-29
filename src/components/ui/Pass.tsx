@@ -207,6 +207,7 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
             name={displayName(pass.organizationName)}
             pubkey={issuer}
             loading={waiting}
+            framed
             size="md"
           />
           <div className="min-w-0 flex-1" aria-busy={waiting || undefined}>

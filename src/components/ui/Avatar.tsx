@@ -25,11 +25,17 @@ interface AvatarProps {
    * the placeholder was indistinguishable from the answer.
    */
   loading?: boolean;
+  /**
+   * A white circular frame with a drop shadow, for an avatar sitting on a
+   * picture (the voucher's full-bleed banner, #419), where a bare circle would
+   * melt into whatever is behind it.
+   */
+  framed?: boolean;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
 }
 
-export function Avatar({ src, name, pubkey, loading, size = 'md', className }: AvatarProps) {
+export function Avatar({ src, name, pubkey, loading, framed, size = 'md', className }: AvatarProps) {
   // The only caller passes a URL from a merchant's own Nostr profile, so a dead
   // link is ordinary rather than exceptional. Falling back to the initials keeps
   // a broken-image icon off the card.
@@ -66,6 +72,11 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
     xl: 'w-7 h-7',
   };
 
+  // On the circle itself, never the merchant wrapper, so the badge sits on the
+  // frame rather than inside it. Ring and shadow compose in Tailwind 3: both
+  // write `box-shadow`, through separate variables.
+  const frame = framed ? 'rounded-full ring-2 ring-white shadow-md shadow-black/40' : undefined;
+
   const face =
     src && src !== failedSrc ? (
       /*
@@ -78,7 +89,7 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
         is at best redundant and at worst contradictory once a caller passes a
         margin.
       */
-      <span className={cn('relative inline-block shrink-0', sizeClasses[size], className)}>
+      <span className={cn('relative inline-block shrink-0', sizeClasses[size], frame, className)}>
         {src !== loadedSrc && (
           <Skeleton className={cn('absolute inset-0 h-full w-full rounded-full')} />
         )}
@@ -128,14 +139,18 @@ export function Avatar({ src, name, pubkey, loading, size = 'md', className }: A
         />
       </span>
     ) : loading ? (
-      <Skeleton className={cn('shrink-0 rounded-full', sizeClasses[size], className)} />
+      <Skeleton className={cn('shrink-0 rounded-full', sizeClasses[size], frame, className)} />
     ) : (
       <div
         className={cn(
           'rounded-full bg-mono-200 dark:bg-mono-700 flex items-center justify-center font-medium text-mono-600 dark:text-mono-300',
           sizeClasses[size],
+          frame,
           className
         )}
+        // A framed avatar sits on a card that sets a text shadow for every
+        // character; the initials have their own disc, so they opt out.
+        style={framed ? { textShadow: 'none' } : undefined}
       >
         {/* The neutral fallback gets the generic person glyph, not an "S":
             initials of a placeholder word are no more a person than initials
