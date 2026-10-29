@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.2] - 2026-10-29
+
+A **patch**: the purchase-issuer image did not build on 0.40.x (#423). No behaviour change.
+
+### Fixed
+
+- The purchase-issuer image carries the wallet readers (`voucherToken`, `cashlinkLock`) and the
+  mailer client the gift path imports, and its build guard checks they are present and load.
+
 ## [0.40.1] - 2026-10-29
 
 A **patch**: the 0.40.0 image did not build (`npm run build` runs `tsc -b`, which failed on type
