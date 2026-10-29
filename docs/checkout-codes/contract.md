@@ -70,7 +70,9 @@ the database names no code. Logs show at most `code_hash[0..12]`.
 
 ## 2. A part
 
-One coupon locked to the shop key `S`:
+One coupon locked to the shop key `S`. A coupon is carried by **1..k proofs** (the gateway signs
+one locked successor per power-of-two output, as for Cashlinks), and every proof of a part has
+the same secret shape:
 
 ```
 P2PK_VOUCHER(data = 02‖S, locktime = x, refund = [02‖R], sigflag = SIG_ALL, n_sigs = 1,
@@ -81,12 +83,15 @@ This is exactly `linkLockProposal`'s shape (`src/lib/cashlinkLock.ts`), signed
 by the same gateway route (`POST /api/v1/wallet/vouchers/cashlink/lock`), with
 `S` in place of the link key. Rules:
 
-- `R ≠ S`. `R` is per part and derived (`imani-checkout-refund/v1/` label),
-  never the customer's identity key.
+- `R ≠ S`. `R` is per part and derived (`imani-checkout-refund/v1/` label, a wallet-wide
+  counter), never the customer's identity key. All proofs of one part share one `R`.
 - Every part of one code has the **same** `x`, the same `unit`, and the same
-  issuer (the stall).
-- `assertNotOpenAfterLocktime` holds for every part.
-- A part travels as a `cashuB` token with exactly one proof.
+  `issuer` tag (the stall's x-only key). The voucher signature is the **gateway's**
+  (`issuer_pubkey`, gateway-customer's identity key), never the stall's.
+- `assertNotOpenAfterLocktime` holds for every proof.
+- A part travels as one `cashuB` token holding all its proofs, all with the same `voucher_id`,
+  `S`, `x` and `R`. Its amount is the credited face value of the sum of its proofs
+  (`creditableFaceValue`). Every proof gets its own pre-signed refund at the relay.
 
 ## 3. The code store API
 
@@ -200,3 +205,80 @@ On the stall's kind-30078 `imani:merchant` record (ADR 0012):
 
 The wallet takes `S` only from here (R7). It is absent, malformed, or not
 64-hex: no online shop.
+
+## 5. Settling: how value leaves `S` (redeem, change, cancel)
+
+A swap cannot change who a coupon is locked to: the gateway's voucher signature covers `data`.
+So, as for Cashlinks, the holder of `S` **burns** each proof and the gateway **re-signs**
+successors, one burn buying one set of signatures. The new gateway route makes the shop's power
+exactly "pay the stall, or give it back to the customer", and nothing else.
+
+### `POST /api/v1/wallet/vouchers/checkout/settle` (gateway-customer, the shop)
+
+NIP-98 by any key (the authority is `authorization`). Body:
+
+```json
+{ "predecessor_secret": "…", "proposed_secrets": ["…"], "authorization": "sig by S",
+  "predecessor_proof": { "amount", "id", "C", "dleq" }, "burn_outputs": [ … ] }
+```
+
+Signed only when every rule holds:
+
+1. The predecessor is the §2 shape (LinkLock), issued by this gateway, not a credential.
+2. `authorization` is BIP-340 by `S` (the predecessor's `data`) over
+   `sha256("imani/voucher-checkout-settle/v1" ‖ predecessor ‖ each proposal)`, length-prefixed
+   the same way as `cashlinkDigest`.
+3. The mint reports the predecessor SPENT, and `SpendingPathway` says by `S` (before `x`). A
+   refund-pathway spend is the customer's, and is never settled.
+4. 1 ≤ proposals ≤ 20. Each proposal is `P2PK_VOUCHER(data = 02‖K, n_sigs = 1)` with **no**
+   `locktime`, **no** `refund`, `sigflag` absent (SIG_INPUTS), a fresh distinct nonce, the
+   predecessor's terms unchanged (`VoucherTerms`, with `locktime`/`refund`/`sigflag` removed from
+   the comparison) and a canonical `max_sats`, where `K` is **either** the `issuer` tag (the
+   stall) **or** the predecessor's refund key `R` (the customer). Any other `K` is refused.
+5. `Σ max_sats ≤` the burn's proven amount (`SuccessorSatBound`). One burn, one claim (the shared
+   claim ledger), and an identical resend replays.
+
+Refusals reuse the Cashlink route's names where they apply, plus `LOCK_KEY_NOT_ALLOWED` (rule 4)
+and `NOT_THE_SHOP_PATHWAY` (rule 3).
+
+Each successor carries one power-of-two output, so the shop sends one proposal per output of the
+amount it re-locks (for example 200 sats to the stall = 128 + 64 + 8, three proposals).
+
+### `POST /api/v1/wallet/vouchers/checkout/unlock` (gateway-customer, the customer)
+
+It turns a returned coupon locked to `R` back into an ordinary, unlocked one:
+
+1. The predecessor is `P2PK_VOUCHER(data = 02‖K)` with no locktime and no refund, issued here.
+2. `authorization` is by `K` over `sha256("imani/voucher-checkout-unlock/v1" ‖ …)`.
+3. The mint reports it SPENT, and only `K` could have spent it.
+4. The proposal is the unlocked `VOUCHER` with the same terms (as `cashlink/resign` builds it),
+   and `max_sats ≤` the burn.
+5. The NIP-98 caller is not the coupon's issuer (customer-to-customer, as for Cashlinks).
+
+### What the shop does at redeem (`imani-coupon-core` `Redeemer`)
+
+For every proof of every part, all derived from `S` and the proof (as `cashlinkLock.ts` derives
+from `R`), so a crash anywhere resumes:
+
+1. **Burn:** swap the proof (SIG_ALL witness by `S`) into plain outputs whose blinding factors are
+   derived from `S` (`imani-checkout-burn/v1/`). NUT-09 restore recovers a lost answer.
+2. **Settle:** propose successors: the applied share locked to the stall, any change locked to
+   `R`. Parts the order does not need at all go back whole, locked to `R`.
+3. **Carry:** swap the burnt plain proofs into the signed successors (derived blinding, single
+   power-of-two output each).
+4. **Deliver:** stall-locked tokens to the stall by NIP-17 (one token per `voucher_id`, ADR 0011).
+   `R`-locked tokens to the store (`/change` after redeem, `/cancelled` after cancel), which gives
+   them to the customer. Neither the shop nor the store can spend either kind.
+
+Cancel is the same with every successor locked to `R`.
+
+## 6. Notifications to the customer
+
+The store sends them itself, as NIP-17 gift wraps from its own key to the depositor's key:
+
+```json
+{ "type": "imani-checkout-code/1", "event": "redeemed|expired|cancelled|change",
+  "code_hash": "…", "amount": 800, "unit": "eur", "tokens": ["cashuB…"] }
+```
+
+`tokens` (R-locked) appear only on `change` and `cancelled`. `redeemed` carries the amount spent.
