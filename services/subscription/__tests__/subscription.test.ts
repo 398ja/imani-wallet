@@ -148,7 +148,10 @@ let ledger: Ledger
 let logs: Array<Record<string, unknown>>
 /** Wraps the service published, as the relay would receive them. */
 let published: Event[]
+/** Wraps handed to the gateway's index. */
+let stored: Event[]
 let relayDown = false
+let indexDown = false
 
 function makeApp(over: { catalogBody?: string; prices?: Record<string, string> } = {}) {
   const config: SubscriptionConfig = {
@@ -182,6 +185,10 @@ function makeApp(over: { catalogBody?: string; prices?: Record<string, string> }
         if (relayDown) throw new Error('relay down')
         published.push(event)
       },
+      store: async (event) => {
+        if (indexDown) throw new Error('index down')
+        stored.push(event)
+      },
     }),
     napServerOptions: { minAuthResponseMillis: 0 },
     log: (e) => logs.push(e),
@@ -193,7 +200,9 @@ beforeEach(async () => {
   stripe = fakeStripe()
   logs = []
   published = []
+  stored = []
   relayDown = false
+  indexDown = false
   ledger = new Ledger(join(await mkdtemp(join(tmpdir(), 'sub-')), 'ledger.json'))
   app = makeApp()
   merchants = new Set([STALL, ADMIN])
@@ -537,10 +546,21 @@ describe('buying a plan', () => {
       await app.handle(event('customer.subscription.updated', { status: 'active' }))
       expect(published).toHaveLength(0)
       relayDown = true
+      indexDown = true
       const out = await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at: 1_802_000_000 }))
       expect(out.status).toBe(200)
       expect((await ledger.all())[0].status).toBe('cancelled')
       expect(logs).toContainEqual(expect.objectContaining({ event: 'subscription_status_failed' }))
+    })
+
+    it('the same wrap goes to the relay AND the gateway index the wallet polls; either one is enough', async () => {
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at: 1_802_000_000 }))
+      expect(stored.map((e) => e.id)).toEqual(published.map((e) => e.id))
+      relayDown = true
+      await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at: null }))
+      expect(stored).toHaveLength(2)
+      expect(logs).toContainEqual(expect.objectContaining({ event: 'subscription_status_sent', status: 'active' }))
     })
   })
 

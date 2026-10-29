@@ -42,18 +42,19 @@ async function main() {
     throw error
   }
   const seller = sellerFrom(config.sellerNsec)
+  const issuer = new LicenceIssuer({ walletUrl: config.walletUrl, nip98BaseUrl: config.walletPublicUrl, edgeSecret: config.edgeSecret, internalRelay: config.internalRelay, seller })
   const app = createApp({
     config,
     seller,
     ledger: new Ledger(config.ledgerPath),
-    issuer: new LicenceIssuer({ walletUrl: config.walletUrl, nip98BaseUrl: config.walletPublicUrl, edgeSecret: config.edgeSecret, internalRelay: config.internalRelay, seller }),
+    issuer,
     stripe: stripeClient(config.stripeSecretKey),
     catalogBody: (await readFile(config.catalogPath, 'utf8')).trim(),
     // gateway-customer serves the public `POST /api/v1/nostr/query` the role is read from.
     merchantStanding: cachedMerchantReader((pubkey) => readMerchantStanding(config.walletUrl, pubkey)),
-    // A cancellation in Stripe reaches the wallet as a seller-sealed DM on the relay the gateway
-    // indexes for its DM poll (the same relay licences are delivered on).
-    notifier: relayStatusNotifier({ seller, relayUrl: config.internalRelay }),
+    // A cancellation in Stripe reaches the wallet as a seller-sealed DM: published to the relay and
+    // stored in the gateway's index, which is what the wallet's DM poll reads.
+    notifier: relayStatusNotifier({ seller, relayUrl: config.internalRelay, store: (event) => issuer.storeEvent(event) }),
   })
   const staticDir = process.env.SUBSCRIPTION_STATIC_DIR?.trim()
   const base = config.basePath

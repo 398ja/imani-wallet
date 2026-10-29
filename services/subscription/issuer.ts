@@ -197,6 +197,17 @@ export class LicenceIssuer {
     if (!r.ok) throw new Error(`deliver failed ${r.status}: ${(await r.text()).slice(0, 300)}`)
   }
 
+  /**
+   * Hand a signed event to gateway-customer's nostrdb index (`POST /api/v1/nostr/events`), which
+   * re-checks its id and signature before storing it. The wallet's DM poll reads that index.
+   */
+  async storeEvent(event: { id: string; pubkey: string; created_at: number; kind: number; tags: string[][]; content: string; sig: string }): Promise<void> {
+    const url = `${this.deps.walletUrl}/api/v1/nostr/events`
+    const body = JSON.stringify(event)
+    const r = await this.fetch(url, { method: 'POST', headers: this.headers(url, 'POST', body), body })
+    if (!r.ok) throw new Error(`store event failed ${r.status}: ${(await r.text()).slice(0, 300)}`)
+  }
+
   /** Revoke a subscription at gateway-customer (#226): every licence of it stops counting. NIP-98 only. */
   async revoke(subscriptionId: string, reason: string): Promise<void> {
     const url = `${this.deps.walletUrl}/api/v1/wallet/licences/revoke`
