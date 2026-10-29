@@ -5,6 +5,7 @@ import QRCode from 'qrcode'
 
 import type { PassField, PassJson } from '../../lib/pass'
 import { formatDate, formatFace, handleLabel, UNKNOWN_STALL } from '../../lib/format'
+import { printShadow } from '../../lib/printShadow'
 import { Avatar } from './Avatar'
 import { RemoteImage } from './RemoteImage'
 import { SkeletonLine } from './Skeleton'
@@ -12,10 +13,17 @@ import { SkeletonLine } from './Skeleton'
 /**
  * A coupon, or a merchant's whole holding, rendered as a wallet pass.
  *
- * The layout is not invented here — it is `PassJson`'s, from cashu-voucher's
- * `cashu-voucher-pass` module: a banner strip, an organisation with a logo, one
- * primary field carrying the balance, an auxiliary expiry, and a barcode. See
- * `src/lib/pass.ts` for why the record is built client-side.
+ * The fields are `PassJson`'s, from cashu-voucher's `cashu-voucher-pass` module:
+ * an organisation with a logo, one primary field carrying the balance, an
+ * auxiliary expiry, and a barcode. See `src/lib/pass.ts` for why the record is
+ * built client-side.
+ *
+ * The stall's picture FILLS THE CARD (#419). It used to be a 40px circle under
+ * the stall's banner, cropped to a 96px strip above a flat black block, so the
+ * one image a customer recognises was the smallest thing on the voucher. The
+ * banner strip is gone from the card. Every printed character carries a shadow
+ * (`printShadow`), because the picture can be anything, a white background
+ * under white text included.
  *
  * Colours arrive as `rgb(r,g,b)` strings on the pass and are applied inline,
  * because they are *data* about a merchant, not app theme. Everything else stays
@@ -95,7 +103,8 @@ function PassBarcode({ format, message, altText }: { format: string; message: st
   if (!format.includes('QR') || !dataUrl) return null
 
   return (
-    <div className="flex flex-col items-center gap-2 rounded-xl bg-white p-3">
+    // Its own white panel, so no print shadow: a halo round dark-on-white is a smudge.
+    <div className="flex flex-col items-center gap-2 rounded-xl bg-white p-3" style={{ textShadow: 'none' }}>
       <img src={dataUrl} alt={`Redemption code ${altText}`} className="w-40" />
       {/* For a cashier to key in when the scanner fails — the bare id, no prefix. */}
       <p className="break-all text-center font-mono text-[0.625rem] text-mono-500">{altText}</p>
@@ -131,7 +140,6 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
   const expiry = pass.storeCard.auxiliaryFields?.[0]
   const code = pass.barcodes?.[0]
   const logoUrl = pass.userInfo.logoUrl
-  const stripUrl = pass.userInfo.stripUrl
   const issuer = pass.userInfo.issuer
   const nip05 = pass.userInfo.issuerNip05
 
@@ -149,21 +157,36 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
   */
   const nameIsKey = /^[0-9a-f]{64}$/i.test(pass.organizationName)
   const waiting = Boolean(loadingIssuer) && nameIsKey
+  // The same rule as the avatar: no picture from a profile that has not arrived.
+  const picture = waiting ? undefined : logoUrl
 
   const card = (
     <div
-      className="overflow-hidden rounded-2xl border border-mono-200 dark:border-mono-800"
-      style={{ backgroundColor: pass.backgroundColor, color: pass.foregroundColor }}
+      className="relative isolate overflow-hidden rounded-2xl border border-mono-200 dark:border-mono-800"
+      style={{
+        // Still painted under the picture: it is the whole card when there is
+        // no picture or the link is dead, exactly as before.
+        backgroundColor: pass.backgroundColor,
+        color: pass.foregroundColor,
+        // Set once here and inherited, so every character on the card has it,
+        // including any field added later.
+        textShadow: printShadow(pass.foregroundColor),
+      }}
     >
-      {stripUrl && (
-        // Issuer-supplied URL — see branding.ts. `RemoteImage` carries the
-        // no-referrer and lazy rules this had, and adds the placeholder: the
-        // strip used to be a blank band until the bytes landed, which reads as
-        // "this stall has no banner" rather than "it is loading".
-        <RemoteImage src={stripUrl} className="h-24 w-full" />
+      {picture && (
+        // Issuer-supplied URL, see branding.ts. `RemoteImage` carries the
+        // no-referrer and lazy rules and the placeholder, and falls back to the
+        // plain background colour when the link is dead.
+        //
+        // Positioned by a wrapper, not by RemoteImage's own class: it sets
+        // `relative`, and `cn` is clsx without tailwind-merge, so an `absolute`
+        // passed alongside would lose to it in Tailwind's stylesheet order.
+        <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+          <RemoteImage src={picture} className="h-full w-full" />
+        </div>
       )}
 
-      <div className="p-5">
+      <div className="relative p-5">
         {/*
           The stall's name and picture are the way back to the stall. Holding a
           coupon and being unable to reach who issued it is the gap this closes:
@@ -255,13 +278,19 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
         )}
 
         {pass.voided && (
-          <p className="mt-4 inline-block rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700">
+          <p
+            className="mt-4 inline-block rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700"
+            style={{ textShadow: 'none' }}
+          >
             This voucher has been used
           </p>
         )}
 
         {!pass.voided && pass.expired && (
-          <p className="mt-4 inline-block rounded-full bg-mono-100 px-3 py-1 text-xs font-medium text-mono-700">
+          <p
+            className="mt-4 inline-block rounded-full bg-mono-100 px-3 py-1 text-xs font-medium text-mono-700"
+            style={{ textShadow: 'none' }}
+          >
             This voucher has expired
           </p>
         )}
