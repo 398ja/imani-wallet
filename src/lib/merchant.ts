@@ -2,6 +2,7 @@ import type { EventTemplate } from 'nostr-tools'
 
 import { newestAddressable } from './relay'
 import { str } from './branding'
+import { onlineShopField, parseOnlineShop, type OnlineShop } from './onlineShop'
 import {
   DEFAULT_VALIDITY_DAYS,
   MERCHANT_D_TAG,
@@ -105,6 +106,11 @@ export interface MerchantProfile {
    * Like `acceptsCards`, only a literal `true` counts, and absent means no.
    */
   giftingIndexable?: boolean
+  /**
+   * The stall's online shop and its redeem key `S` (#402, contract §4), or absent. Read
+   * fail-closed by `parseOnlineShop`: a malformed field is no shop, never a repaired one.
+   */
+  onlineShop?: OnlineShop
   /** When this record was last written locally, ms. For display only. */
   updatedAt: number
   /**
@@ -328,6 +334,8 @@ export function buildMerchantEvent(merchant: MerchantProfile): EventTemplate {
   // agree rather than needing to be told apart.
   if (merchant.acceptsCards === true) content.acceptsCards = true
   if (merchant.giftingIndexable === true) content.giftingIndexable = true
+  // Republished as read, so saving the profile here never drops a shop another client connected.
+  if (merchant.onlineShop) content.online_shop = onlineShopField(merchant.onlineShop)
 
   return {
     kind: MERCHANT_KIND,
@@ -387,6 +395,9 @@ export function mergeMerchantEvent(
     // the old value would keep a Buy button alive on a stall that disconnected.
     acceptsCards: parsed.acceptsCards === true,
     giftingIndexable: parsed.giftingIndexable === true,
+    // Absent or malformed means no shop, for the reason `acceptsCards` gives: a record that stops
+    // naming a key has stopped being evidence for it, and a stale `S` would lock money to it.
+    onlineShop: parseOnlineShop(parsed.online_shop) ?? undefined,
     updatedAt: Date.now(),
     eventAt: createdAt > 0 ? createdAt : merchant.eventAt,
   }
