@@ -198,6 +198,8 @@ export interface GiftReturnView {
   unit: string
   decimals: number
   x: number
+  /** G17: the voucher's own expiry, unix seconds, which a gift taken back keeps; null = never. */
+  expiresAt: number | null
   state: ReturnState
 }
 
@@ -253,6 +255,7 @@ export async function readGiftReturn(r: Uint8Array, t: string | undefined, nowMs
       unit: parsed.voucher.unit,
       decimals: parsed.voucher.faceDecimals,
       x: check.x,
+      expiresAt: typeof parsed.voucher.expiresAt === 'number' && Number.isFinite(parsed.voucher.expiresAt) ? parsed.voucher.expiresAt : null,
       state: returnStateOf(states, check.x, nowMs),
     },
   }

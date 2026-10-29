@@ -16,7 +16,7 @@ vi.mock('../../lib/trustedMint', () => ({ loadTrustedMints: async () => {} }))
 import { GiftReturnPage } from '../GiftReturnPage'
 
 const R = '44'.repeat(32)
-const view = (state: string) => ({ kind: 'ok', view: { token: 'cashuBx', stall: 'Mama Put', faceMinor: 1000, unit: 'GBP', decimals: 2, x: 1_800_000_000, state } })
+const view = (state: string, expiresAt: number | null = 1_801_000_000) => ({ kind: 'ok', view: { token: 'cashuBx', stall: 'Mama Put', faceMinor: 1000, unit: 'GBP', decimals: 2, x: 1_800_000_000, expiresAt, state } })
 
 function open(authed = true) {
   window.history.replaceState(null, '', `/gift-return#r=${R}`)
@@ -55,6 +55,18 @@ describe('GiftReturnPage', () => {
     fireEvent.click(button)
     expect(await screen.findByText('Gift taken back')).toBeTruthy()
     expect(m.take).toHaveBeenCalledTimes(1)
+    // G17 (C): it keeps its original expiry.
+    expect(document.body.textContent).toMatch(/keeps its original expiry: spend it by /)
+  })
+
+  it('G17 (C): says the expiry the voucher keeps, or that it never expires', async () => {
+    m.read.mockResolvedValue(view('waiting'))
+    open()
+    expect(await screen.findByText(/keeps its original expiry: spend it by /)).toBeTruthy()
+    cleanup()
+    m.read.mockResolvedValue(view('ready', null))
+    open()
+    expect(await screen.findByText("The voucher doesn't expire.")).toBeTruthy()
   })
 
   it('ready but signed out: asks to open or create a wallet, no button', async () => {
