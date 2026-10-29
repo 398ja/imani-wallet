@@ -103,12 +103,14 @@ describe('the avatar on the card', () => {
 })
 
 describe('the imani mark', () => {
-  it('sits top right in a white framed circle, the bare mark with no wordmark', () => {
+  it('sits top right in a white framed circle with no fill, the bare mark with no wordmark', () => {
     const { getByRole } = draw(coupon())
     const mark = getByRole('img', { name: 'imani' })
     expect(mark.className).toMatch(/absolute right-5 top-5/)
     expect(mark.className).toMatch(/rounded-full/)
-    expect(mark.className).toMatch(/bg-white/)
+    expect(mark.className).toMatch(/ring-white/)
+    expect(mark.className).toMatch(/bg-transparent/)
+    expect(mark.className).not.toMatch(/bg-white/)
     expect(mark.className).toMatch(/shadow-md/)
     expect(mark.querySelector('svg')).not.toBeNull()
     expect(mark.textContent).toBe('')

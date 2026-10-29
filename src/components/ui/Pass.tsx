@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 
 import type { PassField, PassJson } from '../../lib/pass'
 import { formatDate, formatFace, handleLabel, UNKNOWN_STALL } from '../../lib/format'
-import { printShadow } from '../../lib/printShadow'
+import { isLightText, printShadow } from '../../lib/printShadow'
 import { Avatar } from './Avatar'
 import { ImaniMark } from './ImaniMark'
 import { RemoteImage } from './RemoteImage'
@@ -70,6 +70,12 @@ interface PassProps {
  */
 function displayName(name: string): string {
   return /^[0-9a-f]{64}$/i.test(name) ? UNKNOWN_STALL : name
+}
+
+/** The print shadow's halo for an SVG, which `text-shadow` does not reach. */
+function dropShadow(foreground: string): string {
+  const tone = isLightText(foreground) ? '0,0,0' : '255,255,255'
+  return `0 1px 2px rgba(${tone},0.8)`
 }
 
 function fieldValue(field: PassField): string {
@@ -165,17 +171,22 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
       <div className="relative p-5">
         {/*
           The imani mark, top right (#419): whose wallet this voucher lives in,
-          beside whose stall issued it. In the same white circular frame and
-          shadow as the avatar (`Avatar framed`), so it reads on any banner, and
-          the bare mark with no wordmark. Outside the issuer link: it is not
-          the stall.
+          beside whose stall issued it. The bare mark with no wordmark, inside
+          the avatar's white circular frame and shadow (`Avatar framed`) but
+          with NO FILL: the banner shows through, and the mark is drawn in the
+          card's own foreground colour with the same print shadow as the text,
+          so it reads on any banner. Outside the issuer link: it is not the
+          stall.
         */}
         <span
           role="img"
           aria-label="imani"
-          className="absolute right-5 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-white text-mono-900 shadow-md shadow-black/40 ring-2 ring-white"
+          className="absolute right-5 top-5 flex h-10 w-10 items-center justify-center rounded-full bg-transparent shadow-md shadow-black/40 ring-2 ring-white"
         >
-          <ImaniMark className="h-5 w-5" />
+          <ImaniMark
+            className="h-5 w-5"
+            style={{ filter: `drop-shadow(${dropShadow(pass.foregroundColor)})` }}
+          />
         </span>
 
         {/*
