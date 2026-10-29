@@ -29,6 +29,7 @@ export function GiftReturnPage({ authed }: { authed: boolean }) {
   const navigate = useNavigate()
   const [link] = useState(readOnce)
   const [read, setRead] = useState<GiftReturnRead | null>(null)
+  const [checks, setChecks] = useState(0)
   const [step, setStep] = useState<'idle' | 'taking' | 'returned' | 'claimed' | 'failed'>('idle')
   const busy = useRef(false)
   const goHome = useCallback(() => navigate('/', { replace: true }), [navigate])
@@ -42,7 +43,16 @@ export function GiftReturnPage({ authed }: { authed: boolean }) {
     return () => {
       live = false
     }
-  }, [link])
+  }, [link, checks])
+
+  // A page left open past the date checks again then, rather than saying "not yet" for ever.
+  const waitingUntil = read?.kind === 'ok' && read.view.state === 'waiting' ? read.view.x : null
+  useEffect(() => {
+    if (waitingUntil === null) return
+    const ms = Math.min(waitingUntil * 1000 - Date.now() + 1_000, 2_147_483_647)
+    const timer = setTimeout(() => setChecks((n) => n + 1), Math.max(ms, 1_000))
+    return () => clearTimeout(timer)
+  }, [waitingUntil, checks])
 
   const takeBack = useCallback(async () => {
     if (!link || read?.kind !== 'ok' || busy.current) return

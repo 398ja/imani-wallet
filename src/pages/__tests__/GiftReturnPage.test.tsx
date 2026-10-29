@@ -75,4 +75,14 @@ describe('GiftReturnPage', () => {
     open()
     expect(await screen.findByText('Gift unavailable')).toBeTruthy()
   })
+
+  it('left open past the date: checks again then and offers the take-back (found on the local stack)', async () => {
+    const x = Math.floor(Date.now() / 1000) + 2
+    m.read.mockResolvedValueOnce({ ...view('waiting'), view: { ...view('waiting').view, x } }).mockResolvedValue({ ...view('ready'), view: { ...view('ready').view, x } })
+    open()
+    expect(await screen.findByText(/take it back after/i)).toBeTruthy()
+    expect(await screen.findByRole('button', { name: /take it back into my wallet/i }, { timeout: 6_000 })).toBeTruthy()
+    expect(m.read).toHaveBeenCalledTimes(2)
+    expect(m.take).not.toHaveBeenCalled()
+  }, 10_000)
 })
