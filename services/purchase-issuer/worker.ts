@@ -12,7 +12,7 @@ import { hostname } from 'node:os'
 import { getDecimals } from '@imani/money'
 
 import { discharge, type Obligation, type Outcome, type Ports } from './discharge'
-import { countAttempt, setOwedUnenrolled } from './metrics'
+import { countAttempt, countGiftSweepError, setOwedUnenrolled } from './metrics'
 import type { DeliveryOutbox } from './outbox'
 import type { PurchasesApi, OwedPurchase } from './purchasesApi'
 
@@ -41,6 +41,8 @@ export interface WorkerDeps {
    * with nothing to re-send it (the pre-U8 behaviour, kept for tests and tools only).
    */
   outbox?: DeliveryOutbox
+  /** G15 §4.3: claimed/expired notices for delivered gifts, swept once per pass. Absent, nothing is swept. */
+  giftTracker?: { sweep(): Promise<unknown> }
 }
 
 /** Host and process, which is what an operator needs to find the claimant. */
@@ -249,6 +251,33 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
         break
       }
 
+      case 'gift_undelivered': {
+        // #410 G14: a locked gift exists and did not reach its recipient or buyer this pass.
+        result.deferred += 1
+        countAttempt(outcome.park ? 'blocked' : 'undelivered')
+        if (outcome.park) {
+          const parked = await deps.api.attention(purchase.eventId, 'delivery_exhausted', {
+            voucherId: outcome.voucherId,
+            detail: `locked gift ${outcome.voucherId}: ${outcome.reason}`.slice(0, 500),
+            worker,
+          })
+          if (parked !== 'parked') {
+            await deps.api.reportFailure(purchase.eventId, `locked gift: ${outcome.reason}`, true, outcome.voucherId, { worker })
+          }
+        } else {
+          // Left to lapse, NOT named: the re-claim re-mints under the same idempotency key and
+          // warrant nonce (gc replays this voucher), and every delivery step is idempotent.
+          await deps.api.reportFailure(
+            purchase.eventId,
+            `issued locked gift ${outcome.voucherId}, delivery pending: ${outcome.reason}`,
+            false,
+            undefined,
+            { worker, keepClaim: true },
+          )
+        }
+        break
+      }
+
       case 'blocked':
         result.blocked += 1
         countAttempt('blocked')
@@ -278,6 +307,15 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
   }
 
   setOwedUnenrolled(owedUnenrolled)
+  if (deps.giftTracker) {
+    // Never fails the pass: a notice is late, never lost (the row stays until claimBy + 7 d).
+    try {
+      await deps.giftTracker.sweep()
+    } catch (error) {
+      countGiftSweepError()
+      console.warn(JSON.stringify({ event: 'gift_sweep_failed', reason: error instanceof Error ? error.name : 'error' }))
+    }
+  }
   return result
 }
 
@@ -297,7 +335,7 @@ async function enqueue(
       voucherId: outcome.voucherId,
       issuerId: outcome.issuerId,
       stallPubkey: purchase.stallPubkey as string,
-      recipientPubkey: purchase.recipientPubkey as string,
+      recipientPubkey: purchase.recipientPubkey ?? '',
       paymentRequestId: purchase.paymentRequestId,
       deliver: outcome.kind === 'undelivered',
       // The inline attempt counts.
@@ -349,6 +387,6 @@ function toObligation(purchase: OwedPurchase): Obligation {
         : { kind: 'pubkey', pubkey: purchase.recipientPubkey },
     attempts: purchase.attempts,
     processorReference: purchase.processorReference,
-    gift: purchase.delivery ? { kind: purchase.delivery.kind } : null,
+    gift: purchase.delivery ? { kind: purchase.delivery.kind, delivery: purchase.delivery, draftId: purchase.draftId ?? null } : null,
   }
 }

@@ -63,6 +63,10 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
     text: [
       "If your gift isn't claimed by {{claimBy}}, use this link to take it back into a wallet:",
       '{{returnUrl}}',
+      '{{#spendBy}}',
+      '',
+      "Once it's back, it keeps its original expiry: {{spendBy}}.",
+      '{{/spendBy}}',
       '',
       "Keep it private: it is yours, not the recipient's.",
       '',
@@ -72,6 +76,8 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       stall: { type: 'line', max: 120, required: true },
       claimBy: { type: 'line', max: 60, required: true },
       returnUrl: { type: 'url', required: true },
+      // G17 (C): "spend it by <date>" or "the voucher doesn't expire". Optional for older callers.
+      spendBy: { type: 'line', max: 80 },
     },
   },
   'gift-bounced': {
@@ -115,6 +121,40 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       sentOn: { type: 'line', max: 60, required: true },
       sender: { type: 'line', max: 254, required: true },
       claimSubject: { type: 'line', max: 250, required: true },
+    },
+  },
+  // G15 §4.3: the buyer's notices from purchase-issuer. No url field in either: no link, no key.
+  'gift-claimed': {
+    fromName: 'Imani gifts',
+    subject: 'Your {{stall}} gift was claimed',
+    text: ['{{recipient}} claimed the {{amount}} voucher for {{stall}} you sent.', '', FOOTER].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      recipient: { type: 'line', max: 320, required: true },
+    },
+  },
+  'gift-expired': {
+    fromName: 'Imani gifts',
+    subject: "Your {{stall}} gift wasn't claimed",
+    text: [
+      "Your {{amount}} voucher for {{stall}} to {{recipient}} wasn't claimed by {{claimBy}}.",
+      '',
+      '{{howBack}}',
+      '{{#spendBy}}',
+      '{{spendBy}}',
+      '{{/spendBy}}',
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      recipient: { type: 'line', max: 320, required: true },
+      claimBy: { type: 'line', max: 60, required: true },
+      howBack: { type: 'text', max: 400, required: true },
+      // G17: the expiry a taken-back voucher keeps. Optional: absent on gifts tracked before it.
+      spendBy: { type: 'line', max: 120 },
     },
   },
   'gift-reminder': {

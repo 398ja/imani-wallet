@@ -43,6 +43,8 @@ import { tokenFor, FileCredentialStore } from './adapters'
 import { confirmAll, CredentialConfirmer, retryUnconfirmed } from './confirmation'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
+import { fileAnchors, httpPublishEvent, httpQueryWraps, httpScrub, httpStallName, type GiftPorts } from './giftDelivery'
+import { mailerClient } from '../imani-mailer/client.ts'
 import { countPass, renderMetrics } from './metrics'
 import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPass } from './outbox'
 import { PurchasesApi, ReportLostError } from './purchasesApi'
@@ -50,6 +52,7 @@ import { sendSaleRecord } from './saleRecord'
 import { ENROLMENT_PREFIX, EnrolmentService, MAX_BODY_BYTES } from './enrolment'
 import { cachedValidityReader, readStallValidity, type ValidityReader } from './stallValidity'
 import { CredentialVault } from './vault'
+import { fileTrackerStore, GiftTracker, httpCheckStates } from './giftTracker'
 import { runPass, type WorkerDeps } from './worker'
 
 /** Build the real ports from config. Exported so a test can see the wiring. */
@@ -76,7 +79,43 @@ export function portsFor(
     fileSale: (credential, sale) => sendSaleRecord(config.gatewayUrl, credential, sale, fetchImpl),
     // #312: the stall's own term, from its signed merchant record, cached for minutes.
     validityFor,
+    // #410 G14: locked gift delivery, only when configured (handle/email gifts refused otherwise).
+    ...(config.gifts ? { gifts: giftPortsFor(config, config.gifts, fetchImpl) } : {}),
   }
+}
+
+function giftPortsFor(config: IssuerConfig, g: NonNullable<IssuerConfig['gifts']>, fetchImpl: typeof fetch): GiftPorts {
+  const mailer = mailerClient({ baseUrl: g.mailerUrl, token: g.mailerToken, fetchImpl })
+  return {
+    sealSecretHex: g.sealKeyHex,
+    walletOrigin: g.walletOrigin,
+    testWindowSeconds: g.testWindowSeconds,
+    publishEvent: httpPublishEvent(config.gatewayUrl, fetchImpl),
+    queryWraps: httpQueryWraps(config.gatewayUrl, fetchImpl),
+    sendMail: (req) => mailer.send(req),
+    scrubSeal: httpScrub(config.purchasesUrl, config.purchasesToken, fetchImpl),
+    anchor: fileAnchors(g.anchorsPath),
+    stallName: httpStallName(config.gatewayUrl, fetchImpl),
+    track: (input, mintUrl) => giftTrackerFor(config, fetchImpl).track(input, mintUrl),
+  }
+}
+
+/** One tracker per config, shared by discharge (track) and the worker loop (sweep). */
+const trackers = new WeakMap<IssuerConfig, GiftTracker>()
+export function giftTrackerFor(config: IssuerConfig, fetchImpl: typeof fetch = fetch): GiftTracker {
+  const g = config.gifts!
+  let t = trackers.get(config)
+  if (!t) {
+    const mailer = mailerClient({ baseUrl: g.mailerUrl, token: g.mailerToken, fetchImpl })
+    t = new GiftTracker(config.vaultKeyHex, fileTrackerStore(g.trackerPath), {
+      checkStates: httpCheckStates(g.mintTransportUrl, fetchImpl),
+      sendMail: (req) => mailer.send(req),
+      now: () => Date.now(),
+      ...(g.sweepEveryMs ? { sweepEveryMs: g.sweepEveryMs } : {}),
+    })
+    trackers.set(config, t)
+  }
+  return t
 }
 
 /** The stall-validity reader, one per process so the mint and `/ready` share its cache (#312). */
@@ -118,6 +157,7 @@ export function depsFor(
       baseBackoffMs: config.deliveryBaseBackoffMs,
       now: () => Date.now(),
     }),
+    ...(config.gifts ? { giftTracker: giftTrackerFor(config) } : {}),
   }
 }
 
