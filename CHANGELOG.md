@@ -9,15 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-29
+
+A **minor**: subscription tiers, the gifting site, API-driven Cashlinks, the verification badge and
+the voucher redesign. New services ship with it (the subscription site and service, the gifting site,
+imani-mailer); see each one's README for its environment.
+
+### Added
+
+- **Subscription tiers** (#407): Starter (free), Essentials and Pro, with signed limits carried in
+  the licence, a signed tier catalog the app fetches, a sales meter that refuses a sale past the
+  limit (plus a 10 % overshoot), and hand grants from an admin screen. Plans are bought by card on
+  the subscription site (`apps/subscription` + `services/subscription`), opened from the wallet and
+  signed in by it (#411). A Stripe cancellation reaches the wallet, which says Cancelled. Prometheus
+  metrics for subscriptions created and cancelled, by tier.
+- **Business verification badge** (#418): a bronze (Essentials), silver (Pro) or gold check on the
+  avatar for exactly the subscription's window, no grace. The subscription service publishes a
+  seller-signed attestation per stall (ADR 0016); a hand grant may carry a badge. The till shows the
+  stall's banner and avatar, badge included. Replaces the orange merchant badge.
+- **Gifting site** (#410, `apps/gifting`): buy a stall's voucher by card for a handle or an email.
+  Gifts are minted already link-locked (G14); the wallet claims them, and the buyer can take an
+  unclaimed gift back after the claim window (min(half the validity, 14 days), G17). The return link
+  is emailed at Pay (G15) through the new **imani-mailer** service.
+- **API-driven Cashlink sending** (#366): `@imani/cashlink-sender` for automated senders.
+
 ### Changed
 
+- **Voucher redesign** (#419): the stall's banner fills the card, its avatar sits in a white framed
+  circle, the imani mark sits top right, every printed character has a shadow, and the card always
+  shows its expiry ("No expiry" included). The coupon page uses the same card.
 - **Plans follow www.imani.casa/pricing** (#407). The subscription site offers Starter (free),
-  Basic and Pro only. A Town / BID Partner plan is arranged with us and is never offered as an
-  option: the site lists only tiers that have a card price. Basic now issues vouchers without limit
-  on 3 tills (catalog version 3, and the wallet's bundled catalog). Prices are Basic £8/month or
-  £70/year and Pro £11/month or £100/year, all in GBP. The site shows each price as Stripe will
-  charge it, and the service never lists or sells a price that is not in GBP. The free tier is
-  called Starter on the site and in the wallet.
+  Essentials and Pro only. A Town / BID Partner plan is arranged with us and is never offered as an
+  option: the site lists only tiers that have a card price. Essentials issues vouchers without limit
+  on 3 tills. Prices are Essentials £8/month or £70/year and Pro £25/month or £250/year, all in GBP.
+  The site shows each price as Stripe will charge it, and the service never lists or sells a price
+  that is not in GBP.
 - **Basic is now called Essentials** (#407), on the subscription site, the wallet's plan screen,
   the plan notice ("Imani Essentials plan activated") and the Stripe product. Only the name changed:
   the tier id is still `basic`, so every licence already sold keeps working and now reads as
