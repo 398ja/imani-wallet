@@ -3,11 +3,16 @@
  * the ones locked to this wallet and takes back the unclaimed ones this wallet bought. The rules are
  * in `lockedGifts.ts`; this is where they meet storage, the signer and the network.
  */
+import { nip17 } from 'nostr-tools'
+
 import { getSigner } from './nap'
 import { getWallet, notifyWalletChanged } from './wallet'
 import { beginReceive } from './receiveGate'
-import type { CashlinkPorts } from './cashlinkFlow'
-import { parseVoucherToken, tokenProofs } from './voucherToken'
+import { tokenStates, type CashlinkPorts, type ReturnOutcome } from './cashlinkFlow'
+import { xOnlyPub } from './cashlinkLock'
+import { fetchGiftWraps, type GiftWrap, type ProofState } from './giftLink'
+import { sealAuthorOf } from './transferSignature'
+import { creditableFaceValue, parseVoucherToken, tokenProofs } from './voucherToken'
 import {
   acceptGiftSent,
   asLockedGiftRecord,
@@ -15,10 +20,13 @@ import {
   lockedGiftMemo,
   lockedGiftRow,
   lockedGiftRowId,
+  parseGiftSent,
+  returnStateOf,
   settleIncoming,
   takeBackLockedGift,
   type GiftSentMessage,
   type LockedGiftRecord,
+  type ReturnState,
 } from './lockedGifts'
 
 export const lockedGiftSeam = {
@@ -173,3 +181,85 @@ async function runSweep(): Promise<{ claimed: number; returned: number }> {
 
 const parseMint = (token: string) => parseVoucherToken(token).mintUrl.trim().replace(/\/+$/, '')
 const proofSecrets = (token: string) => tokenProofs(token).map((p) => p.secret)
+
+// --- The guest's return page (/gift-return) ----------------------------------
+
+export interface GiftReturnView {
+  token: string
+  stall: string
+  /** Face, minor units. */
+  faceMinor: number
+  unit: string
+  decimals: number
+  x: number
+  state: ReturnState
+}
+
+export type GiftReturnRead = { kind: 'ok'; view: GiftReturnView } | { kind: 'not_found' } | { kind: 'refused'; why: string } | { kind: 'unreachable' }
+
+export const giftReturnSeam = {
+  wraps: async (r: Uint8Array): Promise<GiftWrap[]> => fetchGiftWraps(r),
+  states: async (token: string): Promise<ProofState[]> => tokenStates(await lockedGiftSeam.ports(), token),
+}
+
+/**
+ * What the return link holds. The token comes from `t` when the link carried one, else from the
+ * issuer's `imani_gift_sent` wrap to `getPublicKey(R)` (queried signed by R, opened with R, seal
+ * pinned to the issuer key). Never spends.
+ */
+export async function readGiftReturn(r: Uint8Array, t: string | undefined, nowMs = Date.now()): Promise<GiftReturnRead> {
+  let token = t
+  let stall = ''
+  try {
+    if (!token) {
+      const issuerKey = await lockedGiftSeam.issuerKey()
+      if (!issuerKey) return { kind: 'unreachable' }
+      for (const wrap of await giftReturnSeam.wraps(r)) {
+        let content: string
+        try {
+          content = (nip17.unwrapEvent(wrap as never, r) as { content: string }).content
+        } catch {
+          continue
+        }
+        const msg = parseGiftSent(content)
+        if (!msg) continue
+        const ok = acceptGiftSent(msg, xOnlyPub(r), sealAuthorOf(wrap as never, r), issuerKey)
+        if (!ok.ok) continue
+        token = msg.token
+        stall = msg.stall
+        break
+      }
+      if (!token) return { kind: 'not_found' }
+    }
+  } catch {
+    return { kind: 'unreachable' }
+  }
+  const check = checkLockedGift(token, 'refund', xOnlyPub(r))
+  if (!check.ok) return { kind: 'refused', why: check.why }
+  const states = await giftReturnSeam.states(token)
+  const parsed = parseVoucherToken(token)
+  return {
+    kind: 'ok',
+    view: {
+      token,
+      stall,
+      faceMinor: creditableFaceValue(parsed).faceValue,
+      unit: parsed.voucher.unit,
+      decimals: parsed.voucher.faceDecimals,
+      x: check.x,
+      state: returnStateOf(states, check.x, nowMs),
+    },
+  }
+}
+
+/** The button: take it back into the wallet that is open. Only after `x`. Never throws. */
+export async function takeBackGuestGift(r: Uint8Array, token: string): Promise<ReturnOutcome> {
+  const c = checkLockedGift(token, 'refund', xOnlyPub(r))
+  if (!c.ok) return { kind: 'unknown', why: c.why }
+  if (Date.now() / 1000 < c.x) return { kind: 'waiting' }
+  try {
+    return await takeBackLockedGift(await lockedGiftSeam.ports(), r, token)
+  } catch (error) {
+    return { kind: 'unknown', why: error instanceof Error ? error.message : String(error) }
+  }
+}

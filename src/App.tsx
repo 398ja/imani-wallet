@@ -70,6 +70,7 @@ import { MerchantPage } from './pages/MerchantPage'
 import { ClaimLandingPage, ResumeParkedClaim } from './pages/ClaimLandingPage'
 import { takeAfterLogin } from './lib/afterLogin'
 import { GiftLandingPage } from './pages/GiftLandingPage'
+import { GiftReturnPage } from './pages/GiftReturnPage'
 import { finishPendingCashlinkClaims, reconcileGiftLinks, restoreScan } from './lib/giftLinks'
 import { runCashlinkExpiryNoticesAfterReconcile } from './lib/cashlinkExpiryNotice'
 import { BuyPage } from './pages/BuyPage'
@@ -610,6 +611,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/c" element={<ClaimLandingPage authed pubkey={pubkey} onSwitchAccount={onLogout} />} />
         {/* A gift link (claim links phase 4): in BOTH trees, as `/c`. */}
         <Route path="/g" element={<GiftLandingPage authed pubkey={pubkey} onSwitchAccount={onLogout} />} />
+        <Route path="/gift-return" element={<GiftReturnPage authed />} />
         {/* Buying a stall's coupon by card. In BOTH trees: a shopper who
             already holds coupons is topping up, and a stranger who scanned a
             QR is the reason the hosted page exists. */}
@@ -929,6 +931,7 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
           spent until a wallet exists to hold it. */}
       <Route path="/c/:ref" element={<ClaimLandingPage authed={false} />} />
       <Route path="/g" element={<GiftLandingPage authed={false} />} />
+      <Route path="/gift-return" element={<GiftReturnPage authed={false} />} />
       {/* A stall's profile, which is a PUBLIC thing: the kind-30078 record and
           the kind-0 profile are both plaintext and readable over an
           unauthenticated relay query, and the whole point of a QR on a stall
