@@ -27,7 +27,8 @@ const L = getPublicKey(hexToBytes(ELL))
 /** `src/lib/giftLink.ts` formatGiftLink's format, written out (that module is browser-only). */
 const walletFormatGiftLink = (origin: string, s: Uint8Array, x: number) =>
   `${new URL(origin).origin}/g#v=1&k=${Buffer.from(s).toString('base64url')}&x=${x}`
-const X = Math.floor((NOW + 30 * DAY_MS) / 1000)
+// G17: 90-day voucher (ninetyDayTerm), so the 14-day cap is what binds.
+const X = Math.floor((NOW + 14 * DAY_MS) / 1000)
 
 /** A P2PK_VOUCHER secret in the minted-locked shape (contract §1). */
 function lockedSecret(lock: string, refund: string, x: number, extra: string[][] = []): string {
@@ -320,7 +321,7 @@ describe('refused before minting', () => {
 describe('pure parts', () => {
   it('giftLockFor: x from the anchor, refused when too short from now', () => {
     expect(giftLockFor({ lockPubkey: BOB, refundPubkey: BUYER, mintedAtMs: NOW, nowMs: NOW, claimWindowDays: 30, couponExpiresAtMs: null })).toEqual({ lockPubkey: BOB, refundPubkey: BUYER, locktime: X })
-    expect(giftLockFor({ lockPubkey: BOB, refundPubkey: BUYER, mintedAtMs: NOW, nowMs: NOW + 29.5 * DAY_MS, claimWindowDays: 30, couponExpiresAtMs: null })).toEqual({ problem: 'window_too_short' })
+    expect(giftLockFor({ lockPubkey: BOB, refundPubkey: BUYER, mintedAtMs: NOW, nowMs: NOW + 13.5 * DAY_MS, claimWindowDays: 30, couponExpiresAtMs: null })).toEqual({ problem: 'window_too_short' })
   })
   it('test mode: a claim window in seconds from the anchor (so an e2e can watch it end)', () => {
     expect(giftLockFor({ lockPubkey: BOB, refundPubkey: BUYER, mintedAtMs: NOW, nowMs: NOW, claimWindowDays: 30, couponExpiresAtMs: null, testWindowSeconds: 120 })).toEqual({
@@ -394,6 +395,8 @@ describe('G15 §4.3: a delivered gift is tracked for the buyer\'s notices', () =
     expect(t.tracked[0].input).toMatchObject({
       draftId: '11111111-2222-3333-4444-555555555555', kind: 'handle', claimBy: X * 1000, buyerEmail: 'ann@example.com',
       recipientDisplay: '@bob', stall: 'Alice Bakery', amount: '€20.00', guest: false, returnMailDate: null,
+      // G17: the voucher's own expiry (90-day stall), which a taken-back gift keeps.
+      spendBy: NOW + 90 * DAY_MS,
     })
   })
 

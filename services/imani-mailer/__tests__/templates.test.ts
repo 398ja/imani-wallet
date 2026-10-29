@@ -59,12 +59,17 @@ describe('built-in templates', () => {
   it('gift-expired (G15): exact copy, howBack as text, no url field', () => {
     const t = compile('gift-expired', BUILTIN_TEMPLATES['gift-expired'])
     expect(Object.values(t.def.fields).some((f) => f.type === 'url')).toBe(false)
-    expect(Object.keys(t.def.fields).sort()).toEqual(['amount', 'claimBy', 'howBack', 'recipient', 'stall'])
+    expect(Object.keys(t.def.fields).sort()).toEqual(['amount', 'claimBy', 'howBack', 'recipient', 'spendBy', 'stall'])
     expect(t.def.fields.howBack.type).toBe('text')
     const howBack = 'Open your Imani wallet: it takes it back for you.'
     const r = render(t, resolveFields(t, { stall: 'Card Test Bakery', amount: '£5.00', recipient: 'bob@example.com', claimBy: '28 Nov 2026', howBack }, LINKS))
     expect(r.subject).toBe("Your Card Test Bakery gift wasn't claimed")
-    expect(r.text).toMatch(/^Your £5\.00 voucher for Card Test Bakery to bob@example\.com wasn't claimed by 28 Nov 2026\.\n\nOpen your Imani wallet: it takes it back for you\./)
+    expect(r.text).toMatch(/^Your £5\.00 voucher for Card Test Bakery to bob@example\.com wasn't claimed by 28 Nov 2026\.\n\nOpen your Imani wallet: it takes it back for you\.\n\n/)
+    // G17 (C): the spend-by line, right under how to take it back, only when given.
+    const spendBy = "Once it's back, it keeps its original expiry: spend it by 27 Jan 2027."
+    const g17 = render(t, resolveFields(t, { stall: 'Card Test Bakery', amount: '£5.00', recipient: 'bob@example.com', claimBy: '28 Nov 2026', howBack, spendBy }, LINKS))
+    expect(g17.text).toContain(`${howBack}\n\n${spendBy}\n\n`)
+    expect(r.text).not.toMatch(/spend it by/)
     expect(() => resolveFields(t, { stall: 's', amount: 'a', recipient: 'r', claimBy: 'c', howBack: 'h', returnUrl: 'https://imani.test/x' }, LINKS)).toThrow(/unknown field "returnUrl"/)
   })
 

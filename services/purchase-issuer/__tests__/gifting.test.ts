@@ -90,12 +90,22 @@ describe('without gift ports, a handle or email gift is never minted (G7, G-R2)'
   })
 })
 
-describe('G11: the claim window', () => {
+describe('G11 + G17: the claim window', () => {
   const t = Date.UTC(2026, 0, 1)
-  it('is 30 days by default', () => expect(claimWindowEnd(t, 30, null)).toBe(t + 30 * DAY_MS))
-  it('is capped by the voucher expiry minus 24h', () => expect(claimWindowEnd(t, 30, t + 10 * DAY_MS)).toBe(t + 9 * DAY_MS))
-  it('a voucher expiring within a day is too short to arm', () => {
+  it('is 14 days at most, even for a voucher that never expires or a draft asking for 30', () => {
+    expect(claimWindowEnd(t, 30, null)).toBe(t + 14 * DAY_MS)
+    expect(claimWindowEnd(t, 30, t + 90 * DAY_MS)).toBe(t + 14 * DAY_MS)
+  })
+  it('is half the validity when that is shorter, so a taken-back voucher has half its life left', () => {
+    expect(claimWindowEnd(t, 30, t + 20 * DAY_MS)).toBe(t + 10 * DAY_MS)
+    expect(claimWindowEnd(t, 30, t + 28 * DAY_MS)).toBe(t + 14 * DAY_MS)
+    expect(claimWindowEnd(t, 30, t + 30 * DAY_MS)).toBe(t + 14 * DAY_MS)
+    expect(claimWindowEnd(t, 30, t + 7 * DAY_MS)).toBe(t + 3.5 * DAY_MS)
+  })
+  it('never longer than the draft asks', () => expect(claimWindowEnd(t, 5, t + 90 * DAY_MS)).toBe(t + 5 * DAY_MS))
+  it('a voucher valid under two days is too short to arm', () => {
     expect(windowTooShort(t, claimWindowEnd(t, 30, t + DAY_MS))).toBe(true)
+    expect(windowTooShort(t, claimWindowEnd(t, 30, t + 2 * DAY_MS))).toBe(false)
     expect(windowTooShort(t, claimWindowEnd(t, 30, t + 90 * DAY_MS))).toBe(false)
   })
 })

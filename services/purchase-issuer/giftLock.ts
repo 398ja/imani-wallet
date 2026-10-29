@@ -46,10 +46,19 @@ export function wrapForLink(linkSecret: Uint8Array, token: string) {
   return nip17.wrapEvent(linkSecret, { publicKey: getPublicKey(linkSecret) }, JSON.stringify({ type: 'cashu_token_transfer', token }))
 }
 
-/** G11: the end of the claim window. `expiresAtMs` null means the voucher never expires. */
+/** G17: the longest a gift waits to be claimed, whatever the draft asks for. */
+export const MAX_CLAIM_WINDOW_DAYS = 14
+
+/**
+ * G11 + G17: the end of the claim window. Half the voucher's validity, and never more than
+ * {@link MAX_CLAIM_WINDOW_DAYS} (nor more than `windowDays`), so a gift taken back unclaimed still
+ * has at least half its life left to be spent: the voucher keeps its original expiry. `expiresAtMs`
+ * null means the voucher never expires, and then only the day cap applies.
+ */
 export function claimWindowEnd(mintedAtMs: number, windowDays: number, expiresAtMs: number | null): number {
-  const window = mintedAtMs + windowDays * DAY_MS
-  return expiresAtMs === null ? window : Math.min(window, expiresAtMs - DAY_MS)
+  const window = mintedAtMs + Math.min(windowDays, MAX_CLAIM_WINDOW_DAYS) * DAY_MS
+  if (expiresAtMs === null) return window
+  return Math.min(window, mintedAtMs + Math.floor((expiresAtMs - mintedAtMs) / 2))
 }
 
 /** True when the window is too short to be worth arming (expiry within a day of minting). */
