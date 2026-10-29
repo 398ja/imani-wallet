@@ -218,7 +218,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // merchant is. 'sent' is the customer's own version of the same thing —
     // a voucher passed to someone else. Anything else is incoming.
     direction:
-      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback'
+      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback' || type === 'gift_sent'
         ? 'out'
         : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
@@ -815,5 +815,8 @@ export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'payment') return 'Paid'
   if (tx.type === 'sent') return 'Sent'
   if (tx.type === 'cashback') return 'Cashlink'
+  // #410 G14: a gift minted locked. Neither row is balance: the memo says where it stands.
+  if (tx.type === 'gift_sent') return 'Gift sent'
+  if (tx.type === 'gift_pending') return 'Gift'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }
