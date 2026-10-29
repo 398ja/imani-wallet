@@ -662,6 +662,8 @@ describe('the sale record is owned by the outbox (U8 over U9 #278)', () => {
 
     expect(fileSale).toHaveBeenCalledTimes(3)
     expect(fileSale.mock.calls[2][1]).toMatchObject({ voucherId: 'v1', faceValue: 2500 })
+    // A stall-site purchase (not a gifting-site gift) still names its buyer to the stall.
+    expect(fileSale.mock.calls[0][1]).toMatchObject({ recipientPubkey: 'c'.repeat(64) })
     expect(await outbox.size()).toBe(0)
     // Delivery was never repeated for the sale's sake.
     expect(w.sends).toHaveLength(1)

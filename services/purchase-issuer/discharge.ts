@@ -31,6 +31,12 @@ import { checkDelegation, couponExpiresAtMs, delegatedWarrant } from './delegate
 import type { StallValidity } from './stallValidity'
 import { DeliveredUnconfirmed, DeliveryRefused, deliver, type Recipient } from './delivery'
 import type { CardSale } from './saleRecord'
+import { formatGiftLink, giftLockFor, openSeal, SealRefused, verifyLockedGift, type GiftLock } from './giftLock'
+import { handBuyerTheGift, publishLinkWrap, sendClaimEmail, type GiftPorts } from './giftDelivery'
+import type { GiftDelivery } from './purchasesApi'
+import { getPublicKey } from 'nostr-tools'
+import { displayDate, tokenMintUrl } from './giftTracker'
+import { hexToBytes } from '@noble/hashes/utils'
 
 /** One coupon a stall owes because a card payment cleared. */
 export interface Obligation {
@@ -57,7 +63,16 @@ export interface Obligation {
    * warrant as `ref` so the stall can reconcile it; not evidence.
    */
   processorReference?: string | null
+  /**
+   * A gifting-site gift's delivery (#410). `self` is delivered exactly like a wallet purchase.
+   * `handle` and `email` are MINTED locked (G14: to the recipient key or L, refund = the buyer's
+   * key, locktime x), verified, delivered, and handed back to the buyer; never minted plain.
+   */
+  gift?: { kind: 'self' | 'handle' | 'email'; delivery?: GiftDelivery | null; draftId?: string | null } | null
 }
+
+/** How many passes a minted gift may fail to deliver before it is parked for a person. */
+export const GIFT_MAX_ATTEMPTS = 40
 
 /**
  * What a minted coupon still owes after this pass, for the delivery outbox (imani-wallet#274):
@@ -100,6 +115,13 @@ export type Outcome =
   | { kind: 'owed'; reason: string; ambiguous: boolean }
   /** Nothing minted and retrying cannot help. Needs a person. */
   | { kind: 'blocked'; reason: string }
+  /**
+   * A locked gift (#410 G14) exists and did not reach its recipient (or its buyer) this pass.
+   * `park`: never retry (the minted token is not the lock asked for, or a refusal is permanent).
+   * Otherwise the claim is left to lapse: the retry re-mints under the same idempotency key and
+   * warrant nonce (gc replays the same voucher), and every delivery step is idempotent.
+   */
+  | ({ kind: 'gift_undelivered'; voucherId: string; reason: string; park: boolean } & Minted)
   /** No credential for this stall. Ordinary, not an error. */
   | { kind: 'manual' }
   /**
@@ -126,6 +148,11 @@ export interface Ports {
    * `stallValidity.ts`). Must never throw.
    */
   validityFor(stallPubkey: string): Promise<StallValidity>
+  /**
+   * Locked gift delivery (#410 G14). Absent (not configured), handle and email gifts are refused
+   * before minting, exactly as before G14.
+   */
+  gifts?: GiftPorts
 }
 
 /**
@@ -185,10 +212,53 @@ export async function discharge(
   // A guest (no buyer pubkey) would take delivery by Cashlink, which is not
   // wired (delivery.ts). Minting first strands a paid coupon, retried forever.
   // Checkout refuses guests now; this blocks any debt that predates that.
-  if (obligation.recipient.kind === 'claim') {
+  if (obligation.recipient.kind === 'claim' && obligation.gift?.kind !== 'email') {
     return {
       kind: 'blocked',
       reason: 'guest purchase: Cashlink delivery is not wired yet; nothing minted, refund or deliver by hand',
+    }
+  }
+
+  // #410: a handle or email gift must arrive LOCKED with a refund to the buyer (G7, §4c). Minting
+  // it here would hand an unlocked voucher to the recipient (handle) or to nobody (email), and the
+  // buyer could never get it back. Refused BEFORE minting, so nothing exists that a second pass
+  // could double: payment-adapter only sells these once `purchase.gifting.kinds` enables them,
+  // which waits for arming (see giftLock.ts).
+  const giftKind = obligation.gift && obligation.gift.kind !== 'self' ? obligation.gift.kind : null
+  if (giftKind !== null && !ports.gifts) {
+    return {
+      kind: 'blocked',
+      reason: `${giftKind} gift: locked gift delivery is not configured on this issuer; nothing minted`,
+    }
+  }
+  // Everything that can refuse a gift without the stall's term is checked here, before minting.
+  let lockPubkey: string | null = null
+  let linkSecret: string | null = null
+  const giftDelivery = obligation.gift?.delivery ?? null
+  if (giftKind !== null) {
+    if (!giftDelivery || giftDelivery.kind !== giftKind || !giftDelivery.refundPubkey) {
+      return { kind: 'blocked', reason: `${giftKind} gift: the pinned delivery is missing or malformed; nothing minted` }
+    }
+    if (giftKind === 'handle') {
+      if (obligation.recipient.kind !== 'pubkey') {
+        return { kind: 'blocked', reason: 'handle gift with no pinned recipient key; nothing minted' }
+      }
+      lockPubkey = obligation.recipient.pubkey.toLowerCase()
+    } else {
+      if (!giftDelivery.sealed || !giftDelivery.recipientEmail || !obligation.gift?.draftId) {
+        return { kind: 'attention', reason: 'email gift: no sealed link secret, recipient email or draft (already scrubbed?); nothing minted' }
+      }
+      try {
+        linkSecret = openSeal(ports.gifts!.sealSecretHex, giftDelivery.sealed, {
+          stallPubkey: obligation.stallPubkey,
+          amountMinor: obligation.faceValue,
+          recipient: giftDelivery.recipientEmail,
+        }).linkSecret
+      } catch (error) {
+        // Never the plaintext: SealRefused carries none.
+        return { kind: 'blocked', reason: `email gift: ${error instanceof SealRefused ? error.message : 'the seal could not be opened'}; nothing minted` }
+      }
+      lockPubkey = getPublicKey(hexToBytes(linkSecret))
     }
   }
 
@@ -234,6 +304,33 @@ export async function discharge(
   }
   const expiresInDays = validity.days
   const mintedAt = ports.now()
+
+  // G14: the lock, from a DURABLE anchor so every retry asks for the same locktime (another
+  // locktime is another body under the same warrant nonce, which gc refuses). Keyed on the PAYMENT,
+  // like the idempotency key and the warrant nonce: two Stripe events for one payment intent (or a
+  // reconciler re-drive) are one mint and must ask for one locktime.
+  let giftLock: GiftLock | null = null
+  if (giftKind !== null) {
+    let anchor: number
+    try {
+      anchor = await ports.gifts!.anchor(purchaseIdempotencyKey(obligation.processorReference!), mintedAt)
+    } catch (error) {
+      return { kind: 'owed', reason: `gift mint anchor unavailable: ${describe(error)}`, ambiguous: false }
+    }
+    const lock = giftLockFor({
+      lockPubkey: lockPubkey!,
+      refundPubkey: giftDelivery!.refundPubkey,
+      mintedAtMs: anchor,
+      nowMs: mintedAt,
+      claimWindowDays: giftDelivery!.claimWindowDays,
+      couponExpiresAtMs: couponExpiresAtMs(anchor, expiresInDays),
+      testWindowSeconds: ports.gifts!.testWindowSeconds ?? null,
+    })
+    if ('problem' in lock) {
+      return { kind: 'attention', reason: `${giftKind} gift cannot be locked (${lock.problem}); nothing minted, refund or issue by hand` }
+    }
+    giftLock = lock
+  }
   const delegation = checkDelegation(credential, couponExpiresAtMs(mintedAt, expiresInDays))
   if (!delegation.ok) {
     // The readiness check refuses these before payment (#312); reaching here means the stall
@@ -276,6 +373,9 @@ export async function discharge(
       // so the till verifies it offline (#152). The processor reference rides
       // along inside the signed bytes for reconciliation.
       issuanceWarrant,
+      ...(giftLock
+        ? { linkLock: { recipientPubkey: giftLock.lockPubkey, refundPubkey: giftLock.refundPubkey, locktime: giftLock.locktime } }
+        : {}),
     })
   } catch (error) {
     if (error instanceof IssuanceFailed && error.unrecorded) {
@@ -307,7 +407,9 @@ export async function discharge(
       faceUnit: obligation.faceUnit,
       faceDecimals: obligation.faceDecimals,
       memo: obligation.memo,
-      recipientPubkey: obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
+      // Never for a gifting-site gift (G9): the stall learns nothing of the buyer or the
+      // recipient, and a handle recipient's key would name them on the stall's vouchers list.
+      recipientPubkey: giftKind === null && obligation.recipient.kind === 'pubkey' ? obligation.recipient.pubkey : undefined,
       at,
       // The gateway counts `expires_in_days` from its own mint instant, so this is
       // the coupon's expiry to within the mint's latency. Without it the merchant
@@ -342,6 +444,13 @@ export async function discharge(
     }
   }
 
+  if (giftLock !== null) {
+    // G17 (C): the voucher's own expiry, which a gift taken back unclaimed keeps (the gateway counts
+    // `expires_in_days` from its mint instant, as the sale record above does).
+    const spendByMs = couponExpiresAtMs(mintedAt, expiresInDays)
+    return deliverGift(baseUrl, credential, obligation, coupon.voucherId, token, giftLock, linkSecret, ports, minted, spendByMs)
+  }
+
   try {
     const delivered = await deliver(
       baseUrl,
@@ -368,6 +477,151 @@ export async function discharge(
       ...(error instanceof DeliveryRefused ? { refused: true as const } : {}),
       ...minted,
     }
+  }
+}
+
+/**
+ * Deliver a minted locked gift (#410 G14): verify the lock, reach the recipient, hand the buyer
+ * their copy, and only then report it discharged.
+ */
+async function deliverGift(
+  baseUrl: string,
+  credential: StallCredential,
+  obligation: Obligation,
+  voucherId: string,
+  token: string,
+  lock: GiftLock,
+  linkSecret: string | null,
+  ports: Ports,
+  minted: Minted,
+  spendByMs: number | null,
+): Promise<Outcome> {
+  const gifts = ports.gifts!
+  const delivery = obligation.gift!.delivery!
+  const undelivered = (reason: string, park = false): Outcome => ({ kind: 'gift_undelivered', voucherId, reason, park, ...minted })
+
+  // Never hand anyone a token that is not exactly the lock asked for: a plain or mis-locked coupon
+  // would be the recipient's (or nobody's) money with no way back for the buyer.
+  const wrong = verifyLockedGift(token, lock)
+  if (wrong !== null) return undelivered(`minted gift is not locked as asked: ${wrong}; NOT delivered`, true)
+
+  const tooMany = obligation.attempts + 1 >= GIFT_MAX_ATTEMPTS
+  const failed = (reason: string, permanent: boolean) => undelivered(reason, permanent || tooMany)
+
+  let eventId: string | undefined
+  if (obligation.gift!.kind === 'handle') {
+    try {
+      const sent = await deliver(baseUrl, credential, obligation.recipient, token, obligation.paymentRequestId, voucherId, fetch, () => ports.now())
+      eventId = sent.eventId
+    } catch (error) {
+      // DeliveredUnconfirmed: the DM went out, unrecorded; the retry re-sends (the wallet dedupes).
+      return failed(describe(error), error instanceof DeliveryRefused)
+    }
+  } else {
+    const ell = hexToBytes(linkSecret!)
+    const wrapped = await publishLinkWrap(gifts, ell, token)
+    if (!wrapped.ok) return failed(wrapped.reason, wrapped.permanent)
+    const stall = (await gifts.stallName(obligation.stallPubkey)) ?? 'a local stall'
+    const claimUrl = claimLink(gifts.walletOrigin, linkSecret!, lock.locktime)
+    if (claimUrl === null) return failed('the claim link could not be built from the wallet origin', true)
+    const mailed = await sendClaimEmail(gifts, {
+      to: delivery.recipientEmail!,
+      draftKey: obligation.gift!.draftId!,
+      fields: {
+        ...(delivery.from ? { from: delivery.from } : {}),
+        stall,
+        amount: formatAmount(obligation.faceValue, obligation.faceDecimals, obligation.faceUnit),
+        claimBy: new Date(lock.locktime * 1000).toUTCString().slice(0, 16),
+        claimUrl,
+        ...(delivery.message ? { message: delivery.message } : {}),
+      },
+    })
+    if (!mailed.ok) return failed(mailed.reason, mailed.permanent)
+  }
+
+  // Contract §3: the buyer's copy, so they can take it back after x. Before the scrub, so a retry
+  // after a failure here can still open the seal and re-confirm the (idempotent) email steps.
+  const handed = await handBuyerTheGift(gifts, {
+    refundPubkey: lock.refundPubkey,
+    token,
+    // Shown to the buyer: a name, never a key.
+    stall: (await gifts.stallName(obligation.stallPubkey)) ?? 'a local stall',
+    to: delivery.recipientEmail ?? null,
+    claimBy: lock.locktime,
+  })
+  if (!handed.ok) return failed(handed.reason, handed.permanent)
+
+  if (obligation.gift!.kind === 'email') {
+    let scrubbed = false
+    try {
+      scrubbed = await gifts.scrubSeal(obligation.id)
+    } catch {
+      scrubbed = false
+    }
+    if (!scrubbed) {
+      // Delivered; the seal outlives the email until payment-adapter's own scrub. Loud, no secret.
+      console.warn(JSON.stringify({ event: 'gift_seal_not_scrubbed', event_id: obligation.id }))
+    }
+  }
+  await trackGift(gifts, obligation, token, lock, spendByMs)
+  return { kind: 'discharged', voucherId, ...(eventId ? { eventId } : {}), ...minted }
+}
+
+/**
+ * G15 §4.3: remember the delivered gift so the buyer hears when it is claimed or expires. Best
+ * effort: the gift is delivered, and failing the discharge here would only re-deliver it. Logged
+ * with no address, draft id or amount.
+ */
+async function trackGift(gifts: GiftPorts, obligation: Obligation, token: string, lock: GiftLock, spendByMs: number | null): Promise<void> {
+  if (!gifts.track) return
+  const delivery = obligation.gift!.delivery!
+  const draftId = obligation.gift!.draftId
+  const kind = obligation.gift!.kind as 'handle' | 'email'
+  if (!draftId || !delivery.buyerEmail) {
+    console.warn(JSON.stringify({ event: 'gift_not_tracked', kind, reason: draftId ? 'no buyer email' : 'no draft' }))
+    return
+  }
+  const recipientDisplay =
+    kind === 'email'
+      ? delivery.recipientEmail ?? 'the recipient'
+      : delivery.recipientHandle
+        ? delivery.recipientHandle.includes('@') ? delivery.recipientHandle : `@${delivery.recipientHandle}`
+        : 'the recipient'
+  // Guest: no signed-in buyer, or a refund key that is not the buyer's wallet key (it is R).
+  const guest = !delivery.buyerPubkey || delivery.buyerPubkey.toLowerCase() !== lock.refundPubkey.toLowerCase()
+  try {
+    const mintUrl = tokenMintUrl(token)
+    await gifts.track(
+      {
+        draftId,
+        kind,
+        token,
+        claimBy: lock.locktime * 1000,
+        buyerEmail: delivery.buyerEmail,
+        recipientDisplay,
+        stall: (await gifts.stallName(obligation.stallPubkey)) ?? 'a local stall',
+        amount: formatAmount(obligation.faceValue, obligation.faceDecimals, obligation.faceUnit),
+        guest,
+        returnMailDate: guest && delivery.draftCreatedAt ? displayDate(delivery.draftCreatedAt) : null,
+        spendBy: spendByMs,
+      },
+      mintUrl,
+    )
+  } catch (error) {
+    console.warn(JSON.stringify({ event: 'gift_not_tracked', kind, reason: error instanceof Error ? error.name : 'error' }))
+  }
+}
+
+function claimLink(walletOrigin: string, linkSecretHex: string, x: number): string | null {
+  return formatGiftLink(walletOrigin, hexToBytes(linkSecretHex), x)
+}
+
+function formatAmount(minor: number, decimals: number, unit: string): string {
+  const major = (minor / 10 ** decimals).toFixed(decimals)
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency: unit }).format(Number(major))
+  } catch {
+    return `${major} ${unit}`
   }
 }
 

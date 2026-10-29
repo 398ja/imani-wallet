@@ -58,6 +58,28 @@ export interface IssuerConfig {
    * Host header: a signature is bound to one URL, and accepting any origin defeats that.
    */
   publicOrigin: string | null
+  /**
+   * Locked gift delivery (#410 G14), or null when this issuer does not deliver handle/email gifts
+   * (they are then refused before minting). On only when `PURCHASE_GIFT_SEAL_KEY` is set, and then
+   * every other value is REQUIRED: no defaults, a half-configured gift path refuses to boot.
+   */
+  gifts: {
+    /** The key the gifting site seals ℓ to (payment-adapter's issuer-key is its public key). */
+    sealKeyHex: string
+    walletOrigin: string
+    mailerUrl: string
+    mailerToken: string
+    /** Durable mint anchors for gift locktimes. */
+    anchorsPath: string
+    /** G15: durable tracked gifts for claimed/expired notices. */
+    trackerPath: string
+    /** Optional origin replacing the coupon's mint URL for NUT-07 (local stacks). */
+    mintTransportUrl: string | null
+    /** Per-gift re-check interval, or null for the default. */
+    sweepEveryMs: number | null
+    /** TEST MODE ONLY: the claim window in seconds instead of the draft's days. */
+    testWindowSeconds: number | null
+  } | null
 }
 
 /** Refused at boot, naming everything that is wrong rather than the first thing. */
@@ -117,6 +139,48 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
     )
   }
 
+  let gifts: IssuerConfig['gifts'] = null
+  const sealKeyHex = (env.PURCHASE_GIFT_SEAL_KEY ?? '').trim().toLowerCase()
+  if (sealKeyHex !== '') {
+    if (!/^[0-9a-f]{64}$/.test(sealKeyHex)) missing.push('PURCHASE_GIFT_SEAL_KEY: must be exactly 64 hex characters')
+    const walletOrigin = origin(env.PURCHASE_WALLET_ORIGIN)
+    if (walletOrigin === null) missing.push('PURCHASE_WALLET_ORIGIN: the wallet origin claim links point at (required with PURCHASE_GIFT_SEAL_KEY)')
+    const mailerUrl = (env.PURCHASE_MAILER_URL ?? '').trim()
+    if (mailerUrl === '') missing.push('PURCHASE_MAILER_URL: imani-mailer, for claim emails (required with PURCHASE_GIFT_SEAL_KEY)')
+    const mailerToken = (env.PURCHASE_MAILER_TOKEN ?? '').trim()
+    if (mailerToken === '') missing.push('PURCHASE_MAILER_TOKEN: imani-mailer bearer token (required with PURCHASE_GIFT_SEAL_KEY)')
+    const anchorsPath = (env.PURCHASE_GIFT_ANCHORS_PATH ?? '').trim()
+    if (anchorsPath === '') missing.push('PURCHASE_GIFT_ANCHORS_PATH: durable gift mint anchors, on a persistent volume')
+    const trackerPath = (env.PURCHASE_GIFT_TRACKER_PATH ?? '').trim()
+    if (trackerPath === '') missing.push('PURCHASE_GIFT_TRACKER_PATH: durable tracked gifts for claimed/expired notices, on a persistent volume')
+    const rawTransport = (env.PURCHASE_MINT_TRANSPORT_URL ?? '').trim()
+    let mintTransportUrl: string | null = null
+    if (rawTransport !== '') {
+      mintTransportUrl = origin(rawTransport) === null ? null : rawTransport.replace(/\/+$/, '')
+      if (mintTransportUrl === null) missing.push('PURCHASE_MINT_TRANSPORT_URL: must be a URL')
+    }
+    // How often one gift is re-checked at the mint (default 10 min). A local stack sets it low to see
+    // the claimed notice within a test; never below 5 s.
+    const rawSweep = (env.PURCHASE_GIFT_SWEEP_MS ?? '').trim()
+    const sweepEveryMs = rawSweep === '' ? null : Number(rawSweep)
+    if (sweepEveryMs !== null && (!Number.isInteger(sweepEveryMs) || sweepEveryMs < 5_000)) {
+      missing.push('PURCHASE_GIFT_SWEEP_MS: whole milliseconds, at least 5000')
+    }
+    // TEST MODE ONLY: a claim window in seconds, so an end-to-end test sees it end. Live mode
+    // refuses to boot with it (a real buyer's recipient always gets the stall's window).
+    const rawTestWindow = (env.PURCHASE_TEST_CLAIM_WINDOW_SECONDS ?? '').trim()
+    let testWindowSeconds: number | null = null
+    if (rawTestWindow !== '') {
+      testWindowSeconds = Number(rawTestWindow)
+      if (!Number.isInteger(testWindowSeconds) || testWindowSeconds < 30 || testWindowSeconds > 86_400) {
+        missing.push('PURCHASE_TEST_CLAIM_WINDOW_SECONDS: whole seconds, 30 to 86400')
+      } else if (livemodeRaw === 'true') {
+        missing.push('PURCHASE_TEST_CLAIM_WINDOW_SECONDS: test mode only, never with PURCHASE_LIVEMODE=true')
+      }
+    }
+    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, mintTransportUrl, sweepEveryMs, testWindowSeconds }
+  }
+
   if (missing.length > 0) throw new ConfigError(missing)
 
   const livemode = livemodeRaw === 'true'
@@ -150,6 +214,7 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
     intervalMs: positive(env.PURCHASE_INTERVAL_MS, 15_000),
     port: positive(env.PURCHASE_ISSUER_PORT, 8791),
     publicOrigin: origin(env.PURCHASE_PUBLIC_ORIGIN),
+    gifts,
   }
 }
 

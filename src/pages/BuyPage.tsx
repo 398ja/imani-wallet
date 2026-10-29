@@ -4,7 +4,9 @@ import { CreditCard } from 'lucide-react'
 
 import { Button, Screen, BackLink, Centered, buttonClasses } from '../components/ui'
 import { startPurchase } from '../lib/purchase'
-import { GUEST_REFUSED, rememberPurchase } from '../lib/pendingPurchase'
+import { GUEST_BUY_ELSEWHERE, rememberPurchase } from '../lib/pendingPurchase'
+import { GIFTING_ORIGIN, giftingPageUrl } from '../lib/giftingPage'
+import { useIdentity } from '../lib/identity'
 import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
 import { cardSalesReason, type CardSalesReadiness } from '../lib/merchantActions'
 
@@ -26,10 +28,9 @@ import { cardSalesReason, type CardSalesReadiness } from '../lib/merchantActions
  * trees: the authenticated one knows who is buying, and the public one has
  * nobody to ask.
  *
- * A visitor with no wallet is REFUSED for now (#267 item 2). Their coupon
- * would be delivered by Cashlink, which purchase-issuer cannot do yet, so they
- * would pay and receive nothing. payment-adapter refuses the same request
- * before creating a Checkout Session; this screen just says so first.
+ * A visitor with no wallet is sent to the stall's gifting page (#410), which
+ * takes guests: it delivers by handle or emailed Cashlink. This page still
+ * never starts a guest checkout, and payment-adapter still refuses one here.
  *
  * ## Amounts
  *
@@ -113,23 +114,7 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
   if (busy) return <Centered>Taking you to the payment page…</Centered>
 
   if (buyerPubkey === null) {
-    return (
-      <Screen>
-        <BackLink to={`/merchants/${pubkey}`} label="Back" />
-        <h1 className="mb-2 text-title font-semibold">Buy a voucher</h1>
-        <p className="mb-6 text-callout text-mono-500">{GUEST_REFUSED}</p>
-        <p className="mb-6 text-callout text-mono-500">
-          The voucher is delivered to your wallet, so you need one before you pay. It takes
-          a minute and nothing is charged.
-        </p>
-        <Link
-          to="/"
-          className={`${buttonClasses('primary', 'lg')} w-full`}
-        >
-          Create a wallet
-        </Link>
-      </Screen>
-    )
+    return <GuestBuy pubkey={pubkey} />
   }
 
   return (
@@ -225,4 +210,28 @@ function toMinorUnits(raw: string): number | null {
   if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null
   const minor = Math.round(Number(trimmed) * 100)
   return Number.isFinite(minor) && minor > 0 ? minor : null
+}
+
+/** A visitor with no wallet: the stall's gifting page, or a wallet. */
+function GuestBuy({ pubkey }: { pubkey: string }) {
+  const identity = useIdentity(pubkey)
+  const gifting = giftingPageUrl(identity?.nip05)
+  return (
+    <Screen>
+      <BackLink to={`/merchants/${pubkey}`} label="Back" />
+      <h1 className="mb-2 text-title font-semibold">Buy a voucher</h1>
+      <p className="mb-6 text-callout text-mono-500">{GUEST_BUY_ELSEWHERE}</p>
+      {gifting && (
+        <a href={gifting} className={`${buttonClasses('primary', 'lg')} mb-3 w-full`}>
+          Buy on the gifting page
+        </a>
+      )}
+      <Link to="/" className={`${buttonClasses(gifting ? 'secondary' : 'primary', 'lg')} w-full`}>
+        Create a wallet
+      </Link>
+      {!gifting && (
+        <p className="mt-3 text-xs text-mono-500">This stall has no gifting page yet. Gifting lives at {GIFTING_ORIGIN}.</p>
+      )}
+    </Screen>
+  )
 }
