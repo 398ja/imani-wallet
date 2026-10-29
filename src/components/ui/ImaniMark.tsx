@@ -1,11 +1,13 @@
+import type { CSSProperties } from 'react'
+
 /**
  * The imani mark: public/imani.svg's single evenodd path, in `currentColor` so
  * the caller's text colour carries it. One definition of the shape for the
  * header lockup and the voucher card, so the two cannot drift.
  */
-export function ImaniMark({ className }: { className?: string }) {
+export function ImaniMark({ className, style }: { className?: string; style?: CSSProperties }) {
   return (
-    <svg viewBox="0 0 48 48" className={className} aria-hidden="true" focusable="false">
+    <svg viewBox="0 0 48 48" className={className} style={style} aria-hidden="true" focusable="false">
       <path
         fill="currentColor"
         fillRule="evenodd"
