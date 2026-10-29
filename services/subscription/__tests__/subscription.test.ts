@@ -424,6 +424,46 @@ describe('buying a plan', () => {
     expect((await ledger.all())[0].status).toBe('cancelled')
   })
 
+  describe('every way Stripe says a subscription is cancelled', () => {
+    const event = (type: string, object: Record<string, unknown>) => {
+      const body = JSON.stringify({ type, data: { object: { id: 'sub_stripe_1', ...object } } })
+      return { method: 'POST', path: '/v1/stripe/webhook', body, headers: { 'stripe-signature': stripeSignatureHeader(body, WEBHOOK_SECRET) } }
+    }
+    const status = async () => (await ledger.all())[0].status
+
+    it('the portal on API 2025-03-31+ sets cancel_at and leaves cancel_at_period_end false (sub_738c90f3fbfe6e46)', async () => {
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      // As Stripe sent it for the local cancellation on 2026-10-29 (api_version 2026-02-25.clover).
+      const out = await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at_period_end: false, cancel_at: 1_802_000_000, canceled_at: 1_800_100_000 }))
+      expect(out.status).toBe(200)
+      expect(await status()).toBe('cancelled')
+      expect(gateway.minted).toHaveLength(1)
+    })
+
+    it('customer.subscription.deleted: the subscription has ended', async () => {
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      await app.handle(event('customer.subscription.deleted', { status: 'canceled', ended_at: 1_802_000_000 }))
+      expect(await status()).toBe('cancelled')
+    })
+
+    it('undoing the cancellation before the period ends makes it active again', async () => {
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at_period_end: false, cancel_at: 1_802_000_000 }))
+      expect(await status()).toBe('cancelled')
+      await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at_period_end: false, cancel_at: null, canceled_at: null }))
+      expect(await status()).toBe('active')
+    })
+
+    it('a revoked subscription stays revoked whatever Stripe says next', async () => {
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      await ledger.update((rows) => {
+        rows[0].status = 'revoked'
+      })
+      await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at: null }))
+      expect(await status()).toBe('revoked')
+    })
+  })
+
   it('shows the stall its own subscription and lets it re-send a lost licence', async () => {
     const end = Math.floor(Date.now() / 1000) + 10 * 86_400
     await app.handle(invoicePaid('in_1', end - 30 * 86_400, end))

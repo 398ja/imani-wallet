@@ -223,11 +223,12 @@ export function createApp(deps: AppDeps) {
 
   async function onSubscriptionChanged(sub: Record<string, unknown>): Promise<Response> {
     const id = String(sub.id ?? '')
-    const status = String(sub.status ?? '')
+    const cancelled = isCancelled(sub)
     await deps.ledger.update((rows) => {
       const r = rows.find((x) => x.stripeSubscriptionId === id)
-      if (r && r.status !== 'revoked') r.status = status === 'canceled' || sub.cancel_at_period_end ? 'cancelled' : 'active'
+      if (r && r.status !== 'revoked') r.status = cancelled ? 'cancelled' : 'active'
     })
+    log({ event: 'subscription_changed', stripe_subscription: id, status: cancelled ? 'cancelled' : 'active' })
     // Cancelling never revokes: the licence already paid for runs to its end (#407 §6).
     return json(200, { ok: true })
   }
@@ -460,6 +461,22 @@ export function createApp(deps: AppDeps) {
   }
 
   return { handle }
+}
+
+/**
+ * Has the stall cancelled this Stripe subscription, now or for later?
+ *
+ * Stripe says so in more than one way, by API version and by how it was cancelled:
+ *  - `status: canceled` (or `ended_at`): it has ended;
+ *  - `cancel_at_period_end: true`: it stops at the period end (older portal behaviour);
+ *  - `cancel_at` set: it stops at that time. API 2025-03-31 onward, the customer portal cancels this
+ *    way and leaves `cancel_at_period_end` false (seen on 2026-02-25.clover, sub_738c90f3fbfe6e46).
+ * Undoing a cancellation clears `cancel_at` and `cancel_at_period_end`, so it reads as active again.
+ */
+export function isCancelled(sub: Record<string, unknown>): boolean {
+  if (sub.status === 'canceled' || sub.ended_at) return true
+  if (sub.cancel_at_period_end === true) return true
+  return typeof sub.cancel_at === 'number' && sub.cancel_at > 0
 }
 
 /** Strict, as `@imani/licence` reads them: an unreadable limit is refused, never read as unlimited. */
