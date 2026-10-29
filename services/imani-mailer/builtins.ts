@@ -63,6 +63,10 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
     text: [
       "If your gift isn't claimed by {{claimBy}}, use this link to take it back into a wallet:",
       '{{returnUrl}}',
+      '{{#spendBy}}',
+      '',
+      "Once it's back, it keeps its original expiry: {{spendBy}}.",
+      '{{/spendBy}}',
       '',
       "Keep it private: it is yours, not the recipient's.",
       '',
@@ -72,6 +76,8 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       stall: { type: 'line', max: 120, required: true },
       claimBy: { type: 'line', max: 60, required: true },
       returnUrl: { type: 'url', required: true },
+      // G17 (C): "spend it by <date>" or "the voucher doesn't expire". Optional for older callers.
+      spendBy: { type: 'line', max: 80 },
     },
   },
   'gift-bounced': {
