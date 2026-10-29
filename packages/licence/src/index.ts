@@ -37,8 +37,8 @@ export type {
   SalesPeriod,
 } from './types.js'
 
-export type { TierCatalog, TierDefinition, SignedCatalog, CatalogVerdict } from './catalog.js'
-export { BUNDLED_CATALOG, FREE_TIER, acceptCatalog, parseCatalog, amountIn } from './catalog.js'
+export type { TierCatalog, TierDefinition, SignedCatalog, CatalogVerdict, BadgeName } from './catalog.js'
+export { BUNDLED_CATALOG, FREE_TIER, acceptCatalog, parseCatalog, amountIn, badgeOf } from './catalog.js'
 
 export type { Entitlement, SalesAllowance, EntitlementOptions, CountedSale, SaleDecision } from './entitlement.js'
 export { entitlementOf, maySell, periodStart, salesInPeriod, WARN_AT } from './entitlement.js'
@@ -46,7 +46,7 @@ export { DENIAL_REASONS } from './types.js'
 export { verifyLicence } from './verify.js'
 
 export type { SignedVoucherFields } from './voucherFields.js'
-export { licenceOf } from './read.js'
+export { licenceOf, BADGE_NAMES, isBadgeName } from './read.js'
 
 export type {
   LicenceCheck,

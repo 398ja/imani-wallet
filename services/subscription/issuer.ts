@@ -14,7 +14,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { finalizeEvent, getPublicKey, nip19 } from 'nostr-tools'
 
-import type { LicenceLimits } from '@imani/licence'
+import { isBadgeName, type LicenceLimits } from '@imani/licence'
 import { licenceMetadataJson } from '../../src/lib/licenceIssue.ts'
 
 export interface Seller {
@@ -42,6 +42,8 @@ export interface LicenceOrder {
   paidAmountMinor: number
   paidCurrency: string
   pilot?: boolean
+  /** A hand grant's own verification badge (#418 Q3), signed into the licence. */
+  badge?: string
 }
 
 export interface MintedLicence {
@@ -112,6 +114,7 @@ export function mintBody(order: LicenceOrder, seller: Seller, nowSeconds = Math.
     validFrom: order.validFrom,
     limits: order.limits,
     grantKind: order.grantKind,
+    badge: isBadgeName(order.badge) ? order.badge : undefined,
   })
   return {
     face_value: face,

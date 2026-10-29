@@ -15,7 +15,9 @@ import { extname, join, normalize } from 'node:path'
 import { createApp } from './app.ts'
 import { readConfig, ConfigError } from './config.ts'
 import { LicenceIssuer, sellerFrom } from './issuer.ts'
-import { relayStatusNotifier } from './statusNotifier.ts'
+import { publishTo, relayStatusNotifier } from './statusNotifier.ts'
+import { relayBadgePublisher } from './badgePublisher.ts'
+import { parseCatalog } from '@imani/licence'
 import { Ledger } from './ledger.ts'
 import { cachedMerchantReader, readMerchantStanding } from './merchantRole.ts'
 import { stripeClient } from './stripe.ts'
@@ -43,18 +45,29 @@ async function main() {
   }
   const seller = sellerFrom(config.sellerNsec)
   const issuer = new LicenceIssuer({ walletUrl: config.walletUrl, nip98BaseUrl: config.walletPublicUrl, edgeSecret: config.edgeSecret, internalRelay: config.internalRelay, seller })
+  const catalogBody = (await readFile(config.catalogPath, 'utf8')).trim()
   const app = createApp({
     config,
     seller,
     ledger: new Ledger(config.ledgerPath),
     issuer,
     stripe: stripeClient(config.stripeSecretKey),
-    catalogBody: (await readFile(config.catalogPath, 'utf8')).trim(),
+    catalogBody,
     // gateway-customer serves the public `POST /api/v1/nostr/query` the role is read from.
     merchantStanding: cachedMerchantReader((pubkey) => readMerchantStanding(config.walletUrl, pubkey)),
     // A cancellation in Stripe reaches the wallet as a seller-sealed DM: published to the relay and
     // stored in the gateway's index, which is what the wallet's DM poll reads.
     notifier: relayStatusNotifier({ seller, relayUrl: config.internalRelay, store: (event) => issuer.storeEvent(event) }),
+    // Each stall's public verification badge (#418): to the relay, and to the gateway's index that
+    // `newestAddressable` reads beside it.
+    badges: relayBadgePublisher({
+      seller,
+      // createApp refuses a catalog that does not parse, so this is only ever read after that check.
+      catalog: parseCatalog(catalogBody) ?? { version: 0, overshootPct: 0, tiers: {} },
+      relayUrl: config.internalRelay,
+      publish: (url, event) => publishTo(url, event, 5000),
+      store: (event) => issuer.storeEvent(event),
+    }),
   })
   const staticDir = process.env.SUBSCRIPTION_STATIC_DIR?.trim()
   const base = config.basePath

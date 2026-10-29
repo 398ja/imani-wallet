@@ -22,6 +22,8 @@ import { Ledger } from '../ledger.ts'
 import { type MerchantStanding } from '../merchantRole.ts'
 import { stripeSignatureHeader, type StripeClient } from '../stripe.ts'
 import { relayStatusNotifier } from '../statusNotifier.ts'
+import { relayBadgePublisher } from '../badgePublisher.ts'
+import { badgeAt, parseVerification, verificationD } from '../../../src/lib/verificationBadge.ts'
 import { catalogSignatureValid } from '../../../src/lib/entitlement.ts'
 import { unwrapSealed } from '../../../src/lib/giftWrap.ts'
 import { parseSubscriptionStatus } from '../../../src/lib/subscriptionStatus.ts'
@@ -150,6 +152,14 @@ let logs: Array<Record<string, unknown>>
 let published: Event[]
 /** Wraps handed to the gateway's index. */
 let stored: Event[]
+/** Verification-badge attestations the service published (#418). */
+let badgeEvents: Event[] = []
+/** The badge a viewer would see for STALL at `at`, from the newest attestation published. */
+function publicBadge(at: number) {
+  const newest = badgeEvents.filter((e) => e.tags.some(([n, v]) => n === 'd' && v === verificationD(STALL))).at(-1)
+  if (!newest) return undefined
+  return badgeAt(parseVerification(newest.content, STALL) ?? [], at)
+}
 let relayDown = false
 let indexDown = false
 
@@ -191,6 +201,15 @@ function makeApp(over: { catalogBody?: string; prices?: Record<string, string> }
       },
     }),
     napServerOptions: { minAuthResponseMillis: 0 },
+    badges: relayBadgePublisher({
+      seller: SELLER,
+      catalog: parseCatalog(over.catalogBody ?? CATALOG)!,
+      relayUrl: 'ws://relay',
+      publish: async (_url, event) => {
+        if (relayDown) throw new Error('relay down')
+        badgeEvents.push(event)
+      },
+    }),
     log: (e) => logs.push(e),
   })
 }
@@ -201,6 +220,7 @@ beforeEach(async () => {
   logs = []
   published = []
   stored = []
+  badgeEvents = []
   relayDown = false
   indexDown = false
   ledger = new Ledger(join(await mkdtemp(join(tmpdir(), 'sub-')), 'ledger.json'))
@@ -609,6 +629,75 @@ describe('hand grants (#407 §7)', () => {
   })
 })
 
+describe('the verification badge (#418)', () => {
+  const grantBody = { stall_pubkey: STALL, limits: { terminals: 5 }, days: 30, reason: 'partner pilot' }
+
+  it('a paid Essentials invoice publishes a bronze badge for exactly the paid window, signed by the seller', async () => {
+    const [start, end] = [1_800_000_000, 1_802_592_000]
+    await app.handle(invoicePaid('in_1', start, end, 'basic'))
+    const e = badgeEvents.at(-1)!
+    expect(e.pubkey).toBe(SELLER.pk)
+    expect(e.tags).toContainEqual(['d', verificationD(STALL)])
+    expect(publicBadge(start)).toBe('bronze')
+    expect(publicBadge(end - 1)).toBe('bronze')
+    // No grace: the badge is off the moment the paid window ends.
+    expect(publicBadge(end)).toBeNull()
+    // Nothing about money in public.
+    expect(e.content).not.toMatch(/paid|price|stripe|sub_/i)
+  })
+
+  it('Pro is silver; held with Essentials the highest wins', async () => {
+    await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_592_000, 'pro', 'annual'))
+    expect(publicBadge(1_800_000_001)).toBe('silver')
+  })
+
+  it('an early renewal extends it seamlessly', async () => {
+    await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_592_000))
+    await app.handle(invoicePaid('in_2', 1_802_592_000, 1_805_184_000))
+    expect(publicBadge(1_802_592_000)).toBe('bronze')
+    expect(publicBadge(1_805_184_000)).toBeNull()
+  })
+
+  it('a revoked (refunded) plan loses its badge at once', async () => {
+    await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_592_000))
+    const id = (await ledger.all())[0].subscriptionId
+    expect(publicBadge(1_800_000_001)).toBe('bronze')
+    await app.handle(await req(ADMIN_SK, 'POST', '/v1/admin/revoke', { subscription_id: id, reason: 'refund' }))
+    expect(publicBadge(1_800_000_001)).toBeNull()
+  })
+
+  it('a hand grant earns the badge it names, gold included, and signs it into the licence', async () => {
+    const out = await app.handle(await req(ADMIN_SK, 'POST', '/v1/admin/grants', { ...grantBody, badge: 'gold' }))
+    expect(out.status).toBe(201)
+    const row = (await ledger.all())[0]
+    expect(row.badge).toBe('gold')
+    expect(publicBadge(row.licences[0].validFrom)).toBe('gold')
+    expect(licenceFromDelivery(gateway.delivered[0], row.licences[0].validTo)?.badge).toBe('gold')
+  })
+
+  it('a hand grant that names no badge earns none', async () => {
+    await app.handle(await req(ADMIN_SK, 'POST', '/v1/admin/grants', grantBody))
+    const row = (await ledger.all())[0]
+    expect(publicBadge(row.licences[0].validFrom)).toBeNull()
+  })
+
+  it('refuses a badge that does not exist', async () => {
+    const out = await app.handle(await req(ADMIN_SK, 'POST', '/v1/admin/grants', { ...grantBody, badge: 'platinum' }))
+    expect(out.status).toBe(400)
+    expect(gateway.minted).toHaveLength(0)
+  })
+
+  it('a relay that is down never fails the payment, and a resend republishes', async () => {
+    relayDown = true
+    const out = await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_592_000))
+    expect(out.status).toBe(200)
+    expect(badgeEvents).toHaveLength(0)
+    relayDown = false
+    await app.handle(await req(STALL_SK, 'POST', '/v1/licences/resend'))
+    expect(publicBadge(1_800_000_001)).toBe('bronze')
+  })
+})
+
 describe('the plans offered (www.imani.casa/pricing)', () => {
   type ListedPlan = { tier: string; terms: string[]; limits: Record<string, unknown>; prices: Record<string, { amount: number; currency: string }> }
   const listPlans = async (a = app) => (await a.handle({ method: 'GET', path: '/v1/plans', headers: {}, body: '' })).body as ListedPlan[]
@@ -675,7 +764,10 @@ describe('the published catalog', () => {
     expect(acceptCatalog(signed, { verifySignature: (s) => catalogSignatureValid(s, SELLER.pk), current: BUNDLED_CATALOG }).accepted).toBe(true)
     expect(catalogSignatureValid({ ...signed, body: signed.body.replace('10000', '99999') }, SELLER.pk)).toBe(false)
     expect(parseCatalog(signed.body)?.fx?.XAF).toEqual({ perUsd: 600, decimals: 0 })
-    expect(parseCatalog(signed.body)?.version).toBe(3)
+    expect(parseCatalog(signed.body)?.version).toBe(4)
     expect(Object.keys(parseCatalog(signed.body)!.tiers)).toEqual(['free', 'basic', 'pro'])
+    // #418: the bought tiers earn their badges from the catalog; Starter earns none.
+    const tiers = parseCatalog(signed.body)!.tiers
+    expect([tiers.free.badge, tiers.basic.badge, tiers.pro.badge]).toEqual([undefined, 'bronze', 'silver'])
   })
 })

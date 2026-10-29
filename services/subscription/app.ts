@@ -19,7 +19,7 @@
  * Every route that is not public needs a NAP session whose role is `merchant` (#411). There is no
  * per-request signature any more: the session is the authentication.
  */
-import { FREE_TIER, parseCatalog, type LicenceLimits, type TierCatalog } from '@imani/licence'
+import { FREE_TIER, isBadgeName, parseCatalog, type LicenceLimits, type TierCatalog } from '@imani/licence'
 
 import { SubscriptionAuth } from './auth.ts'
 import type { SubscriptionConfig } from './config.ts'
@@ -28,6 +28,7 @@ import { Ledger, newSubscriptionId, type IssuedLicence, type SubscriptionRow } f
 import type { MerchantReader } from './merchantRole.ts'
 import { countStatusMessage, countTransition, renderMetrics } from './metrics.ts'
 import type { StatusNotifier } from './statusNotifier.ts'
+import type { BadgePublisher } from './badgePublisher.ts'
 import { verifyStripeSignature, type StripeClient, type StripePrice } from './stripe.ts'
 
 export interface Request {
@@ -55,6 +56,8 @@ export interface AppDeps {
   merchantStanding: MerchantReader
   /** Tells the stall's wallet a subscription was cancelled or un-cancelled (statusNotifier.ts). */
   notifier?: StatusNotifier
+  /** Publishes each stall's public verification badge (#418, badgePublisher.ts). */
+  badges?: BadgePublisher
   now?: () => number
   log?: (event: Record<string, unknown>) => void
   /** Tests only: NAP server overrides (clock, response padding). */
@@ -118,6 +121,7 @@ export function createApp(deps: AppDeps) {
       subscriptionId: row.subscriptionId,
       tier: row.tier,
       grantKind: row.grantKind,
+      badge: row.badge,
       features: row.features ?? catalog.tiers[row.tier]?.features ?? [],
       limits: row.grantKind === 'custom' ? (row.limits as LicenceLimits | undefined) : undefined,
       validFrom: licence.validFrom,
@@ -142,7 +146,20 @@ export function createApp(deps: AppDeps) {
       log({ event: 'licence_issue_failed', subscription_id: row.subscriptionId, key: next.key, error: next.lastError })
     }
     await save(row.subscriptionId, next)
+    // The stall's badge follows what it now holds (#418). Never fails the issue: a lost publish is
+    // repaired by the next change or a resend.
+    if (next.state !== licence.state) await publishBadge(row.stallPubkey)
     return next
+  }
+
+  /** Republish one stall's verification badge from the ledger. Best effort, NEVER THROWS. */
+  async function publishBadge(stallPubkey: string): Promise<void> {
+    if (!deps.badges) return
+    try {
+      await deps.badges.publish(stallPubkey, await deps.ledger.forStall(stallPubkey))
+    } catch (error) {
+      log({ event: 'badge_publish_failed', stall: stallPubkey, error: String(error) })
+    }
   }
 
   function save(subscriptionId: string, licence: IssuedLicence) {
@@ -447,6 +464,8 @@ export function createApp(deps: AppDeps) {
         if (done.state === 'delivered') sent += 1
       }
     }
+    // Always: this is the repair path for a badge publish that was lost.
+    await publishBadge(pubkey)
     return json(200, { sent })
   }
 
@@ -464,9 +483,16 @@ export function createApp(deps: AppDeps) {
     const limits = parseLimits(body.limits)
     if (isResponse(limits)) return limits
     const features = Array.isArray(body.features) ? body.features.filter((f): f is string => typeof f === 'string' && f.length > 0) : []
+    // A badge rides on a grant; it is not one. A licence that lifts nothing is not recognised as a
+    // licence at all (licenceOf), so a badge alone would mint an ordinary coupon.
     if (!limits && features.length === 0) return json(400, { error: 'a grant must lift a limit or name a feature' })
     const validFrom = typeof body.valid_from === 'number' ? body.valid_from : now()
     const currency = String(body.currency ?? 'GBP').toUpperCase()
+    // A grant earns a verification badge only if it names one (#418 Q3).
+    if (body.badge !== undefined && body.badge !== null && body.badge !== '' && !isBadgeName(body.badge)) {
+      return json(400, { error: 'badge must be bronze, silver or gold' })
+    }
+    const badge = isBadgeName(body.badge) ? body.badge : undefined
 
     const row: SubscriptionRow = {
       subscriptionId: newSubscriptionId(),
@@ -480,6 +506,7 @@ export function createApp(deps: AppDeps) {
       issuedBy: admin,
       reason,
       pilot: body.pilot === true,
+      ...(badge ? { badge } : {}),
       paidAmountMinor: 0,
       paidCurrency: /^[A-Z]{3}$/.test(currency) ? currency : 'GBP',
       createdAt: now(),
@@ -497,10 +524,13 @@ export function createApp(deps: AppDeps) {
     const id = String(body.subscription_id ?? '')
     if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(id)) return json(400, { error: 'subscription_id is malformed' })
     await deps.issuer.revoke(id, String(body.reason ?? ''))
-    await deps.ledger.update((rows) => {
+    const stall = await deps.ledger.update((rows) => {
       const r = rows.find((x) => x.subscriptionId === id)
       if (r) r.status = 'revoked'
+      return r?.stallPubkey
     })
+    // The refunded plan's badge comes off at once (#418): republished without it.
+    if (stall) await publishBadge(stall)
     return json(200, { revoked: id })
   }
 

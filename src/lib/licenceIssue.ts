@@ -144,6 +144,11 @@ export interface LicenceTerms {
   limits?: LicenceLimits
   /** `subscription` (bought) or `custom` (issued by hand). */
   grantKind?: 'subscription' | 'custom'
+  /**
+   * A hand grant's verification badge (#418 Q3). Only a grant writes one: a bought tier's badge is
+   * the catalog's, so re-mapping a tier to a badge never needs every licence re-issued.
+   */
+  badge?: 'bronze' | 'silver' | 'gold'
 }
 
 /**
@@ -193,6 +198,7 @@ export function licenceMetadataJson(terms: LicenceTerms): string {
     ...(terms.validFrom !== undefined ? { valid_from: terms.validFrom } : {}),
     ...(terms.limits ? { limits: limitsJson(terms.limits) } : {}),
     ...(terms.grantKind ? { grant_kind: terms.grantKind } : {}),
+    ...(terms.badge ? { badge: terms.badge } : {}),
   })
 }
 

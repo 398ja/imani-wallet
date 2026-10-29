@@ -42,6 +42,8 @@ export interface SubscriptionRow {
   issuedBy?: string
   reason?: string
   pilot?: boolean
+  /** A hand grant's verification badge (#418 Q3): bronze, silver or gold. A bought tier's is the catalog's. */
+  badge?: string
   paidAmountMinor: number
   paidCurrency: string
   createdAt: number

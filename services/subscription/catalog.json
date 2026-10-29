@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "overshoot_pct": 10,
   "tiers": {
     "free": {
@@ -11,11 +11,13 @@
     },
     "basic": {
       "features": ["terminals"],
-      "limits": { "sales": null, "terminals": 3 }
+      "limits": { "sales": null, "terminals": 3 },
+      "badge": "bronze"
     },
     "pro": {
       "features": ["terminals", "api", "ecommerce"],
-      "limits": { "sales": null, "terminals": null }
+      "limits": { "sales": null, "terminals": null },
+      "badge": "silver"
     }
   },
   "fx": { "XAF": { "per_usd": 600, "decimals": 0 } }

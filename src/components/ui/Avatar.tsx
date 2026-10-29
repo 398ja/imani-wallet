@@ -3,16 +3,17 @@ import { User } from 'lucide-react';
 
 import { cn, getInitials } from '../../lib/utils';
 import { OWN_ACCOUNT, UNKNOWN_PERSON, UNKNOWN_STALL } from '../../lib/format';
-import { useIsMerchant } from '../../hooks/useIsMerchant';
+import { BADGE_LABELS, type Badge } from '../../lib/verificationBadge';
+import { useVerificationBadge } from '../../hooks/useVerificationBadge';
 import { Skeleton } from './Skeleton';
 
 interface AvatarProps {
   src?: string;
   name: string;
   /**
-   * Whose avatar this is. Optional: given one, the avatar looks up whether they
-   * trade as a merchant and wears the badge if they do — so no caller has to
-   * know, and every screen showing the same person agrees.
+   * Whose avatar this is. Optional: given one, the avatar looks up the verification badge that key
+   * has earned by subscribing (#418) and wears it while the subscription is valid, so no caller has
+   * to know, and every screen showing the same person agrees.
    */
   pubkey?: string;
   /**
@@ -54,7 +55,7 @@ export function Avatar({ src, name, pubkey, loading, framed, size = 'md', classN
   // the bytes are there, and `complete` covers the case the browser had it
   // cached and fired `load` before React attached the handler.
   const [loadedSrc, setLoadedSrc] = useState<string>();
-  const merchant = useIsMerchant(pubkey);
+  const badge = useVerificationBadge(pubkey);
 
   const sizeClasses = {
     sm: 'w-8 h-8 text-xs',
@@ -163,29 +164,52 @@ export function Avatar({ src, name, pubkey, loading, framed, size = 'md', classN
       </div>
     );
 
-  if (!merchant) return face;
+  if (!badge) return face;
 
   return (
     <span className={cn('relative inline-flex shrink-0', className)}>
       {face}
-      {/*
-        The one spot of colour in a monochrome app, which is the point: it marks
-        the handful of people you can buy from. Orange gradient, white glyph and
-        surface-coloured ring are imani-apps' merchant badge verbatim, glyph path
-        included — a customer who uses both should not have to learn two marks.
-      */}
-      <span
-        className={cn(
-          'absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-gradient-to-br from-orange-500 to-orange-600 shadow ring-2 ring-mono-50 dark:ring-mono-950',
-          badgeClasses[size]
-        )}
-        title="Merchant"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-[60%] w-[60%] fill-white">
-          <path d="M19 5v2h-4V5h4M9 5v6H5V5h4m10 8v6h-4v-6h4M9 17v2H5v-2h4M21 3h-8v6h8V3M11 3H3v10h8V3m10 8h-8v10h8V11m-10 4H3v6h8v-6z" />
-        </svg>
-      </span>
-      <span className="sr-only">Merchant</span>
+      <VerificationCheck badge={badge} className={badgeClasses[size]} />
+      <span className="sr-only">{BADGE_LABELS[badge]}</span>
+    </span>
+  );
+}
+
+/**
+ * Bronze, silver and gold as metal rather than flat colour: a light-to-dark gradient reads as a
+ * medal at 12px, where a flat fill reads as a dot. The tick is white on all three, inside a
+ * surface-coloured ring so it separates from any picture behind it.
+ */
+const METAL: Record<Badge, string> = {
+  bronze: 'bg-gradient-to-br from-[#e3a46b] via-[#b8733a] to-[#7a4a22]',
+  silver: 'bg-gradient-to-br from-[#f4f6f8] via-[#b9c0c8] to-[#7d8790]',
+  gold: 'bg-gradient-to-br from-[#fbe38a] via-[#e2b23a] to-[#a8780f]',
+};
+
+/**
+ * The verification badge (#418), replacing the orange merchant badge. It no longer says "this person
+ * has a stall": it says "this business subscribes, and is verified until its plan ends".
+ */
+export function VerificationCheck({ badge, className }: { badge: Badge; className?: string }) {
+  return (
+    <span
+      className={cn(
+        'absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full shadow ring-2 ring-mono-50 dark:ring-mono-950',
+        METAL[badge],
+        className
+      )}
+      title={BADGE_LABELS[badge]}
+      data-badge={badge}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-[62%] w-[62%]" fill="none">
+        <path
+          d="M5 12.5l4.2 4.2L19 7"
+          stroke="white"
+          strokeWidth="3.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
     </span>
   );
 }

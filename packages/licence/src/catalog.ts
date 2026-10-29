@@ -1,4 +1,8 @@
-import type { LicenceLimits } from './types.js'
+import type { LicenceGrant, LicenceLimits } from './types.js'
+import { isBadgeName, type BADGE_NAMES } from './read.js'
+
+/** A verification badge (#418), lowest first. */
+export type BadgeName = (typeof BADGE_NAMES)[number]
 
 /**
  * The tier catalog (#407 §1): which tiers exist, what each unlocks, and the limits they set.
@@ -36,6 +40,12 @@ export interface TierCatalog {
 export interface TierDefinition {
   features: readonly string[]
   limits: LicenceLimits
+  /**
+   * The verification badge a licence of this tier earns while it is valid (#418): bronze, silver or
+   * gold. Absent means none, which is the free tier and any tier an older catalog describes, so a
+   * catalog that does not know about badges awards none rather than a wrong one.
+   */
+  badge?: BadgeName
 }
 
 /** The tier a stall with no licence is on. */
@@ -65,10 +75,12 @@ export const BUNDLED_CATALOG: TierCatalog = {
     basic: {
       features: ['terminals'],
       limits: { sales: null, terminals: 3 },
+      badge: 'bronze',
     },
     pro: {
       features: ['terminals', 'api', 'ecommerce'],
       limits: { sales: null, terminals: null },
+      badge: 'silver',
     },
   },
 }
@@ -180,7 +192,17 @@ function parseTier(def: unknown): TierDefinition | null {
     limits.sales = { period, amounts }
   }
 
-  return { features: [...features] as string[], limits }
+  return { features: [...features] as string[], limits, ...(isBadgeName(def.badge) ? { badge: def.badge } : {}) }
+}
+
+/**
+ * The badge one verified grant earns (#418): the badge the grant itself signed (a hand grant, Q3),
+ * else its tier's in the catalog. None for the free tier, an unknown tier, or a tier with no badge.
+ */
+export function badgeOf(grant: Pick<LicenceGrant, 'tier' | 'badge'>, catalog: Pick<TierCatalog, 'tiers'>): BadgeName | null {
+  if (isBadgeName(grant.badge)) return grant.badge
+  if (!grant.tier || grant.tier === FREE_TIER) return null
+  return catalog.tiers[grant.tier]?.badge ?? null
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

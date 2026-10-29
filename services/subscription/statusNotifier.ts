@@ -32,7 +32,7 @@ export interface StatusNotifier {
 }
 
 /** Publish one event to a relay and wait for its OK, within `timeoutMs`. */
-async function publishTo(url: string, event: Event, timeoutMs: number): Promise<void> {
+export async function publishTo(url: string, event: Event, timeoutMs: number): Promise<void> {
   const relay = await Promise.race([
     Relay.connect(url),
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`connect ${url} timed out`)), timeoutMs)),
