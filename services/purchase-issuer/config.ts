@@ -75,6 +75,8 @@ export interface IssuerConfig {
     trackerPath: string
     /** Optional origin replacing the coupon's mint URL for NUT-07 (local stacks). */
     mintTransportUrl: string | null
+    /** Per-gift re-check interval, or null for the default. */
+    sweepEveryMs: number | null
   } | null
 }
 
@@ -155,7 +157,14 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
       mintTransportUrl = origin(rawTransport) === null ? null : rawTransport.replace(/\/+$/, '')
       if (mintTransportUrl === null) missing.push('PURCHASE_MINT_TRANSPORT_URL: must be a URL')
     }
-    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, mintTransportUrl }
+    // How often one gift is re-checked at the mint (default 10 min). A local stack sets it low to see
+    // the claimed notice within a test; never below 5 s.
+    const rawSweep = (env.PURCHASE_GIFT_SWEEP_MS ?? '').trim()
+    const sweepEveryMs = rawSweep === '' ? null : Number(rawSweep)
+    if (sweepEveryMs !== null && (!Number.isInteger(sweepEveryMs) || sweepEveryMs < 5_000)) {
+      missing.push('PURCHASE_GIFT_SWEEP_MS: whole milliseconds, at least 5000')
+    }
+    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, mintTransportUrl, sweepEveryMs }
   }
 
   if (missing.length > 0) throw new ConfigError(missing)

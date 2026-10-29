@@ -70,6 +70,8 @@ export interface TrackerStore {
 }
 
 export interface TrackerPorts {
+  /** How long between two mint checks of one gift. Default `SWEEP_EVERY_MS`. */
+  sweepEveryMs?: number
   checkStates(mintUrl: string, ys: string[]): Promise<Map<string, ProofState>>
   sendMail(req: SendRequest): Promise<SendOutcome>
   now(): number
@@ -179,7 +181,7 @@ export class GiftTracker {
           changed = true
           continue
         }
-        if (row.checkedAt !== undefined && now - row.checkedAt < SWEEP_EVERY_MS) continue
+        if (row.checkedAt !== undefined && now - row.checkedAt < (this.ports.sweepEveryMs ?? SWEEP_EVERY_MS)) continue
         row.checkedAt = now
         changed = true
         let states: Map<string, ProofState>
