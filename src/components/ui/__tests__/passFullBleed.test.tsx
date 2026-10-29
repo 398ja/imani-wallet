@@ -69,14 +69,21 @@ describe('the stall banner fills the voucher', () => {
 })
 
 describe('the line under the name', () => {
-  it('prints the voucher description', () => {
-    const { getByText } = draw(coupon())
-    expect(getByText('Coffee card')).toBeTruthy()
+  it('prints no description, not even the "Gift Card" placeholder', () => {
+    const { queryByText } = draw(coupon({ description: 'Gift Card' }))
+    expect(queryByText('Gift Card')).toBeNull()
   })
+})
 
-  it('prints no empty line when there is no description', () => {
-    const { container } = draw(coupon({ description: '' }))
-    expect(container.querySelectorAll('p.truncate.text-xs')).toHaveLength(0)
+describe('no redemption QR on the card (#419)', () => {
+  it('does not draw a code even when the pass carries one', async () => {
+    const pass = coupon({
+      barcodes: [{ format: 'PKBarcodeFormatQR', message: 'voucher:x', messageEncoding: 'UTF-8', altText: 'x' }],
+    } as Partial<PassJson>)
+    const { container, queryByText } = draw(pass)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(container.querySelector('img[alt^="Redemption code"]')).toBeNull()
+    expect(queryByText('x')).toBeNull()
   })
 })
 
@@ -96,10 +103,15 @@ describe('the avatar on the card', () => {
 })
 
 describe('the balance', () => {
-  it('prints the amount without the "Balance" label', () => {
-    const { container, queryByText } = draw(coupon())
+  it('prints the face value it is given, without the "Balance" label', () => {
+    const pass = coupon({
+      storeCard: {
+        primaryFields: [{ key: 'balance', label: 'BALANCE', value: 500, unit: 'USD', decimals: 2 }],
+      },
+    })
+    const { container, queryByText } = draw(pass)
     expect(queryByText(/balance/i)).toBeNull()
-    expect(container.querySelector('.text-amount')?.textContent).toBeTruthy()
+    expect(container.querySelector('.text-amount')?.textContent).toBe('$5.00')
   })
 })
 

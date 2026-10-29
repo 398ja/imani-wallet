@@ -1,7 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import QRCode from 'qrcode'
 
 import type { PassField, PassJson } from '../../lib/pass'
 import { formatDate, formatFace, handleLabel, UNKNOWN_STALL } from '../../lib/format'
@@ -15,7 +13,7 @@ import { SkeletonLine } from './Skeleton'
  *
  * The fields are `PassJson`'s, from cashu-voucher's `cashu-voucher-pass` module:
  * an organisation with a logo, one primary field carrying the balance, an
- * auxiliary expiry, and a barcode. See `src/lib/pass.ts` for why the record is
+ * auxiliary expiry, and a barcode (not printed, see below). See `src/lib/pass.ts` for why the record is
  * built client-side.
  *
  * The stall's BANNER FILLS THE CARD (#419). It used to be cropped to a 96px
@@ -40,9 +38,8 @@ interface PassProps {
    * coupon.
    *
    * Separate from `to` rather than reusing it, because on a coupon's own page
-   * the card is NOT a link: it carries the redemption QR, and wrapping that in
-   * a navigation is how a cashier's tap on the code becomes a page change
-   * mid-scan. The identity block is the only part that should move.
+   * the card is NOT a link: it is the page's subject, and the identity block is
+   * the only part that should move.
    *
    * The two are mutually exclusive in practice — a card that is entirely a link
    * must not contain a second one, which is invalid HTML and gives the inner
@@ -53,8 +50,8 @@ interface PassProps {
   /**
    * The issuer's kind-0 has not arrived yet.
    *
-   * Only the IDENTITY block waits on it. The balance, the expiry and the
-   * barcode come from the coupon in hand and are already correct — blanking the
+   * Only the IDENTITY block waits on it. The balance and the expiry come from
+   * the coupon in hand and are already correct — blanking the
    * card while a name loads would hide the number the customer opened it for,
    * and make a local fact hostage to a network one.
    *
@@ -80,36 +77,6 @@ function fieldValue(field: PassField): string {
     return formatFace(field.value, { unit: field.unit ?? '', decimals: field.decimals ?? 0 })
   }
   return String(field.value)
-}
-
-function PassBarcode({ format, message, altText }: { format: string; message: string; altText: string }) {
-  const [dataUrl, setDataUrl] = useState<string>()
-
-  useEffect(() => {
-    let live = true
-    QRCode.toDataURL(message, { width: 512, margin: 1 }).then(
-      (url) => {
-        if (live) setDataUrl(url)
-      },
-      // A pass without its code is still a useful card, so a failure here is
-      // silent rather than an error state over the balance.
-      () => undefined,
-    )
-    return () => {
-      live = false
-    }
-  }, [message])
-
-  if (!format.includes('QR') || !dataUrl) return null
-
-  return (
-    // Its own white panel, so no print shadow: a halo round dark-on-white is a smudge.
-    <div className="flex flex-col items-center gap-2 rounded-xl bg-white p-3" style={{ textShadow: 'none' }}>
-      <img src={dataUrl} alt={`Redemption code ${altText}`} className="w-40" />
-      {/* For a cashier to key in when the scanner fails — the bare id, no prefix. */}
-      <p className="break-all text-center font-mono text-[0.625rem] text-mono-500">{altText}</p>
-    </div>
-  )
 }
 
 /**
@@ -138,7 +105,6 @@ function IssuerBlock({ to, children }: { to?: string; children: ReactNode }) {
 export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
   const balance = pass.storeCard.primaryFields?.[0]
   const expiry = pass.storeCard.auxiliaryFields?.[0]
-  const code = pass.barcodes?.[0]
   const logoUrl = pass.userInfo.logoUrl
   const bannerUrl = pass.userInfo.stripUrl
   const issuer = pass.userInfo.issuer
@@ -160,9 +126,14 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
   const waiting = Boolean(loadingIssuer) && nameIsKey
   // The same rule as the avatar: no picture from a profile that has not arrived.
   const picture = waiting ? undefined : bannerUrl
-  // The line under the name. Optional: a merchant card has none (#419), the
-  // stall's `about` blurb does not belong on a voucher.
-  const description = pass.description?.trim() ? pass.description : undefined
+  /*
+    Not printed (#419): `pass.description` and `pass.barcodes`. One card design
+    for the stall and the coupon: the stall's identity and the amount. The
+    description was a "Gift Card" placeholder or a shop blurb more often than a
+    real memo (the coupon page lists a memo under the card), and the redemption
+    QR is not needed to spend a coupon. Both stay on the pass record, which
+    mirrors the Java mapper.
+  */
 
   const card = (
     <div
@@ -213,16 +184,10 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
           <div className="min-w-0 flex-1" aria-busy={waiting || undefined}>
             {waiting ? (
               /* Name and handle, at the heights of the lines they replace, so
-                 the card does not resize under the balance when they land. The
-                 description between them is the coupon's own and needs no wait. */
+                 the card does not resize under the balance when they land. */
               <>
                 {/* The name's line, at the card's own weight and size. */}
                 <SkeletonLine text="text-base font-semibold" width="w-36" />
-                {description && (
-                  <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>
-                    {description}
-                  </p>
-                )}
                 {/* Unlike IdentityInline, a second bar here is honest: every
                     stall has a profile, so on a card with an issuer the handle
                     line is about to render. */}
@@ -231,11 +196,6 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
             ) : (
               <>
             <p className="truncate font-semibold">{displayName(pass.organizationName)}</p>
-            {description && (
-              <p className="truncate text-xs" style={{ color: pass.labelColor, opacity: 0.7 }}>
-                {description}
-              </p>
-            )}
             {/*
               WHO, under the name. kind-0 is self-published and unverified: a
               second pubkey can publish the same name and picture, and coupons
@@ -301,11 +261,6 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
           </p>
         )}
 
-        {code && (
-          <div className="mt-5 flex justify-center">
-            <PassBarcode format={code.format} message={code.message} altText={code.altText} />
-          </div>
-        )}
       </div>
     </div>
   )

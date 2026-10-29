@@ -124,18 +124,16 @@ export function CouponPage() {
       <BackLink to={backTo} label="Back" />
 
       {/*
-        The pass replaces what used to be a bare amount-and-name panel. It leads
-        with what this coupon is worth now (its row's `face_value`, which a
-        partial spend rewrites to the change; see `balanceField` in pass.ts for
-        why that is the only balance there is). It carries the redemption QR,
-        the code a merchant scans to redeem against the ledger, NOT the share
-        QR, which would hand over the token's bearer value.
+        The pass replaces what used to be a bare amount-and-name panel, in the
+        same design as the stall's card (#419): banner, framed avatar, name and
+        the amount. The amount is this coupon's face value (its row's
+        `face_value`, which a partial spend rewrites to the change; see
+        `balanceField` in pass.ts). No QR: it is not needed to spend a coupon.
       */}
       <div className="mb-6">
         {/*
-          `issuerTo`, not `to`: the card carries the redemption QR a cashier
-          scans, and making the whole thing a link turns a tap on that code into
-          a navigation mid-redemption. Only the stall's name and picture move.
+          `issuerTo`, not `to`: the card is this page's subject, so only the
+          stall's name and picture move.
 
           Reaching the stall used to depend on the back arrow, which only points
           there when the customer ARRIVED from it — open a coupon from a
@@ -192,6 +190,9 @@ export function CouponPage() {
           // Whether a coupon runs out is the thing a holder needs to know.
           // #265: with a countdown beside the date, so nobody has to subtract.
           ['Expires', expiresValue],
+          // The sender's note, off the card since #419 (the card's line was
+          // mostly the "Gift Card" placeholder). Dropped when there is none.
+          ['Memo', row.memo],
           // The id identifies the record, so it stays visible rather than
           // collapsing into Details with the derived and diagnostic fields.
           ['Voucher id', row.token_id],
