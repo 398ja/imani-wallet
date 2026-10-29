@@ -25,7 +25,10 @@ export interface SubscriptionStatusMessage {
   status: 'cancelled' | 'active'
   /** Unix SECONDS: when a cancelled subscription stops. Absent when unknown or active. */
   endsAt?: number
-  /** Unix SECONDS: when the seller learned it. Newest wins on the device. */
+  /**
+   * Unix MILLISECONDS: when the seller learned it. Newest wins on the device. Milliseconds because
+   * a cancellation and its undo can arrive within the same second (seen on the local deployment).
+   */
   at: number
 }
 

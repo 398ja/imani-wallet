@@ -520,6 +520,18 @@ describe('buying a plan', () => {
       expect(b.at).toBeGreaterThanOrEqual(a.at)
     })
 
+    it('is never backdated, so the wallet poll (watermark - 60 s) fetches an undo sent after a cancel', async () => {
+      // NIP-59 backdates wraps by up to 10 minutes; the undo of a cancellation was then never
+      // fetched on the local deployment. Status wraps carry the real time.
+      await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
+      for (let i = 0; i < 6; i++) {
+        await app.handle(event('customer.subscription.updated', { status: 'active', cancel_at: i % 2 === 0 ? 1_802_000_000 : null }))
+      }
+      const nowSec = Math.floor(Date.now() / 1000)
+      expect(published).toHaveLength(6)
+      for (const w of published) expect(nowSec - w.created_at).toBeLessThan(60)
+    })
+
     it('nothing is sent when nothing changed, and a relay that is down never fails the webhook', async () => {
       await app.handle(invoicePaid('in_1', 1_800_000_000, 1_802_000_000))
       await app.handle(event('customer.subscription.updated', { status: 'active' }))

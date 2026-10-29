@@ -56,7 +56,10 @@ export function relayStatusNotifier(opts: {
   const publish = opts.publish ?? ((url, event) => publishTo(url, event, opts.timeoutMs ?? 5000))
   return {
     async notify(stallPubkey, message) {
-      const wrap = wrapMessage(opts.seller.sk, stallPubkey, subscriptionStatusJson(message))
+      // Not backdated (blur 0): a cancellation and its undo are seconds apart, and the wallet's poll
+      // would never fetch an undo whose wrap was backdated behind the cancellation it had seen.
+      // The timing it would hide is already public: the seller acts when Stripe's webhook fires.
+      const wrap = wrapMessage(opts.seller.sk, stallPubkey, subscriptionStatusJson(message), 0)
       await publish(opts.relayUrl, wrap)
     },
   }

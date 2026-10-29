@@ -15,17 +15,26 @@ export interface Rumor {
   tags: string[][]
 }
 
-/** Gift-wrap a kind-14 message from `senderKey` to `recipient` (NIP-17, NIP-59). */
-export function wrapMessage(senderKey: Uint8Array, recipient: string, content: string): Event {
+/**
+ * Gift-wrap a kind-14 message from `senderKey` to `recipient` (NIP-17, NIP-59).
+ *
+ * `blurSeconds` is NIP-59's timing blur: the seal and the wrap are backdated by up to that much
+ * (default 600). A sender whose messages must be SEEN IN ORDER by the wallet's DM poll passes 0:
+ * the poll reads wraps from `watermark - 60 s`, so a wrap backdated further than that, sent after
+ * one already seen, is never fetched. That is how an undo of a cancellation was lost on the local
+ * deployment (2026-10-29): it was sent 4 s after the cancellation and backdated past it.
+ */
+export function wrapMessage(senderKey: Uint8Array, recipient: string, content: string, blurSeconds = 600): Event {
   const sender = getPublicKey(senderKey)
   const now = Math.floor(Date.now() / 1000)
+  const blur = () => (blurSeconds > 0 ? Math.floor(Math.random() * blurSeconds) : 0)
   const rumor = { kind: 14, pubkey: sender, created_at: now, content, tags: [['p', recipient]] }
   const seal = finalizeEvent(
     {
       kind: 13,
       // NIP-59 tweaks `created_at` to blur timing. Kept within the 24-hour
       // window the device enforces, which it reads from the RUMOR anyway.
-      created_at: now - Math.floor(Math.random() * 600),
+      created_at: now - blur(),
       tags: [],
       content: nip44.encrypt(JSON.stringify(rumor), nip44.getConversationKey(senderKey, recipient)),
     },
@@ -35,7 +44,7 @@ export function wrapMessage(senderKey: Uint8Array, recipient: string, content: s
   return finalizeEvent(
     {
       kind: 1059,
-      created_at: now - Math.floor(Math.random() * 600),
+      created_at: now - blur(),
       tags: [['p', recipient]],
       content: nip44.encrypt(JSON.stringify(seal), nip44.getConversationKey(throwaway, recipient)),
     },
