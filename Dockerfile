@@ -85,6 +85,8 @@ ARG VITE_SUBSCRIPTION_SITE_URL=
 ENV VITE_SUBSCRIPTION_SITE_URL=$VITE_SUBSCRIPTION_SITE_URL
 ARG VITE_GIFTING_SITE_URL=
 ENV VITE_GIFTING_SITE_URL=$VITE_GIFTING_SITE_URL
+ARG VITE_GIFTING_HANDLE_DOMAIN=
+ENV VITE_GIFTING_HANDLE_DOMAIN=$VITE_GIFTING_HANDLE_DOMAIN
 
 # Checkout codes for online shops (#402, src/lib/checkoutCodePorts.ts). "on" shows "Use online";
 # anything else ships the feature dark, which is the default. Not a secret. imani-deploy's
