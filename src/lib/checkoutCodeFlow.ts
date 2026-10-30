@@ -534,7 +534,8 @@ export function parseCheckoutNotice(content: string): CheckoutNotice | null {
 export async function storePubkey(ports: CheckoutPorts): Promise<string | null> {
   try {
     const answer = await ports.store.call('GET', `${CHECKOUT_CODES_PATH}/info`)
-    const key = answer.body?.pubkey
+    // Contract §6: `{"nostr_pubkey": "…"}`, as imani-checkout-codes `InfoController` answers.
+    const key = answer.body?.nostr_pubkey
     return answer.status === 200 && typeof key === 'string' && /^[0-9a-f]{64}$/i.test(key) ? key.toLowerCase() : null
   } catch {
     return null
