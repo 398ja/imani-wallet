@@ -78,6 +78,12 @@ export { GatewayUnreachableError }
  * #203 was a CALLER ignoring this result; every caller must check `ok`.
  */
 export async function publish(event: Event, relays: string[] = [RELAY_URL]): Promise<PublishResult> {
+  // #428 WRITE-THROUGH. Reads go only through the gateway now, and for non-addressable kinds it
+  // answers from nostrdb alone while its copy is "fresh" (30 min), never asking the relay. An event
+  // published only to strfry stayed invisible: on staging a sender's history read 4 of 46 events.
+  // So every publish also stores the event in the cache. Best effort, in parallel, never blocks or
+  // changes the relay result.
+  void cacheEvent(event)
   const pool = new SimplePool()
   try {
     const results = await Promise.allSettled(pool.publish(relays, event))
@@ -100,6 +106,26 @@ export async function publish(event: Event, relays: string[] = [RELAY_URL]): Pro
     // Without this the WebSocket stays open for the life of the page. Each
     // profile save would leak another connection to the same relay.
     pool.close(relays)
+  }
+}
+
+/**
+ * Store a signed event in the gateway's nostrdb (`POST /api/v1/nostr/events`, NIP-98; the gateway
+ * re-derives the id and checks the signature). NEVER THROWS. Returns whether it was stored.
+ */
+export async function cacheEvent(event: Event): Promise<boolean> {
+  try {
+    const { signedFetch } = await import('./nip98')
+    const response = await signedFetch(
+      '/api/v1/nostr/events',
+      'POST',
+      { id: event.id, pubkey: event.pubkey, createdAt: event.created_at, kind: event.kind, tags: event.tags, content: event.content, sig: event.sig },
+      undefined,
+      { signal: AbortSignal.timeout(8_000) },
+    )
+    return response.ok
+  } catch {
+    return false
   }
 }
 
