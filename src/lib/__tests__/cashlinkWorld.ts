@@ -613,7 +613,7 @@ export class FakeCodeStore {
   async call(method: 'GET' | 'POST', path: string, body?: unknown): Promise<GatewayAnswer> {
     if (this.down) throw new Error('store unreachable')
     this.calls.push({ method, path, body })
-    if (path === '/v1/checkout-codes/info') return { status: 200, body: { pubkey: STORE_PUB } }
+    if (path === '/v1/checkout-codes/info') return { status: 200, body: { notice_type: 'imani-checkout-code/1', nostr_pubkey: STORE_PUB } }
     if (path === '/v1/checkout-codes/mine') return { status: 200, body: [...this.codes.values()].map((c) => ({ code: c.code, status: c.status, amount: c.body.amount })) as unknown as Record<string, unknown> }
     if (path === '/v1/checkout-codes' && method === 'POST') return this.deposit(body as StoredCode['body'])
     const cancel = /^\/v1\/checkout-codes\/([^/]+)\/cancel$/.exec(path)

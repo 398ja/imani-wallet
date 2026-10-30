@@ -244,7 +244,25 @@ Signed only when every rule holds:
    claim ledger), and an identical resend replays.
 
 Refusals reuse the Cashlink route's names where they apply, plus `LOCK_KEY_NOT_ALLOWED` (rule 4)
-and `NOT_THE_SHOP_PATHWAY` (rule 3).
+and `NOT_THE_SHOP_PATHWAY` (rule 3). Retryable (`409`): `PREDECESSOR_NOT_SPENT`,
+`MINT_KEYS_UNAVAILABLE`. Everything else is `422`, including `PREDECESSOR_ALREADY_CLAIMED`.
+
+`200 {"signed_parts": ["…"]}`, one per proposal, in proposal order (the split route's answer).
+
+Pinned details:
+
+- `K` is the `issuer` **tag value** (the stall's x-only key) or `R`, always written `02‖x`. A
+  `03` spelling is refused even when `x` matches: BIP-340 keys are x-only, and one spelling keeps
+  the claim ledger and the mint's records unambiguous.
+- `sigflag` absent and `sigflag = SIG_INPUTS` are the same thing (cashu-lib writes the default).
+- The authorization digest is
+  `sha256(TAG ‖ u32be(len) ‖ predecessor ‖ u32be(len) ‖ p₁ ‖ … ‖ u32be(len) ‖ pₙ)`, the UTF-8
+  bytes of each field. With one proposal it equals `cashlinkDigest`.
+- A part always carries a signed `max_sats`, so the pre-#141 legacy budget is never consulted.
+- Splitting one proof's value: successors are in sats. The share for the stall is
+  `round_half_up(sats × applied / part_amount)`, clamped to `[1, sats − 1]` when both sides are
+  non-empty. The stall's ledger books the credited face value of what it receives, so this rounding
+  can move at most one sat's worth between stall and customer.
 
 Each successor carries one power-of-two output, so the shop sends one proposal per output of the
 amount it re-locks (for example 200 sats to the stall = 128 + 64 + 8, three proposals).
@@ -288,3 +306,7 @@ The store sends them itself, as NIP-17 gift wraps from its own key to the deposi
 ```
 
 `tokens` (R-locked) appear only on `change` and `cancelled`. `redeemed` carries the amount spent.
+`expired` carries only the amount: the parts come back through the relay's pre-signed refunds.
+
+The store publishes its nostr key at `GET /v1/checkout-codes/info` (`{"nostr_pubkey": "…"}`,
+public). The wallet drops any notice whose seal is not that key.
