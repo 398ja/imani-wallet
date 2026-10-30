@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.1] - 2026-10-30
+
+### Fixed
+
+- The stall's gifting page link (Settings, and the guest Buy page) now points at the gifting site this
+  build is configured for (`VITE_GIFTING_SITE_URL`). A staging wallet linked to the production gifting
+  site. A build with no gifting site shows no link. New optional build arg `VITE_GIFTING_HANDLE_DOMAIN` (#432).
+
 ## [0.41.0] - 2026-10-30
 
 A **minor** release: checkout codes for online shops (#402), shipped **dark**, plus fixes to
