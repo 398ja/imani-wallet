@@ -20,20 +20,42 @@ import { buildMerchantEvent, emptyMerchant, mergeMerchantEvent, type MerchantPro
 const STALL = 'a'.repeat(64)
 const merchant = (over: Partial<MerchantProfile> = {}): MerchantProfile => ({ ...emptyMerchant(STALL), acceptsCards: true, ...over })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+})
+
+const prodSite = () => {
+  vi.stubEnv('VITE_GIFTING_SITE_URL', 'https://gifting.imani.casa')
+  vi.stubEnv('VITE_GIFTING_HANDLE_DOMAIN', '')
+}
 
 describe('giftingPageUrl', () => {
   it('bare on the default domain, full handle elsewhere, nothing without a handle', () => {
+    prodSite()
     expect(giftingPageUrl('Alice@imani.casa')).toBe('https://gifting.imani.casa/shop/alice')
     expect(giftingPageUrl('alice@example.com')).toBe('https://gifting.imani.casa/shop/alice%40example.com')
     expect(giftingPageUrl('_@imani.casa')).toBe('https://gifting.imani.casa/shop/_%40imani.casa')
     expect(giftingPageUrl(undefined)).toBeNull()
     expect(giftingPageUrl('not a handle')).toBeNull()
   })
+  it('follows the build: a staging wallet links to the staging gifting site and handle domain', () => {
+    vi.stubEnv('VITE_GIFTING_SITE_URL', 'https://gifting.staging.398ja.xyz/')
+    vi.stubEnv('VITE_GIFTING_HANDLE_DOMAIN', '')
+    expect(giftingPageUrl('bob@staging.398ja.xyz')).toBe('https://gifting.staging.398ja.xyz/shop/bob')
+    expect(giftingPageUrl('bob@imani.casa')).toBe('https://gifting.staging.398ja.xyz/shop/bob%40imani.casa')
+    vi.stubEnv('VITE_GIFTING_HANDLE_DOMAIN', 'Example.org')
+    expect(giftingPageUrl('bob@example.org')).toBe('https://gifting.staging.398ja.xyz/shop/bob')
+  })
+  it('no gifting site in this build: no link, never a guessed production URL', () => {
+    vi.stubEnv('VITE_GIFTING_SITE_URL', '')
+    expect(giftingPageUrl('alice@imani.casa')).toBeNull()
+  })
 })
 
 describe('GiftingPageSection', () => {
   it('shows the link by handle and a QR button', () => {
+    prodSite()
     identity = { nip05: 'alice@imani.casa' }
     render(<GiftingPageSection merchant={merchant()} onToggleIndexing={async () => {}} />)
     expect(screen.getByTestId('gifting-url').textContent).toBe('https://gifting.imani.casa/shop/alice')
