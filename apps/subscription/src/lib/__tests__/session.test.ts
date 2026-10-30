@@ -38,4 +38,14 @@ describe('stallLabel', () => {
   it('has nothing to say when the wallet sent no name', () => {
     expect(stallLabel(`?as=${PK}`)).toBeUndefined()
   })
+
+  it('takes an https avatar, and refuses any other scheme', () => {
+    const pic = 'https://blossom.primal.net/f4fc.webp'
+    expect(stallLabel(`?as=${PK}&picture=${encodeURIComponent(pic)}`)?.picture).toBe(pic)
+    expect(stallLabel('')?.picture).toBe(pic)
+    sessionStorage.clear()
+    for (const bad of ['javascript:alert(1)', 'http://evil.test/x.png', 'data:image/svg+xml,<svg/>', '//evil.test/x']) {
+      expect(stallLabel(`?as=${PK}&name=Bart&picture=${encodeURIComponent(bad)}`)).toEqual({ pubkey: PK, name: 'Bart' })
+    }
+  })
 })

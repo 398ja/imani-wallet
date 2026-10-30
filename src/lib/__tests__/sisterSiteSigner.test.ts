@@ -74,11 +74,16 @@ describe('openSisterSite', () => {
     expect(url.searchParams.has('name')).toBe(false)
     expect(url.searchParams.has('nip05')).toBe(false)
 
-    saveProfile({ ...emptyProfile(signer.pubkey), displayName: 'Bart', nip05: 'bart@staging.398ja.xyz', updatedAt: 1 })
+    saveProfile({ ...emptyProfile(signer.pubkey), displayName: 'Bart', nip05: 'bart@staging.398ja.xyz', picture: 'https://blossom.primal.net/f4fc.webp', updatedAt: 1 })
     expect(openSisterSite(SITE, 'imani-subscription')).toBe(true)
     url = new URL(opened[1].url)
     expect(url.searchParams.get('name')).toBe('Bart')
     expect(url.searchParams.get('nip05')).toBe('bart@staging.398ja.xyz')
+    expect(url.searchParams.get('picture')).toBe('https://blossom.primal.net/f4fc.webp')
+
+    saveProfile({ ...emptyProfile(signer.pubkey), displayName: 'Bart', picture: 'data:image/png;base64,AAAA', updatedAt: 1 })
+    expect(openSisterSite(SITE, 'imani-subscription')).toBe(true)
+    expect(new URL(opened[2].url).searchParams.has('picture')).toBe(false)
     clearProfile(signer.pubkey)
   })
 

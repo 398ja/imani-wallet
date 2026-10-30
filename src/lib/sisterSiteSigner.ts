@@ -24,6 +24,7 @@
  */
 import { CROSS_ORIGIN_PROTOCOL, mountCrossOriginSigner, type CrossOriginSignerHandle } from '@imani/nap-client-web'
 
+import { imageUrl } from './branding'
 import { getSession, getSigner } from './nap'
 import { loadProfile } from './profile'
 import { signerPolicy } from './napSignerPolicy'
@@ -75,6 +76,10 @@ export function openSisterSite(url: string, name: string): boolean {
   const profile = pubkey ? loadProfile(pubkey) : null
   if (profile?.displayName) target.searchParams.set('name', profile.displayName.slice(0, 64))
   if (profile?.nip05) target.searchParams.set('nip05', profile.nip05.slice(0, 128))
+  // https only (a data: avatar would bloat the URL past what a browser keeps), and only one the
+  // profile guard already accepted.
+  const picture = imageUrl(profile?.picture)
+  if (picture?.startsWith('https://') && picture.length <= 512) target.searchParams.set('picture', picture)
 
   // A named window: a second tap reuses the tab instead of piling up new ones.
   const child = window.open(target.toString(), name)

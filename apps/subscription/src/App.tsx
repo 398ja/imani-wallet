@@ -101,6 +101,7 @@ export function App() {
               linkToProfile={false}
               fallbackName={label?.pubkey === account.pubkey ? label.name : undefined}
               fallbackHandle={label?.pubkey === account.pubkey ? label.nip05 : undefined}
+              fallbackPicture={label?.pubkey === account.pubkey ? label.picture : undefined}
             />
           </Link>
           {me?.admin ? (
