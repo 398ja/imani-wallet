@@ -163,6 +163,19 @@ Body `{"order_ref": "string ≤ 128"}`.
 
 `reserved → cancelling`. `409 HELD` while held.
 
+### `GET /v1/checkout-codes/cancelling?limit=50` (shop)
+
+The caller's codes in `cancelling`, oldest first (limit 1..200):
+`[{ "code", "amount", "unit", "expires_at" }]`. Any other caller gets `[]`. The shop's plugin
+polls this, so a customer's cancel reaches it without a push to the shop.
+
+### `POST /v1/checkout-codes/{code}/return` (shop)
+
+The parts of a `cancelling` code, in `/redeem`'s shape
+(`{"parts":[{"token","amount"}], "customer_pubkey"}`), for `Redeemer::cancel`. Read-only and
+repeatable: the code only moves on `/cancelled`, so a crash between the two just asks again.
+`409 {"refusal":"<STATE>"}` in any other state, and the usual `404` for another shop.
+
 ### `POST /v1/checkout-codes/{code}/cancelled` (shop)
 
 Body `{"tokens":["cashuB…"]}`: the parts, swapped back and locked to the customer.
