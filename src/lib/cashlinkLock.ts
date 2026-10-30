@@ -71,6 +71,21 @@ export function deriveRefundSecret(identitySecret: Uint8Array, i: number): Uint8
   return scalarBytes(scalarFrom(identitySecret, `${REFUND_LABEL}${i}`))
 }
 
+/**
+ * #402: the refund key of the `i`-th checkout part this wallet ever locks, under its own label so it
+ * can never equal a Cashlink's refund key for the same index. The shop holds `S`, so `R` must stay
+ * the customer's: after `x` it is the customer, and only the customer, who takes the part back.
+ *
+ * `i` is a wallet-wide counter, never the part's index within one code: reusing it across codes
+ * would put the same `R` on parts of different codes, and the relay could link them to one customer.
+ */
+export const CHECKOUT_REFUND_LABEL = 'imani-checkout-refund/v1/'
+
+export function deriveCheckoutRefundSecret(identitySecret: Uint8Array, i: number): Uint8Array {
+  if (!Number.isSafeInteger(i) || i < 0) throw new Error('part index must be a non-negative integer')
+  return scalarBytes(scalarFrom(identitySecret, `${CHECKOUT_REFUND_LABEL}${i}`))
+}
+
 /** A random refund key, for an account whose key this wallet cannot read (kept on the link record). */
 export function randomRefundSecret(): Uint8Array {
   for (;;) {
@@ -94,7 +109,7 @@ const xOnlyOf = (key: string): string => (key.length === 66 ? key.slice(2) : key
  * What a derived value is for. Separate labels, so no two steps can ever produce the same output:
  * a refund output that equalled a burn output would let one swap's restore answer for the other.
  */
-export type DerivedPurpose = 'burn' | 'refund' | 'takeback' | 'mint-link' | 'mint-refund' | 'lock' | 'resign-link' | 'resign-refund'
+export type DerivedPurpose = 'burn' | 'refund' | 'takeback' | 'mint-link' | 'mint-refund' | 'lock' | 'resign-link' | 'resign-refund' | 'unlock-burn' | 'unlock' | 'mint-unlock'
 
 const anchorOf = (secret: string) => bytesToHex(sha256(utf8(secret)))
 
@@ -271,6 +286,16 @@ export function lockWindowProblem(x: number, couponExpiresAt: number | undefined
   return null
 }
 
+/**
+ * The latest `x` {@link lockWindowProblem} accepts for one coupon, or null when no `x` would do.
+ * Derived from the same constants, so the two answers cannot disagree (#402 `maxExpiryFor`).
+ */
+export function latestLockX(couponExpiresAt: number | undefined, nowS: number): number | null {
+  let x = nowS + 30 * DAY_S
+  if (couponExpiresAt !== undefined) x = Math.min(x, couponExpiresAt - DAY_S - CLOCK_SLACK_S)
+  return lockWindowProblem(x, couponExpiresAt, nowS) === null ? x : null
+}
+
 // ─── Building the two proposals ─────────────────────────────────────────────
 
 /** Tags that decide who can spend, or that the issuer sets. Never terms. */
@@ -337,16 +362,47 @@ export interface LinkLockProposal {
  * voucher id and terms, then the locktime, the ONE refund key and the sat bound.
  */
 export function linkLockProposal(p: LinkLockProposal): string {
+  return lockProposal({ ...p, lockPub: p.linkPub }, 'link')
+}
+
+export interface CheckoutLockProposal {
+  giftSecret: string
+  /** `S`, x-only: the stall's online-shop redeem key, read from its profile and nowhere else. */
+  shopPub: string
+  /** x-only. Per part, from {@link deriveCheckoutRefundSecret}. Never `S`. */
+  refundPub: string
+  x: number
+  maxSats: number
+  nonce: string
+}
+
+/**
+ * One part of a checkout code (#402, contract §2): the coupon locked to the shop key `S` instead of
+ * a link key. Byte for byte the link lock's layout, signed by the same gateway route, and built by
+ * the same internal so the two can never drift apart, least of all on the refund rule.
+ */
+export function checkoutLockProposal(p: CheckoutLockProposal): string {
+  return lockProposal({ ...p, lockPub: p.shopPub }, 'shop')
+}
+
+/**
+ * The one builder behind both proposals. `lockPub` is whoever may spend before `x`: the link key
+ * for a Cashlink, `S` for a checkout code. Ends in {@link assertNotOpenAfterLocktime}, the one gate.
+ */
+function lockProposal(
+  p: { giftSecret: string; lockPub: string; refundPub: string; x: number; maxSats: number; nonce: string },
+  lockName: 'link' | 'shop',
+): string {
   const found = lockableVoucher(p.giftSecret)
   if ('problem' in found) throw new Error(`this gift cannot be locked: ${found.problem}`)
-  if (xOnlyOf(p.refundPub) === xOnlyOf(p.linkPub)) throw new CashlinkInvariantError('the refund key must not be the link key')
+  if (xOnlyOf(p.refundPub) === xOnlyOf(p.lockPub)) throw new CashlinkInvariantError(`the refund key must not be the ${lockName} key`)
   if (!Number.isSafeInteger(p.x) || p.x <= 0 || p.x > 2_147_483_647) throw new Error('the expiry is not a usable locktime')
   if (!Number.isSafeInteger(p.maxSats) || p.maxSats <= 0) throw new Error('the sat bound must be a positive integer')
   const secret = JSON.stringify([
     'P2PK_VOUCHER',
     {
       nonce: p.nonce,
-      data: compressed(p.linkPub),
+      data: compressed(p.lockPub),
       tags: [
         ['n_sigs', '1'],
         ['sigflag', 'SIG_ALL'],
@@ -423,6 +479,8 @@ const verifySigned = (v: SignedVoucherFields): boolean => verifyVoucher(v).signa
 
 export const CASHLINK_LOCK_TAG = 'imani/voucher-cashlink-lock/v1'
 export const CASHLINK_RESIGN_TAG = 'imani/voucher-cashlink-resign/v1'
+/** #402 contract §5: a returned checkout coupon locked to `R`, unlocked by `R`. */
+export const CHECKOUT_UNLOCK_TAG = 'imani/voucher-checkout-unlock/v1'
 
 /** `sha256(TAG || u32be(len) || predecessor || u32be(len) || proposed)`, as `LockAuthorization`. */
 export function cashlinkDigest(tag: string, predecessor: string, proposed: string): Uint8Array {

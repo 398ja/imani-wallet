@@ -48,6 +48,9 @@ import {
   readEnrolmentCode,
 } from '../lib/terminalEnrolProof'
 import { CredentialMintError } from '../lib/terminalMint'
+import { SHOP_ENROL_MESSAGES, SHOP_ENROL_PREFIX, readShopEnrolCode, shopHost, type ShopEnrolment } from '../lib/shopEnrol'
+import { TERMINAL_ROLES } from '../lib/terminalRole'
+import { allTerminals } from '../lib/terminalRoster'
 import { userMessage } from '../lib/userMessage'
 
 /**
@@ -130,6 +133,9 @@ export function TerminalEnrolPage({
   const [terminalPubkey, setTerminalPubkey] = useState<string | null>(null)
   // The device's proof that the scanned key was created as a terminal (inv-terminal-not-merchant).
   const [enrolmentProof, setEnrolmentProof] = useState<string | null>(null)
+  // An online shop's code was scanned (#402 §0): the key is the shop's `S`, and the terminal can
+  // only ever be redeem-only. Its url and platform go on the row, and from there on the profile.
+  const [shop, setShop] = useState<ShopEnrolment | null>(null)
   // Why the last scan was refused, in the owner's words.
   const [scanRefusal, setScanRefusal] = useState<string | null>(null)
   const lastScanned = useRef<string | null>(null)
@@ -195,6 +201,31 @@ export function TerminalEnrolPage({
       lastScanned.current = null
       setScanRefusal(message)
     }
+    if (text.trim().toLowerCase().startsWith(SHOP_ENROL_PREFIX)) {
+      const code = readShopEnrolCode(text)
+      if (typeof code === 'string') {
+        refuse(SHOP_ENROL_MESSAGES[code])
+        return true
+      }
+      // One online shop per stall in v1: a second would split the profile's single `online_shop`.
+      const other = allTerminals(stallPubkey).find(
+        (t) => t.shop && t.revokedAt === undefined && t.terminalPubkey !== code.redeemKey,
+      )
+      if (other) {
+        refuse(`Your stall is already connected to ${shopHost(other.shop!.url)}. Revoke it first.`)
+        return true
+      }
+      if (code.redeemKey === stallPubkey.toLowerCase()) {
+        refuse('That is your own stall. Copy the code from the shop.')
+        return true
+      }
+      setShop(code)
+      setRole(TERMINAL_ROLES.REDEEM_ONLY)
+      if (!name.trim()) setName(shopHost(code.url))
+      setTerminalPubkey(code.redeemKey)
+      setEnrolmentProof(code.enrolmentProof)
+      return true
+    }
     if (typeof read === 'string') {
       refuse(ENROLMENT_CODE_MESSAGES[read])
       return true
@@ -238,8 +269,9 @@ export function TerminalEnrolPage({
    */
   const enrol = async () => {
     if (!context || busy) return
+    // A shop is never anything but redeem-only (#402 §0), whatever the picker says.
     const prepared = {
-      ...prepareEnrolment(request, context),
+      ...prepareEnrolment(shop ? { ...request, role: TERMINAL_ROLES.REDEEM_ONLY } : request, context),
       idleLockMinutes: idleLock,
       ...(enrolmentProof ? { enrolmentProof } : {}),
     }
@@ -269,6 +301,7 @@ export function TerminalEnrolPage({
         ...(credential.enrolmentProof ? { enrolmentProof: credential.enrolmentProof } : {}),
         idleLockMinutes: idleLock,
         waitingUntil: startedAt + WAITING_TTL_MS,
+        ...(shop ? { shop: { url: shop.url, platform: shop.platform } } : {}),
       })
     } catch (e) {
       setFailure(userMessage(e, 'Could not set up the terminal.'))
@@ -426,7 +459,14 @@ export function TerminalEnrolPage({
           </p>
         </div>
 
-        <RolePicker value={role} onChange={setRole} />
+        {shop ? (
+          <p className="text-sm text-mono-500" data-testid="shop-role">
+            Online shop at {shopHost(shop.url)}: {TERMINAL_ROLE_LABELS[TERMINAL_ROLES.REDEEM_ONLY].name.toLowerCase()}.
+            It can take your coupons at checkout and can never sell them.
+          </p>
+        ) : (
+          <RolePicker value={role} onChange={setRole} />
+        )}
 
         {/* Decision 2 on #160. On top of the 12-hour session: an unattended till
             locks itself after this long with no touch. */}
@@ -479,6 +519,7 @@ export function TerminalEnrolPage({
                 onClick={() => {
                   setTerminalPubkey(null)
                   setEnrolmentProof(null)
+                  setShop(null)
                   lastScanned.current = null
                 }}
               >
@@ -491,7 +532,7 @@ export function TerminalEnrolPage({
                 onFound={() => {}}
                 onText={onScanned}
                 selfPubkey={stallPubkey}
-                manualLabel="Or enter the device's code"
+                manualLabel="Or enter the device's or online shop's code"
               />
               {scanRefusal ? (
                 <div className="mt-3">

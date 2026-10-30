@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CreditCard, Wallet } from 'lucide-react'
+import { CreditCard, Globe, Wallet } from 'lucide-react'
 
 import { Button } from './ui'
 import { listVouchers, onWalletChanged, walletIsOpen } from '../lib/wallet'
@@ -8,6 +8,7 @@ import { withoutInFlight } from '../lib/pay'
 import { merchantActions, payPath, validVoucherCount, type ActionState, type CardSalesReadiness } from '../lib/merchantActions'
 import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
 import { rememberAfterLogin } from '../lib/afterLogin'
+import { checkoutCodesEnabled } from '../lib/checkoutCodePorts'
 
 /**
  * Buy and Pay at one stall (#280), shared by `/merchants/:pubkey` and `/profile/:pubkey`.
@@ -24,9 +25,12 @@ export function MerchantActions({
   pubkey,
   acceptsCards,
   viewerPubkey,
+  sellsOnline = false,
 }: {
   pubkey: string
   acceptsCards: boolean
+  /** #402: the stall's profile names an online shop. */
+  sellsOnline?: boolean
   /** The signed-in user, or undefined for a visitor with no session. */
   viewerPubkey?: string
 }) {
@@ -97,6 +101,12 @@ export function MerchantActions({
         onClick={() => navigate(payPath(pubkey))}
         variant="outline"
       />
+      {/* #402: a checkout code for this stall's online shop. Dark until the flag is on. */}
+      {sellsOnline && loggedIn && valid > 0 && checkoutCodesEnabled() && (
+        <Button size="lg" variant="ghost" className="col-span-2 w-full" onClick={() => navigate(`/online?stall=${pubkey}`)}>
+          <Globe className="mr-2 h-5 w-5" aria-hidden /> Use online
+        </Button>
+      )}
     </div>
   )
 }
