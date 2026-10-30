@@ -70,6 +70,13 @@ ENV VITE_VOUCHER_ISSUER_PUBKEYS=$VITE_VOUCHER_ISSUER_PUBKEYS
 ARG VITE_LICENCE_SELLER_PUBKEY=
 ENV VITE_LICENCE_SELLER_PUBKEY=$VITE_LICENCE_SELLER_PUBKEY
 
+# The licence ISSUER's key, 64-hex x-only (src/lib/licenceStatus.ts licenceIssuerPubkey): the
+# gateway-customer key that signs every licence voucher. Not a secret. EMPTY MEANS NO LICENCE
+# VERIFIES: a paid plan is delivered, stored and announced, and the wallet still reports no plan
+# (staging, 2026-10-30, until this arg existed: the image could not be built with it at all).
+ARG VITE_LICENCE_ISSUER_PUBKEY=
+ENV VITE_LICENCE_ISSUER_PUBKEY=$VITE_LICENCE_ISSUER_PUBKEY
+
 # The sister sites (#411, src/lib/sisterSites.ts): where Settings › Subscription › "Upgrade my plan"
 # goes, and the only origins the wallet will sign a NAP login for. Per environment, e.g.
 # https://subscription.imani.casa in production. Not secrets. Empty: that site is not part of this
