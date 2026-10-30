@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-10-30
+
+A **minor** release: checkout codes for online shops (#402), shipped **dark**, plus fixes to
+licences, the subscription site and Cashlink take-back.
+
+### Added
+
+- **Checkout codes for online shops** (#402). A customer makes a code (`IMANI-XXXX-XXXX-XXXX`) from
+  their coupons at one stall and types it at that stall's online shop (WooCommerce, WordPress,
+  Magento). Behind **"Use online"**: pick the stall, the amount and the expiry; the wallet locks 1..N
+  coupons of that stall to the shop key, all or nothing, and deposits them with the code store. The
+  value is shown as reserved, logout waits while a code is outstanding, and change comes back as a
+  coupon locked to the customer. Store notices arrive by DM, with `GET /mine` as the fallback.
+- **Online shops as redeem-only terminals** (#402). A stall enrols its shop with a setup code; the
+  Terminals page shows the shop and its outstanding codes ("3 codes, €45.00 outstanding"), and
+  revoking it withdraws the shop from the stall's profile.
+- The flag: shown only when built with **`VITE_CHECKOUT_CODES=on`**, with
+  `VITE_CHECKOUT_CODES_URL` for the exposure figure. Both are now declared in the Dockerfile.
+- A staging end-to-end test (`e2e/checkout-codes-staging.e2e.mts`) and a VAT brief for an adviser
+  (`docs/handoff/vat-coupons-q4.md`, #402 Q4).
+
+### Fixed
+
+- **Licences never verified in a built wallet.** The Dockerfile did not declare
+  `VITE_LICENCE_ISSUER_PUBKEY`, so the issuer key was always empty and every delivered plan was
+  ignored. It is now a build arg.
+- **"Take it back" right after "Cashlink ready" left the gift claimable** under a row reading
+  "Taken back": the tap took back the bearer copy the send was about to burn. A take-back now waits
+  for its own link's send to finish (up to 90 s), then takes back the real gift.
+- **The subscription site's header** showed "Someone", no avatar and no badge. The wallet now passes
+  the stall's name, handle and https avatar to the site; the site is built with `VITE_RELAY_URL` and
+  `VITE_LICENCE_SELLER_PUBKEY` so it can read profiles and verification badges itself.
+
 ## [0.40.3] - 2026-10-29
 
 A **patch**: the wallet-api image did not build on 0.40.x (#425). No behaviour change.
