@@ -40,7 +40,7 @@ const D = 'voucher:a5e17b7b-136b-41ec-8615-cdadea10d001'
 live('with the relay unreachable, the gateway carries the read', () => {
   it('newestAddressable still finds the record', async () => {
     const { newestAddressable } = await import('../relay')
-    const found = await newestAddressable(AUTHOR, 30078, D, ['ws://127.0.0.1:1'])
+    const found = await newestAddressable(AUTHOR, 30078, D)
     expect(found).not.toBeNull()
     expect(found!.tags.some(([n, v]) => n === 'd' && v === D)).toBe(true)
     expect(found!.created_at).toBeGreaterThan(0)
@@ -49,13 +49,13 @@ live('with the relay unreachable, the gateway carries the read', () => {
 
   it('refuses a d tag that does not exist, rather than any old kind-30078', async () => {
     const { newestAddressable } = await import('../relay')
-    const found = await newestAddressable(AUTHOR, 30078, 'imani:no-such-record', ['ws://127.0.0.1:1'])
+    const found = await newestAddressable(AUTHOR, 30078, 'imani:no-such-record')
     expect(found).toBeNull()
   }, 60000)
 
   it('allAddressable returns the prefixed set', async () => {
     const { allAddressable } = await import('../relay')
-    const events = await allAddressable(AUTHOR, 30078, 'voucher:', ['ws://127.0.0.1:1'])
+    const events = await allAddressable(AUTHOR, 30078, 'voucher:')
     expect(events.length).toBeGreaterThan(0)
     expect(events.every((e) => e.tags.some(([n, v]) => n === 'd' && v.startsWith('voucher:')))).toBe(true)
     console.log('LIVE allAddressable count=%d', events.length)
@@ -63,7 +63,7 @@ live('with the relay unreachable, the gateway carries the read', () => {
 
   it('excludes records that do not match the prefix', async () => {
     const { allAddressable } = await import('../relay')
-    const events = await allAddressable(AUTHOR, 30078, 'imani:issued:', ['ws://127.0.0.1:1'])
+    const events = await allAddressable(AUTHOR, 30078, 'imani:issued:')
     console.log('LIVE allAddressable imani:issued: count=%d', events.length)
     expect(events.every((e) => e.tags.some(([n, v]) => n === 'd' && v.startsWith('imani:issued:')))).toBe(true)
   }, 60000)
@@ -109,7 +109,7 @@ live('with the relay unreachable, the gateway carries the read', () => {
     // Read it back with the relay leg of OUR code disabled, so the only path
     // to this event is through the gateway.
     const { newestAddressable } = await import('../relay')
-    const found = await newestAddressable(pubkey, 30078, d, ['ws://127.0.0.1:1'])
+    const found = await newestAddressable(pubkey, 30078, d)
 
     expect(found, 'gateway did not return an event published 2.5s ago').not.toBeNull()
     expect(found!.id).toBe(event.id)

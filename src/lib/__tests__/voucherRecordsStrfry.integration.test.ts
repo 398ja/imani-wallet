@@ -63,7 +63,11 @@ describe.skipIf(!URL_)('coupon backup through a real strfry (#203)', () => {
     await publishVoucher(coupon)
     expect(error).not.toHaveBeenCalled()
 
-    const onRelay = await allEvents(pk, NIP60_TOKEN_KIND, [URL_!])
+    // The TEST checks strfry itself (the app reads only through the gateway since #428).
+    const { SimplePool } = await import('nostr-tools')
+    const pool = new SimplePool()
+    const onRelay = await pool.querySync([URL_!], { authors: [pk], kinds: [NIP60_TOKEN_KIND] })
+    pool.close([URL_!])
     console.log(
       '[#203] relay holds',
       onRelay.map((e) => ({ bytes: JSON.stringify(e).length, tags: e.tags.filter(([n]) => n !== 'payload_hash') })),
