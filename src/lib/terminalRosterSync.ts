@@ -175,6 +175,7 @@ function joinSame(a: TerminalRecord, b: TerminalRecord): TerminalRecord {
     lastUsedAt: maxNum(a.lastUsedAt, b.lastUsedAt),
     renewal: pickObj(a.renewal, b.renewal),
     renewRequest: pickObj(a.renewRequest, b.renewRequest),
+    shop: pickObj(a.shop, b.shop),
     credentials: a.credentials,
   })
 }

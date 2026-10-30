@@ -779,3 +779,42 @@ describe('inv-terminal-not-merchant: only a key created as a terminal can be add
     expect(allTerminals(STALL)).toEqual([])
   })
 })
+
+describe('#402: enrolling an online shop', () => {
+  it('reads the shop code, fixes the role to redeem-only, and records the shop on the row', async () => {
+    const { signShopEnrolCode } = await import('../../lib/shopEnrol')
+    // The fake gateway locks to DEVICE, so the shop's S is DEVICE here.
+    scanned = signShopEnrolCode(DEVICE_KEY, DEVICE, 'https://shop.example', 'woocommerce', Math.floor(Date.now() / 1000))
+    renderPage()
+    await waitFor(() => expect(addButton()).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await waitFor(() => expect(screen.getByTestId('shop-role').textContent).toMatch(/shop\.example.*never sell/))
+    expect(screen.queryByRole('button', { name: /Sell and redeem/ })).toBeNull()
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('shop.example')
+
+    await waitFor(() => expect(addButton().disabled).toBe(false))
+    fireEvent.click(addButton())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Waiting for the device' })).toBeTruthy())
+
+    const meta = (posts[0] as { merchant_metadata: Record<string, unknown> }).merchant_metadata
+    expect(meta.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
+    expect(postHeaders[0]?.['X-Imani-Terminal-Enrolment']).toMatch(/^1:\d+:[0-9a-f]{128}$/)
+    const row = allTerminals(STALL).find((t) => t.terminalPubkey === DEVICE)!
+    expect(row.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
+    expect(row.shop).toEqual({ url: 'https://shop.example', platform: 'woocommerce' })
+    expect(row.token).toBeTruthy()
+  })
+
+  it('refuses a second online shop while one is connected', async () => {
+    const { signShopEnrolCode } = await import('../../lib/shopEnrol')
+    recordTerminal(STALL, {
+      terminalPubkey: 'e'.repeat(64), name: 'old', role: TERMINAL_ROLES.REDEEM_ONLY, enrolledAt: 1,
+      status: 'in-service', shop: { url: 'https://old.example', platform: 'magento' },
+    })
+    scanned = signShopEnrolCode(DEVICE_KEY, DEVICE, 'https://shop.example', 'woocommerce', Math.floor(Date.now() / 1000))
+    renderPage()
+    await waitFor(() => expect(addButton()).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+    await waitFor(() => expect(screen.getByText(/already connected to old\.example/)).toBeTruthy())
+  })
+})
