@@ -131,6 +131,52 @@ add four points that bear on Imani:
 Useful decision rule from the same summary, for the adviser to confirm: if every possible use has
 the same VAT outcome in one jurisdiction, it is an SPV; otherwise an MPV.
 
+## 4c. Initial analysis received (2026-10-30, unverified)
+
+The owner obtained a written analysis answering section 5, citing VATA 1994 Sch 10B, HMRC VAT
+information sheet 09/18, Directive 2016/1065 (Art 30a/30b), the French BOFiP, Irish Revenue TDM
+Part 05 and the CJEU in C-68/23. **It is not from a qualified adviser and is not relied on.** It is
+recorded here because it sharpens the questions, and three of its points change our plan. The
+adviser should confirm or correct each line.
+
+| Q | What it says |
+|---|---|
+| 1 | It turns on the stall's **VAT-liability mix**, not its range of goods. One category (all standard, all zero, or all exempt) **and** a fixed place of supply means SPV; mixed rates mean MPV. IE, DE and FR apply the same test. |
+| 2 | One rate is necessary, not sufficient. A coupon usable in person and online, or at a shop that ships abroad, is normally an MPV. **But** under C-68/23 classification follows the **conditions of use**: if the terms restrict use to one country, customers getting round it do not undo SPV status. Nothing has to say "SPV", but the terms must identify the supplier (the stall), and for an MPV state the face value. |
+| 3 | Both treatments are right in effect. **MPV:** the coupon is a VAT-inclusive payment (a £50 coupon plus £20 cash on £70 of goods means VAT on £70). **SPV:** redemption is **not a supply**, so the coupon is left out at checkout, not because it is a discount. |
+| 4 | No VAT when given away. **Issued free by the stall itself:** HMRC treats it as a discount, so nil value if nothing else is paid. **Bought by someone else and given away** (employer, Imani, a promoter): face value still applies on use. The statute's fallback (face value) and HMRC's guidance (discount) disagree, and it has not been tested in court. |
+| 4b | An SPV sale needs VAT captured at the till, and a VAT invoice for VAT-registered business buyers. A consumer receipt with a VAT line is not strictly required. Ordinary gift-card accounting (VAT on redemption) gets SPVs wrong. |
+| 5 | Change issued as a new coupon is a new voucher worth the unused value. **If it is narrower in scope than the original** it could become an SPV and trigger VAT when issued. |
+| 6 | Free transfers change nothing for MPVs, and carry no VAT for SPVs. A *business* giving coupons away may hit business-gift rules. |
+| 7 | Imani's fee is a separate supply to the stall (Sch 10B para 10). Caveat: **if Imani ever took the customer's money and paid the stall**, it would be in the voucher chain itself. |
+| 8 | An unused MPV owes nothing; an SPV's VAT is not reversed. |
+| 9 | Partial use is valued proportionally. Refund cash as cash and the coupon part as a coupon, or the records stop matching. |
+
+**What this changes for Imani:**
+
+- **UK scope: transferability.** In the UK a voucher must be **transferable by gift** to be inside
+  the voucher rules at all; the Directive has no such condition. Imani coupons **are** transferable
+  (gift links), so they are vouchers in the UK and the EU alike. Keep it that way: a
+  "non-transferable" coupon would fall outside Sch 10B in the UK only, and need different logic.
+- **Change must mirror the original (Q5).** The checkout's change coupon is issued by the same
+  stall, redeemable on anything that stall sells, like the original. Today it is the same scope by
+  construction. A rule for the code: never issue change narrower than what it replaces.
+- **Free coupons split by who funds them (Q4).** Stall cashback and stall gifts are the stall's own
+  free coupons (the "discount" case). A coupon **bought by someone else** and given away (a gift
+  bought by card, a business buying coupons for staff) is the face-value case. The wallet can tell
+  these apart, and the merchant guide should explain the difference.
+- **Imani never holds the money (Q7).** The card checkout is a direct charge to the stall's own
+  Stripe account plus a separate fee (section 2), which is the structure this analysis says keeps
+  Imani out of the voucher chain. Keep it so, and keep the fee separate from any coupon flow.
+- **The SPV sale gap stands (section 4).** The analysis agrees that an SPV's VAT is due at sale,
+  and that ordinary gift-card accounting gets it wrong. That is exactly what Imani does today.
+
+**Questions this narrows for the adviser:** (1) confirm the liability-mix test and the C-68/23
+reading, so a stall can pin its coupons to one country in its terms; (2) how to treat a stall with
+mixed rates that wants SPVs (it can't, on this reading); (3) the free-coupon gap, and whether to
+seek a non-statutory clearance from HMRC; (4) whether a coupon bought by a gift-giver and used by
+someone else is the face-value case.
+
 ## 5. Questions for the adviser
 
 1. **Classification:** for a stall-issued, fixed-value coupon redeemable on anything that stall
