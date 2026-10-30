@@ -33,6 +33,14 @@ RUN test -n "$VITE_WALLET_ORIGIN" || { echo "set --build-arg VITE_WALLET_ORIGIN=
 # together with SUBSCRIPTION_BASE_PATH on the service.
 ARG SUBSCRIPTION_BASE="/"
 ENV SUBSCRIPTION_BASE=$SUBSCRIPTION_BASE
+# The public relay the site reads profiles from (the wallet's src/lib/relay.ts, which the header's
+# identity lookup imports). Unset, it falls back to ws://localhost:27778, which no browser has, and
+# every stall whose kind-0 is not in the gateway cache reads "Someone" (staging, 2026-10-30).
+# The other half of that lookup is the gateway cache, same-origin at /api/v1/nostr/query: the edge
+# must route it (imani-deploy nginx/conf.d/subscription.staging.conf).
+ARG VITE_RELAY_URL
+ENV VITE_RELAY_URL=$VITE_RELAY_URL
+RUN test -n "$VITE_RELAY_URL" || { echo "set --build-arg VITE_RELAY_URL=<the public wss:// relay>" >&2; exit 1; }
 RUN npx vite build --config apps/subscription/vite.config.ts
 
 # ---- the service
