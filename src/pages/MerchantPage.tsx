@@ -209,7 +209,7 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
         {isSelf ? (
           <p className="text-center text-sm text-mono-500">This is how your stall looks to a shopper.</p>
         ) : (
-          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} />
+          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} sellsOnline={Boolean(record?.onlineShop)} />
         )}
 
         {/* Send stays, one row down and quieter. It is a different errand from

@@ -1,6 +1,7 @@
 import { readOwnerAttestation, type OwnerAttestation } from './ownerAttestation'
 import { roleOf, type TerminalRole } from './terminalRole'
 import { parseVoucherToken } from './voucherToken'
+import { ONLINE_SHOP_PLATFORMS, type OnlineShopPlatform } from './onlineShop'
 import { isForgotten, normalizeRow, type ForgottenRow } from './terminalRosterSync'
 
 /**
@@ -141,6 +142,12 @@ export interface TerminalRecord {
   renewal?: TerminalRenewal
   /** Set when a till asked for a renewal and the owner has not renewed yet (Q3). */
   renewRequest?: { at: number }
+  /**
+   * Present when this terminal is an online shop (#402 §0): a redeem-only terminal whose key `S`
+   * the shop's plugin generated. The stall advertises it as `online_shop` on its profile while the
+   * row is live, and withdraws it on revoke. Display and publishing only: the role is the token's.
+   */
+  shop?: { url: string; platform: OnlineShopPlatform }
 }
 
 /** One credential a terminal held, in the roster's history (#160 phase 6). */
@@ -211,6 +218,13 @@ function credentialEntryOf(raw: unknown): TerminalCredentialEntry | null {
   return entry
 }
 
+function shopOf(raw: unknown): TerminalRecord['shop'] {
+  const s = raw as Partial<NonNullable<TerminalRecord['shop']>> | undefined
+  if (!s || typeof s.url !== 'string' || typeof s.platform !== 'string') return undefined
+  if (!(ONLINE_SHOP_PLATFORMS as readonly string[]).includes(s.platform)) return undefined
+  return { url: s.url, platform: s.platform }
+}
+
 function attestationOf(raw: unknown): OwnerAttestation | undefined {
   return raw && typeof raw === 'object' ? (readOwnerAttestation({ owner_attestation: raw }) ?? undefined) : undefined
 }
@@ -272,6 +286,7 @@ export function sanitizeRow(entry: unknown): TerminalRecord | null {
     renewal: renewalOf(row.renewal),
     renewRequest:
       row.renewRequest && typeof row.renewRequest.at === 'number' ? { at: row.renewRequest.at } : undefined,
+    shop: shopOf(row.shop),
   }
   for (const key of Object.keys(record) as (keyof TerminalRecord)[]) {
     if (record[key] === undefined) delete record[key]

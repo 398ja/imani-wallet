@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Tablet, TriangleAlert } from 'lucide-react'
+import { Store, Tablet, TriangleAlert } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, ListSection, Button, EmptyRow, Alert } from '../components/ui'
 import { Link } from 'react-router-dom'
@@ -44,6 +44,16 @@ import {
 } from '../lib/terminalRenewOwner'
 import { expiryBand, type ExpiryBand } from '../lib/terminalRenewal'
 import { collectRenewRequests } from '../lib/terminalDeliveryNet'
+import { syncOnlineShop, type ProfilePublisher } from '../lib/onlineShopProfile'
+import { exposureLine, fetchShopExposure, type ExposureFetch, type ShopExposure } from '../lib/shopExposure'
+import { publish as relayPublish } from '../lib/relay'
+import type { Event } from 'nostr-tools'
+
+/** The stall's own signer and relay, as `PaymentsSettingsPage` publishes the profile. */
+const ownerProfilePublisher: ProfilePublisher = {
+  sign: (template) => getSigner().signEvent(template) as unknown as Promise<{ created_at: number }>,
+  publish: (signed) => relayPublish(signed as Event),
+}
 
 
 /** How often the list looks for a device's "I have it" while something is waiting. */
@@ -122,6 +132,8 @@ export function TerminalsPage({
   renew = ownerRenew,
   renewals = ownerRenewals,
   now = systemNow,
+  profile = ownerProfilePublisher,
+  exposure = fetchShopExposure,
 }: {
   stallPubkey: string
   /** Injected by tests. Spends a credential with the stall's key. */
@@ -142,6 +154,10 @@ export function TerminalsPage({
   renewals?: (stallPubkey: string, api: CredentialMintApi, transport: MintTransport) => Promise<{ changed: number; lapsed: string[] }>
   /** Injected by tests (E7 moves the clock). */
   now?: () => number
+  /** Injected by tests. Signs and publishes the stall's profile when its online shop changes (#402). */
+  profile?: ProfilePublisher
+  /** Injected by tests. The code store's outstanding figure for a shop (#402 R5). */
+  exposure?: ExposureFetch
 }) {
   // Read lazily rather than in an effect. The roster is local storage, so it is
   // available on the first render — going through an effect would paint an
@@ -179,6 +195,35 @@ export function TerminalsPage({
   }, [stallPubkey])
 
   const refresh = useCallback(() => setTerminals(allTerminals(stallPubkey)), [stallPubkey])
+
+  // #402 §0: the profile's `online_shop` follows the roster. A shop that turned In service is
+  // advertised, a revoked one is withdrawn, from whichever path changed the row. Best effort: the
+  // record is saved locally first and republished the next time this list renders a change.
+  useEffect(() => {
+    void syncOnlineShop(stallPubkey, terminals, profile).catch(() => undefined)
+  }, [stallPubkey, terminals, profile])
+
+  // R5: what each live shop could redirect, from the code store. No figure when it cannot say.
+  const [exposures, setExposures] = useState<Record<string, ShopExposure>>({})
+  const shopKeys = terminals
+    .filter((t) => t.shop && t.revokedAt === undefined)
+    .map((t) => t.terminalPubkey)
+    .join(',')
+  useEffect(() => {
+    if (!shopKeys) return
+    let cancelled = false
+    void Promise.all(
+      shopKeys.split(',').map(async (key) => [key, await exposure(stallPubkey, key).catch(() => null)] as const),
+    ).then((pairs) => {
+      if (cancelled) return
+      const next: Record<string, ShopExposure> = {}
+      for (const [key, value] of pairs) if (value) next[key] = value
+      setExposures(next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [stallPubkey, shopKeys, exposure])
 
   /** Which row is being revoked right now, and what went wrong last time. */
   const [revoking, setRevoking] = useState<string | null>(null)
@@ -351,6 +396,7 @@ export function TerminalsPage({
             <TerminalRow
               key={terminal.terminalPubkey}
               terminal={terminal}
+              exposure={exposures[terminal.terminalPubkey]}
               // Undefined until the check answers, so the row shows no marker
               // rather than briefly accusing a healthy subscription.
               stopped={licence ? !mayServe(licence, terminals, terminal.terminalPubkey).serving : undefined}
@@ -419,8 +465,11 @@ function TerminalRow({
   renewing = false,
   renewError = null,
   onRenew,
+  exposure,
 }: {
   terminal: TerminalRecord
+  /** An online shop's outstanding codes (#402 R5), when the code store could say. */
+  exposure?: ShopExposure
   /** The clock the expiry badge reads (#160 phase 6). The list passes its own. */
   now: number
   renewing?: boolean
@@ -465,7 +514,11 @@ function TerminalRow({
     // promise a screen behind it that does not exist.
     <div className={`p-4 ${revoked ? 'opacity-60' : ''}`}>
       <div className="flex items-center gap-3">
-        <Tablet className="h-5 w-5 shrink-0 text-mono-400" aria-hidden />
+        {terminal.shop ? (
+          <Store className="h-5 w-5 shrink-0 text-mono-400" aria-hidden />
+        ) : (
+          <Tablet className="h-5 w-5 shrink-0 text-mono-400" aria-hidden />
+        )}
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium text-mono-900 dark:text-mono-50">{terminal.name}</p>
           <p className="text-sm text-mono-500">
@@ -490,6 +543,11 @@ function TerminalRow({
                 ? `Last used ${formatDate(terminal.lastUsedAt)}`
                 : 'Never used'}
           </p>
+          {terminal.shop ? (
+            <p className="text-sm text-mono-500" data-testid="shop-line">
+              {exposure && !revoked ? exposureLine(exposure, terminal.shop.url) : `Online shop at ${terminal.shop.url}`}
+            </p>
+          ) : null}
         </div>
         {renewable && !confirming ? (
           <Button

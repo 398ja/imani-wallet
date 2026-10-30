@@ -70,6 +70,13 @@ ENV VITE_VOUCHER_ISSUER_PUBKEYS=$VITE_VOUCHER_ISSUER_PUBKEYS
 ARG VITE_LICENCE_SELLER_PUBKEY=
 ENV VITE_LICENCE_SELLER_PUBKEY=$VITE_LICENCE_SELLER_PUBKEY
 
+# The licence ISSUER's key, 64-hex x-only (src/lib/licenceStatus.ts licenceIssuerPubkey): the
+# gateway-customer key that signs every licence voucher. Not a secret. EMPTY MEANS NO LICENCE
+# VERIFIES: a paid plan is delivered, stored and announced, and the wallet still reports no plan
+# (staging, 2026-10-30, until this arg existed: the image could not be built with it at all).
+ARG VITE_LICENCE_ISSUER_PUBKEY=
+ENV VITE_LICENCE_ISSUER_PUBKEY=$VITE_LICENCE_ISSUER_PUBKEY
+
 # The sister sites (#411, src/lib/sisterSites.ts): where Settings › Subscription › "Upgrade my plan"
 # goes, and the only origins the wallet will sign a NAP login for. Per environment, e.g.
 # https://subscription.imani.casa in production. Not secrets. Empty: that site is not part of this
@@ -78,6 +85,17 @@ ARG VITE_SUBSCRIPTION_SITE_URL=
 ENV VITE_SUBSCRIPTION_SITE_URL=$VITE_SUBSCRIPTION_SITE_URL
 ARG VITE_GIFTING_SITE_URL=
 ENV VITE_GIFTING_SITE_URL=$VITE_GIFTING_SITE_URL
+
+# Checkout codes for online shops (#402, src/lib/checkoutCodePorts.ts). "on" shows "Use online";
+# anything else ships the feature dark, which is the default. Not a secret. imani-deploy's
+# deploy-staging.sh already passes both; until they were declared here, the build silently ignored
+# them and the button never showed (2026-10-30).
+ARG VITE_CHECKOUT_CODES=
+ENV VITE_CHECKOUT_CODES=$VITE_CHECKOUT_CODES
+# The code store origin the stall's exposure figure is read from (src/lib/shopExposure.ts): the
+# wallet host, which proxies /v1/checkout-codes same-origin. Empty: the exposure figure is not shown.
+ARG VITE_CHECKOUT_CODES_URL=
+ENV VITE_CHECKOUT_CODES_URL=$VITE_CHECKOUT_CODES_URL
 
 # The public website, without a trailing path (src/lib/terms.ts): every new account accepts the
 # Terms and Conditions at <this>/terms.html, today https://www.imani.casa/terms.html. Not a secret.

@@ -307,6 +307,12 @@ export interface ArmContext {
    * record that lost it must still never re-run the pre-check, which reads our own burn as a claim).
    */
   resuming?: boolean
+  /**
+   * #402: the key the gift is locked to, when it is not the link key: a checkout part is locked to
+   * the shop key `S`. `linkSecret` is then the part's refund key `R`, which signs the deposit
+   * (gateway-customer accepts the refund key there) and is what `deliver` is handed.
+   */
+  lockPub?: string
 }
 
 /** The relay is on when a deliberately empty deposit is refused for its shape (422), not 503/404. */
@@ -363,7 +369,7 @@ async function allStillUnspent(ports: ArmContext['ports'], mintUrl: string, proo
 async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   const { ports } = ctx
   if (ctx.merchant) return { kind: 'unarmed', why: 'merchant' }
-  const linkPub = linkPubOf(ctx.linkSecret)
+  const linkPub = ctx.lockPub ?? linkPubOf(ctx.linkSecret)
   const refundPub = xOnlyPub(ctx.refundSecret)
   const proofs = ctx.gifts.flatMap((g) => tokenProofs(g.token).map((p) => ({ token: g.token, proof: p })))
   if (proofs.length === 0) return { kind: 'unarmed', why: 'no_gift' }
@@ -410,6 +416,21 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
 
   // 4.
   return depositAll(ports, ctx.linkSecret, ctx.refundSecret, mintUrl, locked)
+}
+
+/**
+ * #402: step 0 alone, for every proof of `ctx.gifts`, with nothing burnt. A checkout code runs it
+ * over EVERY part before the first burn, so one part that cannot be locked stops the code while
+ * every coupon is still exactly what it was. Null: all of it can be armed. Never throws.
+ */
+export async function armPreflight(ctx: ArmContext): Promise<ArmOutcome | null> {
+  try {
+    const proofs = ctx.gifts.flatMap((g) => tokenProofs(g.token).map((p) => ({ token: g.token, proof: p })))
+    if (proofs.length === 0) return { kind: 'unarmed', why: 'no_gift' }
+    return await preflight(ctx, proofs, mintOf(proofs[0].token), ctx.lockPub ?? linkPubOf(ctx.linkSecret), xOnlyPub(ctx.refundSecret))
+  } catch {
+    return { kind: 'unarmed', why: 'unreachable' }
+  }
 }
 
 async function preflight(
@@ -1187,6 +1208,12 @@ export function lockedOnLink(tokens: GiftToken[], linkPub: string): GiftToken[] 
     return proofs.length > 0 && proofs.every((p) => readLinkLock(p.secret)?.linkPub === linkPub)
   })
 }
+
+/**
+ * #402: the shared steps, for the checkout-code flow (`checkoutCodeFlow.ts`), which reuses them
+ * rather than growing a second copy of the money path.
+ */
+export const cashlinkSteps = { mintOf, proofBody, burnOutputsBody, restoreMine, swapOrRestore, signRoute, notYet, refusalOf, tokenOf, keepAsSats, mintCarrier }
 
 // --- The default ports ------------------------------------------------------
 
