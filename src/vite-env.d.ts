@@ -22,4 +22,6 @@ interface ImportMetaEnv {
    * create accounts (src/lib/terms.ts).
    */
   readonly VITE_WEBSITE_BASE_URL?: string
+  /** #402: `on` shows "Use online" (checkout codes). Off by default, so the feature ships dark. */
+  readonly VITE_CHECKOUT_CODES?: string
 }

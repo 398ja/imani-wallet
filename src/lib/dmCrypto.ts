@@ -607,6 +607,20 @@ export function createDmCryptoAdapter(): CryptoAdapter {
           }
         }
 
+        /**
+         * #402: the code store telling the customer what became of a checkout code. Believed only
+         * from the store's own key, read from the verified SEAL (checked against `/info` inside).
+         * Awaited: a `change`/`cancelled` carries coupons, so a notice not yet handled stays
+         * unprocessed (null) and is offered again.
+         */
+        if (rumor.content.includes('imani-checkout-code/1')) {
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          const me = getSigner().pubkey
+          const outcome = await import('./checkoutCodesApp').then((m) => m.onCheckoutNoticeDm(me, rumor.content, sealAuthor)).catch(() => 'retry' as const)
+          if (outcome === 'retry') return null
+          if (outcome) return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+        }
+
         const transferSignature = parseTransferSignature(rumor.content)
         if (transferSignature) {
           const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
