@@ -25,6 +25,7 @@
 import { CROSS_ORIGIN_PROTOCOL, mountCrossOriginSigner, type CrossOriginSignerHandle } from '@imani/nap-client-web'
 
 import { getSession, getSigner } from './nap'
+import { loadProfile } from './profile'
 import { signerPolicy } from './napSignerPolicy'
 
 /** How often the wallet says "ready" to the tab it opened, until that tab connects. */
@@ -67,6 +68,13 @@ export function openSisterSite(url: string, name: string): boolean {
   const target = new URL(url, window.location.href)
   // Which stall the site should be signed in as. The site drops a session for anyone else.
   if (pubkey) target.searchParams.set('as', pubkey)
+  // How the wallet names this account, for the site's header only: a stall with no kind-0 (most
+  // registered with a handle and never published one) otherwise reads "Someone" there. A display
+  // hint, never trusted for who is signed in: the session is the NAP proof, and the site shows this
+  // only for the pubkey it names, and only until a kind-0 arrives.
+  const profile = pubkey ? loadProfile(pubkey) : null
+  if (profile?.displayName) target.searchParams.set('name', profile.displayName.slice(0, 64))
+  if (profile?.nip05) target.searchParams.set('nip05', profile.nip05.slice(0, 128))
 
   // A named window: a second tap reuses the tab instead of piling up new ones.
   const child = window.open(target.toString(), name)

@@ -79,6 +79,42 @@ export function expectedStall(search = window.location.search): string | undefin
   return as && /^[0-9a-f]{64}$/.test(as) ? as : undefined
 }
 
+/** How the wallet names the stall it opened this tab for: display only, never identity. */
+export interface StallLabel {
+  pubkey: string
+  name?: string
+  nip05?: string
+}
+
+const LABEL_KEY = 'imani-subscription:stall-label'
+
+/**
+ * The wallet's `name` / `nip05` hint for the `as` stall, kept for this tab so a return from Stripe
+ * (which drops the query) still shows it. Only ever paired with the pubkey it came with: the header
+ * uses it for that pubkey alone, so a hint can never put a name on someone else's session.
+ */
+export function stallLabel(search = window.location.search, store: Storage = sessionStorage): StallLabel | undefined {
+  const params = new URLSearchParams(search)
+  const pubkey = expectedStall(search)
+  const clean = (v: string | null, max: number) => {
+    const s = v?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, max)
+    return s || undefined
+  }
+  if (pubkey) {
+    const label: StallLabel = { pubkey, name: clean(params.get('name'), 64), nip05: clean(params.get('nip05'), 128)?.toLowerCase() }
+    if (label.name || label.nip05) {
+      try { store.setItem(LABEL_KEY, JSON.stringify(label)) } catch { /* private mode: this visit only */ }
+      return label
+    }
+  }
+  try {
+    const saved = JSON.parse(store.getItem(LABEL_KEY) ?? 'null') as StallLabel | null
+    return saved && typeof saved.pubkey === 'string' ? saved : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function failureFor(code: CrossOriginErrorCode): SignInFailure {
   switch (code) {
     case 'DECLINED':

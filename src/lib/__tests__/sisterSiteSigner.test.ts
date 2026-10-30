@@ -67,6 +67,21 @@ describe('openSisterSite', () => {
     expect(opened[0].name).toBe('imani-subscription')
   })
 
+  it("passes the account's own name and handle as a display hint, and nothing when it has none", async () => {
+    const { emptyProfile, saveProfile, clearProfile } = await import('../profile')
+    expect(openSisterSite(SITE, 'imani-subscription')).toBe(true)
+    let url = new URL(opened[0].url)
+    expect(url.searchParams.has('name')).toBe(false)
+    expect(url.searchParams.has('nip05')).toBe(false)
+
+    saveProfile({ ...emptyProfile(signer.pubkey), displayName: 'Bart', nip05: 'bart@staging.398ja.xyz', updatedAt: 1 })
+    expect(openSisterSite(SITE, 'imani-subscription')).toBe(true)
+    url = new URL(opened[1].url)
+    expect(url.searchParams.get('name')).toBe('Bart')
+    expect(url.searchParams.get('nip05')).toBe('bart@staging.398ja.xyz')
+    clearProfile(signer.pubkey)
+  })
+
   it('refuses a site that is not in the signer policy, and opens nothing', () => {
     expect(openSisterSite('https://evil.example/plans', 'x')).toBe(false)
     expect(opened).toHaveLength(0)
