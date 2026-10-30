@@ -41,6 +41,13 @@ ENV SUBSCRIPTION_BASE=$SUBSCRIPTION_BASE
 ARG VITE_RELAY_URL
 ENV VITE_RELAY_URL=$VITE_RELAY_URL
 RUN test -n "$VITE_RELAY_URL" || { echo "set --build-arg VITE_RELAY_URL=<the public wss:// relay>" >&2; exit 1; }
+# The licence SELLER's public key (the wallet's licenceSellerPubkey): the only key whose
+# verification attestation (#418) the header's avatar badge is read from. Unset, the reader returns
+# nothing before it looks, and no stall wears a badge here (staging, 2026-10-30). Public; the same
+# value as the wallet's VITE_LICENCE_SELLER_PUBKEY and the key this service signs with.
+ARG VITE_LICENCE_SELLER_PUBKEY
+ENV VITE_LICENCE_SELLER_PUBKEY=$VITE_LICENCE_SELLER_PUBKEY
+RUN echo "$VITE_LICENCE_SELLER_PUBKEY" | grep -Eq '^[0-9a-f]{64}$' || { echo "set --build-arg VITE_LICENCE_SELLER_PUBKEY=<the seller's x-only hex pubkey>" >&2; exit 1; }
 RUN npx vite build --config apps/subscription/vite.config.ts
 
 # ---- the service

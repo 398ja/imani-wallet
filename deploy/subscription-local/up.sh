@@ -53,6 +53,9 @@ esac
 docker network inspect imani-test_imani-internal >/dev/null 2>&1 || docker network create imani-test_imani-internal >/dev/null
 
 umask 077
+# The site's badge reader pins the seller (build arg): the PUBLIC half of the nsec above, read from
+# the same env file's GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS (its first entry).
+export VITE_LICENCE_SELLER_PUBKEY=${VITE_LICENCE_SELLER_PUBKEY:-$(get GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS | cut -d, -f1)}
 cat > .env <<EOF
 STRIPE_SECRET_KEY=$STRIPE_SECRET_KEY
 STRIPE_WEBHOOK_SECRET=$WHSEC

@@ -48,6 +48,7 @@ docker build -f services/subscription/Dockerfile -t imani-subscription .
 | `SUBSCRIPTION_BASE_PATH` | `''` (the root of its origin). A path only if the edge mounts it under one, matching the `SUBSCRIPTION_BASE` build arg |
 | `VITE_WALLET_ORIGIN` (build arg, **required**) | the ONE wallet origin the site accepts a signer from, e.g. `https://wallet.imani.casa`. The wallet side is `VITE_SUBSCRIPTION_SITE_URL` (the wallet's `.env`/build arg), which must name this site |
 | `VITE_RELAY_URL` (build arg, **required**) | the public `wss://` relay the header reads the stall's profile from, as the wallet does. The other half is the gateway cache at `/api/v1/nostr/query` on this origin, which the edge must route to gateway-customer |
+| `VITE_LICENCE_SELLER_PUBKEY` (build arg, **required**) | the seller's public key, x-only hex: the only signer whose verification attestation (#418) puts a badge on the header's avatar. The public half of `IMANI_SUBSCRIPTIONS_SELLER_NSEC` |
 | `SUBSCRIPTION_WALLET_URL` | gateway-customer (mint, deliver, revoke, and the public nostr query the merchant role is read from) |
 | `EDGE_SECRET` | edge secret gateway-customer trusts |
 | `IMANI_SUBSCRIPTIONS_SELLER_NSEC` | the seller (`GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`); also signs the catalog; wallets pin it as `VITE_LICENCE_SELLER_PUBKEY` |
