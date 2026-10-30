@@ -84,6 +84,7 @@ export interface StallLabel {
   pubkey: string
   name?: string
   nip05?: string
+  picture?: string
 }
 
 const LABEL_KEY = 'imani-subscription:stall-label'
@@ -101,15 +102,29 @@ export function stallLabel(search = window.location.search, store: Storage = ses
     return s || undefined
   }
   if (pubkey) {
-    const label: StallLabel = { pubkey, name: clean(params.get('name'), 64), nip05: clean(params.get('nip05'), 128)?.toLowerCase() }
-    if (label.name || label.nip05) {
+    const label: StallLabel = { pubkey, name: clean(params.get('name'), 64), nip05: clean(params.get('nip05'), 128)?.toLowerCase(), picture: httpsUrl(params.get('picture')) }
+    if (!label.picture) delete label.picture
+    if (label.name || label.nip05 || label.picture) {
       try { store.setItem(LABEL_KEY, JSON.stringify(label)) } catch { /* private mode: this visit only */ }
       return label
     }
   }
   try {
     const saved = JSON.parse(store.getItem(LABEL_KEY) ?? 'null') as StallLabel | null
-    return saved && typeof saved.pubkey === 'string' ? saved : undefined
+    if (!saved || typeof saved.pubkey !== 'string') return undefined
+    const picture = httpsUrl(saved.picture ?? null)
+    const { picture: _dropped, ...rest } = saved
+    return picture ? { ...rest, picture } : rest
+  } catch {
+    return undefined
+  }
+}
+
+/** An absolute https URL, or nothing: the avatar ends up in an `src`, and the query is anyone's to write. */
+function httpsUrl(value: string | null): string | undefined {
+  if (!value || value.length > 512) return undefined
+  try {
+    return new URL(value).protocol === 'https:' ? value : undefined
   } catch {
     return undefined
   }
