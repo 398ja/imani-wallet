@@ -5,7 +5,7 @@ import { CreditCard } from 'lucide-react'
 import { Button, Screen, BackLink, Centered, buttonClasses } from '../components/ui'
 import { startPurchase } from '../lib/purchase'
 import { GUEST_BUY_ELSEWHERE, rememberPurchase } from '../lib/pendingPurchase'
-import { GIFTING_ORIGIN, giftingPageUrl } from '../lib/giftingPage'
+import { giftingOrigin, giftingPageUrl } from '../lib/giftingPage'
 import { useIdentity } from '../lib/identity'
 import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
 import { cardSalesReason, type CardSalesReadiness } from '../lib/merchantActions'
@@ -230,7 +230,11 @@ function GuestBuy({ pubkey }: { pubkey: string }) {
         Create a wallet
       </Link>
       {!gifting && (
-        <p className="mt-3 text-xs text-mono-500">This stall has no gifting page yet. Gifting lives at {GIFTING_ORIGIN}.</p>
+        <p className="mt-3 text-xs text-mono-500">
+          {giftingOrigin()
+            ? `This stall has no gifting page yet. Gifting lives at ${giftingOrigin()}.`
+            : 'This stall has no gifting page yet.'}
+        </p>
       )}
     </Screen>
   )
