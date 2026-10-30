@@ -181,6 +181,17 @@ This is the only place the store returns a code, and only to its depositor. The
 store therefore keeps the code **encrypted** for the depositor too: AES-GCM under a
 server key, beside `code_hash`.
 
+### `GET /v1/checkout-codes/exposure?shop_key={S}` (stall)
+
+R5: what a shop key could redirect if it were stolen, for the stall's Terminals page
+("3 codes, €45.00 outstanding at shop.example"). The NIP-98 caller must be the
+`stall_pubkey` the codes were deposited for. `200 {"codes": n, "amount": minor, "unit": "eur"}`
+over codes locked to `S` for this stall in `reserved`, `held` or `cancelling`; one unit per
+stall (ADR 0005). It returns no code and no customer. Any other caller, or an `S` this stall
+has no codes for, gets `{"codes": 0, "amount": 0, "unit": <stall unit>}`, so the answer
+reveals nothing about other stalls. The wallet shows no figure for anything but a well-formed
+200 (`shopExposure.ts`).
+
 ### State machine
 
 ```
@@ -205,6 +216,26 @@ On the stall's kind-30078 `imani:merchant` record (ADR 0012):
 
 The wallet takes `S` only from here (R7). It is absent, malformed, or not
 64-hex: no online shop.
+
+The stall publishes it while the shop's redeem-only terminal row is in service, and
+republishes without it when the terminal is revoked (`onlineShopProfile.ts`). One per stall.
+
+### Enrolling the shop
+
+The plugin generates `S` at setup and shows the owner
+
+```
+imani-shop-enrol:1:<S hex>:<url>:<platform>:<created_at>:<sig>
+```
+
+where `created_at` and `sig` are the terminal enrolment proof (`terminalEnrolProof.ts`):
+BIP-340 by `S` over `sha256("imani-terminal-enrolment" US "1" US S US created_at)`, valid
+for 24 hours. The url (https) may contain colons and is what lies between `S` and the
+platform. The stall's wallet sends `1:<created_at>:<sig>` as `X-Imani-Terminal-Enrolment`
+with a `redeem-only` credential mint locked to `S`, exactly as for a till, and the plugin
+then receives its credential by NIP-17 like a till (`terminalDelivery`'s setup code and
+`enrolled` notice). The url and platform are not signed by `S`; the owner confirms them on
+screen and the stall signs them into §4.
 
 ## 5. Settling: how value leaves `S` (redeem, change, cancel)
 

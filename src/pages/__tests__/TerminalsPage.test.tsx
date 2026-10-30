@@ -674,3 +674,54 @@ describe('renewal on the list (#160 phase 6, decision 1)', () => {
     expect(screen.queryByRole('button', { name: 'Renew Door' })).toBeNull()
   })
 })
+
+describe('#402: an online shop on the list', () => {
+  const shopRow = { shop: { url: 'https://shop.example', platform: 'woocommerce' }, status: 'in-service', name: 'shop.example' }
+
+  it('shows its outstanding codes, publishes online_shop, and withdraws it on revoke', async () => {
+    const { saveMerchant, emptyMerchant, loadMerchant, mergeMerchantEvent } = await import('../../lib/merchant')
+    saveMerchant({ ...emptyMerchant(STALL), acceptsCards: true })
+    enrol(shopRow)
+    const published: Array<{ content: string }> = []
+    let at = 100
+    render(
+      <MemoryRouter>
+        <TerminalsPage
+          sync={noSync}
+          renewals={noRenewals}
+          stallPubkey={STALL}
+          spendApi={async () => fakeMint}
+          collect={collect}
+          confirm={async () => 204}
+          deliver={async () => 0}
+          profile={{ sign: async (t) => ({ ...t, created_at: at++ }), publish: async (e) => (published.push(e as never), { ok: 1 }) }}
+          exposure={async (_s, key) => (key === DOOR ? { codes: 3, amount: 4500, unit: 'EUR' } : null)}
+        />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByTestId('shop-line').textContent).toMatch(/^3 codes, .*45.* outstanding at shop\.example$/))
+    await waitFor(() => expect(published).toHaveLength(1))
+    expect(mergeMerchantEvent(emptyMerchant(STALL), published[0].content, 1).onlineShop?.redeemKey).toBe(DOOR)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    fireEvent.click(screen.getByRole('button', { name: /Revoke shop\.example/ }))
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    await waitFor(() => expect(published).toHaveLength(2))
+    const after = mergeMerchantEvent(emptyMerchant(STALL), published[1].content, 1)
+    expect(after.onlineShop).toBeUndefined()
+    expect(after.acceptsCards).toBe(true)
+    expect(loadMerchant(STALL)?.onlineShop).toBeUndefined()
+  })
+
+  it('shows the shop without a figure when the code store cannot say', async () => {
+    enrol(shopRow)
+    render(
+      <MemoryRouter>
+        <TerminalsPage sync={noSync} renewals={noRenewals} stallPubkey={STALL} spendApi={async () => fakeMint}
+          collect={collect} confirm={async () => 204} deliver={async () => 0} exposure={async () => null} />
+      </MemoryRouter>,
+    )
+    expect(screen.getByTestId('shop-line').textContent).toBe('Online shop at https://shop.example')
+  })
+})
