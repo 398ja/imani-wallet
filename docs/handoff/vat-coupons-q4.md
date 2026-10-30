@@ -33,6 +33,9 @@ merchant guide tells stalls to "ask your accountant" until we have one.
   Stripe account**: the stall is the merchant of record and receives the money. Imani takes an
   **application fee** on each sale. Imani never holds the customer's money
   (payment-adapter `StripeSdkCheckoutClient`).
+- **No VAT is charged when a coupon is sold.** Card sales send no tax rate and do not turn on
+  Stripe Tax (only Imani's own subscription checkout does, in `services/subscription/stripe.ts`).
+  Till sales record an amount, with no VAT line. The coupon's price is its face value.
 - **Promotional coupons** (cashback, free gifts) may be issued for no consideration.
 
 So the issuer, and the seller of the coupon, is the **stall**. Imani is a software provider that
@@ -69,27 +72,53 @@ What each checkout treatment does, as we understand it:
 
 So the default can over-declare but never under-declares, which is why we chose it.
 
+**The bigger gap, if any coupon is an SPV.** An SPV's VAT is due when the coupon is **sold**, and
+as §2 says, nothing charges or records VAT at that point today. So for an SPV-issuing stall, the
+error is upstream of checkout: VAT is missing at the sale, and no checkout setting can put it
+back. Fixing that would mean recording a VAT rate when a coupon is sold, at the till and in the
+card checkout. That is a larger change than the plugin setting, and the main reason the
+classification matters.
+
 **Note for the adviser:** #402's own text gives a different reason for the default. It says
 treating an SPV as a discount would "lower the taxable base a second time". By the table above,
 that looks backwards: for an SPV, the discount treatment seems to be the right one. Please confirm
 which is right, because it decides what the store setting should say.
 
 Our working assumption is that most Imani coupons are **MPVs**: their value can be spent on goods
-at different VAT rates, and the rate isn't known when the coupon is sold. But a stall that sells
-only one VAT rate (for example, only standard-rated services) could be issuing **SPVs**, and for
-those stalls the default overcharges VAT.
+at different VAT rates, and the rate isn't known when the coupon is sold. A stall that sells only
+one VAT rate *might* issue SPVs, but one rate is not enough on its own: the SPV test also needs
+the **place of supply** to be known at issue. A stall that ships cross-border, or whose coupon can
+be used both in person and in its online shop, may fail that test even at one rate.
+
+## 4a. Facts that decide the classification
+
+These are the facts the adviser will need for a given stall. Most are per stall, not per Imani:
+
+| Fact | Why it matters (SPV test: both known at issue) | What Imani knows today |
+|---|---|---|
+| VAT rates of what the coupon can buy | the VAT due | Nothing. The stall decides what it sells. |
+| Where the stall supplies from and to (cross-border shipping, EU customers) | the place of supply | Nothing. |
+| Used in person, online, or both | place of supply can differ between the two | Both, for any stall with an online shop. |
+| Sold, or given away (promotions, cashback) | whether there is consideration at issue | Both happen. |
+| Passed on to someone else (gift links), free or for money | SPVs are taxed on each transfer **for consideration** | Gift links are free; Imani sees no resale. |
+| Whether the stall is VAT-registered | whether any of this applies | Nothing. |
 
 ## 5. Questions for the adviser
 
 1. **Classification:** for a stall-issued, fixed-value coupon redeemable on anything that stall
    sells, is it an SPV or an MPV in the **UK**? In the **EU** (Ireland, Germany, France as
    examples)? Does it depend on the stall's product mix?
-2. **One rate only:** if a stall sells only one VAT rate, does that make its coupons SPVs? Must
-   the coupon itself say so, or is the stall's product mix at issue enough?
+2. **One rate only:** if a stall sells only one VAT rate, does that make its coupons SPVs? How
+   does the place-of-supply limb apply to a coupon usable both in person and online, or at a
+   shop that ships to other countries? Must the coupon itself say what it is for?
 3. **Default:** is "after VAT, as a payment" correct for MPVs? For SPVs, is "before VAT, as a
    discount" the right treatment, so VAT on the coupon's part is not charged twice?
 4. **Free coupons:** for promotional coupons given for nothing (cashback, gifts), is there any VAT
-   at issue, and how should their use at checkout be shown?
+   at issue? When one is used, is the value of the supply nil, or the coupon's face value? HMRC's
+   guidance takes the MPV value as "the amount last paid for the voucher or, in the absence of
+   this information, its face value", which does not clearly cover a coupon nobody paid for.
+4b. **The sale itself:** if some stalls issue SPVs, what must be recorded when the coupon is sold
+   (at the till and by card), and is a receipt with a VAT line required?
 5. **Change:** when a code is worth more than the order and the difference comes back as a new
    coupon, is that new coupon a new voucher for VAT, or the unused part of the old one?
 6. **Gifting:** does a customer passing a coupon to someone else change anything (an SPV is taxed
@@ -103,8 +132,10 @@ those stalls the default overcharges VAT.
 ## 6. What we will do with the answer
 
 - **The code:** if the answer is "MPV, payment after VAT", nothing changes. If some stalls issue
-  SPVs, the shop setting gets a clearer name and help text, or the stall chooses a VAT type when
-  it sets up its coupons. The setting already exists in the WooCommerce and Magento plugins.
+  SPVs, two things change. First, the sale: record a VAT rate when such a coupon is sold, at the
+  till and in the card checkout, which nothing does today. Second, the checkout: the shop setting
+  gets a clearer name and help text, or the stall chooses a VAT type when it sets up its coupons.
+  The setting already exists in the WooCommerce and Magento plugins.
 - **The merchant guide:** replace the "VAT: payment, not discount (open question)" section in
   imani-docs `wallet/merchants.md` with the adviser's answer.
 - **The issue:** close Q4 on imani-wallet #402.
@@ -119,7 +150,10 @@ those stalls the default overcharges VAT.
   mode" setting, off by default (PR 398ja/imani-checkout-woo#1).
 - **Magento:** imani-checkout-magento, `Model/Total/Quote/ImaniCode`, a total after tax
   (PR 398ja/imani-checkout-magento#1).
-- **Card sales:** payment-adapter `StripeSdkCheckoutClient`: direct charge plus application fee.
+- **Card sales:** payment-adapter `StripeSdkCheckoutClient`: direct charge plus application fee,
+  no tax rate and no Stripe Tax.
+- **Sources checked:** HMRC, "VAT: treatment of vouchers from 1 January 2019" (GOV.UK);
+  Directive (EU) 2016/1065 (EUR-Lex). Our summary of them is a starting point, not advice.
 
 ## 8. Not covered here
 
