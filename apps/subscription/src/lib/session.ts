@@ -98,7 +98,9 @@ export function stallLabel(search = window.location.search, store: Storage = ses
   const params = new URLSearchParams(search)
   const pubkey = expectedStall(search)
   const clean = (v: string | null, max: number) => {
-    const s = v?.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, max)
+    // Control characters (U+0000 to U+001F, U+007F) out, by code point, not by a regex the linter
+    // reads as a mistake.
+    const s = Array.from(v ?? '').filter((c) => { const n = c.codePointAt(0) ?? 0; return n > 0x1f && n !== 0x7f }).join('').trim().slice(0, max)
     return s || undefined
   }
   if (pubkey) {
@@ -113,7 +115,7 @@ export function stallLabel(search = window.location.search, store: Storage = ses
     const saved = JSON.parse(store.getItem(LABEL_KEY) ?? 'null') as StallLabel | null
     if (!saved || typeof saved.pubkey !== 'string') return undefined
     const picture = httpsUrl(saved.picture ?? null)
-    const { picture: _dropped, ...rest } = saved
+    const rest: StallLabel = { pubkey: saved.pubkey, ...(saved.name ? { name: saved.name } : {}), ...(saved.nip05 ? { nip05: saved.nip05 } : {}) }
     return picture ? { ...rest, picture } : rest
   } catch {
     return undefined
