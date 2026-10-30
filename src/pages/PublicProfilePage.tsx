@@ -318,7 +318,7 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
         </p>
       ) : (
         <div className="mt-6">
-          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} />
+          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} sellsOnline={Boolean(record?.onlineShop)} />
         </div>
       )}
 

@@ -83,6 +83,8 @@ import { useExpiryReminders } from './hooks/useExpiryReminders'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
 import { PayPage } from './pages/PayPage'
+import { UseOnlinePage } from './pages/UseOnlinePage'
+import { checkoutCodesEnabled } from './lib/checkoutCodePorts'
 import { SendPage } from './pages/SendPage'
 import { SendLinkPage } from './pages/SendLinkPage'
 import { ReceivePage } from './pages/ReceivePage'
@@ -622,6 +624,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             device, so this explains rather than sets anything up. */}
         <Route path="/terminal/setup" element={<WalletHolderIsNotATerminal />} />
         <Route path="/pay" element={<PayPage pubkey={pubkey} />} />
+        {/* #402: checkout codes, dark until VITE_CHECKOUT_CODES=on. */}
+        {checkoutCodesEnabled() && <Route path="/online" element={<UseOnlinePage pubkey={pubkey} />} />}
+        {checkoutCodesEnabled() && <Route path="/online/code/:id" element={<UseOnlinePage pubkey={pubkey} />} />}
         <Route path="/send" element={<SendPage pubkey={pubkey} />} />
         <Route path="/send/link" element={<SendLinkPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
