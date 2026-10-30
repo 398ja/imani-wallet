@@ -103,6 +103,34 @@ These are the facts the adviser will need for a given stall. Most are per stall,
 | Passed on to someone else (gift links), free or for money | SPVs are taxed on each transfer **for consideration** | Gift links are free; Imani sees no resale. |
 | Whether the stall is VAT-registered | whether any of this applies | Nothing. |
 
+## 4b. What public sources say (search "mpv vs spv VAT", 2026-10-30)
+
+Gathered for the adviser to check, not relied on. The sources broadly agree with section 4, and
+add four points that bear on Imani:
+
+- **A double charge is a known failure.** One summary warns that "double taxation can occur if
+  an SPV is mis-identified as an MPV" and taxed again at redemption (vatupdate.com, May 2026).
+  That is exactly the risk in the default for an SPV-issuing stall (section 4 table).
+- **Partial use differs by type.** For a partly used SPV, the remaining value stays VAT-inclusive.
+  For an MPV, the taxable amount is the relevant share of what the voucher's buyer paid
+  (Mitchell Charlesworth). This bears on Q5 (change): the change coupon is the unused part of a
+  voucher, and its VAT treatment follows from the type.
+- **Expiry differs by type.** VAT on an SPV is paid at issue and not reversed if it expires; an MPV
+  that expires never gives rise to VAT (Moore Belgium; NaviPartner). This is Q8.
+- **Free vouchers, in one country.** The Dutch tax authority's view, as reported, is that free
+  SPVs and MPVs also fall under the voucher rules in some cases (input VAT recovered on the goods,
+  and a value over EUR 15) (MPR accountants). That is one EU state's view only, but it shows Q4
+  is a real question. National rules on free vouchers may differ.
+- **Cross-border use makes an MPV.** A chain whose gift card works in stores in several EU
+  countries issues MPVs, because the place of supply is not known at issue (MPR accountants).
+  Same logic as the place-of-supply point in section 4.
+- **Case law on transfers.** The ECJ (Finanzamt, C-68/23) confirmed that an SPV transferred
+  between several parties before use is taxed on each transfer (Crowe UK). For Imani, transfers
+  are free gift links, so this matters only if coupons are ever resold.
+
+Useful decision rule from the same summary, for the adviser to confirm: if every possible use has
+the same VAT outcome in one jurisdiction, it is an SPV; otherwise an MPV.
+
 ## 5. Questions for the adviser
 
 1. **Classification:** for a stall-issued, fixed-value coupon redeemable on anything that stall
@@ -153,7 +181,8 @@ These are the facts the adviser will need for a given stall. Most are per stall,
 - **Card sales:** payment-adapter `StripeSdkCheckoutClient`: direct charge plus application fee,
   no tax rate and no Stripe Tax.
 - **Sources checked:** HMRC, "VAT: treatment of vouchers from 1 January 2019" (GOV.UK);
-  Directive (EU) 2016/1065 (EUR-Lex). Our summary of them is a starting point, not advice.
+  Directive (EU) 2016/1065 (EUR-Lex); a public web search, summarised in section 4b, with each
+  source named there. Our summary of them is a starting point, not advice.
 
 ## 8. Not covered here
 
