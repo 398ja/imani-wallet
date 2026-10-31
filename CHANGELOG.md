@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.4] - 2026-10-31
+
+### Fixed
+
+- The stall's online-shop profile counts as published only once the relay accepts it. A copy that
+  only the gateway took was pruned on the next read, and the retry had already stopped. Relay
+  refusals are logged (#441, #402).
+
 ## [0.41.3] - 2026-10-31
 
 ### Fixed
