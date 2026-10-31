@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-10-31
+
+### Fixed
+
+- "Use online" offers only amounts it can actually make: a code's split part is carved from the
+  coupon's own proofs, and when no subset makes the amount the next coupon is split instead, or the
+  screen says so before Get code. Before, the code was refused after Get code (#449, #402).
+- The stall's online-shop profile publish gets an 8 s relay connect window instead of 3 s. Right
+  after enrolment it lost the 3 s race every time (#450, #402).
+
 ## [0.42.0] - 2026-10-31
 
 ### Changed
