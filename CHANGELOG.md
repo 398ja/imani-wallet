@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.3] - 2026-10-31
+
+### Fixed
+
+- A stall's profile now names its online shop reliably. The republish is retried until the relay
+  or the gateway confirms it, and it goes through the gateway's mirror too. Before, a lost publish
+  was never retried and customers saw "This stall does not sell online" (#438, #402).
+
 ## [0.41.2] - 2026-10-31
 
 ### Fixed
