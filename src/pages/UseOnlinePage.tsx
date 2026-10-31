@@ -101,7 +101,12 @@ function StallPicker({ deps }: { deps: UseOnlineDeps }) {
       <BackLink to="/" label="Back" />
       <PageHeader title="Use online" subtitle="Pick the stall whose shop you are buying from." />
       {stalls.length === 0 ? (
-        <Notice tone="warning">None of the stalls you hold vouchers from sell online yet.</Notice>
+        <Notice tone="warning">
+          {/* Only coupons you can still spend count: one already in a checkout code, or used, is not
+              here (staging 2026-10-31: read as "the shop is not online"). */}
+          No coupon you can spend comes from a stall that sells online. Coupons already in a checkout code
+          are not counted.
+        </Notice>
       ) : (
         <div className="space-y-3">
           {stalls.map((s) => (
