@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.6] - 2026-10-31
+
+### Fixed
+
+- Lint is clean again: the stall profile publisher moved out of the Terminals page, which only
+  exports components (#445). No behaviour change from 0.41.5.
+
 ## [0.41.5] - 2026-10-31
 
 ### Fixed
