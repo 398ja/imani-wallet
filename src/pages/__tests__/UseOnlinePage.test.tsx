@@ -74,7 +74,7 @@ describe('Use online', () => {
   it('shows what is usable at the shop and hands the plan to the flow', async () => {
     at(`/online?stall=${W.STALL}`)
     expect(await screen.findByText('Usable at shop.example')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '0.08' } })
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '0.08' } })
     const get = screen.getByRole('button', { name: 'Get code' }) as HTMLButtonElement
     await waitFor(() => expect(get.disabled).toBe(false))
     fireEvent.click(get)
@@ -87,7 +87,7 @@ describe('Use online', () => {
   it('says when the amount is more than the shop can take', async () => {
     at(`/online?stall=${W.STALL}`)
     await screen.findByText('Usable at shop.example')
-    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '5.00' } })
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '5.00' } })
     expect(await screen.findByText(/can be used at shop\.example/)).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Get code' }) as HTMLButtonElement).disabled).toBe(true)
   })

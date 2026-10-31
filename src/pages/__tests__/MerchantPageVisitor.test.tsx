@@ -54,4 +54,23 @@ describe('a stall page opened with no wallet', () => {
     expect(pay.disabled).toBe(true)
     expect(screen.getByText('Log in to pay with your vouchers')).toBeTruthy()
   })
+
+  it('shows Coupon code in place of Share, disabled with why for a stall with no online shop (#402)', async () => {
+    vi.stubEnv('VITE_CHECKOUT_CODES', 'on')
+    try {
+      render(
+        <MemoryRouter initialEntries={[`/merchants/${STALL}`]}>
+          <Routes>
+            <Route path="/merchants/:pubkey" element={<MerchantPage />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+      const code = (await screen.findByRole('button', { name: /coupon code/i })) as HTMLButtonElement
+      expect(code.disabled).toBe(true)
+      expect(screen.getByText("This merchant doesn't sell online")).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /^(Share|Copy)$/ })).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })

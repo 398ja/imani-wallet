@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Copy, Globe } from 'lucide-react'
 
-import { Alert, BackLink, Button, Centered, DetailRow, Notice, PageHeader, Panel, Screen } from '../components/ui'
+import { Alert, BackLink, Button, Centered, DetailRow, IdentityInline, Input, Notice, PageHeader, Panel, Screen } from '../components/ui'
+import { useMerchantLabel } from '../lib/identity'
 import { listVouchers } from '../lib/wallet'
 import { toMerchants } from '../lib/merchants'
 import { fetchMerchantRecord } from '../lib/merchant'
@@ -108,11 +109,21 @@ function StallPicker({ deps }: { deps: UseOnlineDeps }) {
           are not counted.
         </Notice>
       ) : (
-        <div className="space-y-3">
+        <div className="divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">
           {stalls.map((s) => (
-            <Button key={s.pubkey} variant="outline" size="lg" className="w-full justify-start" onClick={() => navigate(`/online?stall=${s.pubkey}`)}>
-              <Globe className="mr-2 h-5 w-5" aria-hidden /> {s.name || 'Stall'} · {hostOf(s.shop.url)}
-            </Button>
+            <button
+              key={s.pubkey}
+              type="button"
+              className="press-row flex w-full items-center gap-3 p-4 text-left"
+              onClick={() => navigate(`/online?stall=${s.pubkey}`)}
+            >
+              <span className="min-w-0 flex-1">
+                <IdentityInline pubkey={s.pubkey} fallbackName={s.name} linkToProfile={false} />
+              </span>
+              <span className="flex shrink-0 items-center gap-1 text-sm text-mono-500">
+                <Globe className="h-4 w-4" aria-hidden /> {hostOf(s.shop.url)}
+              </span>
+            </button>
           ))}
         </div>
       )}
@@ -142,12 +153,14 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
     if (!loaded) return undefined
     return toMerchants(loaded.rows).find((m) => m.pubkey.toLowerCase() === stall)?.groups[0]
   }, [loaded, stall])
+  // The stall's own name (kind 0, then the coupon's issuer name), never its key (#402 review).
+  const stallName = useMerchantLabel({ pubkey: stall, name: group?.merchantName })
 
   if (!loaded) return <Centered>Checking your vouchers…</Centered>
   if (!loaded.shop) {
     return (
       <Screen>
-        <BackLink to="/online" label="Back" />
+        <BackLink to={`/merchants/${stall}`} label="Back" />
         <Alert>This stall does not sell online.</Alert>
       </Screen>
     )
@@ -207,44 +220,63 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
 
   return (
     <Screen>
-      <BackLink to="/online" label="Back" />
-      <PageHeader title="How much?" subtitle={`To spend at ${hostOf(shop.url)}`} />
-      <Panel className="p-4">
+      <BackLink to={`/merchants/${stall}`} label="Back" />
+      <PageHeader title="Coupon code" subtitle={`${stallName} · to spend at ${hostOf(shop.url)}`} />
+      {/* The one figure that matters, large, as on the coupon itself; why the rest cannot go
+          follows in small type, beside the figure it explains. */}
+      <Panel className="p-5">
         <p className="text-sm text-mono-500">Usable at {hostOf(shop.url)}</p>
-        <p className="text-amount text-mono-900 dark:text-mono-50">{formatFace(usable, denom)}</p>
+        <p className="text-amount tracking-tight text-mono-900 dark:text-mono-50">{formatFace(usable, denom)}</p>
         {[...excluded.entries()].map(([reason, minor]) => (
-          <p key={reason} className="text-xs text-mono-500">
+          <p key={reason} className="mt-1 text-xs text-mono-600 dark:text-mono-400">
             {formatFace(minor, denom)} {EXCLUSION_WORDS[reason]}
           </p>
         ))}
       </Panel>
 
-      <div className="mt-4 space-y-4">
-        <label className="block text-sm">
-          <span className="text-mono-600 dark:text-mono-300">Amount ({unit})</span>
-          <input
-            className="mt-1 w-full rounded-xl border border-mono-200 bg-transparent p-3 text-lg dark:border-mono-700"
-            inputMode={decimals > 0 ? 'decimal' : 'numeric'}
-            placeholder={decimals > 0 ? '0.00' : '0'}
-            value={amountText}
-            onChange={(e) => setAmountText(e.target.value)}
-            aria-label="Amount"
-            autoFocus
-          />
-        </label>
-        {obstacleText && <p className="text-sm text-mono-600 dark:text-mono-400">{obstacleText}</p>}
+      <div className="mt-6 space-y-5">
+        <Input
+          label={`Amount (${unit})`}
+          className="text-lg"
+          inputMode={decimals > 0 ? 'decimal' : 'numeric'}
+          placeholder={decimals > 0 ? '0.00' : '0'}
+          value={amountText}
+          onChange={(e) => setAmountText(e.target.value)}
+          aria-describedby={obstacleText ? 'online-obstacle' : undefined}
+          autoFocus
+        />
+        {/* Validated as the amount is typed, never after Get code: the shopper sees why the
+            button is off while the figure is still in front of them. */}
+        {obstacleText && (
+          <p id="online-obstacle" role="status" className="-mt-3 text-sm text-amber-700 dark:text-amber-300">
+            {obstacleText}
+          </p>
+        )}
 
-        <fieldset>
-          <legend className="text-sm text-mono-600 dark:text-mono-300">Code expires in</legend>
-          <div className="mt-1 grid grid-cols-3 gap-2">
-            {EXPIRY_CHOICES.map((d) => (
-              <Button key={d} variant={d === days ? 'primary' : 'outline'} disabled={!offered.includes(d)} onClick={() => setDays(d)} aria-pressed={d === days}>
-                {d === 1 ? '1 day' : `${d} days`}
-              </Button>
-            ))}
+        <div>
+          <p className="mb-2 text-sm font-medium text-mono-600 dark:text-mono-400">Code expires in</p>
+          <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Code expires in">
+            {EXPIRY_CHOICES.map((d) => {
+              const ok = offered.includes(d)
+              return (
+                <Button
+                  key={d}
+                  type="button"
+                  role="radio"
+                  aria-checked={d === days}
+                  size="sm"
+                  variant={d === days ? 'primary' : 'secondary'}
+                  className={ok ? undefined : 'opacity-40'}
+                  disabled={!ok}
+                  onClick={() => setDays(d)}
+                >
+                  {d === 1 ? '1 day' : `${d} days`}
+                </Button>
+              )
+            })}
           </div>
-          {offered.length < EXPIRY_CHOICES.length && <p className="mt-1 text-xs text-mono-500">A voucher's own expiry limits how long the code can last.</p>}
-        </fieldset>
+          {offered.length < EXPIRY_CHOICES.length && <p className="mt-2 text-xs text-mono-600 dark:text-mono-400">A voucher's own expiry limits how long the code can last.</p>}
+        </div>
 
         {error && <Alert>{error}</Alert>}
         <Button size="lg" className="w-full" disabled={!plan.plan || busy || !offered.includes(days as 1 | 7 | 30)} onClick={() => void onGet()}>
@@ -264,6 +296,7 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
   const [record, setRecord] = useState<CheckoutCodeRecord | undefined>(() => deps.codes(pubkey).find((r) => r.id === id))
   const [copied, setCopied] = useState(false)
   const [cancelError, setCancelError] = useState<string | null>(null)
+  const stallName = useMerchantLabel({ pubkey: record?.stall ?? '' })
   if (!record) return <Centered>No such code.</Centered>
   const shop = hostOf(record.shopUrl)
   const denom = { unit: record.unit, decimals: record.decimals }
@@ -272,8 +305,8 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
   if (!record.code) {
     return (
       <Screen>
-        <BackLink to="/" label="Done" />
-        <PageHeader title="Your code" subtitle={`For ${shop}`} />
+        <BackLink to={`/merchants/${record.stall}`} label="Done" />
+        <PageHeader title="Your code" subtitle={`${stallName} · for ${shop}`} />
         <Notice tone="warning">
           {record.status === 'abandoned'
             ? `No code was made. Your vouchers come back on their own by ${expires}.`
@@ -300,7 +333,7 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
 
   return (
     <Screen>
-      <BackLink to="/" label="Done" />
+      <BackLink to={`/merchants/${record.stall}`} label="Done" />
       <PageHeader title="Your code" subtitle={`Only works at ${shop}`} />
       <Panel className="p-5 text-center">
         <p className="break-all font-mono text-2xl font-semibold tracking-wider text-mono-900 dark:text-mono-50" data-testid="checkout-code">
@@ -312,6 +345,7 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
       </Panel>
       <Panel className="mt-4 p-4">
         <DetailRow label="Amount" value={formatFace(record.amount, denom)} />
+        <DetailRow label="Stall" value={stallName} />
         <DetailRow label="Shop" value={shop} />
         <DetailRow label="Expires" value={expires} />
         <DetailRow label="Status" value={STATUS_WORDS[record.status] ?? record.status} />
