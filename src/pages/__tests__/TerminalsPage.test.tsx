@@ -763,7 +763,7 @@ describe('#402: an online shop on the list', () => {
 
 describe('the stall profile publisher (#402): only the relay confirms', () => {
   it('a gateway-only copy is not "published", so the online_shop republish is retried', async () => {
-    const { profilePublisherVia } = await import('../TerminalsPage')
+    const { profilePublisherVia } = await import('../../lib/onlineShopPublisher')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const mirrorOnly = profilePublisherVia(async () => ({ ok: 0, errors: ['publish timed out'] }), async () => true, async (t) => ({ ...t, created_at: 1 }))
     expect((await mirrorOnly.publish({})).ok).toBe(0)
