@@ -32,6 +32,12 @@ const STALL = 'a'.repeat(64)
 const CUSTOMER = 'b'.repeat(64)
 const UNREACHABLE = 'c'.repeat(64)
 
+// #434: the stall's open-for-business status is asked of the portal. Open here: these tests
+// are about something else, and an unmocked fetch would (correctly) fail closed.
+vi.mock('../../lib/merchantStatus', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchantStatus')>()),
+  fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
+}))
 vi.mock('../../lib/branding', () => ({
   merchantBranding: (pubkey: string) =>
     Promise.resolve(

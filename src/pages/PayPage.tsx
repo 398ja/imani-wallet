@@ -31,6 +31,8 @@ import {
   Panel,
 } from '../components/ui'
 import { userMessage } from '../lib/userMessage'
+import { useStallStatus } from '../hooks/useStallStatus'
+import { closedMessage, mayTradeWith } from '../lib/merchantStatus'
 
 type Status =
   | { step: 'review' }
@@ -93,6 +95,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // called conditionally. It is the same fetch the merchant pages make, cached per
   // pubkey, so asking here costs nothing extra.
   const issuer = useIdentity(parsed.ok ? parsed.request.issuerId : undefined)
+  // #434: is the stall taking payments? Polled while this screen is up; fail closed.
+  const stall = useStallStatus(parsed.ok ? parsed.request.issuerId : undefined)
 
   if (!parsed.ok) return <Fatal title="Cannot read this request" detail={parsed.error} />
   const request = parsed.request
@@ -140,7 +144,12 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   const passedNote = passedOverNote(
     passedOver(allVouchers, request.amount, { issuer: request.issuerId, unit: request.unit }),
   )
-  const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle
+  const stallOpen = mayTradeWith(stall.status === 'loading' ? 'unknown' : stall.status)
+  const stallNote =
+    stall.status === 'loading'
+      ? 'Checking this merchant is open…'
+      : closedMessage(stall.status === 'customer' ? 'unknown' : stall.status, issuer?.name ?? merchant?.name)
+  const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle && stallOpen
 
   if (status.step === 'done') {
     // A payment drawn across several coupons can land in pieces, and what landed
@@ -234,6 +243,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       </Panel>
 
       {expired && <Alert>This payment request has expired.</Alert>}
+      {!expired && !stallOpen && stallNote && status.step !== 'failed' && <Alert>{stallNote}</Alert>}
       {!expired && !merchant && (
         <Alert>You have no vouchers from this merchant.</Alert>
       )}
@@ -262,6 +272,16 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         onClick={async () => {
           setStatus({ step: 'paying' })
           try {
+            // #434: ask again right before money moves. A stall that closed since the last poll
+            // must not be paid, and nothing has left the wallet yet.
+            const now = await stall.recheck()
+            if (!mayTradeWith(now.status)) {
+              setStatus({
+                step: 'failed',
+                message: closedMessage(now.status === 'customer' ? 'unknown' : now.status, issuer?.name ?? merchant?.name) ?? 'Payment failed.',
+              })
+              return
+            }
             const result = await payRequest({ request, raw, merchant: merchant!, payer: pubkey })
             setStatus({ step: 'done', result })
           } catch (e) {

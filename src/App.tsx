@@ -36,6 +36,7 @@ import { ReauthDialog } from './components/ui/ReauthDialog'
 import { HeldCouponsNotice } from './components/ui/HeldCouponsNotice'
 import {
   canTrade,
+  canRunStall,
   loadMerchant,
   refreshMerchant,
   type MerchantProfile,
@@ -53,6 +54,7 @@ import { isTerminalDevice } from './lib/terminalEnrol'
 import { WelcomePage } from './pages/WelcomePage'
 import { MerchantsPage } from './pages/MerchantsPage'
 import { MerchantHomePage } from './pages/MerchantHomePage'
+import { OpenStallOnly } from './components/StallClosed'
 import {
   MerchantTransactionsPage,
   IssuedCouponsPage,
@@ -497,10 +499,13 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   // The session's authority AND a stall to sell from — see `canTrade`. A `const`
   // so TypeScript narrows `merchant` for the screens behind it.
   const trading = canTrade(permissions, merchant)
+  // #434: the ROLE, open or closed. A closed stall keeps the merchant home, header and every
+  // trading route; the screens grey their actions out and say why instead of disappearing.
+  const stallOwner = canRunStall(permissions, merchant)
 
   return (
     <>
-      <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
+      <Header profile={profile} merchant={stallOwner} terminal={terminal.actor !== null} onLogout={onLogout} />
       {/* Coupons the trusted-mint gate is holding, so a wait is never mistaken for a loss (#133). */}
       <HeldCouponsNotice pubkey={pubkey} className="mt-2" />
       {/* #352: the wallet opens first and the vouchers fill in as they come back. */}
@@ -530,11 +535,12 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             */
             <ResumeParkedClaim pubkey={pubkey}>
               <ResumeAfterLogin>
-              {trading ? (
+              {stallOwner ? (
                 <MerchantHomePage
                   actor={terminal.actor ?? undefined}
                   session={terminal.session}
                   refusal={terminal.refusal}
+                  closed={!merchant.active}
                 />
               ) : (
                 <MerchantsPage pubkey={pubkey} />
@@ -543,17 +549,19 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             </ResumeParkedClaim>
           }
         />
-        {trading && (
+        {stallOwner && (
           <>
             <Route
               path="/sell"
               element={
-                <SellPage
-                  pubkey={pubkey}
-                  merchant={merchant}
-                  actor={terminal.actor ?? undefined}
-                  session={terminal.session}
-                />
+                <OpenStallOnly merchant={merchant}>
+                  <SellPage
+                    pubkey={pubkey}
+                    merchant={merchant}
+                    actor={terminal.actor ?? undefined}
+                    session={terminal.session}
+                  />
+                </OpenStallOnly>
               }
             />
             {/* Under /sell because it is the other half of the same job —
@@ -562,23 +570,27 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             <Route
               path="/sell/cashback"
               element={
-                <CashbackIssuePage
-                  merchant={merchant}
-                  actor={terminal.actor ?? undefined}
-                  session={terminal.session}
-                />
+                <OpenStallOnly merchant={merchant}>
+                  <CashbackIssuePage
+                    merchant={merchant}
+                    actor={terminal.actor ?? undefined}
+                    session={terminal.session}
+                  />
+                </OpenStallOnly>
               }
             />
             <Route
               path="/redeem"
               element={
-                <RedeemPage
-                  pubkey={pubkey}
-                  merchant={merchant}
-                  actor={terminal.actor ?? undefined}
-                  fulfilment={OWNER_FULFILMENT}
-                  register={OWNER_REGISTER}
-                />
+                <OpenStallOnly merchant={merchant}>
+                  <RedeemPage
+                    pubkey={pubkey}
+                    merchant={merchant}
+                    actor={terminal.actor ?? undefined}
+                    fulfilment={OWNER_FULFILMENT}
+                    register={OWNER_REGISTER}
+                  />
+                </OpenStallOnly>
               }
             />
             {/*

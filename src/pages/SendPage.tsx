@@ -20,6 +20,8 @@ import { SwapBackOffer } from '../components/SwapBackOffer'
 import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
 import { listVouchers } from '../lib/wallet'
 import { merchantStatus, type MerchantStatus } from '../lib/merchant'
+import { useStallStatus } from '../hooks/useStallStatus'
+import { closedMessage, mayTradeWith } from '../lib/merchantStatus'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import {
@@ -173,6 +175,16 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     }
   }, [recipient])
 
+  /*
+    #434: paying a stall (the recipient is a merchant) needs that stall to be open. Asked only
+    for a merchant recipient: a send to a person never depends on anyone's opening hours.
+  */
+  const stallRecipient =
+    recipient !== null && merchantAnswer?.pubkey === recipient && merchantAnswer.status === 'merchant'
+      ? recipient
+      : null
+  const stall = useStallStatus(stallRecipient)
+
   if (merchants === null) return <Centered>Checking your vouchers…</Centered>
 
   const options = sendOptions(merchants)
@@ -250,6 +262,13 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     recipient === null
       ? undefined
       : merchants.find((m) => m.pubkey.toLowerCase() === recipient.toLowerCase())
+  // #434: closed, unknown or still checking all hold the payment back, with the reason.
+  const stallBlocked = stallRecipient !== null && stall.status !== 'open'
+  const stallNote = !stallBlocked
+    ? null
+    : stall.status === 'loading'
+      ? 'Checking this merchant is open…'
+      : closedMessage(stall.status === 'customer' ? 'unknown' : stall.status, recipientIdentity?.name ?? asMerchant?.name)
   /*
     The recipient in prose — "Send to …", "… reached X."
 
@@ -444,15 +463,24 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         {status.step === 'failed' && status.swapBackTokenId && (
           <SwapBackOffer tokenId={status.swapBackTokenId} pubkey={pubkey} />
         )}
+        {stallBlocked && status.step !== 'failed' && stallNote && <Alert>{stallNote}</Alert>}
 
         <div className="space-y-2">
           <Button
             size="lg"
             className="w-full"
-            disabled={status.step === 'sending' || status.step === 'unconfirmed'}
+            disabled={status.step === 'sending' || status.step === 'unconfirmed' || stallBlocked}
             onClick={async () => {
               setStatus({ step: 'sending' })
               try {
+                // #434: a stall recipient is asked again right before money moves.
+                if (stallRecipient) {
+                  const now = await stall.recheck()
+                  if (!mayTradeWith(now.status)) {
+                    setStatus({ step: 'failed', message: closedMessage(now.status === 'customer' ? 'unknown' : now.status, recipientIdentity?.name ?? asMerchant?.name) ?? 'Send failed.' })
+                    return
+                  }
+                }
                 const result = await sendVouchers({
                   payer: pubkey,
                   recipient: {
@@ -587,11 +615,12 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         {/* Holding enough is not the same as being able to send it: a voucher
             cannot be divided below one sat's worth of face value. */}
         {!short && obstacle && <Alert>{obstacle}</Alert>}
+        {stallBlocked && stallNote && <Alert>{stallNote}</Alert>}
 
         <Button
           size="lg"
           className="w-full"
-          disabled={minor === null || minor <= 0 || short || !!obstacle}
+          disabled={minor === null || minor <= 0 || short || !!obstacle || stallBlocked}
           onClick={() => setConfirming(true)}
         >
           Continue

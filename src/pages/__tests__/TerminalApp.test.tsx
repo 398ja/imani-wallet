@@ -17,7 +17,13 @@ import { MemoryRouter, useNavigate, type NavigateFunction } from 'react-router-d
 const STALL = 'a'.repeat(64)
 const DEVICE = 'c'.repeat(64)
 
-const state = vi.hoisted(() => ({ till: null as unknown }))
+const state = vi.hoisted(() => ({ till: null as unknown, stallStatus: 'open' as 'open' | 'closed' | 'unknown' }))
+// #434: the stall's open-for-business status is asked of the portal. Open here: these tests
+// are about something else, and an unmocked fetch would (correctly) fail closed.
+vi.mock('../../lib/merchantStatus', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchantStatus')>()),
+  fetchStallStatus: async () => ({ status: state.stallStatus, sellsByCard: state.stallStatus === 'open', eventId: state.stallStatus }),
+}))
 vi.mock('../../lib/terminalUnlock', () => ({
   openTill: () => state.till,
   lockTerminal: vi.fn(),
@@ -105,6 +111,7 @@ function at(path: string) {
 beforeEach(() => {
   localStorage.clear()
   state.till = null
+  state.stallStatus = 'open'
 })
 afterEach(() => cleanup())
 
@@ -335,5 +342,46 @@ describe('a terminal record without a token (#160 review, LOW)', () => {
     )
     at('/')
     expect(await screen.findByRole('button', { name: 'Open the till' })).toBeTruthy()
+  })
+})
+
+describe('a till for a stall that is closed for business (#434)', () => {
+  it.each(['closed', 'unknown'] as const)('%s: Sell and Redeem stay, disabled, with why', async (s) => {
+    state.stallStatus = s
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    at('/')
+    expect(await screen.findByText('Closed for business')).toBeTruthy()
+    expect((screen.getByRole('button', { name: /Sell/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /Redeem/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(/Ask the owner to open it again/)).toBeTruthy()
+  })
+
+  it.each(['/sell', '/sell/cashback', '/redeem'])('a typed %s lands on the closed note, not the screen', async (path) => {
+    state.stallStatus = 'closed'
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    at(path)
+    expect(await screen.findByText('Closed for business')).toBeTruthy()
+    expect(screen.queryByText(/sell-screen|cashback-screen|redeem-screen/)).toBeNull()
+  })
+
+  it('reopening re-enables the till without a reload', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      state.stallStatus = 'closed'
+      enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+      unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+      at('/')
+      expect(await screen.findByText('Closed for business')).toBeTruthy()
+      state.stallStatus = 'open'
+      await act(async () => {
+        vi.advanceTimersByTime(16_000)
+      })
+      await waitFor(() => expect(screen.queryByText('Closed for business')).toBeNull())
+      expect((screen.getByRole('button', { name: /Sell/ }) as HTMLButtonElement).disabled).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -268,3 +268,26 @@ describe('a refused terminal is not mistaken for the owner', () => {
     expect(redeem()).toBeTruthy()
   })
 })
+
+describe('a stall closed for business (#434)', () => {
+  it('owner: stays a merchant home, Sell and Redeem disabled, with a way to reopen', () => {
+    render(
+      <MemoryRouter>
+        <MerchantHomePage closed />
+      </MemoryRouter>,
+    )
+    expect((screen.getByRole('button', { name: /Sell/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /Redeem/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('link', { name: 'Open again in Settings' }).getAttribute('href')).toBe('/settings/merchant')
+  })
+
+  it('open: nothing changes', () => {
+    render(
+      <MemoryRouter>
+        <MerchantHomePage />
+      </MemoryRouter>,
+    )
+    expect((screen.getByRole('button', { name: /Sell/ }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByText('Closed for business')).toBeNull()
+  })
+})
