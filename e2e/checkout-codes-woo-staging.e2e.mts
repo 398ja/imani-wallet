@@ -87,7 +87,7 @@ async function main() {
       return orig.call(this, k, v)
     }
   })
-  owner.on('console', (c) => { if (c.text().startsWith('[trace]')) relayFrames.push(`${new Date().toISOString().slice(11, 19)} ${c.text()}`) })
+  owner.on('console', (c) => { if (c.text().startsWith('[trace]') || c.text().startsWith('[online-shop]')) relayFrames.push(`${new Date().toISOString().slice(11, 19)} ${c.text()}`) })
   owner.on('websocket', (ws) => {
     const t = () => new Date().toISOString().slice(11, 19)
     relayFrames.push(`${t()} open ${ws.url()}`)
