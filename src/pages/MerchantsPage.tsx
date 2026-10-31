@@ -9,8 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Globe, QrCode, ScanLine } from 'lucide-react'
-import { checkoutCodesEnabled } from '../lib/checkoutCodePorts'
+import { QrCode, ScanLine } from 'lucide-react'
 
 import { Button, Screen, Panel, Pass } from '../components/ui'
 import { StallExpiryCue } from '../components/ui/ExpiryBadge'
@@ -426,12 +425,6 @@ export function MerchantsPage({ pubkey = '' }: { pubkey?: string }) {
           <QrCode className="mr-2 h-5 w-5" /> Receive
         </Button>
       </div>
-      {/* #402: pay at a stall's online shop with a checkout code. Dark until the flag is on. */}
-      {checkoutCodesEnabled() && (
-        <Button size="lg" variant="ghost" className="-mt-3 mb-6 w-full" onClick={() => navigate('/online')}>
-          <Globe className="mr-2 h-5 w-5" aria-hidden /> Use online
-        </Button>
-      )}
 
       {merchants?.length === 0 && (
         <p className="rounded-2xl bg-mono-100 p-5 text-center text-sm text-mono-500 dark:bg-mono-900">

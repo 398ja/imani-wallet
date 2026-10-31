@@ -5,7 +5,8 @@ import QRCode from 'qrcode'
 
 import { Avatar, BackLink, Centered, RemoteImage, Screen } from '../components/ui'
 import { LocationMap } from '../components/LocationMap'
-import { MerchantActions } from '../components/MerchantActions'
+import { CouponCodeAction, MerchantActions } from '../components/MerchantActions'
+import { checkoutCodesEnabled } from '../lib/checkoutCodePorts'
 import { merchantBranding } from '../lib/branding'
 import { handleLabel, UNKNOWN_STALL } from '../lib/format'
 import { toRecipientPubkey } from '../lib/issue'
@@ -318,7 +319,12 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
         </p>
       ) : (
         <div className="mt-6">
-          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} sellsOnline={Boolean(record?.onlineShop)} />
+          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} />
+          {checkoutCodesEnabled() && (
+            <div className="mt-3 grid">
+              <CouponCodeAction pubkey={pubkey} sellsOnline={Boolean(record?.onlineShop)} viewerPubkey={viewerPubkey} />
+            </div>
+          )}
         </div>
       )}
 

@@ -1,15 +1,13 @@
 import { useEffect, useId, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CreditCard, Globe, Wallet } from 'lucide-react'
+import { CreditCard, Ticket, Wallet } from 'lucide-react'
 
 import { Button } from './ui'
 import { useStallStatus } from '../hooks/useStallStatus'
-import { listVouchers, onWalletChanged, walletIsOpen } from '../lib/wallet'
-import { withoutInFlight } from '../lib/pay'
-import { merchantActions, payPath, validVoucherCount, type ActionState, type CardSalesReadiness } from '../lib/merchantActions'
+import { useValidVouchers } from '../hooks/useValidVouchers'
+import { merchantActions, payPath, type ActionState, type CardSalesReadiness } from '../lib/merchantActions'
 import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
 import { rememberAfterLogin } from '../lib/afterLogin'
-import { checkoutCodesEnabled } from '../lib/checkoutCodePorts'
 
 /**
  * Buy and Pay at one stall (#280), shared by `/merchants/:pubkey` and `/profile/:pubkey`.
@@ -26,18 +24,15 @@ export function MerchantActions({
   pubkey,
   acceptsCards,
   viewerPubkey,
-  sellsOnline = false,
 }: {
   pubkey: string
   acceptsCards: boolean
-  /** #402: the stall's profile names an online shop. */
-  sellsOnline?: boolean
   /** The signed-in user, or undefined for a visitor with no session. */
   viewerPubkey?: string
 }) {
   const navigate = useNavigate()
   const loggedIn = viewerPubkey !== undefined
-  const [valid, setValid] = useState(0)
+  const valid = useValidVouchers(pubkey, viewerPubkey)
   // #298: can the purchase issuer actually issue for this stall? Asked only when the stall says
   // it takes cards. Fails safe: an error or no answer is `not-ready`, never a sale. The answer is
   // kept WITH the stall it is for, so a stale answer for another stall reads as `checking`.
@@ -56,20 +51,6 @@ export function MerchantActions({
   }, [pubkey, acceptsCards])
   const cardSales: CardSalesReadiness =
     answer === null || answer.stall !== pubkey ? 'checking' : answer.ready
-
-  useEffect(() => {
-    // `listVouchers` throws with no wallet open, and a visitor has nothing to
-    // count anyway, so the load is skipped rather than caught.
-    if (!loggedIn || !walletIsOpen()) return
-    const load = async () => {
-      // Minus coupons behind an unconfirmed send (#128): offering Pay on those
-      // would land on SendPage's "none left" refusal.
-      const rows = withoutInFlight(await listVouchers(), viewerPubkey)
-      setValid(validVoucherCount(rows, pubkey))
-    }
-    void load()
-    return onWalletChanged(() => void load())
-  }, [pubkey, loggedIn, viewerPubkey])
 
   // #434: the stall's own open-for-business status, polled while this screen is up.
   const stall = useStallStatus(pubkey)
@@ -111,13 +92,39 @@ export function MerchantActions({
         onClick={() => navigate(payPath(pubkey))}
         variant="outline"
       />
-      {/* #402: a checkout code for this stall's online shop. Dark until the flag is on. */}
-      {sellsOnline && loggedIn && valid > 0 && checkoutCodesEnabled() && (
-        <Button size="lg" variant="ghost" className="col-span-2 w-full" onClick={() => navigate(`/online?stall=${pubkey}`)}>
-          <Globe className="mr-2 h-5 w-5" aria-hidden /> Use online
-        </Button>
-      )}
     </div>
+  )
+}
+
+/**
+ * #402: a checkout code for this stall's online shop, on the stall's own page. Always drawn when
+ * the feature is on, and disabled with the reason when the stall has no shop or the viewer has
+ * nothing to put in a code, the same rule as Buy and Pay above.
+ */
+export function CouponCodeAction({
+  pubkey,
+  sellsOnline,
+  viewerPubkey,
+  size = 'md',
+}: {
+  pubkey: string
+  sellsOnline: boolean
+  viewerPubkey?: string
+  size?: 'md' | 'lg'
+}) {
+  const navigate = useNavigate()
+  const valid = useValidVouchers(pubkey, viewerPubkey)
+  const { online } = merchantActions({ acceptsCards: false, validVouchers: valid, loggedIn: viewerPubkey !== undefined, sellsOnline })
+  return (
+    <Action
+      state={online}
+      label="Coupon code"
+      accessibleName="Get a coupon code for this merchant's online shop"
+      icon={<Ticket className="mr-2 h-5 w-5" aria-hidden />}
+      onClick={() => navigate(`/online?stall=${pubkey}`)}
+      variant="outline"
+      size={size}
+    />
   )
 }
 
@@ -128,6 +135,7 @@ function Action({
   icon,
   onClick,
   variant = 'primary',
+  size = 'lg',
 }: {
   state: ActionState
   label: string
@@ -135,12 +143,13 @@ function Action({
   icon: React.ReactNode
   onClick: () => void
   variant?: 'primary' | 'outline'
+  size?: 'md' | 'lg'
 }) {
   const reasonId = useId()
   return (
     <div className="flex flex-col gap-1">
       <Button
-        size="lg"
+        size={size}
         // A disabled action drops to the quiet outline, whatever its enabled
         // variant: a solid primary fill at half opacity still reads as pressable,
         // and heavier than the disabled Pay beside it.
