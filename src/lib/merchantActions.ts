@@ -29,6 +29,14 @@ export const CARD_SALES_NEEDS_EXPIRY = 'This shop sells by card only with an exp
  * Whether the purchase issuer can issue for this stall now (#298). `checking` and `not-ready`
  * both keep Buy disabled: an unknown answer never sells.
  */
+/** #434: the stall has switched Open for business off. Neither Buy nor Pay is offered. */
+export const STALL_CLOSED = 'This merchant is closed right now. Your vouchers are safe.'
+/** #434: the portal could not say. Fail closed. */
+export const STALL_UNKNOWN = "Can't check whether this merchant is open. Try again in a moment."
+export const STALL_CHECKING = 'Checking this merchant is open…'
+
+export type StallOpen = 'open' | 'closed' | 'customer' | 'unknown' | 'loading'
+
 export type CardSalesReadiness = 'checking' | 'ready' | 'not-ready' | 'no-expiry'
 
 /** The line under a disabled Buy for a readiness that is not `ready`. */
@@ -51,6 +59,19 @@ export interface MerchantActionInput {
   /** Coupons from this stall that can still be spent: unspent and unexpired. */
   validVouchers: number
   loggedIn: boolean
+  /**
+   * #434: the stall's open-for-business status from the portal. Only `open` lets either button
+   * through; closed, unknown and still-loading all disable both, with the reason. Absent keeps
+   * the pre-#434 behaviour, for callers with no stall status to give.
+   */
+  stallOpen?: StallOpen
+}
+
+function stallBlock(stallOpen: StallOpen | undefined): ActionState | null {
+  if (stallOpen === undefined || stallOpen === 'open') return null
+  if (stallOpen === 'closed') return { enabled: false, reason: STALL_CLOSED }
+  if (stallOpen === 'loading') return { enabled: false, reason: STALL_CHECKING }
+  return { enabled: false, reason: STALL_UNKNOWN }
 }
 
 export function merchantActions({
@@ -58,10 +79,16 @@ export function merchantActions({
   cardSales = 'checking',
   validVouchers,
   loggedIn,
+  stallOpen,
 }: MerchantActionInput): {
   buy: ActionState
   pay: ActionState
 } {
+  // A closed stall (or one nobody could confirm is open) takes neither card nor vouchers (#434).
+  // Except while still asking: a reason the shopper can act on ("no cards here") is shown first.
+  const blocked = stallBlock(stallOpen)
+  if (blocked && !(stallOpen === 'loading' && !acceptsCards)) return { buy: blocked, pay: blocked }
+  if (blocked) return { buy: { enabled: false, reason: NO_CARDS }, pay: blocked }
   // Logged out does not disable Buy: the button leads through login and back
   // (guest card purchase is not supported, so that detour IS the purchase).
   // No cards at all says so first: it is the reason a shopper can act on (try another stall).

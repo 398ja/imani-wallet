@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { CreditCard, Globe, Wallet } from 'lucide-react'
 
 import { Button } from './ui'
+import { useStallStatus } from '../hooks/useStallStatus'
 import { listVouchers, onWalletChanged, walletIsOpen } from '../lib/wallet'
 import { withoutInFlight } from '../lib/pay'
 import { merchantActions, payPath, validVoucherCount, type ActionState, type CardSalesReadiness } from '../lib/merchantActions'
@@ -70,7 +71,16 @@ export function MerchantActions({
     return onWalletChanged(() => void load())
   }, [pubkey, loggedIn, viewerPubkey])
 
-  const { buy, pay } = merchantActions({ acceptsCards, cardSales, validVouchers: valid, loggedIn })
+  // #434: the stall's own open-for-business status, polled while this screen is up.
+  const stall = useStallStatus(pubkey)
+  const { buy, pay } = merchantActions({
+    // Open is checked by `stallOpen`; the portal's sellsByCard narrows cards further once known.
+    acceptsCards: acceptsCards && (stall.status !== 'open' || stall.sellsByCard),
+    cardSales,
+    validVouchers: valid,
+    loggedIn,
+    stallOpen: stall.status,
+  })
 
   const onBuy = () => {
     if (loggedIn) {

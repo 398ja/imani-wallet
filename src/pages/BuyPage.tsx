@@ -1,4 +1,6 @@
 import { useEffect, useId, useState } from 'react'
+import { useStallStatus } from '../hooks/useStallStatus'
+import { closedMessage } from '../lib/merchantStatus'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { CreditCard } from 'lucide-react'
 
@@ -45,6 +47,15 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [cardSales, setCardSales] = useState<CardSalesReadiness>('checking')
+  // #434: a closed stall sells nothing by card, whatever Stripe says.
+  const stall = useStallStatus(pubkey)
+  const stallSells = stall.status === 'open' && stall.sellsByCard
+  const stallNote =
+    stall.status === 'loading'
+      ? 'Checking this merchant is open…'
+      : stall.status === 'open'
+        ? stall.sellsByCard ? null : "Card payments aren't set up for this merchant"
+        : closedMessage(stall.status === 'customer' ? 'unknown' : stall.status)
   const readinessId = useId()
 
   /*
@@ -82,6 +93,14 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
 
     // Asked again at the tap (#298): the answer on screen may be minutes old, and this is the
     // last moment nothing has been charged.
+    // #434: and is the stall still open? A stall that closed since the page loaded is never sent
+    // to Stripe.
+    const now = await stall.recheck()
+    if (now.status !== 'open' || !now.sellsByCard) {
+      setBusy(false)
+      setError(`${(closedMessage(now.status === 'customer' ? 'unknown' : now.status) ?? "Card payments aren't available").replace(/\.$/, '')}. Nothing was charged.`)
+      return
+    }
     const readiness = await cardSalesReadiness(pubkey).catch((): 'not-ready' => 'not-ready')
     if (readiness !== 'ready') {
       setCardSales(readiness)
@@ -171,16 +190,16 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
       <Button
         size="lg"
         className="mt-4 w-full"
-        disabled={minor === null || cardSales !== 'ready'}
-        aria-describedby={cardSales !== 'ready' ? readinessId : undefined}
+        disabled={minor === null || cardSales !== 'ready' || !stallSells || busy}
+        aria-describedby={cardSales !== 'ready' || !stallSells ? readinessId : undefined}
         onClick={buy}
       >
         <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Pay by card
       </Button>
       {/* The reason sits under the button it disables (#281), and is announced with it. */}
-      {cardSales !== 'ready' && (
+      {(stallNote || cardSales !== 'ready') && (
         <p id={readinessId} className="mt-2 text-center text-xs text-mono-600 dark:text-mono-400">
-          {cardSalesReason(cardSales)}
+          {stallNote ?? (cardSales !== 'ready' ? cardSalesReason(cardSales) : null)}
         </p>
       )}
 

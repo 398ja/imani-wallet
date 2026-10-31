@@ -34,6 +34,12 @@ const LATER = SOON + 30 * 86_400
 
 let tombstoned = new Set<string>()
 
+// #434: the stall's open-for-business status is asked of the portal. Open here: these tests
+// are about something else, and an unmocked fetch would (correctly) fail closed.
+vi.mock('../../lib/merchantStatus', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchantStatus')>()),
+  fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
+}))
 vi.mock('../../lib/wallet', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/wallet')>()),
   listVouchers: () =>
