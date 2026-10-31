@@ -50,7 +50,32 @@ export function reconcileOnlineShop(merchant: MerchantProfile, rows: readonly Te
 
 export interface ProfilePublisher {
   sign(template: ReturnType<typeof buildMerchantEvent>): Promise<{ created_at: number } & Record<string, unknown>>
+  /** `ok` counts every place that took it: the relay, and the gateway's mirror (as the roster does). */
   publish(signed: unknown): Promise<{ ok: number }>
+}
+
+/**
+ * The stall's `online_shop` as last CONFIRMED published, by stall. The record is saved locally
+ * before the publish, so without this a publish that never landed (a relay that dropped it, the
+ * page navigated away mid-send) read as `unchanged` on every later render and was never retried:
+ * on staging 2026-10-31 the stall's row was In service and its profile never named the shop.
+ */
+const publishedKey = (stall: string) => `imani-wallet:online-shop-published:${stall.toLowerCase()}`
+const shopKey = (shop: OnlineShop | null | undefined) =>
+  shop ? `${shop.url}|${shop.redeemKey}|${shop.platform}|${shop.since}` : ''
+function publishedShop(stall: string): string | null {
+  try {
+    return localStorage.getItem(publishedKey(stall))
+  } catch {
+    return null
+  }
+}
+function notePublished(stall: string, shop: OnlineShop | null | undefined): void {
+  try {
+    localStorage.setItem(publishedKey(stall), shopKey(shop))
+  } catch {
+    // Storage full or blocked: the next render retries, which is the safe direction.
+  }
 }
 
 /**
@@ -66,14 +91,19 @@ export async function syncOnlineShop(
   const merchant = loadMerchant(stallPubkey)
   if (!merchant) return { changed: false, published: false }
   const change = reconcileOnlineShop(merchant, rows)
-  if (change.kind === 'unchanged') return { changed: false, published: false }
-  saveMerchant(change.merchant)
+  // Unchanged locally AND confirmed published: nothing to do. Unchanged locally but never
+  // confirmed (a lost publish): send the record as it stands.
+  const unsent = change.kind === 'unchanged' && publishedShop(stallPubkey) !== shopKey(merchant.onlineShop)
+  if (change.kind === 'unchanged' && !unsent) return { changed: false, published: false }
+  const next = change.kind === 'republish' ? change.merchant : merchant
+  if (change.kind === 'republish') saveMerchant(next)
   try {
-    const signed = await publisher.sign(buildMerchantEvent(change.merchant))
-    saveMerchant({ ...change.merchant, eventAt: signed.created_at })
+    const signed = await publisher.sign(buildMerchantEvent(next))
+    saveMerchant({ ...next, eventAt: signed.created_at })
     const { ok } = await publisher.publish(signed)
-    return { changed: true, published: ok > 0 }
+    if (ok > 0) notePublished(stallPubkey, next.onlineShop)
+    return { changed: change.kind === 'republish', published: ok > 0 }
   } catch {
-    return { changed: true, published: false }
+    return { changed: change.kind === 'republish', published: false }
   }
 }

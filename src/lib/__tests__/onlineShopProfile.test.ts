@@ -56,4 +56,22 @@ describe('online_shop follows the roster (#402 §0)', () => {
     // Nothing changed: nothing published again.
     expect((await syncOnlineShop(STALL, [shopRow()], { sign: async () => { throw new Error('no') }, publish: async () => ({ ok: 0 }) })).changed).toBe(false)
   })
+
+  it('retries a publish that never landed, on the next render, until one does', async () => {
+    saveMerchant({ ...emptyMerchant(STALL), acceptsCards: true })
+    const lost = await syncOnlineShop(STALL, [shopRow()], { sign: async (t) => ({ ...t, created_at: 100 }), publish: async () => ({ ok: 0 }) })
+    expect(lost).toEqual({ changed: true, published: false })
+    // Saved locally already, so reconcile says unchanged: it must still send.
+    const sent: string[] = []
+    const retry = await syncOnlineShop(STALL, [shopRow()], {
+      sign: async (t) => ({ ...t, created_at: 101 }),
+      publish: async (e) => (sent.push((e as { content: string }).content), { ok: 1 }),
+    })
+    expect(retry.published).toBe(true)
+    expect(mergeMerchantEvent(emptyMerchant(STALL), sent[0], 101).onlineShop?.redeemKey).toBe(S)
+    // Confirmed now: the next render sends nothing.
+    let calls = 0
+    await syncOnlineShop(STALL, [shopRow()], { sign: async (t) => (calls++, { ...t, created_at: 102 }), publish: async () => ({ ok: 1 }) })
+    expect(calls).toBe(0)
+  })
 })
