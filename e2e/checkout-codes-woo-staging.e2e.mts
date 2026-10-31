@@ -179,6 +179,11 @@ async function main() {
       continue
     }
     await cust.getByLabel('Amount').fill(CODE_AMOUNT)
+    // An amount the coupons cannot make exactly is refused on the screen, before anything is locked.
+    if (await cust.getByText(/cannot make exactly this amount/).isVisible({ timeout: 2_000 }).catch(() => false)) {
+      step('W2b-refused an amount no proofs make is refused before Get code', await cust.getByRole('button', { name: 'Get code' }).isDisabled(), CODE_AMOUNT)
+      return finish(browser)
+    }
     await cust.getByRole('button', { name: 'Get code' }).click()
     code = await Promise.race([
       cust.getByTestId('checkout-code').innerText({ timeout: 120_000 }).then((s) => s.match(CODE_RE)?.[0] ?? '', () => ''),
