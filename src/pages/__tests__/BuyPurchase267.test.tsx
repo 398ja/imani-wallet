@@ -13,6 +13,12 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 const startPurchase = vi.fn()
+// #434: the stall's open-for-business status is asked of the portal. Open here: these tests
+// are about something else, and an unmocked fetch would (correctly) fail closed.
+vi.mock('../../lib/merchantStatus', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchantStatus')>()),
+  fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
+}))
 vi.mock('../../lib/purchase', () => ({ startPurchase: (...a: unknown[]) => startPurchase(...a) }))
 vi.mock('../../hooks/useBranding', () => ({
   useBranding: (pubkey: string | undefined) => ({

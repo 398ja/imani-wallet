@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-10-31
+
+### Changed
+
+- **Open for business pauses trading instead of turning the wallet into a customer's (#434).** A
+  closed stall keeps its merchant home, header, menus and history. Sell, Redeem and Cashback stay on
+  screen, disabled, with the reason, on the owner's device and every linked terminal. Closing asks for
+  the passphrase and says why first. Reopening saves at once.
+- Customers cannot pay or buy by card from a closed stall, or one nobody could confirm is open: Buy
+  and Pay, the payment-request Pay screen, paying a stall from Send, and card checkout all gate on
+  the portal's verified status, polled every 15 s and asked again right before anything is sent.
+- Terminals see a close within the 30 s target, without a reload or re-pairing.
+
+Needs gateway-portal >= 0.16.1 (status endpoint); 0.17.0 also refuses issuance server-side.
+
 ## [0.41.6] - 2026-10-31
 
 ### Fixed
