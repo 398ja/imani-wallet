@@ -38,6 +38,7 @@ import { checkSplittable, minSplitStep, planParts, stallKey } from '@imani/walle
 import { latestLockX, lockableVoucher, lockWindowProblem, type WindowProblem } from './cashlinkLock'
 import { toVoucher } from './merchants'
 import { withoutInFlight } from './pay'
+import { canCarve } from './checkoutCarve'
 import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } from './voucherToken'
 
 /** Contract §3: 1 ≤ parts ≤ 20. */
@@ -133,13 +134,39 @@ function draw(candidates: CheckoutCandidate[], amount: number): CheckoutPart[] |
 }
 
 /**
+ * A part is carved from its coupon's own proofs, offline (`checkoutCarve.ts`): only whole proofs
+ * move. A plan whose split part no subset of proofs can make would be refused AFTER Get code
+ * (staging 2026-10-31: 'this amount cannot be taken from that coupon'), so it is not a plan.
+ */
+const carvable = (plan: CheckoutPart[]) => plan.every((p) => p.amount === p.faceValue || canCarve(p.row.token, p.amount))
+
+/**
+ * A plan every part of which can be carved: `draw`'s own, or the same draw with the uncarvable
+ * split coupon left out (the next coupon is then split instead). Null when none can.
+ */
+function drawCarvable(candidates: CheckoutCandidate[], amount: number): CheckoutPart[] | null {
+  const first = draw(candidates, amount)
+  if (!first || carvable(first)) return first
+  let pool = candidates
+  for (let tries = 0; tries < candidates.length; tries++) {
+    const plan = draw(pool, amount)
+    if (!plan) return null
+    if (carvable(plan)) return plan
+    const stuck = plan.find((p) => p.amount !== p.faceValue && !canCarve(p.row.token, p.amount))
+    if (!stuck) return null
+    pool = pool.filter((c) => c.row !== stuck.row)
+  }
+  return null
+}
+
+/**
  * The same number of parts, but with a splittable coupon in it, when `planParts`'s own answer has
  * none: leave out one unsplittable part at a time and plan again.
  */
 function preferSplittable(candidates: CheckoutCandidate[], amount: number, plan: CheckoutPart[]): CheckoutPart[] {
   if (plan.some((p) => p.splittable)) return plan
   for (const part of plan) {
-    const other = draw(
+    const other = drawCarvable(
       candidates.filter((c) => c.row !== part.row),
       amount,
     )
@@ -182,7 +209,7 @@ export function checkoutPlan(req: CheckoutPlanRequest): CheckoutPlan {
   if (!Number.isSafeInteger(req.amount) || req.amount <= 0 || available < req.amount) {
     return { usable, excluded, obstacle: { kind: 'insufficient_value', available } }
   }
-  const plan = draw(usable, req.amount)
+  const plan = drawCarvable(usable, req.amount)
   if (!plan) {
     const steps = usable.map((c) => minSplitStep(c.voucher))
     return { usable, excluded, obstacle: { kind: 'not_splittable', available, minimumStep: steps.length ? Math.min(...steps) : undefined } }
