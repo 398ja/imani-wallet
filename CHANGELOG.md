@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.5] - 2026-10-31
+
+### Fixed
+
+- The stall's online-shop profile publish is retried every 5 seconds while Terminals is open,
+  until the relay takes it. A connect timeout right after enrolment was never retried (#443, #402).
+
 ## [0.41.4] - 2026-10-31
 
 ### Fixed
