@@ -34,6 +34,9 @@ export const STALL_CLOSED = 'This merchant is closed right now. Your vouchers ar
 /** #434: the portal could not say. Fail closed. */
 export const STALL_UNKNOWN = "Can't check whether this merchant is open. Try again in a moment."
 export const STALL_CHECKING = 'Checking this merchant is open…'
+/** #402: the stall's profile names no online shop, so a checkout code has nowhere to be used. */
+export const NO_ONLINE_SHOP = "This merchant doesn't sell online"
+export const LOG_IN_FOR_CODE = 'Log in to use your vouchers online'
 
 export type StallOpen = 'open' | 'closed' | 'customer' | 'unknown' | 'loading'
 
@@ -65,6 +68,8 @@ export interface MerchantActionInput {
    * the pre-#434 behaviour, for callers with no stall status to give.
    */
   stallOpen?: StallOpen
+  /** #402: the stall's profile names an online shop. Absent is no shop. */
+  sellsOnline?: boolean
 }
 
 function stallBlock(stallOpen: StallOpen | undefined): ActionState | null {
@@ -80,15 +85,27 @@ export function merchantActions({
   validVouchers,
   loggedIn,
   stallOpen,
+  sellsOnline = false,
 }: MerchantActionInput): {
   buy: ActionState
   pay: ActionState
+  online: ActionState
 } {
+  // #402: a checkout code needs a shop to use it at, a wallet, and a coupon to put in it. The
+  // shop is asked first: it is the one thing about this stall the shopper cannot change.
+  const online: ActionState = !sellsOnline
+    ? { enabled: false, reason: NO_ONLINE_SHOP }
+    : !loggedIn
+      ? { enabled: false, reason: LOG_IN_FOR_CODE }
+      : validVouchers > 0
+        ? { enabled: true }
+        : { enabled: false, reason: NO_VOUCHERS }
   // A closed stall (or one nobody could confirm is open) takes neither card nor vouchers (#434).
   // Except while still asking: a reason the shopper can act on ("no cards here") is shown first.
   const blocked = stallBlock(stallOpen)
-  if (blocked && !(stallOpen === 'loading' && !acceptsCards)) return { buy: blocked, pay: blocked }
-  if (blocked) return { buy: { enabled: false, reason: NO_CARDS }, pay: blocked }
+  // The code is spent at the shop later, not here, so a stall closed at its till does not block it.
+  if (blocked && !(stallOpen === 'loading' && !acceptsCards)) return { buy: blocked, pay: blocked, online }
+  if (blocked) return { buy: { enabled: false, reason: NO_CARDS }, pay: blocked, online }
   // Logged out does not disable Buy: the button leads through login and back
   // (guest card purchase is not supported, so that detour IS the purchase).
   // No cards at all says so first: it is the reason a shopper can act on (try another stall).
@@ -104,7 +121,7 @@ export function merchantActions({
     : validVouchers > 0
       ? { enabled: true }
       : { enabled: false, reason: NO_VOUCHERS }
-  return { buy, pay }
+  return { buy, pay, online }
 }
 
 /**
