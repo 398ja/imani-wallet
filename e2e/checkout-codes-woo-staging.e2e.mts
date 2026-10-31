@@ -27,6 +27,8 @@ const SHOP = (process.env.E2E_SHOP ?? 'https://shop.staging.398ja.xyz').replace(
 const ADMIN_PW = process.env.E2E_SHOP_ADMIN_PASSWORD ?? ''
 if (!ADMIN_PW) throw new Error('E2E_SHOP_ADMIN_PASSWORD is required (wp user shopadmin)')
 const PRODUCT_ID = Number(process.env.E2E_SHOP_PRODUCT ?? 32) // Pour-over Kit, EUR 39.00 in the seed
+// The whole coupon by default: a part of one needs carving, which is imani-wallet#447.
+const CODE_AMOUNT = process.env.E2E_CODE_AMOUNT ?? '20.00'
 const CODE_RE = /IMANI-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}/
 
 const failures: string[] = []
@@ -55,61 +57,8 @@ async function main() {
 
   const relayFrames: string[] = []
   const owner = await page()
-  // Trace the stall's profile writes: localStorage merchant record changes, as they happen.
-  await owner.addInitScript(() => {
-    const W = window.WebSocket
-    class Traced extends W {
-      constructor(url: string | URL, p?: string | string[]) {
-        super(url, p)
-        const stack = (new Error().stack ?? '').split('\n').slice(2, 5).map((l) => l.trim().replace(/https?:\/\/[^/]+\/assets\//, '')).join(' < ')
-        console.log(`[trace] ws new ${String(url)} from ${stack.slice(0, 260)}`)
-        this.addEventListener('close', (e) => console.log(`[trace] ws close code=${(e as CloseEvent).code}`))
-      }
-      send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
-        const s = String(data)
-        if (s.startsWith('["EVENT"')) console.log(`[trace] ws send EVENT state=${this.readyState} online_shop=${s.includes('online_shop')}`)
-        return super.send(data)
-      }
-      close(code?: number, reason?: string) {
-        const stack = (new Error().stack ?? '').split('\n').slice(2, 4).map((l) => l.trim().replace(/https?:\/\/[^/]+\/assets\//, '')).join(' < ')
-        console.log(`[trace] ws close() state=${this.readyState} from ${stack.slice(0, 200)}`)
-        return super.close(code, reason)
-      }
-    }
-    ;(window as unknown as { WebSocket: typeof WebSocket }).WebSocket = Traced as unknown as typeof WebSocket
-  })
-  await owner.addInitScript(() => {
-    const orig = Storage.prototype.setItem
-    Storage.prototype.setItem = function (k: string, v: string) {
-      if (k.startsWith('imani-wallet:merchant:') || k.startsWith('imani-wallet:online-shop-published:')) {
-        console.log(`[trace] setItem ${k.split(':')[1]} online_shop=${v.includes('"onlineShop"') || v.includes('|')} eventAt=${(v.match(/"eventAt":(\d+)/) ?? [])[1] ?? '-'}`)
-      }
-      return orig.call(this, k, v)
-    }
-  })
-  owner.on('console', (c) => { if (c.text().startsWith('[trace]') || c.text().startsWith('[online-shop]')) relayFrames.push(`${new Date().toISOString().slice(11, 19)} ${c.text()}`) })
-  owner.on('websocket', (ws) => {
-    const t = () => new Date().toISOString().slice(11, 19)
-    relayFrames.push(`${t()} open ${ws.url()}`)
-    ws.on('close', () => relayFrames.push(`${t()} close`))
-    ws.on('socketerror', (e) => relayFrames.push(`${t()} error ${ws.url()} ${e}`))
-    ws.on('framesent', (f) => {
-      const s = String(f.payload)
-      relayFrames.push(`${t()} sent ${s.slice(0, 40)} len=${s.length} merchant=${s.includes('imani:merchant')} online_shop=${s.includes('online_shop')}`)
-    })
-    ws.on('framereceived', (f) => {
-      const s = String(f.payload)
-      if (s.startsWith('["OK"')) relayFrames.push(`recv ${s.slice(0, 160)}`)
-    })
-  })
-  owner.on('console', (c) => { if (/online.?shop|profile|publish/i.test(c.text())) relayFrames.push(`console ${c.text().slice(0, 200)}`) })
-  owner.on('requestfinished', async (r) => {
-    if (!r.url().includes('/api/v1/nostr/events') || r.method() !== 'POST') return
-    const body = r.postData() ?? ''
-    const res = await r.response()
-    relayFrames.push(`mirror ${res?.status()} kind=${(body.match(/"kind":(\d+)/) ?? [])[1]} merchant=${body.includes('imani:merchant')} online_shop=${body.includes('online_shop')}`)
-  })
-  owner.on('pageerror', (e) => relayFrames.push(`pageerror ${e.message.slice(0, 200)}`))
+  // The wallet logs '[online-shop] ...' when the relay refuses the stall's profile: kept for W1e's detail.
+  owner.on('console', (c) => { if (c.text().startsWith('[online-shop]')) relayFrames.push(`${new Date().toISOString().slice(11, 19)} ${c.text()}`) })
   const handle = await registerMerchant(owner, BASE)
   const stall = await owner.evaluate(() => {
     for (let i = 0; i < localStorage.length; i++) {
@@ -176,32 +125,34 @@ async function main() {
   }
   step('W1d the stall\'s Terminals list shows the shop In service (and advertises it)', inService, inService ? '' : (await text(owner)).slice(0, 300))
   if (!inService) return finish(browser)
-  await owner.waitForTimeout(5_000) // the profile republish is fire-and-forget from that render
-  const local = await owner.evaluate((s) => {
-    const m = JSON.parse(localStorage.getItem(`imani-wallet:merchant:${s}`) ?? 'null') as { onlineShop?: unknown; eventAt?: number } | null
-    return { hasMerchant: !!m, onlineShop: m?.onlineShop ?? null, eventAt: m?.eventAt ?? null, publishedMark: localStorage.getItem(`imani-wallet:online-shop-published:${s}`) }
-  }, stall)
-  info(`stall local record: ${JSON.stringify(local)}`)
-  info(`stall relay frames: ${relayFrames.join(' || ') || 'none'}`)
-  if (process.env.E2E_PROBE_PUBLISH) {
-    const probe = await owner.evaluate(async () => {
-      const ws = new WebSocket('wss://relay.staging.398ja.xyz')
-      const opened = await new Promise<string>((ok) => { ws.onopen = () => ok('open'); ws.onerror = () => ok('error'); setTimeout(() => ok('timeout'), 5000) })
-      if (opened !== 'open') return opened
-      // A hand-made event with a deliberately bad sig: the relay must answer OK false. Proves EVENTs can leave this page.
-      const reply = await new Promise<string>((ok) => {
-        ws.onmessage = (m) => ok(String(m.data).slice(0, 120))
-        ws.send(JSON.stringify(['EVENT', { id: '0'.repeat(64), pubkey: '1'.repeat(64), created_at: 1, kind: 1, tags: [], content: '', sig: '2'.repeat(128) }]))
-        setTimeout(() => ok('no reply'), 5000)
-      })
-      ws.close()
-      return `${opened} ${reply}`
-    })
-    info(`probe raw websocket from stall page: ${probe}`)
-  }
 
   // W2: cashback from the stall to a fresh customer, claimed in the customer's own browser.
+  // First, stay on Terminals until the relay holds a profile naming the shop (or 90 s).
+  const relayHasShop = async () => {
+    const r = await fetch(`${BASE}/api/v1/nostr/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kinds: [30078], authors: [stall], limit: 20 }) })
+    const j = (await r.json()) as { events: Array<{ content: string; tags: string[][] }> }
+    return j.events.some((e) => e.tags.some((t) => t[0] === 'd' && t[1] === 'imani:merchant') && e.content.includes('online_shop'))
+  }
+  let advertised = false
+  for (let i = 0; i < 18 && !advertised; i++) {
+    advertised = await relayHasShop()
+    if (!advertised) await owner.waitForTimeout(5_000)
+  }
+  step('W1e the stall\'s published profile names the shop', advertised, (relayFrames.filter((f) => f.includes('[online-shop]')).slice(-2).join(' / ')) || 'no relay warnings')
+  if (!advertised) return finish(browser)
   const cust = await page()
+  cust.on('requestfinished', async (r) => {
+    if (!r.url().includes('/v1/checkout-codes') || r.method() !== 'POST') return
+    const res = await r.response()
+    if (!res || res.status() < 400) return
+    const body = r.postData() ?? ''
+    let parts = ''
+    try {
+      const j = JSON.parse(body) as { parts?: Array<{ token: string; amount: number }> }
+      parts = (j.parts ?? []).map((p) => `${p.amount}:${p.token.length}ch`).join(',')
+    } catch { parts = `unparsed ${body.length}ch` }
+    info(`deposit ${res.status()} ${(await res.text().catch(() => '')).slice(0, 120)} parts=[${parts}]`)
+  })
   await registerCustomer(cust, BASE)
   const generated = owner.waitForResponse((r) => r.url().endsWith('/api/v1/portal/cashback/generate') && r.request().method() === 'POST', { timeout: 90_000 })
   await owner.goto(`${BASE}/sell/cashback`, { waitUntil: 'load' })
@@ -227,12 +178,27 @@ async function main() {
       await cust.waitForTimeout(10_000)
       continue
     }
-    await cust.getByLabel('Amount').fill('10.00')
+    await cust.getByLabel('Amount').fill(CODE_AMOUNT)
     await cust.getByRole('button', { name: 'Get code' }).click()
-    code = await cust.getByTestId('checkout-code').innerText({ timeout: 120_000 }).then((s) => s.match(CODE_RE)?.[0] ?? '', () => '')
+    code = await Promise.race([
+      cust.getByTestId('checkout-code').innerText({ timeout: 120_000 }).then((s) => s.match(CODE_RE)?.[0] ?? '', () => ''),
+      cust.getByText(/cannot be used online right now|No code could be made/).waitFor({ timeout: 120_000 }).then(() => '', () => ''),
+    ])
+    if (!code) break
   }
   step('W2b Use online makes a checkout code for this shop', !!code, code || (await text(cust)).slice(0, 300))
-  if (!code) return finish(browser)
+  if (!code) {
+    const why = await cust.evaluate(() => {
+      const out: string[] = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i) ?? ''
+        if (/checkout/i.test(k)) out.push(`${k}: ${(localStorage.getItem(k) ?? '').match(/"refusal":"[^"]*"|"status":"[^"]*"/g)?.join(',') ?? ''}`)
+      }
+      return out.join(' | ')
+    })
+    info(`customer checkout records: ${why.slice(0, 600)}`)
+    return finish(browser)
+  }
   const codePage = cust.url()
 
   // W3
@@ -240,9 +206,12 @@ async function main() {
   await buyer.goto(`${SHOP}/?add-to-cart=${PRODUCT_ID}`, { waitUntil: 'domcontentloaded' })
   await buyer.goto(`${SHOP}/cart/`, { waitUntil: 'networkidle' })
   const totalOf = async () => {
-    const t = await text(buyer)
-    const m = [...t.matchAll(/Total\s*€\s?([0-9]+[.,][0-9]{2})|Total\s*([0-9]+[.,][0-9]{2})\s*€/g)].pop()
-    return m ? Number((m[1] ?? m[2]).replace(',', '.')) : NaN
+    // The block cart renders prices client-side; its footer reads "Estimated total €39.00".
+    const footer = buyer.locator('.wc-block-components-totals-footer-item, .order-total').first()
+    await buyer.waitForFunction(() => /\d[.,]\d{2}/.test(document.querySelector('.wc-block-components-totals-footer-item, .order-total')?.textContent ?? ''), undefined, { timeout: 30_000 }).catch(() => {})
+    const t = (await footer.innerText().catch(() => '')).replace(/\s+/g, ' ')
+    const m = t.match(/([0-9]+[.,][0-9]{2})/)
+    return m ? Number(m[1].replace(',', '.')) : NaN
   }
   const before = await totalOf()
   const classic = buyer.locator('#coupon_code')
@@ -250,14 +219,21 @@ async function main() {
     await classic.fill(code)
     await buyer.locator('button[name="apply_coupon"]').click()
   } else {
-    await buyer.getByRole('button', { name: /Add (a )?coupon/i }).first().click()
-    await buyer.locator('.wc-block-components-totals-coupon input, input[id*="coupon"]').first().fill(code)
-    await buyer.getByRole('button', { name: /^Apply$/ }).first().click()
+    await buyer.getByText(/^Add coupons?$/i).first().click()
+    const input = buyer.locator('.wc-block-components-totals-coupon input, input[id*="coupon"]').first()
+    await input.waitFor({ timeout: 15_000 })
+    await input.fill(code)
+    await buyer.locator('.wc-block-components-totals-coupon button, button:has-text("Apply")').first().click()
   }
-  await buyer.waitForTimeout(6_000)
+  // The total re-renders after the store API answers.
+  await buyer.waitForFunction((b) => {
+    const t = document.querySelector('.wc-block-components-totals-footer-item, .order-total')?.textContent ?? ''
+    const m = t.match(/([0-9]+[.,][0-9]{2})/)
+    return !!m && Number(m[1].replace(',', '.')) !== b
+  }, before, { timeout: 30_000 }).catch(() => {})
   const after = await totalOf()
   const cartText = await text(buyer)
-  step('W3 the shop takes the code: the cart total drops by EUR 10.00', Math.abs(before - after - 10) < 0.01, `total ${before} -> ${after} | ${cartText.match(/.{0,120}(Imani|IMANI-).{0,120}/)?.[0] ?? cartText.slice(0, 300)}`)
+  step('W3 the shop takes the code: the cart total drops by the code amount', Math.abs(before - after - Number(CODE_AMOUNT)) < 0.01, `total ${before} -> ${after} | ${cartText.match(/.{0,120}(Imani|IMANI-).{0,120}/)?.[0] ?? cartText.slice(0, 300)}`)
   if (!(before - after > 0)) return finish(browser)
 
   // W4
@@ -268,13 +244,51 @@ async function main() {
   ]
   const email = buyer.locator('#billing_email, #email').first()
   if (await email.count()) await email.fill(`buyer${Date.now()}@example.com`)
+  // Block checkout: shipping-* fields with billing the same; classic: billing_*.
+  const country = buyer.locator('#shipping-country, #billing-country').first()
+  if (await country.count()) await country.selectOption('IE').catch(() => {})
+  await buyer.waitForTimeout(1_500) // the address fields re-render for the country
+  // Ireland needs a county (shipping-state); pick Dublin, or the first real option.
+  const state = buyer.locator('#shipping-state, #billing-state, #billing_state').first()
+  if (await state.count()) {
+    await state.selectOption({ label: 'Dublin' }).catch(async () => {
+      const v = await state.evaluate((e) => [...(e as HTMLSelectElement).options].find((o) => o.value)?.value ?? '')
+      if (v) await state.selectOption(v)
+    })
+  }
   for (const [k, v] of fields) {
-    const f = buyer.locator(`#billing_${k}, #billing-${k}`).first()
+    const f = buyer.locator(`#shipping-${k}, #billing_${k}, #billing-${k}`).first()
     if (await f.count()) await f.fill(v)
   }
-  await buyer.locator('input[value="cod"]').first().check().catch(() => {})
-  await buyer.getByRole('button', { name: /Place order/i }).click()
+  await buyer.locator('#radio-control-wc-payment-method-options-cod, input[value="cod"]').first().check().catch(() => {})
+  buyer.on('response', async (r) => {
+    if (/wc\/store\/v1\/checkout/.test(r.url()) && r.request().method() === 'POST') info(`store checkout ${r.status()} ${(await r.text().catch(() => '')).slice(0, 400)}`)
+  })
+  await buyer.waitForLoadState('networkidle').catch(() => {})
+  const place = buyer.locator('button.wc-block-components-checkout-place-order-button, #place_order').first()
+  await place.waitFor({ timeout: 30_000 })
+  await buyer.waitForFunction(() => {
+    const b = document.querySelector('button.wc-block-components-checkout-place-order-button, #place_order') as HTMLButtonElement | null
+    return !!b && !b.disabled && !b.classList.contains('wc-block-components-button--loading')
+  }, undefined, { timeout: 30_000 }).catch(() => {})
+  // The form re-calculates totals (checkout?__experimental_calc_totals) as fields change; only a
+  // POST to /checkout WITHOUT that flag places the order. Click, and click again if nothing went.
+  const isPlace = (r: { url(): string; request(): { method(): string } }) =>
+    /wc\/store\/v1\/checkout(\?|$)/.test(r.url()) && !/calc_totals/.test(r.url()) && r.request().method() === 'POST'
+  let placedRes = null as Awaited<ReturnType<typeof buyer.waitForResponse>> | null
+  for (let i = 0; i < 3 && !placedRes; i++) {
+    const placed = buyer.waitForResponse(isPlace, { timeout: 30_000 }).catch(() => null)
+    // After a click that did go, the button stays disabled while the order is processed: done.
+    if (i > 0 && (await place.isDisabled().catch(() => true))) break
+    await place.click({ timeout: 10_000 }).catch(() => {})
+    placedRes = await placed
+  }
+  info(`place order -> ${placedRes ? `${placedRes.status()} ${(await placedRes.text().catch(() => '')).match(/"order_id":\d+,"status":"[^"]*"|"message":"[^"]*"/g)?.join(' ') ?? ''}` : 'no order request'}`)
   await buyer.waitForURL(/order-received/, { timeout: 120_000 }).catch(() => {})
+  if (!/order-received/.test(buyer.url())) {
+    await buyer.screenshot({ path: `${process.env.JCODE_SCRATCH_DIR ?? '/tmp'}/woo-checkout-fail.png`, fullPage: true }).catch(() => {})
+    info(`checkout notices: ${(await buyer.locator('.wc-block-components-notice-banner, .woocommerce-error, .wc-block-components-validation-error').allInnerTexts().catch(() => [])).join(' | ').slice(0, 500)}`)
+  }
   const orderId = buyer.url().match(/order-received\/(\d+)/)?.[1] ?? ''
   step('W4a the order is placed with the code', !!orderId, orderId ? `order ${orderId}` : (await text(buyer)).slice(0, 400))
   if (!orderId) return finish(browser)
@@ -293,6 +307,11 @@ async function main() {
     await admin.waitForTimeout(10_000)
   }
   step('W4b paying the order redeems the code (order note, order not on hold)', /redeemed/i.test(notes) && !/on.hold|failed/i.test(notes), notes.slice(0, 400))
+  // The customer pays the rest only: the order total is the cart total less the code. Read from the
+  // customer's own order-received page (its "Total:" row), which is what they were charged.
+  const receivedText = (await buyer.locator('.woocommerce-order-overview__total, .wc-block-order-confirmation-totals, .woocommerce-table--order-details tfoot').allInnerTexts().catch(() => [])).join(' ').replace(/\s+/g, ' ')
+  const orderTotal = Number((receivedText.match(/Total:?\s*€\s?([0-9]+[.,][0-9]{2})(?![\s\S]*Total:?\s*€)/i)?.[1] ?? receivedText.match(/€\s?([0-9]+[.,][0-9]{2})/)?.[1] ?? 'NaN').replace(',', '.'))
+  step('W4d the order charges only the rest (cart total less the code)', Math.abs(orderTotal - after) < 0.01, `order total ${orderTotal}, cart after code ${after}, before ${before}`)
 
   let status = ''
   for (let i = 0; i < 9; i++) {
