@@ -8,7 +8,7 @@ import { adoptRenewRequest, completeRenewals } from './terminalRenewOwner'
 import { renewRequestFromRumor } from './terminalRenewal'
 import { legacyApi } from './legacyBridge'
 import type { CredentialMintApi } from './credentialRevocation'
-import { enrolledNotices, giftWrapsFor, unwrapSealed, type WrapPublisher } from './terminalDelivery'
+import { enrolledNotices, giftWrapsFor, unwrapSealed, WRAP_BACKDATE_SECONDS, type WrapPublisher } from './terminalDelivery'
 import { signedFetch, type RequestSigner } from './nip98'
 
 /**
@@ -75,7 +75,7 @@ export async function giftWraps(pubkey: string, sinceSeconds?: number): Promise<
     try {
       return await pool.querySync(
         [RELAY_URL],
-        { kinds: [1059], '#p': [pubkey], ...(sinceSeconds ? { since: sinceSeconds - 900 } : {}) },
+        { kinds: [1059], '#p': [pubkey], ...(sinceSeconds ? { since: sinceSeconds - WRAP_BACKDATE_SECONDS } : {}) },
         { maxWait: 4000 },
       )
     } catch {
