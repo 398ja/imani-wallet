@@ -47,12 +47,23 @@ import { collectRenewRequests } from '../lib/terminalDeliveryNet'
 import { syncOnlineShop, type ProfilePublisher } from '../lib/onlineShopProfile'
 import { exposureLine, fetchShopExposure, type ExposureFetch, type ShopExposure } from '../lib/shopExposure'
 import { publish as relayPublish } from '../lib/relay'
+import { mirrorToGateway } from '../lib/transferSignature'
 import type { Event } from 'nostr-tools'
 
-/** The stall's own signer and relay, as `PaymentsSettingsPage` publishes the profile. */
+/**
+ * The stall's own signer, and BOTH the relay and the gateway's mirror, as the roster publishes
+ * (terminalRosterSyncNet.ts). Customers read the profile from either (newestAddressable). The
+ * relay alone lost the online_shop republish on staging 2026-10-31.
+ */
 const ownerProfilePublisher: ProfilePublisher = {
   sign: (template) => getSigner().signEvent(template) as unknown as Promise<{ created_at: number }>,
-  publish: (signed) => relayPublish(signed as Event),
+  publish: async (signed) => {
+    const [relayed, mirrored] = await Promise.all([
+      relayPublish(signed as Event).then((r) => r.ok, () => 0),
+      mirrorToGateway(signed as Event).catch(() => false),
+    ])
+    return { ok: relayed + (mirrored ? 1 : 0) }
+  },
 }
 
 
