@@ -24,6 +24,7 @@ import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
 import { collectTillSalesForOwner } from './lib/tillSalesNet'
 import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
+import { startOnlineShopSync } from './lib/onlineShopPublisher'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
 import { restoreCashbackStash } from './lib/cashbackStash'
 import { useLogout } from './lib/useLogout'
@@ -213,6 +214,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // Every change to the terminal list is published, debounced, to the owner's other
         // devices (#160 phase 6). Stopped on logout.
         startRosterSync(pubkey)
+        // And the stall's profile follows it: a shop turning In service is advertised from any
+        // screen, not only while Terminals is open (#402).
+        startOnlineShopSync(pubkey)
 
         // This account's own avatar reads the licences it holds as well as the public attestation
         // (#418), so its badge is right the moment a plan arrives, before the service publishes.

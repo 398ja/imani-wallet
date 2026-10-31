@@ -1,6 +1,7 @@
 import { getSession, keyStore, resetSession } from './nap'
 import { drainDmPoll, startDmPoll, stopDmPoll } from './dmPoll'
 import { startRosterSync, stopRosterSync } from './terminalRosterSyncNet'
+import { stopOnlineShopSync } from './onlineShopPublisher'
 import { startIncomingNotifications, stopIncomingNotifications } from './incomingNotifications'
 import { disableNotifications } from './notifications/manager'
 import { forgetResume } from './resume'
@@ -374,6 +375,7 @@ export async function attemptLogout(
   stopDmPoll()
   // A debounced roster publish must not fire after the key is gone (#160 phase 6).
   stopRosterSync()
+  stopOnlineShopSync()
   // Same reason: the drain loop signs NIP-98 with the session key and would keep
   // polling for payments addressed to the account being torn down.
   stopIncomingNotifications()
