@@ -95,3 +95,73 @@ describe('publish against a relay that refuses', () => {
     }
   })
 })
+
+/**
+ * A relay slow to ACCEPT the connection, not one that refuses. Staging 2026-10-31: right after a
+ * terminal enrolment the stall's profile publish hit "connection timed out" every time and nothing
+ * reached strfry. The default 3 s window stays for every other publish; the Terminals page asks
+ * for 8 s (`connectMs`), which a 4 s accept fits.
+ */
+describe('publish against a relay slow to accept', () => {
+  it('gives up at the default 3 s window', async () => {
+    const { createServer: http } = await import('node:http')
+    const server = http()
+    let held: Promise<void> = Promise.resolve()
+    server.on('upgrade', (_req, socket) => {
+      socket.on('error', () => {})
+      // Never upgraded: the client's 3 s connect window passes and it gives up (and closes it).
+      held = new Promise<void>((done) => socket.on('close', () => done()))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const result = await publish(event(), [`ws://127.0.0.1:${port}`])
+      expect(result.ok).toBe(0)
+      expect(result.errors[0]).toMatch(/connection failure/)
+      await Promise.race([held, new Promise((r) => setTimeout(r, 2000))])
+    } finally {
+      server.closeAllConnections?.()
+      server.close()
+    }
+  }, 10_000)
+
+  it('a caller may give the connect a longer window, and is then accepted', async () => {
+    const { WebSocketServer } = await import('ws')
+    const wss = new WebSocketServer({ noServer: true })
+    let upgrades = 0
+    wss.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(String(raw)) as [string, { id: string }]
+        if (msg[0] === 'EVENT') ws.send(JSON.stringify(['OK', msg[1].id, true, '']))
+      })
+    })
+    const { createServer: http } = await import('node:http')
+    const server = http()
+    let closing = false
+    server.on('upgrade', (req, socket, head) => {
+      upgrades += 1
+      socket.on('error', () => {})
+      // The connection is upgraded only after 4 s: past the default 3 s window, inside 8 s.
+      const upgrade = () => (closing ? socket.destroy() : wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req)))
+      if (upgrades === 1) {
+        setTimeout(upgrade, 4000)
+        return
+      }
+      upgrade()
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const result = await publish(event(), [`ws://127.0.0.1:${port}`], { connectMs: 8000 })
+      expect(result).toMatchObject({ ok: 1, total: 1 })
+      expect(upgrades).toBe(1)
+    } finally {
+      closing = true
+      for (const c of wss.clients) c.terminate()
+      wss.close()
+      server.closeAllConnections?.()
+      server.close()
+    }
+  }, 20_000)
+
+})

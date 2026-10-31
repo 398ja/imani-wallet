@@ -50,7 +50,9 @@ import { publish as relayPublish } from '../lib/relay'
 import { mirrorToGateway } from '../lib/transferSignature'
 import { profilePublisherVia } from '../lib/onlineShopPublisher'
 
-const ownerProfilePublisher: ProfilePublisher = profilePublisherVia(relayPublish, mirrorToGateway)
+// 8 s to connect, not the default 3: right after an enrolment this page has a burst of relay sockets
+// open and the profile publish lost the 3 s race every time on staging (2026-10-31).
+const ownerProfilePublisher: ProfilePublisher = profilePublisherVia((e) => relayPublish(e, undefined, { connectMs: 8000 }), mirrorToGateway)
 
 
 /** How often the list looks for a device's "I have it" while something is waiting. */
