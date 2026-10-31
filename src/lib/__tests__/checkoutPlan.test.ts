@@ -55,7 +55,8 @@ beforeEach(() => localStorage.clear())
 
 describe('checkoutPlan (#402)', () => {
   it('excludes other stalls, other units, in-flight and too-soon coupons, with the reason', () => {
-    const mine = row(1000)
+    // 256+128+64+32+16+4 = 500 of these 1000.
+    const mine = row(1000, { sats: [256, 256, 128, 128, 64, 64, 32, 32, 16, 16, 4, 4] })
     const other = row(1000, { key: OTHER_KEY })
     const usd = row(1000, { unit: 'USD' })
     const busy = row(1000)
@@ -82,13 +83,28 @@ describe('checkoutPlan (#402)', () => {
 
   it('draws whole coupons then at most one split, at credited face value', () => {
     const a = row(1000)
-    const b = row(700)
+    // The split part is carved from whole proofs: 256+128+64+32+16+4 = 500 of these 700.
+    const b = row(700, { sats: [256, 128, 128, 64, 64, 32, 16, 8, 4] })
     const out = plan([a, b], 1500)
     expect(out.plan?.map((p) => [p.row, p.amount])).toEqual([
       [a, 1000],
       [b, 500],
     ])
     expect(out.plan?.filter((p) => p.amount !== p.faceValue)).toHaveLength(1)
+  })
+
+  it('does not offer a split no subset of the coupon\'s proofs makes (staging 2026-10-31)', () => {
+    // One proof of 2000: a part of 1000 cannot be carved offline, so it is not a plan, and the
+    // screen says so before Get code instead of failing after it.
+    const one = row(2000, { sats: [2000] })
+    expect(plan([one], 1000).obstacle).toMatchObject({ kind: 'not_splittable' })
+    expect(plan([one], 2000).plan?.[0].amount).toBe(2000)
+    // With a carvable coupon beside it, that one is split instead.
+    // 512+256+128+64+32+8 = 1000 of these 1500.
+    const many = row(1500, { sats: [512, 256, 256, 128, 128, 64, 64, 32, 32, 16, 8, 4] })
+    const out = plan([one, many], 1000)
+    expect(out.obstacle).toBeUndefined()
+    expect(out.plan?.every((p) => p.amount === p.faceValue || p.row === many)).toBe(true)
   })
 
   it('credits the face value the sats back, not the row', () => {
