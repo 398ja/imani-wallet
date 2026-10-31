@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.2] - 2026-10-31
+
+### Fixed
+
+- An online shop enrolled as a terminal now turns In service, and the stall advertises it. The
+  shop's "enrolled" notice is backdated by up to two days (NIP-59), and the wallet only looked 15
+  minutes back, so the row stayed Waiting (#436, #402).
+
 ## [0.41.1] - 2026-10-30
 
 ### Fixed
