@@ -78,6 +78,12 @@ function notePublished(stall: string, shop: OnlineShop | null | undefined): void
   }
 }
 
+/** Whether the stall's current `online_shop` has not been confirmed on the relay yet. */
+export function onlineShopUnconfirmed(stall: string): boolean {
+  const merchant = loadMerchant(stall)
+  return !!merchant && publishedShop(stall) !== shopKey(merchant.onlineShop)
+}
+
 /**
  * Reconcile and, if needed, save and publish. Local first, as `PaymentsSettingsPage` does.
  *

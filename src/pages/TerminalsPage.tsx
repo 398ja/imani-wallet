@@ -44,7 +44,7 @@ import {
 } from '../lib/terminalRenewOwner'
 import { expiryBand, type ExpiryBand } from '../lib/terminalRenewal'
 import { collectRenewRequests } from '../lib/terminalDeliveryNet'
-import { syncOnlineShop, type ProfilePublisher } from '../lib/onlineShopProfile'
+import { onlineShopUnconfirmed, syncOnlineShop, type ProfilePublisher } from '../lib/onlineShopProfile'
 import { exposureLine, fetchShopExposure, type ExposureFetch, type ShopExposure } from '../lib/shopExposure'
 import { publish as relayPublish } from '../lib/relay'
 import { mirrorToGateway } from '../lib/transferSignature'
@@ -84,6 +84,10 @@ const ownerProfilePublisher: ProfilePublisher = profilePublisherVia(relayPublish
 
 /** How often the list looks for a device's "I have it" while something is waiting. */
 const ENROLLED_POLL_MS = 5_000
+
+/** The online_shop republish retries this often, this many times, while the list is open (#402). */
+const ONLINE_SHOP_RETRY_MS = 5_000
+const ONLINE_SHOP_RETRIES = 24
 
 /** Sends a credential DM to every waiting device that has not had one, sealed by the stall. */
 const ownerDeliver = (stallPubkey: string) =>
@@ -223,10 +227,24 @@ export function TerminalsPage({
   const refresh = useCallback(() => setTerminals(allTerminals(stallPubkey)), [stallPubkey])
 
   // #402 §0: the profile's `online_shop` follows the roster. A shop that turned In service is
-  // advertised, a revoked one is withdrawn, from whichever path changed the row. Best effort: the
-  // record is saved locally first and republished the next time this list renders a change.
+  // advertised, a revoked one is withdrawn, from whichever path changed the row. The record is
+  // saved locally first; the publish is retried every ONLINE_SHOP_RETRY_MS while this list is open
+  // until the relay takes it. It lands in the burst of relay connections right after enrolment,
+  // and a connect timeout there was never retried (staging 2026-10-31: "connection timed out").
   useEffect(() => {
-    void syncOnlineShop(stallPubkey, terminals, profile).catch(() => undefined)
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const attempt = async (left: number) => {
+      const out = await syncOnlineShop(stallPubkey, terminals, profile).catch(() => ({ changed: true, published: false }))
+      // `changed || published` false means nothing was pending (already confirmed): stop.
+      const failed = !out.published && (out.changed || onlineShopUnconfirmed(stallPubkey))
+      if (!stopped && failed && left > 0) timer = setTimeout(() => void attempt(left - 1), ONLINE_SHOP_RETRY_MS)
+    }
+    void attempt(ONLINE_SHOP_RETRIES)
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
   }, [stallPubkey, terminals, profile])
 
   // R5: what each live shop could redirect, from the code store. No figure when it cannot say.

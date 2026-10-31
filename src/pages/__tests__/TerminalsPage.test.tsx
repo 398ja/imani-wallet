@@ -714,6 +714,41 @@ describe('#402: an online shop on the list', () => {
     expect(loadMerchant(STALL)?.onlineShop).toBeUndefined()
   })
 
+  it('retries a publish whose relay connect timed out, with no other change to the list', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { saveMerchant, emptyMerchant } = await import('../../lib/merchant')
+      saveMerchant({ ...emptyMerchant(STALL), acceptsCards: true })
+      enrol(shopRow)
+      let calls = 0
+      render(
+        <MemoryRouter>
+          <TerminalsPage
+            sync={noSync}
+            renewals={noRenewals}
+            stallPubkey={STALL}
+            spendApi={async () => fakeMint}
+            collect={collect}
+            confirm={async () => 204}
+            deliver={async () => 0}
+            profile={{ sign: async (t) => ({ ...t, created_at: 100 + calls }), publish: async () => ({ ok: ++calls >= 3 ? 1 : 0 }) }}
+            exposure={async () => null}
+          />
+        </MemoryRouter>,
+      )
+      await waitFor(() => expect(calls).toBe(1))
+      await vi.advanceTimersByTimeAsync(5_000)
+      await waitFor(() => expect(calls).toBe(2))
+      await vi.advanceTimersByTimeAsync(5_000)
+      await waitFor(() => expect(calls).toBe(3))
+      // Confirmed: the timer stops.
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(calls).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('shows the shop without a figure when the code store cannot say', async () => {
     enrol(shopRow)
     render(
@@ -738,3 +773,4 @@ describe('the stall profile publisher (#402): only the relay confirms', () => {
     warn.mockRestore()
   })
 })
+
