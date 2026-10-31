@@ -159,8 +159,13 @@ function readPool(): SimplePool {
  * Locked by relayPublishCount.test.ts against a real socket. The silence in
  * #203 was a CALLER ignoring this result; every caller must check `ok`.
  */
-export async function publish(event: Event, relays: string[] = [RELAY_URL]): Promise<PublishResult> {
-  const pool = new SimplePool()
+export async function publish(
+  event: Event,
+  relays: string[] = [RELAY_URL],
+  /** A longer connect window, for a caller that has seen the default lose a race (#402). */
+  opts: { connectMs?: number } = {},
+): Promise<PublishResult> {
+  const pool = opts.connectMs ? new SimplePool({ maxWaitForConnection: opts.connectMs } as never) : new SimplePool()
   try {
     const results = await Promise.allSettled(pool.publish(relays, event))
     // A relay that could not be REACHED does not reject. nostr-tools (2.24)
