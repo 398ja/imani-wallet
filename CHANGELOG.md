@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.46.4] - 2026-11-01
+
+### Fixed
+- The change a shop gives back after a checkout code (the order cost less than the code) arrived as
+  coupons but had no history row (#402). It now has its own incoming "Change" row ("Change from
+  <shop>: €x back in your wallet"), once per code, and the code's own row says what the shop really
+  spent (the store's redeemed notice carries the code's whole amount).
+
 ## [0.46.3] - 2026-11-01
 
 ### Fixed
