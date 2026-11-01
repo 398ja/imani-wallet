@@ -241,3 +241,57 @@ export function describeCashbackClaim(
       }
   }
 }
+
+/**
+ * A sale whose signature holds but whose coupons add up to less than it (#462).
+ *
+ * This used to borrow the mismatch wording, "does not match its signature",
+ * which reads as forgery. It is not one: every signature verified, and the
+ * usual cause is a split sale that reached the customer only partly. So it says
+ * the figures a merchant has to act on (signed, delivered, missing) and stays
+ * out of the alarm tone, which is kept for a signature that does not hold.
+ * `money` is passed in so this module stays free of locale code.
+ */
+export function describeUnderstatedSale(
+  shortfall: { signedMinor: number; deliveredMinor: number; partlyDelivered: boolean },
+  money: (minor: number) => string,
+): EvidenceLine {
+  const missing = Math.max(0, shortfall.signedMinor - shortfall.deliveredMinor)
+  return {
+    label: shortfall.partlyDelivered ? 'Partly delivered' : 'Sale not all here',
+    tone: 'neutral',
+    detail:
+      `${understatedSummary(shortfall, money)}. The signature on this sale holds. ` +
+      (shortfall.partlyDelivered
+        ? 'This sale stopped part-way, so the customer holds only part of it; worth settling the ' +
+          `${money(missing)} with them.`
+        : 'Usually a sale that stopped part-way, or history restored in pieces; worth checking ' +
+          'against the customer.'),
+  }
+}
+
+/** "€1,000.00 sale signed, €200.00 delivered: €800.00 missing", shared by the panel and the record. */
+export function understatedSummary(
+  shortfall: { signedMinor: number; deliveredMinor: number },
+  money: (minor: number) => string,
+): string {
+  const missing = Math.max(0, shortfall.signedMinor - shortfall.deliveredMinor)
+  return (
+    `${money(shortfall.signedMinor)} sale signed, ${money(shortfall.deliveredMinor)} delivered: ` +
+    `${money(missing)} missing`
+  )
+}
+
+/** The panel's line for a currency's understated sales (#462). */
+export function describeUnderstatedLine(
+  line: { understatedSignedMinor: number; understatedMinor: number; counts: { understated: number } },
+  money: (minor: number) => string,
+): string {
+  const n = line.counts.understated
+  return (
+    `${understatedSummary(
+      { signedMinor: line.understatedSignedMinor, deliveredMinor: line.understatedMinor },
+      money,
+    )}, ${n} sale${n === 1 ? '' : 's'} to look at.`
+  )
+}
