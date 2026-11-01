@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { getDecimals } from '@imani/money'
 
 import { listVouchers } from '../lib/wallet'
-import { issuerKey, toMerchants, type Merchant } from '../lib/merchants'
+import { holdingForUnit, issuerKey, toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
 import {
@@ -104,7 +104,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   if (merchants === null) return <Centered>Checking your vouchers…</Centered>
 
   const merchant = merchants.find((f) => issuerKey(f.pubkey) === issuerKey(request.issuerId))
-  const group = merchant?.groups.find((g) => g.unit.toUpperCase() === request.unit.toUpperCase())
+  // Every group in the unit, not the first: coupons from several sales (different
+  // issuance ratios) are separate groups but one balance (#460).
+  const group = merchant ? holdingForUnit(merchant, request.unit) : undefined
   const available = group?.totalFaceValue ?? 0
   // How to read `request.amount`, which is MINOR UNITS.
   //

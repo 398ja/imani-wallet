@@ -457,3 +457,63 @@ export function walletTotals(merchants: Merchant[]): UnitTotal[] {
 
   return [...byUnit.values()].sort((a, b) => b.minor - a.minor)
 }
+
+/**
+ * What one merchant holds in one currency: every group of theirs in that unit,
+ * merged. A merchant's `groups` split by issuance ratio too, which matters for
+ * backing but not for what can be spent, so reading `groups.find(unit)` alone
+ * under-reports the balance when coupons came from several sales (#460).
+ */
+export interface UnitHolding {
+  merchant: Merchant
+  unit: string
+  decimals: number
+  totalFaceValue: number
+  voucherCount: number
+  vouchers: Voucher[]
+}
+
+/** The merchant's holding in `unit` (case-insensitive), or undefined if they hold none. */
+export function holdingForUnit(merchant: Merchant, unit: string): UnitHolding | undefined {
+  const wanted = unit.toUpperCase()
+  let found: UnitHolding | undefined
+  for (const group of merchant.groups) {
+    if (group.unit.toUpperCase() !== wanted) continue
+    if (found) {
+      found.totalFaceValue += group.totalFaceValue
+      found.voucherCount += group.voucherCount
+      found.vouchers.push(...group.vouchers)
+    } else {
+      found = {
+        merchant,
+        unit: group.unit,
+        decimals: group.decimals,
+        totalFaceValue: group.totalFaceValue,
+        voucherCount: group.voucherCount,
+        vouchers: [...group.vouchers],
+      }
+    }
+  }
+  return found
+}
+
+/** Total face value, in minor units, the merchant holds in `unit`. */
+export function totalForUnit(merchant: Merchant, unit: string): number {
+  return holdingForUnit(merchant, unit)?.totalFaceValue ?? 0
+}
+
+/** One holding per merchant and unit, most valuable first (the send picker's options). */
+export function unitHoldings(merchants: Merchant[]): UnitHolding[] {
+  const out: UnitHolding[] = []
+  for (const merchant of merchants) {
+    const seen = new Set<string>()
+    for (const group of merchant.groups) {
+      const key = group.unit.toUpperCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      const holding = holdingForUnit(merchant, group.unit)
+      if (holding) out.push(holding)
+    }
+  }
+  return out.sort((a, b) => b.totalFaceValue - a.totalFaceValue)
+}
