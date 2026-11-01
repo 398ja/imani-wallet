@@ -277,3 +277,74 @@ describe('crash and retry', () => {
     expect(rows.has(c.tokenId)).toBe(false)
   })
 })
+
+describe('the change of a split, back to an ordinary coupon (staging 2026-11-01: a €1 send failed)', () => {
+  // The split's change stays locked to K: gateway-core's send cannot split a locked proof
+  // (LOCKED_VOUCHER_SPLIT_REQUIRES_HOLDER), so it must come back unlocked before anything else spends it.
+  const sum = (tokens: string[], f: (t: string) => number) => tokens.reduce((n, t) => n + f(t), 0)
+
+  async function splitChange(nonce: string) {
+    const c = coupon([1024], nonce)
+    const out = await split.splitVoucher(ports, ME, { tokenId: c.tokenId, token: c.token, amount: 337 })
+    if (out.kind !== 'split') throw new Error('split')
+    const [id, token] = [...rows.entries()].find(([k, t]) => k.startsWith('split-') && t !== out.parts[0].token)!
+    return { c, id, token }
+  }
+
+  it('unlocks every K-locked proof of the change row, keeps its value, and is idempotent', async () => {
+    const self = await import('../selfLockedCoupons')
+    const { c, id, token } = await splitChange('a')
+    const before = held()
+    expect(self.hasSelfLockedProof(token, xOnlyPub(ID))).toBe(true)
+
+    const done = await self.unlockSelfLockedRow(ports, { tokenId: id, token })
+
+    expect(done.kind).toBe('unlocked')
+    if (done.kind !== 'unlocked') return
+    expect(done.tokens.length).toBe(tokenProofs(token).length)
+    for (const t of done.tokens) {
+      for (const p of tokenProofs(t)) {
+        expect(isSelfLocked(p.secret, xOnlyPub(ID))).toBe(false)
+        expect(JSON.parse(p.secret)[0]).toBe('VOUCHER')
+      }
+      expect(parseVoucherToken(t).voucher.voucherId).toBe(parseVoucherToken(c.token).voucher.voucherId)
+    }
+    expect(sum(done.tokens, face)).toBe(face(token))
+    expect(sum(done.tokens, sats)).toBe(sats(token))
+    rows.delete(id)
+    done.tokens.forEach((t, n) => rows.set(`${id}-u${n}`, t))
+    expect(held()).toBe(before)
+    expect(w.kept).toEqual([])
+    // A second run on the old token (a page that died before writing) finds the burn and the minted
+    // coupons by NUT-09: the SAME coupons, nothing burnt or minted twice, nothing kept as sats.
+    const again = await self.unlockSelfLockedRow(ports, { tokenId: id, token })
+    expect(again.kind).toBe('unlocked')
+    if (again.kind === 'unlocked') expect([...again.tokens].sort()).toEqual([...done.tokens].sort())
+    expect(w.kept).toEqual([])
+  })
+
+  it('the gateway down: nothing is lost, and the next run finishes from the same burn', async () => {
+    const self = await import('../selfLockedCoupons')
+    const { id, token } = await splitChange('b')
+    w.gateway.unlockRoute = false
+
+    const first = await self.unlockSelfLockedRow(ports, { tokenId: id, token })
+    w.gateway.unlockRoute = true
+    const second = await self.unlockSelfLockedRow(ports, { tokenId: id, token })
+
+    expect(first.kind).toBe('pending')
+    expect(second.kind).toBe('unlocked')
+    if (second.kind !== 'unlocked') return
+    expect(sum(second.tokens, face)).toBe(face(token))
+    expect(w.kept).toEqual([])
+  })
+
+  it('a row with no K-locked proof is left exactly as it is', async () => {
+    const self = await import('../selfLockedCoupons')
+    const c = coupon([512, 256], 'c')
+    expect(self.hasSelfLockedProof(c.token, xOnlyPub(ID))).toBe(false)
+    const done = await self.unlockSelfLockedRow(ports, c)
+    expect(done.kind).toBe('unlocked')
+    if (done.kind === 'unlocked') expect(tokenProofs(done.tokens[0]).map((p) => p.secret)).toEqual(tokenProofs(c.token).map((p) => p.secret))
+  })
+})
