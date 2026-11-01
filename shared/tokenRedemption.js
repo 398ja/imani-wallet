@@ -489,6 +489,9 @@ function _buildReceiveTransactionRow(voucher, metadata = {}) {
         // shipped, and the row it renders from never carried the result.
         // Absent for plain ecash, which has no issuer claim to check.
         validation: metadata.validation || undefined,
+        // #402 traceability: where an online shop spent it (order number, shop), as the shop
+        // declared it on the envelope. Read by the merchant's books; absent for anything else.
+        spendSource: metadata.spend_source || metadata.spendSource || undefined,
         memo: isPayment
             ? (voucher.memo ? `[PAYMENT] ${voucher.memo}` : '[PAYMENT] Payment to merchant')
             : (voucher.memo || 'Received via DM'),
