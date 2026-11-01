@@ -11,6 +11,7 @@ import {
   replaceVoucherToken,
   SendOutcomeUnknownError,
   signedPartOf,
+  unreclaimableNote,
 } from '../pay'
 import { VoucherFullyRedeemedError } from '../fullyRedeemed'
 import { RequestAlreadyPaidError } from '../settledSends'
@@ -1785,6 +1786,81 @@ describe('sendVouchers and payRequest', () => {
       expect(transactions[0]).toMatchObject({ type: 'sent', direction: 'out' })
     })
   })
+
+  describe('failed-send wording keyed on error_code (#117)', () => {
+    function ending(status: Record<string, unknown>) {
+      const reclaims: string[] = []
+      gateway()
+      stubs.api.getAtomicSendStatus = async () => status
+      stubs.api.initiateAtomicSend = async () => ({ send_id: 'as_1', status: 'PENDING' })
+      stubs.api.reclaimAtomicSend = async (id: string) => {
+        reclaims.push(id)
+        throw new Error('Reclaim requires HTTP receive endpoint')
+      }
+      return reclaims
+    }
+    const send = () =>
+      sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 })
+
+    it('SPLIT_NEVER_SIGNED: no reclaim, voucher still in the wallet', async () => {
+      stubs.rows = [row()]
+      const reclaims = ending({ status: 'FAILED', error_code: 'SPLIT_NEVER_SIGNED' })
+      wallet([row()])
+      const err = await send().catch((e: Error) => e)
+      expect(String(err)).toMatch(/did not go through\. Your voucher is still in your wallet/)
+      expect(String(err)).not.toMatch(/held by the gateway/)
+      expect(reclaims).toEqual([])
+    })
+
+    it('SOURCE_PROOFS_NOT_UNSPENT: no reclaim, no held-by-gateway claim', async () => {
+      stubs.rows = [row()]
+      const reclaims = ending({ status: 'FAILED', error_code: 'SOURCE_PROOFS_NOT_UNSPENT' })
+      wallet([row()])
+      const err = await send().catch((e: Error) => e)
+      expect(String(err)).toMatch(/already spent/)
+      expect(String(err)).not.toMatch(/held by the gateway/)
+      expect(reclaims).toEqual([])
+    })
+
+    it.each(['PHANTOM_SPEND', 'SPLIT_PROOFS_SPENT'])('%s: no reclaim, says an earlier attempt spent it', async (code) => {
+      stubs.rows = [row()]
+      const reclaims = ending({ status: 'FAILED', error_code: code })
+      wallet([row()])
+      const err = await send().catch((e: Error) => e)
+      expect(String(err)).toMatch(/earlier attempt already spent this voucher/)
+      expect(String(err)).not.toMatch(/held by the gateway/)
+      expect(reclaims).toEqual([])
+    })
+
+    it.each(['FAILED', 'SPLIT_ERROR', 'EXPIRED'])('%s without a code: no reclaim attempted', async (state) => {
+      stubs.rows = [row()]
+      const reclaims = ending({ status: state })
+      wallet([row()])
+      const err = await send().catch((e: Error) => e)
+      expect(String(err)).not.toMatch(/held by the gateway/)
+      expect(reclaims).toEqual([])
+    })
+
+    // TOKEN_HELD / DM_RETRY_PENDING are reclaimable too but not terminal, so the
+    // poll never settles on them; the terminal held states are exercised here.
+    it.each(['DM_ERROR', 'RECLAIM_READY'])(
+      '%s: reclaims, and says the voucher is held by the gateway when that fails',
+      async (state) => {
+        stubs.rows = [row()]
+        const reclaims = ending({ status: state })
+        wallet([row()])
+        const err = await send().catch((e: Error) => e)
+        expect(reclaims.length).toBeGreaterThan(0)
+        expect(new Set(reclaims)).toEqual(new Set(['as_1']))
+        expect(String(err)).toMatch(/Your voucher is held by the gateway \(send as_1\)/)
+      },
+    )
+
+    it('unreclaimableNote is empty for an unknown code', () => {
+      expect(unreclaimableNote({ status: 'FAILED', error_code: 'X' }, 's')).toBe('')
+    })
+  })
+
 })
 
 /**

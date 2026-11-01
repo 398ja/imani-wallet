@@ -1,24 +1,33 @@
-import { SimplePool, type Event } from 'nostr-tools'
-import { gatewayAllEvents, gatewayEvents, newestByD, unionWithGateway } from './gatewayNostr'
+import { SimplePool, verifyEvent, type Event } from 'nostr-tools'
+import { gatewayAllEvents, gatewayQuery, GatewayUnreachableError, newestByD } from './gatewayNostr'
 
 /**
- * Publishing to the Nostr relay.
+ * The wallet's Nostr I/O: WRITES go to the relay, READS go through the cache.
  *
- * Reads go to BOTH this relay and the gateway's nostrdb cache, newest winning
- * (see lib/gatewayNostr.ts). WRITES go straight to the relay from the browser.
+ * OWNER RULE (2026-10-30, #428): the browser never READS from the relay (strfry) directly. Every
+ * read goes through the gateway's `POST /api/v1/nostr/query`, which serves nostrdb and merges a
+ * live relay query server-side (`CachingNostrGatewayDecorator`), so the answer stays fresh.
+ * `relayReadRule.test.ts` fails if a read path opens a socket again.
  *
- * That write path is why deploy/compose.override.yml publishes strfry's port at
- * all — upstream's docker-compose.test.yml exposes it only on the internal
- * Docker network. Reads no longer DEPEND on that port being published, which is
- * what DEV-144 was about; publishing an event still does.
+ * Why: each read used to open its own `SimplePool` to strfry, beside the gateway read it was
+ * merged with. On staging (redeploy 60) that was one websocket every ~0.6 s while a gift link was
+ * being settled, and each settle paid for the slower of the two stores (#428).
+ *
+ * The function names (`allEvents`, `allAddressable`, `newestAddressable`, `allEventsWithGateway`)
+ * are kept so callers did not change. Their contract is the same, with one improvement: a read the
+ * gateway could not answer now THROWS (`GatewayUnreachableError`) instead of resolving `[]`, which
+ * a caller could not tell from "no records" (the 2026-10-18 incident). Every caller already catches.
+ *
+ * Every event a read hands back is checked: right author, right kind, and a signature that
+ * verifies. The rows built from these become balances and roles, and the gateway is a cache, not
+ * an authority. A FRESH object is verified, so no cached verdict on the input can ride along.
+ *
+ * Publishing still opens a socket to the relay, because the relay is where this wallet writes.
  *
  * The relay URL is NOT taken from `GET /api/v1/config`. That endpoint reports
- * `wss://relay.imani.local` on this stack — a name that does not resolve from a
- * browser — and the container-internal `ws://nostr-relay:7777` would not either.
- * Neither is reachable from where this code runs.
+ * `wss://relay.imani.local` on this stack, a name that does not resolve from a browser.
  *
- * ponytail: hardcoded dev default, overridable with VITE_RELAY_URL. Read it from
- * the gateway once it reports a browser-reachable URL.
+ * ponytail: hardcoded dev default, overridable with VITE_RELAY_URL.
  */
 // A BROWSER default pointing at localhost, used only when VITE_RELAY_URL is unset at build time
 // — i.e. a developer running the dev server. A deployed build always has the variable, and a
@@ -37,8 +46,6 @@ export const RELAY_URL: string = import.meta.env.VITE_RELAY_URL ?? 'ws://localho
  * gateway does the publishing from inside the compose network where
  * `localhost` is its own container.
  *
- * scripts/seed-merchant.mjs draws the same distinction, for the same reason.
- *
  * ponytail: hardcoded dev default like RELAY_URL above, overridable with
  * VITE_INTERNAL_RELAY_URL. Both should come from GET /api/v1/config eventually.
  */
@@ -55,96 +62,7 @@ export interface PublishResult {
   errors: string[]
 }
 
-/**
- * How long a READ may spend opening a socket to the relay.
- *
- * SimplePool's default is 3000ms, and that number is the wallet's worst
- * latency in its ordinary deployed state rather than in a rare one. Reads go to
- * the relay AND the gateway in parallel and merge the results, so the caller
- * waits for the slower store — and reaching strfry from a browser needs its
- * port published, which `imani-deploy/docker-compose.test.yml` deliberately
- * does not do. Measured against a real strfry and two dead addresses:
- *
- *   healthy relay ..................... 25ms
- *   port not published (refused) ....... 3ms
- *   unroutable host (dropped) ....... 3002ms   <- the default, in full
- *   the same, with this cap at 1200 . 1201ms
- *
- * A refused connection is already fast because the OS answers immediately; the
- * expensive case is a host that DROPS packets — a firewall, a phone whose radio
- * has gone to sleep, a container on an address that no longer routes — where
- * nothing answers and only a timer ends the wait.
- *
- * IT WAS 1200ms, AND THAT FAILED A RELAY THAT WAS GOING TO ANSWER (imani-deploy#235).
- * "Tens of ms over the internet" was the TCP connect only. A `wss://` open is
- * DNS + TCP + TLS + the HTTP upgrade, about four round trips, before a REQ can
- * be sent. Measured to `wss://relay.staging.398ja.xyz` from a well-connected
- * laptop: TLS done at 0.38-0.56s, upgrade answered at 0.6-0.9s. That leaves
- * almost no margin, and a phone link with a 350ms round trip crosses 1200ms. Then
- * the read resolved `[]`, which callers cannot tell from "no records". It is how
- * samson's restore showed a 0 balance: twelve sockets opened, never sent a REQ,
- * and died on the relay's ping as 1006 a minute later. nostr-tools 2.24.1
- * abandons a timed-out socket without closing it. Real Chromium through a
- * delaying proxy, the wallet's pool, the real relay:
- *
- *   round trip   cap 1200            cap 4000
- *   0-200ms      4 events            4 events
- *   350ms        0 (0 frames sent)   4 events, 2.2s
- *   500ms        0 (0 frames sent)   4 events, 2.7s
- *
- * So the cap is SimplePool's own 3000ms, the budget the publish path has always
- * had, which is why the same user's WRITES kept working. A dead relay now costs
- * 3s rather than 1.2s on a read that runs in parallel with the gateway's. A cap
- * that fails a healthy relay on an ordinary mobile link costs a silently empty
- * read, and that is worse. These reads decide whether a merchant HAS a stall
- * (`newestAddressable` null takes away the merchant role) and whether a restore
- * finds the user's coupons, so the bias stays towards giving the relay its say.
- *
- * PUBLISHING IS NOT CAPPED. A read that gives up early costs a slower answer
- * from the other store; a publish that gives up early is an event the user
- * believes they sent and nobody has.
- */
-const READ_CONNECT_TIMEOUT_MS = 3000
-
-/**
- * How long a READ waits for EOSE once its REQ is sent (`querySync`'s `maxWait`).
- *
- * Was the same 1200ms, and on a slow link the first EVENT is a round trip away:
- * at a 0.8s round trip a 1200ms wait handed back half a page. A healthy relay
- * answers EOSE in well under a second, so this only costs time when the relay
- * is connected and slow, which is exactly when waiting is right.
- */
-const READ_EOSE_TIMEOUT_MS = 3000
-
-/**
- * A pool for reads, with the connection wait bounded.
- *
- * `maxWait` on `querySync` is NOT enough and this was measured, not assumed: it
- * sets the EOSE timeout, so it bounds a relay that connects and then says
- * nothing, while a relay that never connects still burns the full default. Both
- * knobs are needed, and this is the one that fixes the expensive case.
- */
-function readPool(): SimplePool {
-  /*
-    THE CAST IS AN UPSTREAM TYPE GAP, not a lie about the runtime.
-
-    `SimplePool`'s constructor is typed as
-    `Pick<AbstractPoolConstructorOptions, 'enablePing' | 'enableReconnect'>`,
-    which omits `maxWaitForConnection` — but its body is
-    `super({ ..., maxWaitForConnection: 3e3, ...options })`, so an option passed
-    here lands AFTER the default and replaces it. The declaration is narrower
-    than the implementation.
-
-    Verified by measurement rather than by reading: against a host that drops
-    packets, an uncapped pool takes 3002ms and this one 1201ms. If a future
-    nostr-tools widens the type, delete the cast and nothing else changes; if it
-    ever stops forwarding the option, the probe in `relayTimeouts.test.ts` fails
-    rather than the app silently going slow again.
-  */
-  return new SimplePool({
-    maxWaitForConnection: READ_CONNECT_TIMEOUT_MS,
-  } as ConstructorParameters<typeof SimplePool>[0])
-}
+export { GatewayUnreachableError }
 
 /**
  * Publish a signed event, resolving with a count rather than throwing.
@@ -165,6 +83,12 @@ export async function publish(
   /** A longer connect window, for a caller that has seen the default lose a race (#402). */
   opts: { connectMs?: number } = {},
 ): Promise<PublishResult> {
+  // #428 WRITE-THROUGH. Reads go only through the gateway now, and for non-addressable kinds it
+  // answers from nostrdb alone while its copy is "fresh" (30 min), never asking the relay. An event
+  // published only to strfry stayed invisible: on staging a sender's history read 4 of 46 events.
+  // So every publish also stores the event in the cache. Best effort, in parallel, never blocks or
+  // changes the relay result.
+  void cacheEvent(event)
   const pool = opts.connectMs ? new SimplePool({ maxWaitForConnection: opts.connectMs } as never) : new SimplePool()
   try {
     const results = await Promise.allSettled(pool.publish(relays, event))
@@ -191,199 +115,92 @@ export async function publish(
 }
 
 /**
- * The newest parameterised-replaceable event (NIP-33) for a pubkey and `d` tag,
- * read from the relay AND the gateway's cache, newest winning.
- *
- * This read used to refuse the gateway outright. DEV-144 recorded why, and the
- * re-check that closed it found four of those five reasons fixed upstream —
- * see the header of lib/gatewayNostr.ts for the itemised verdict. The one that
- * survives (a cache that can freeze silently) is harmless to a merge, because
- * a stale copy simply loses to the relay's.
- *
- * What the bypass cost was larger than what it avoided: reaching strfry from a
- * browser needs its port published, and a real deployment does not publish it.
- * With the relay unreachable this returned null, and null here means the
- * merchant role disappears — the home screen reverts to a customer's, Stats
- * resets to zero, and since logout wipes the device there is no other way back
- * to a merchant's own books.
- *
- * No `ws` polyfill here, unlike scripts/seed-merchant.mjs — that is a Node 20
- * problem (no global WebSocket, and the failure is silent because the promise
- * inside `publish()` still resolves). Browsers have had WebSocket all along.
+ * Store a signed event in the gateway's nostrdb (`POST /api/v1/nostr/events`, NIP-98; the gateway
+ * re-derives the id and checks the signature). NEVER THROWS. Returns whether it was stored.
  */
-/**
- * Every addressable event of one kind whose `d` tag starts with a prefix, newest
- * copy of each.
- *
- * The list counterpart of `newestAddressable`, for records that are one event
- * PER ITEM rather than one event per user — issuance records, whose `d` is
- * `imani:issued:<voucherId>`. Filtering is by prefix and done here rather than
- * on the wire, because a relay cannot match prefixes and a `#d` list would mean
- * knowing every voucher id before asking for it.
- *
- * De-duplicated by `d`, keeping the newest: NIP-33 says a later event replaces
- * an earlier one with the same address, but relays are not obliged to have
- * dropped the old copy, and a re-published record would otherwise restore twice.
- */
-export async function allAddressable(
-  pubkey: string,
-  kind: number,
-  dPrefix: string,
-  relays: string[] = [RELAY_URL],
-): Promise<Event[]> {
-  // BOTH STORES (DEV-144). The relay is the wallet's write target and stays
-  // authoritative on conflict, but reaching it from a browser needs a published
-  // strfry port, which a real deployment does not have — and without this read
-  // a merchant loses their entire issuance ledger. The gateway's copy is merged
-  // rather than trusted: a frozen cache costs nothing, because a newer relay
-  // event wins.
-  //
-  // No `#d` on the wire here: this is a PREFIX query, which no relay can
-  // express, so the filtering below is the only filtering there is either way.
-  const [relayed, cached] = await Promise.all([
-    allEvents(pubkey, kind, relays).catch(() => []),
-    gatewayEvents(pubkey, kind),
-  ])
-
-  const matching = (events: Event[]) =>
-    events.filter((event) =>
-      event.tags.some(([name, value]) => name === 'd' && value?.startsWith(dPrefix)),
-    )
-  return newestByD(matching(relayed), matching(cached))
-}
-
-/**
- * Every event of one kind for a pubkey, UNDEDUPED.
- *
- * `allAddressable`'s newest-per-`d` rule is the right one for a ledger, where
- * the latest record supersedes. It is the wrong one for coupons, where a
- * "this is spent" tombstone must win over the record of the coupon even if
- * both land in the same second and the relay replays them in either order —
- * see `voucherRecords.restoreVouchers`. That reduction needs the raw list.
- */
-export async function allEvents(
-  pubkey: string,
-  kind: number,
-  relays: string[] = [RELAY_URL],
-): Promise<Event[]> {
-  // PAGED (#206 review M2). strfry caps every filter at `maxFilterLimit` (500)
-  // newest events and says nothing, so an unpaged read silently loses a wallet's
-  // OLDEST records. Walk back with `until`. The cursor is INCLUSIVE (the oldest
-  // second seen) because several events share a second (every chunk of a
-  // snapshot does) and a page can end inside one; duplicates are dropped by id.
-  const pool = readPool()
-  const seen = new Map<string, Event>()
+export async function cacheEvent(event: Event): Promise<boolean> {
   try {
-    let until: number | undefined
-    for (let page = 0; page < MAX_READ_PAGES; page++) {
-      const batch = await pool.querySync(
-        relays,
-        { authors: [pubkey], kinds: [kind], limit: RELAY_PAGE_LIMIT, ...(until === undefined ? {} : { until }) },
-        { maxWait: READ_EOSE_TIMEOUT_MS },
-      )
-      let fresh = 0
-      for (const event of batch) {
-        if (!seen.has(event.id)) {
-          seen.set(event.id, event)
-          fresh++
-        }
-      }
-      // A SHORT page is not the end: `maxWait` is an EOSE timeout, and a page of
-      // 55 KB chunk events can outlast it (measured on strfry: 151 of 500 at
-      // 1200ms), so querySync hands back the newest part of a page. Only a page
-      // that brings nothing new ends the walk.
-      if (batch.length === 0) break
-      if (fresh === 0) {
-        if (batch.length < RELAY_PAGE_LIMIT) break
-        // A full page with nothing new: more than a page's worth in one
-        // second. Step past that second rather than loop on it.
-        until = Math.min(...batch.map((e) => e.created_at)) - 1
-        continue
-      }
-      until = Math.min(...batch.map((e) => e.created_at))
-    }
-    return [...seen.values()]
-  } finally {
-    pool.close(relays)
+    const { signedFetch } = await import('./nip98')
+    const response = await signedFetch(
+      '/api/v1/nostr/events',
+      'POST',
+      { id: event.id, pubkey: event.pubkey, createdAt: event.created_at, kind: event.kind, tags: event.tags, content: event.content, sig: event.sig },
+      undefined,
+      { signal: AbortSignal.timeout(8_000) },
+    )
+    return response.ok
+  } catch {
+    return false
   }
 }
 
-/**
- * Every event of one kind for a pubkey from the relay AND the gateway, as a
- * raw UNION by event id, with each gateway event's signature re-checked.
- *
- * The coupon counterpart of `allAddressable`, and the fix for the 2026-10-18
- * staging incident: a restored wallet showed its history and a zero balance.
- * The coupon's kind-7375 record WAS on the relay, but the browser's websocket
- * reads to strfry failed, and `querySync` RESOLVES `[]` on a socket that never
- * opens. `restoreVouchers` read the relay alone, so "unreachable" read as "no
- * coupons", silently. `restoreTx` read through `allAddressable`, which also
- * asks the gateway, and its history came back from the same login.
- *
- * Not `newestByD`: coupon records need every event (a tombstone must win over
- * a same-second record, and every chunk of a snapshot shares one `d` family),
- * so the reduction stays with `voucherRecords`. Deduped by id only.
- *
- * Signatures are checked on the gateway's copies because the gateway is a
- * relay of last resort here and the rows it hands back become MONEY; a
- * relay's own events are signature-checked by nostr-tools on the way in.
- * `stripCachedVerdict` is moot for JSON, which carries no symbol.
- */
-export async function allEventsWithGateway(
-  pubkey: string,
-  kind: number,
-  relays: string[] = [RELAY_URL],
-): Promise<Event[]> {
-  const [relayed, cached] = await Promise.all([
-    allEvents(pubkey, kind, relays).catch(() => [] as Event[]),
-    // PAGED (review of #326): a single 500-limit ask lost a big wallet's
-    // oldest coupons from the read that matters when the relay is down.
-    gatewayAllEvents(pubkey, kind),
-  ])
-  return unionWithGateway(relayed, cached ?? [], pubkey, kind)
+/** Only events by `author`, of `kind`, whose signature verifies. */
+function authentic(events: Event[], author: string, kind: number): Event[] {
+  const out = new Map<string, Event>()
+  for (const event of events) {
+    if (out.has(event.id) || event.pubkey !== author || event.kind !== kind) continue
+    const { id, pubkey, created_at, tags, content, sig } = event
+    if (!verifyEvent({ id, pubkey, created_at, kind, tags, content, sig })) continue
+    out.set(event.id, event)
+  }
+  return [...out.values()]
 }
 
-/** strfry's default `maxFilterLimit`; a relay may cap lower, which only costs an extra page. */
-export const RELAY_PAGE_LIMIT = 500
-/** A backstop against a relay that ignores `until`: 100 pages, 50,000 events. */
-const MAX_READ_PAGES = 100
+/**
+ * Every event of one kind for a pubkey, UNDEDUPED by `d`, through the cache.
+ *
+ * `allAddressable`'s newest-per-`d` rule is the right one for a ledger, where the latest record
+ * supersedes. It is the wrong one for coupons, where a "this is spent" tombstone must win over the
+ * record of the coupon even if both land in the same second (see `voucherRecords.restoreVouchers`).
+ * That reduction needs the raw list.
+ *
+ * PAGED (#206 review M2, review of #326): the gateway, like strfry, answers the newest 500 per
+ * filter and says nothing about the rest, so this walks back with `until`. Throws
+ * `GatewayUnreachableError` when the gateway did not answer at all; a later page failing returns
+ * what was read (partial is only ever LESS, and every caller treats a missing record as "not
+ * confirmed").
+ */
+export async function allEvents(pubkey: string, kind: number): Promise<Event[]> {
+  const events = await gatewayAllEvents(pubkey, kind)
+  if (events === null) throw new GatewayUnreachableError('nostr/query did not answer')
+  return authentic(events, pubkey, kind)
+}
 
-export async function newestAddressable(
-  pubkey: string,
-  kind: number,
-  d: string,
-  relays: string[] = [RELAY_URL],
-): Promise<Event | null> {
-  const pool = readPool()
-  try {
-    // BOTH STORES, NEWEST WINS (DEV-144) — see the header of lib/gatewayNostr.
-    // Without the gateway read, a deployment that does not publish strfry's
-    // port loses the merchant role entirely: this record IS what makes a
-    // merchant a merchant, and logout wipes the device.
-    const [relayed, cached] = await Promise.all([
-      pool
-        .querySync(
-          relays,
-          { authors: [pubkey], kinds: [kind], '#d': [d] },
-          { maxWait: READ_EOSE_TIMEOUT_MS },
-        )
-        .catch(() => [] as Event[]),
-      gatewayEvents(pubkey, kind, d),
-    ])
+/**
+ * The same read as `allEvents`. The name is kept from when it merged a relay read with the
+ * gateway's (2026-10-18 incident); since #428 every read is the gateway's.
+ */
+export const allEventsWithGateway = allEvents
 
-    // Checked again locally on BOTH sides. `#d` now goes on the wire to each
-    // (the gateway honours a standard tag filter since the DEV-144 re-check),
-    // but a store that ignores it would otherwise satisfy `imani:merchant` with
-    // any other kind-30078 this key has published — `imani:settings` and
-    // everything else possa-merchant writes under this kind.
-    return (
-      [...relayed, ...cached]
-        .filter((e) => e.tags.some(([name, value]) => name === 'd' && value === d))
-        // Sort rather than trust order: querySync merges several relays' replies
-        // and makes no promise about which arrives first.
-        .sort((a, b) => b.created_at - a.created_at)[0] ?? null
-    )
-  } finally {
-    pool.close(relays)
-  }
+/**
+ * Every addressable event of one kind whose `d` tag starts with a prefix, newest copy of each.
+ *
+ * The list counterpart of `newestAddressable`, for records that are one event PER ITEM: issuance
+ * records (`imani:issued:<voucherId>`), history rows. Filtered by prefix here, because no store can
+ * match a `d` PREFIX on the wire. De-duplicated by `d`, keeping the newest: a store is not obliged
+ * to have dropped an older copy, and a re-published record would otherwise restore twice.
+ */
+export async function allAddressable(pubkey: string, kind: number, dPrefix: string): Promise<Event[]> {
+  const matching = (await allEvents(pubkey, kind)).filter((event) =>
+    event.tags.some(([name, value]) => name === 'd' && value?.startsWith(dPrefix)),
+  )
+  return newestByD(matching)
+}
+
+/**
+ * The newest parameterised-replaceable event (NIP-33) for a pubkey and `d` tag, or null when the
+ * gateway holds none. Throws `GatewayUnreachableError` when it did not answer: null here takes away
+ * the merchant role, so "unreachable" must never read as "none".
+ *
+ * `#d` goes on the wire (the gateway honours a standard tag filter, DEV-144) and is checked again
+ * here, so a store that ignored it could not satisfy `imani:merchant` with another kind-30078 this
+ * key has published.
+ */
+export async function newestAddressable(pubkey: string, kind: number, d: string): Promise<Event | null> {
+  const events = await gatewayQuery({ kinds: [kind], authors: [pubkey], tags: { '#d': [d] }, limit: 50 })
+  return (
+    authentic(events, pubkey, kind)
+      .filter((e) => e.tags.some(([name, value]) => name === 'd' && value === d))
+      .sort((a, b) => b.created_at - a.created_at)[0] ?? null
+  )
 }
