@@ -24,6 +24,7 @@ import {
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
 import { gatesSealed, receivesOpen } from './receiveGate'
 import { announceRefusal } from './refusalToast'
+import { announceUnsaved, resumeUnsavedReceipts } from './unsavedReceipt'
 import { recordRefusal } from './refusedCoupons'
 import { heldCoupons, recordHeld, releaseHeld } from './heldCoupons'
 import { clearReceiveTrouble, fromRedemptionError, fromRedemptionUnsaved } from './receiveTrouble'
@@ -1810,6 +1811,9 @@ export function startDmPoll(pubkey: string): DmPollService {
   // the rest. Display state only; never throws.
   resumeBundleArrivals(pubkey)
 
+  // Settled-but-unsaved vouchers (#112) survive logout; the bell rows do not.
+  resumeUnsavedReceipts(pubkey)
+
   // Before the poller reads its processed set, not after: coupons abandoned by
   // a build that could not reassemble chunks are recoverable only if their
   // tombstones are gone by the time the first catch-up runs.
@@ -1907,6 +1911,8 @@ export function startDmPoll(pubkey: string): DmPollService {
     const emitter = service
     service.on('redemption:error', (event) => onReceiveFailed(emitter, event))
     service.on('redemption:unsaved', (event) => fromRedemptionUnsaved(owner ?? '', event))
+    // #112: a voucher the gateway settled but this wallet did not save: toast, bell, operator log.
+    service.on('redemption:unsaved', (event) => announceUnsaved(pubkey, event))
     service.on('redemption:success', (event) => clearReceiveTrouble(owner ?? '', event?.eventId))
   }
 
