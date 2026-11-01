@@ -78,6 +78,26 @@ export function asCheckoutCodeSnapshot(value: unknown): CheckoutCodeSnapshot | u
   }
 }
 
+/** The history row type for a shop's change (#402): value in, its coupons already in the wallet. */
+export const CHECKOUT_CHANGE_TX_TYPE = 'checkout_change'
+
+/** The change row, keyed on the code (`checkout:<id>:change`), so a second notice overwrites it. */
+export function checkoutChangeRow(a: { id: string; at: number; stall: string; unit: string; decimals: number; amount: number; memo: string }): Record<string, unknown> {
+  return {
+    id: a.id,
+    txId: a.id,
+    type: CHECKOUT_CHANGE_TX_TYPE,
+    direction: 'in',
+    timestamp: a.at,
+    amount: a.amount,
+    unit: a.unit,
+    decimals: a.decimals,
+    merchantId: a.stall,
+    counterparty: a.stall,
+    memo: a.memo,
+  }
+}
+
 /** The history row for a code, in the camelCase shape every writer uses. */
 export function checkoutCodeRow(record: CheckoutCodeRecord, memo?: string): Record<string, unknown> {
   const snapshot: CheckoutCodeSnapshot = {

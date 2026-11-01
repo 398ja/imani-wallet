@@ -90,6 +90,8 @@ export interface CheckoutCodeRecord {
   codeHash?: string
   /** What the shop spent, minor units, once redeemed. */
   spent?: number
+  /** The change the shop gave back, minor units, once its coupons are in (recorded once). */
+  change?: number
   /** Why no code was issued. */
   refusal?: string
   /** Set once every part's value is spent or back: the code no longer holds anything. */

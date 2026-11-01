@@ -49,6 +49,7 @@ const start = (parts: ReturnType<typeof part>[], extra = {}) =>
   flow.startCheckoutCode({ ports, pubkey: ME, stall: W.STALL, shop: SHOP, unit: 'GBP', decimals: 2, amount: parts.reduce((n, p) => n + p.amount, 0), x: X, parts, ...extra })
 
 const only = () => records.loadCheckoutCodes(ME)[0]
+const keptFace = () => w.kept.reduce((n, k) => n + creditableFaceValue(parseVoucherToken(k.token)).faceValue, 0)
 const keptSats = () => w.kept.reduce((n, k) => n + (k.satsToken ? (k.sats ?? 0) : parseVoucherToken(k.token).tokenAmount), 0)
 const lockedSats = (r = only()) => r.parts.reduce((n, p) => n + (p.lockedToken ? tokenProofs(p.lockedToken).reduce((m, q) => m + q.amount, 0) : 0), 0)
 
@@ -289,6 +290,26 @@ describe('after the code', () => {
     w.gateway.unlockRoute = true
     expect(await flow.handleCheckoutNotice(ports, ME, notice(r, 'change', { tokens }), W.STORE_PUB)).toBe('handled')
     expect(keptSats()).toBe(64)
+  })
+
+  it('change after a redeem: one incoming "Change" row with what came back, and the code row says what was spent (2026-11-01)', async () => {
+    const changes: Array<{ id: string; amount: number; memo: string }> = []
+    ports.changeActivity = async (row) => void changes.push(row)
+    const r = await issued()
+    W.shopSpends(w.mint, r.parts.map((p) => p.lockedToken!))
+    // The store's redeemed notice carries the code's whole amount.
+    expect(await flow.handleCheckoutNotice(ports, ME, notice(r, 'redeemed', { amount: r.amount }), W.STORE_PUB)).toBe('handled')
+    const tokens = W.returnToCustomer(w.mint, r.parts.map((p) => p.lockedToken!))
+    expect(await flow.handleCheckoutNotice(ports, ME, notice(r, 'change', { tokens }), W.STORE_PUB)).toBe('handled')
+
+    const back = keptFace()
+    expect(back).toBeGreaterThan(0)
+    expect(changes).toEqual([expect.objectContaining({ id: `checkout:${r.id}:change`, amount: back, memo: expect.stringMatching(/^Change from shop\.example: /) })])
+    expect(only()).toMatchObject({ status: 'redeemed', change: back, spent: r.amount - back })
+    expect(history.at(-1)?.memo).toMatch(/spent, .* back$/)
+    // A second delivery of the change notice writes no second row.
+    await flow.handleCheckoutNotice(ports, ME, notice(r, 'change', { tokens }), W.STORE_PUB)
+    expect(changes).toHaveLength(1)
   })
 
   it('expired: every part comes back by the relay refund path', async () => {
