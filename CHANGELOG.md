@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The stall hears when a customer claims its cashback** (#158, with
+  imani-gateway-portal#59). The portal sends a `cashback_claimed` Web Push and keeps a
+  drainable notice; `src/lib/cashbackClaimDrain.ts` collects the notice
+  (`POST /api/v1/portal/cashback/claim-notices/drain` then `/ack`) on the receipt drain's
+  cadence (boot, every 10s while visible, on becoming visible) and never throws. Push and
+  drain both file through one function, keyed `cashback-claimed:<cashbackId>`, so a claim
+  that arrives both ways is one bell row and one toast: "€5.00 cashback claimed
+  (CB-…)", formatted with `formatFace`. The code comes from the stall's own row, never
+  from the portal. Filing also stamps the row `cashbackStatus = Claimed` and `claimedAt`, so
+  the Vouchers list and the voucher detail (#155) are right without a status fetch; the
+  stamp happens even when the bell entry is switched off. A customer wallet's drain gets
+  403 and stops for the session. `cashback_claimed` is a known notification type in the
+  app and the service worker, governed by the existing "coupon claimed" switch.
+- `e2e/probe-cashback-spend.mts` checks the till's bell entry and the stamped row after the
+  claim.
+
+### Fixed
+
+- **The cashback claim drain no longer hammers a failing portal** (#158, with
+  imani-gateway-portal#59). It still stops for the session on 403/404/405/410, but 429, 5xx
+  and network errors now back off exponentially from 10s to a 5-minute cap, with +/-20%
+  jitter, and a successful drain resets it. It warns once per backoff level instead of every
+  tick, and a tab becoming visible does not jump the queue. A portal older than #59 answered
+  the missing route with 500, so a wallet shipped first logged "drain refused 500" every 10s
+  forever. Ship the portal first; a wallet that ships first is now quiet either way.
+  `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
+
 ## [0.42.1] - 2026-10-31
 
 ### Fixed
