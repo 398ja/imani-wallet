@@ -40,8 +40,6 @@ export interface SplitPlan {
   needCount: number
 }
 
-const EPS = 1e-9
-const isWhole = (v: number) => Math.abs(v - Math.round(v)) < EPS
 const powersOf = (n: number): number[] => {
   const out: number[] = []
   for (let bit = 2 ** Math.floor(Math.log2(n)); bit >= 1; bit /= 2) {
@@ -98,25 +96,45 @@ export function planSplit(token: string, amount: number): SplitPlan | null {
     } catch {
       continue
     }
-    if (!isWhole(share) || Math.round(share) <= 0) continue
+    if (!(Math.round(share) > 0)) continue
     const whole = Math.round(share)
     const others = proofs.filter((p) => p !== proof)
     const remainder = others.length ? plain(others) : null
+    // The code store credits a deposited part round(total sats × ratio) (checkout-codes
+    // CreditableFaceValue, the wallet's creditableFaceValue), rounded once over the part's sats. Real
+    // coupons are issued at the day's rate (staging: 1 sat = 0.0694 c), where no power of two of sats
+    // is a whole cent: the first version demanded exact cents and so never split one (staging
+    // 2026-11-01). So: the need parts' sats, together, must round to exactly `need`.
+    const credit = (s: number) => Math.round(s * ratio)
     for (const kept of carvableSums(remainder, amount)) {
       const need = amount - kept
       if (need <= 0 || need >= whole) continue
-      const needSats = need / ratio
-      if (!isWhole(needSats)) continue
-      const n = Math.round(needSats)
-      if (n <= 0 || n >= proof.amount) continue
-      const needParts = powersOf(n)
-      const restParts = powersOf(proof.amount - n)
-      if (needParts.length + restParts.length > MAX_SPLIT_PARTS) continue
-      if (![...needParts, ...restParts].every((s) => isWhole(s * ratio))) continue
-      return { proof, remainder, carveAmount: kept, need, sats: [...needParts, ...restParts], needCount: needParts.length }
+      const parts = partsMaking(need, proof.amount, ratio, credit)
+      if (!parts) continue
+      return { proof, remainder, carveAmount: kept, need, sats: [...parts.need, ...parts.rest], needCount: parts.need.length }
     }
   }
   return null
+}
+
+/**
+ * A sat count `n` whose value rounds to exactly `need` (as the code store credits it), split into
+ * powers of two (one blinded output each), with the rest of `total` as powers of two too, within the
+ * gateway's part limit. Fewest parts first. Null when none.
+ */
+function partsMaking(need: number, total: number, ratio: number, credit: (sats: number) => number): { need: number[]; rest: number[] } | null {
+  if (!(ratio > 0)) return null
+  const centre = Math.round(need / ratio)
+  const span = Math.max(4, Math.ceil(1 / ratio) + 2)
+  let best: { need: number[]; rest: number[] } | null = null
+  for (let n = Math.max(1, centre - span); n <= Math.min(total - 1, centre + span); n++) {
+    if (credit(n) !== need) continue
+    const needParts = powersOf(n)
+    const restParts = powersOf(total - n)
+    if (needParts.length + restParts.length > MAX_SPLIT_PARTS) continue
+    if (!best || needParts.length + restParts.length < best.need.length + best.rest.length) best = { need: needParts, rest: restParts }
+  }
+  return best
 }
 
 /** Whether a split can make `amount` from this coupon. Never throws. */
