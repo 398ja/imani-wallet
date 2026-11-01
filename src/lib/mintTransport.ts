@@ -18,7 +18,7 @@ import type { BlindSignatureResponse } from './walletSwap'
  * than incidental: callers hold full `BlindedOutput` values, so passing one
  * straight through would leak both without anything failing.
  *
- * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ * See `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
  */
 
 /** How long to wait before giving up on the mint. */

@@ -47,7 +47,7 @@ export interface ReceiptPayload {
    * already a message to exactly the right recipient at a moment when they are
    * looking at their own phone rather than holding up a queue at a counter.
    *
-   * See `docs/attestation-ui-gap.md` for why this is here and not in a prompt
+   * See `imani-docs/wallet/attestation-ui-gap.md` for why this is here and not in a prompt
    * during the sale, and `cashAttestation.ts` for what it does and does not
    * establish — chiefly that it attests RECEIPT rather than payment.
    *

@@ -1,4 +1,4 @@
-import type { Event } from 'nostr-tools'
+import { verifyEvent, type Event } from 'nostr-tools'
 
 /**
  * Reading Nostr events through the GATEWAY rather than from the browser.
@@ -134,24 +134,113 @@ export async function gatewayEvents(
   dTag?: string,
 ): Promise<Event[]> {
   try {
-    const response = await fetch(`${GATEWAY}/api/v1/nostr/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        kinds: [kind],
-        authors: [pubkey],
-        ...(dTag ? { tags: { '#d': [dTag] } } : {}),
-        limit: 500,
-      }),
+    return await gatewayQuery({
+      kinds: [kind],
+      authors: [pubkey],
+      ...(dTag ? { tags: { '#d': [dTag] } } : {}),
+      limit: 500,
     })
-    if (!response.ok) return []
-
-    const body = (await response.json()) as { events?: GatewayEvent[] }
-    return (body.events ?? []).map(toEvent).filter((e): e is Event => e !== null)
   } catch {
     return []
   }
+}
+
+/** The gateway did not answer a read (unreachable, timed out, or not a 2xx). */
+export class GatewayUnreachableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'GatewayUnreachableError'
+  }
+}
+
+/**
+ * One `POST /api/v1/nostr/query`, THROWING `GatewayUnreachableError` when the gateway did not
+ * answer, so a caller can tell "unreachable" from "no events". Bounded by
+ * `GATEWAY_PAGE_TIMEOUT_MS`. Events are NOT signature-checked here; `relay.ts` does that.
+ */
+export async function gatewayQuery(filter: Record<string, unknown>): Promise<Event[]> {
+  let response: Response
+  try {
+    response = await fetch(`${GATEWAY}/api/v1/nostr/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      signal: AbortSignal.timeout(GATEWAY_PAGE_TIMEOUT_MS),
+      body: JSON.stringify(filter),
+    })
+  } catch (error) {
+    throw new GatewayUnreachableError(error instanceof Error ? error.message : String(error))
+  }
+  if (!response.ok) throw new GatewayUnreachableError(`nostr/query answered ${response.status}`)
+  let body: { events?: GatewayEvent[] }
+  try {
+    body = (await response.json()) as { events?: GatewayEvent[] }
+  } catch (error) {
+    throw new GatewayUnreachableError(error instanceof Error ? error.message : String(error))
+  }
+  return (body.events ?? []).map(toEvent).filter((e): e is Event => e !== null)
+}
+
+/** The gateway's page size for `gatewayAllEvents`; it also caps lower reads at 500 upstream. */
+export const GATEWAY_PAGE_LIMIT = 500
+/** Backstop against a gateway that ignores `until`: 100 pages, the relay walk's own bound. */
+const GATEWAY_MAX_PAGES = 100
+/** Per page. A gateway that accepts the socket and never answers must not hang a logout. */
+export const GATEWAY_PAGE_TIMEOUT_MS = 8_000
+
+/**
+ * EVERY event of one kind for one author from the gateway, paged with `until`
+ * (review of #326). NEVER THROWS.
+ *
+ * `gatewayEvents` asks once with `limit: 500`, and the gateway (like strfry)
+ * answers the NEWEST 500 and says nothing about the rest. For coupon records
+ * that silently dropped a big wallet's OLDEST coupons from the very read that
+ * exists for when the relay is unreachable. Same walk as `relay.allEvents`:
+ * an inclusive cursor (several events share a second), dedup by id, and a
+ * page with nothing new ends it.
+ *
+ * Returns `null` when the gateway did not answer at all, so a caller can tell
+ * "unreachable" from "no events" (the confusion behind the 2026-10-18
+ * incident). A later page failing returns what was read: partial is only ever
+ * LESS, and every caller treats a missing record as "not confirmed".
+ */
+export async function gatewayAllEvents(pubkey: string, kind: number): Promise<Event[] | null> {
+  const seen = new Map<string, Event>()
+  let until: number | undefined
+  let answered = false
+  for (let page = 0; page < GATEWAY_MAX_PAGES; page++) {
+    let batch: Event[]
+    try {
+      batch = await gatewayQuery({
+        kinds: [kind],
+        authors: [pubkey],
+        limit: GATEWAY_PAGE_LIMIT,
+        ...(until === undefined ? {} : { until }),
+      })
+    } catch {
+      break
+    }
+    answered = true
+    let fresh = 0
+    for (const event of batch) {
+      if (!seen.has(event.id)) {
+        seen.set(event.id, event)
+        fresh++
+      }
+    }
+    if (batch.length === 0) break
+    const oldest = Math.min(...batch.map((e) => e.created_at))
+    if (fresh === 0) {
+      if (batch.length < GATEWAY_PAGE_LIMIT) break
+      // A full page all in one second: step past that second rather than loop.
+      until = oldest - 1
+      continue
+    }
+    // A SHORT page is not taken as the end (the gateway may cap below the ask):
+    // only a page with nothing new ends the walk.
+    until = oldest
+  }
+  return answered ? [...seen.values()] : null
 }
 
 /**
@@ -174,4 +263,33 @@ export function newestByD(...sources: Event[][]): Event[] {
     }
   }
   return [...newest.values()]
+}
+
+/**
+ * The relay's events plus the gateway's, as a raw union by event id: no
+ * newest-per-`d` reduction, because coupon records need every event (see
+ * `relay.allEventsWithGateway`).
+ *
+ * A gateway event joins only if it is by `author`, of `kind`, and its signature
+ * verifies. The rows built from these become a balance, and the gateway is a
+ * second source, not a trusted one. Events arrive as JSON, so no cached
+ * verification verdict can ride along (see `audit.stripCachedVerdict`); the
+ * copy below makes sure of it for in-memory callers too.
+ */
+export function unionWithGateway(
+  relayed: Event[],
+  cached: Event[],
+  author: string,
+  kind: number,
+): Event[] {
+  const byId = new Map<string, Event>()
+  for (const event of relayed) byId.set(event.id, event)
+  for (const event of cached) {
+    if (byId.has(event.id)) continue
+    if (event.pubkey !== author || event.kind !== kind) continue
+    const { id, pubkey, created_at, tags, content, sig } = event
+    if (!verifyEvent({ id, pubkey, created_at, kind, tags, content, sig })) continue
+    byId.set(event.id, event)
+  }
+  return [...byId.values()]
 }

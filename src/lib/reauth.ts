@@ -80,3 +80,15 @@ export async function reauthenticate(passphrase: string): Promise<void> {
   const pubkey = session.getSession()?.pubkey
   if (pubkey) await remember(pubkey, privkeyHex)
 }
+
+/**
+ * Step-up: prove the person at the device is the owner, right now (imani-wallet#434).
+ *
+ * The same three steps as `reauthenticate`, for a session that is still alive: decrypt the key
+ * with the passphrase (the check, failing closed on a wrong one), put it back if a lock evicted
+ * it, and log in again for a fresh NIP-98 cookie, so the gateway sees a recent authentication.
+ * Used before closing the stall; reopening needs none.
+ */
+export async function stepUp(passphrase: string): Promise<void> {
+  await reauthenticate(passphrase)
+}

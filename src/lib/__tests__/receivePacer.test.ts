@@ -128,4 +128,25 @@ describe('receivePacer', () => {
     await pacer.acquire(1)
     expect(clock.now()).toBe(0)
   })
+
+  it('an aborted waiter books no slot, and the next waiter gets it at once (#301)', async () => {
+    let t = 0
+    const pacer = createReceivePacer({ now: () => t, sleep: () => new Promise<void>(() => {}) })
+    await pacer.acquire(CALLS_PER_WINDOW)
+    const abort = new AbortController()
+    const ghost = pacer.acquire(1, abort.signal).then(
+      () => 'booked',
+      () => 'abandoned',
+    )
+    await new Promise((r) => setTimeout(r, 0))
+    abort.abort(new Error('step timeout'))
+    expect(await ghost).toBe('abandoned')
+    // The window frees. The next caller books at once: the abandoned wait
+    // neither took the slot nor left a sleeper ahead of it in the queue.
+    t = WINDOW_MS
+    let booked = false
+    void pacer.acquire(1).then(() => (booked = true))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(booked).toBe(true)
+  })
 })

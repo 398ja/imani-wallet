@@ -1,5 +1,5 @@
 import type { SignedVoucherFields } from './voucherFields.js'
-import type { LicenceVoucher } from './types.js'
+import type { LicenceLimits, LicenceVoucher, SalesPeriod } from './types.js'
 
 /**
  * Reading a licence out of a signed voucher.
@@ -34,6 +34,50 @@ interface LicenceMetadata {
    * widens what can be recognised, never what can be granted.
    */
   lock_key?: unknown
+  tier?: unknown
+  valid_from?: unknown
+  limits?: unknown
+  grant_kind?: unknown
+  badge?: unknown
+}
+
+const SALES_PERIODS: readonly SalesPeriod[] = ['lifetime', 'month', 'window']
+
+function asCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+/**
+ * The signed limits, read STRICTLY. Anything malformed is dropped rather than guessed at, and the
+ * one shape that means "unlimited" is an explicit `null`. A garbled amount must never read as
+ * "no cap", so a limit we cannot read is absent, which leaves the stall at whatever else grants it.
+ */
+function asLimits(value: unknown): LicenceLimits | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const raw = value as { sales?: unknown; terminals?: unknown }
+  const out: LicenceLimits = {}
+
+  if (raw.terminals === null) out.terminals = null
+  else {
+    const t = asCount(raw.terminals)
+    if (t !== undefined) out.terminals = t
+  }
+
+  if (raw.sales === null) out.sales = null
+  else if (raw.sales && typeof raw.sales === 'object' && !Array.isArray(raw.sales)) {
+    const s = raw.sales as { period?: unknown; amounts?: unknown }
+    const period = SALES_PERIODS.find((p) => p === s.period)
+    const amounts: Record<string, number> = {}
+    if (s.amounts && typeof s.amounts === 'object' && !Array.isArray(s.amounts)) {
+      for (const [currency, amount] of Object.entries(s.amounts as Record<string, unknown>)) {
+        const n = asCount(amount)
+        if (n !== undefined && /^[A-Z]{3}$/.test(currency)) amounts[currency] = n
+      }
+    }
+    if (period && Object.keys(amounts).length > 0) out.sales = { period, amounts }
+  }
+
+  return out.sales !== undefined || out.terminals !== undefined ? out : undefined
 }
 
 function asStrings(value: unknown): string[] {
@@ -61,9 +105,9 @@ function licenceMetadata(raw: string | null | undefined): LicenceMetadata | null
 /**
  * The signed voucher, read as a licence, or null if it is not one.
  *
- * BOTH a subscription id and at least one feature are required. Either alone is
- * ambiguous: a merchant writing `{"features": [...]}` into their metadata for
- * some unrelated purpose would otherwise demonetise their own coupon, and an id
+ * A subscription id is required, and so is something it confers: at least one feature, or (since
+ * #407) a limit. Either alone is ambiguous: a merchant writing `{"features": [...]}` into their
+ * metadata for some unrelated purpose would otherwise demonetise their own coupon, and an id
  * with no grant is not a thing we sell. Two fields together, in bytes the issuer
  * signed, is not something a coupon acquires by accident.
  */
@@ -73,13 +117,17 @@ export function licenceOf(signed: SignedVoucherFields): LicenceVoucher | null {
 
   const subscriptionId = asString(meta.subscription_id)
   const features = asStrings(meta.features)
-  if (!subscriptionId || features.length === 0) return null
+  const limits = asLimits(meta.limits)
+  if (!subscriptionId || (features.length === 0 && !limits)) return null
+  const validFrom = asCount(meta.valid_from)
 
   return {
     subscriptionId,
     issuerPublicKey: signed.issuerPublicKey,
     issuerSignature: signed.issuerSignature,
     lockKey: asString(meta.lock_key),
+    mintLockKey: asString(signed.lockKey),
+    issuerId: asString(signed.issuerId),
     expiresAt: signed.expiresAt,
     // The credential is its own receipt (ADR 0007): what was paid, and until
     // when, both read off the voucher rather than off a record we would have to
@@ -88,6 +136,18 @@ export function licenceOf(signed: SignedVoucherFields): LicenceVoucher | null {
     faceUnit: signed.unit,
     features,
     pilot: meta.pilot === true,
+    ...(limits ? { limits } : {}),
+    ...(asString(meta.tier) ? { tier: asString(meta.tier) } : {}),
+    ...(validFrom !== undefined ? { validFrom } : {}),
+    ...(asString(meta.grant_kind) ? { grantKind: asString(meta.grant_kind) } : {}),
+    ...(isBadgeName(meta.badge) ? { badge: meta.badge } : {}),
   }
+}
+
+/** The verification badges a licence or a tier may name (#418). Anything else reads as none. */
+export const BADGE_NAMES = ['bronze', 'silver', 'gold'] as const
+
+export function isBadgeName(value: unknown): value is (typeof BADGE_NAMES)[number] {
+  return typeof value === 'string' && (BADGE_NAMES as readonly string[]).includes(value)
 }
 

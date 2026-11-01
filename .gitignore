@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-e2e-signer
 *.local
 
 # Secret keys. scripts/seed-merchant.mjs generates a merchant and a customer
@@ -62,3 +63,6 @@ e2e/.probe-concurrent-redeem/
 
 # Screenshots a failed e2e/probe-cashback-spend.mts run leaves behind.
 e2e/.probe-cashback-spend/
+
+# Local npm cache (npm ci --cache .npm in containers/CI).
+.npm

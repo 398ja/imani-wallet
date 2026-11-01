@@ -20,6 +20,41 @@ const US = 'a'.repeat(64)
 const THEM = 'b'.repeat(64)
 const CUSTOMER = 'c'.repeat(64)
 const SOMEONE_ELSE = 'd'.repeat(64)
+const SELLER = 'e'.repeat(64)
+
+describe('locked at the mint, as the server requires (#197 review)', () => {
+  it('refuses a plain VOUCHER licence: its lock is advisory and the server refuses it too', () => {
+    const verdict = verifyLicence(licence({ mintLockKey: undefined }), opts())
+    expect(verdict).toMatchObject({ granted: false, reason: DENIAL_REASONS.NOT_LOCKED_AT_MINT })
+  })
+
+  it('refuses a licence whose mint lock is not its signed lock_key', () => {
+    const verdict = verifyLicence(licence({ mintLockKey: SOMEONE_ELSE }), opts())
+    expect(verdict).toMatchObject({ granted: false, reason: DENIAL_REASONS.WRONG_KEY })
+  })
+
+  it('reads a compressed NUT-11 key as its x-only key', () => {
+    expect(verifyLicence(licence({ mintLockKey: `03${CUSTOMER}` }), opts()).granted).toBe(true)
+  })
+})
+
+describe('the seller pin (#197 review, MEDIUM-3)', () => {
+  it('grants a licence the configured seller sold', () => {
+    expect(verifyLicence(licence(), opts({ sellerPublicKey: SELLER })).granted).toBe(true)
+  })
+
+  it('refuses one any other stall minted through the same gateway key', () => {
+    // The gateway key signs every coupon, so a stall can mint a licence-shaped voucher naming
+    // itself as issuer and DM it to a victim. Only issuer_id tells the two apart.
+    const verdict = verifyLicence(licence({ issuerId: THEM }), opts({ sellerPublicKey: SELLER }))
+    expect(verdict).toMatchObject({ granted: false, reason: DENIAL_REASONS.NOT_SOLD_BY_US })
+  })
+
+  it('does not pin when no seller is configured', () => {
+    expect(verifyLicence(licence({ issuerId: THEM }), opts()).granted).toBe(true)
+    expect(verifyLicence(licence({ issuerId: THEM }), opts({ sellerPublicKey: '' })).granted).toBe(true)
+  })
+})
 
 const NOW = 1_800_000_000
 const LATER = NOW + 86_400
@@ -29,6 +64,8 @@ const licence = (over: Partial<LicenceVoucher> = {}): LicenceVoucher => ({
   issuerPublicKey: US,
   issuerSignature: 'sig',
   lockKey: CUSTOMER,
+  mintLockKey: CUSTOMER,
+  issuerId: SELLER,
   expiresAt: LATER,
   features: ['multi-terminal'],
   ...over,
@@ -202,6 +239,8 @@ describe('refusals a caller can act on', () => {
       verifyLicence(licence({ expiresAt: undefined }), opts()),
       verifyLicence(licence({ expiresAt: NOW - 1 }), opts()),
       verifyLicence(licence({ features: [] }), opts()),
+      verifyLicence(licence({ mintLockKey: undefined }), opts()),
+      verifyLicence(licence({ issuerId: THEM }), opts({ sellerPublicKey: SELLER })),
     ].map((v) => (v.granted ? 'granted' : v.reason))
 
     expect(new Set(reasons).size).toBe(reasons.length)

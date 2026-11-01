@@ -52,6 +52,22 @@ export interface TerminalActor {
   /** The disposable key this device generated. Recorded, never stamped. */
   terminalPubkey: string
   permissions: readonly string[]
+  /**
+   * The stall signed this till's credential (#160 decision 5, spec 4.6.5). Set only by login,
+   * from the token's own `owner_attestation`. A till without it still redeems, but never sells:
+   * every customer's wallet would read its sales `unwarranted` and refuse them. `true` exactly,
+   * so an actor built anywhere else cannot sell by default.
+   */
+  attested?: boolean
+  /**
+   * The credential's signed `expires_at`, epoch seconds (#160 phase 6, F5). Set by login.
+   */
+  expiresAt?: number
+  /**
+   * Past `expiresAt` when the till opened (#160 phase 6, Q4): it opens for Redeem only and asks
+   * the owner to renew. The portal refuses its Sell anyway; this stops the till offering one.
+   */
+  expired?: boolean
 }
 
 export type Actor = OwnerActor | TerminalActor
@@ -164,9 +180,15 @@ export function issuingStall(actor: Actor): string {
  * terminal is refused here and would be refused at the API too, which is the
  * spec's requirement that the role be enforced "at the API and not merely in
  * the UI".
+ *
+ * And only when the stall attested its credential (`attested`, spec 4.6.5): an unattested till
+ * keeps Redeem but cannot Sell, until the owner sets it up again.
  */
 export function mayIssue(actor: Actor): boolean {
   if (actor.kind === 'owner') return true
+  if (actor.attested !== true) return false
+  // An expired credential redeems, never sells (Q4). Redeem keeps working for a paperwork lapse.
+  if (actor.expired === true) return false
   return mayAct(actor.permissions, TERMINAL_ACTIONS.ISSUE, actor.stallPubkey)
 }
 

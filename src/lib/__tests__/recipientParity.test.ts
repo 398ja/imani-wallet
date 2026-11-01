@@ -14,7 +14,7 @@
  * app's side is reached through `payRequest`'s real path with the network
  * stubbed at `merchantStatus`'s one dependency.
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeAll, beforeEach } from 'vitest'
 
 // Vitest 3 takes ONE type argument, the whole function signature; the
 // two-argument `<Args, Return>` form was removed in v2. Under the old
@@ -34,6 +34,12 @@ vi.mock('nostr-tools/pool', () => ({
   useWebSocketImplementation: () => {},
 }))
 vi.mock('../gatewayNostr', () => ({ gatewayEvents: async () => relayEvents() }))
+// #428: reads go through the gateway only, so the stub sits at `newestAddressable` (signature
+// checks are covered in gatewayNostr.test.ts; these records are unsigned fixtures).
+vi.mock('../relay', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../relay')>()),
+  newestAddressable: async () => ((await relayEvents())[0] as never) ?? null,
+}))
 
 const STALL = 'a'.repeat(64)
 const OTHER_STALL = 'b'.repeat(64)
@@ -116,6 +122,20 @@ async function apiAllows(s: Situation): Promise<boolean> {
 }
 
 describe('the API refuses what the app refuses', () => {
+  /**
+   * Transform the module graph once, outside any test's 5s budget.
+   *
+   * Every case imports `../pay` and `@imani/wallet-core` after `resetModules`.
+   * That reset clears the module registry but not the transform cache, so only
+   * the FIRST import pays to transform the whole graph. It used to pay inside
+   * the first case, which then timed out in roughly 1 run in 4 on a cold
+   * worker. That made this file the one flaky failure in a clean `npm test`.
+   */
+  beforeAll(async () => {
+    await import('../pay')
+    await import('@imani/wallet-core')
+  }, 60_000)
+
   beforeEach(() => {
     localStorage.clear()
     vi.resetModules()

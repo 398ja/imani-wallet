@@ -19,18 +19,27 @@ vi.mock('../nap', () => ({
   keyStore: { clear: vi.fn().mockResolvedValue(undefined) },
   resetSession: vi.fn(),
 }))
-vi.mock('../dmPoll', () => ({ stopDmPoll: vi.fn() }))
-vi.mock('../incomingNotifications', () => ({ stopIncomingNotifications: vi.fn() }))
+vi.mock('../dmPoll', () => ({ stopDmPoll: vi.fn(), startDmPoll: vi.fn(), drainDmPoll: vi.fn(async () => true) }))
+vi.mock('../incomingNotifications', () => ({ stopIncomingNotifications: vi.fn(), startIncomingNotifications: vi.fn() }))
+vi.mock('../terminalRosterSyncNet', () => ({ stopRosterSync: vi.fn(), startRosterSync: vi.fn() }))
 vi.mock('../notifications/manager', () => ({ disableNotifications: vi.fn(async () => undefined) }))
 import { disableNotifications } from '../notifications/manager'
 const forgetResume = vi.fn(() => {
   order.push('forget-resume')
 })
+// Every held voucher confirmed: these pin the teardown. The BLOCK is pinned in
+// logoutUnbackedCoupons.test.ts and end to end in restoreAfterLogout.test.ts.
+vi.mock('../voucherRecords', () => ({
+  confirmBackups: vi.fn(async () => ({ ok: true, confirmed: 0, fingerprint: '' })),
+  heldFingerprint: () => '',
+}))
 vi.mock('../resume', () => ({ forgetResume: () => forgetResume() }))
 vi.mock('../wallet', () => ({
   wipeWallet: vi.fn(async () => {
     order.push('wipe')
   }),
+  openWallet: async () => ({ getAllVouchers: async () => [], getAllTransactions: async () => [] }),
+  voucherWriteCount: () => 0,
 }))
 
 const { logout } = await import('../logout')
@@ -51,6 +60,7 @@ beforeEach(() => {
   // The module clears every `imani-wallet:*` key; the test env has no DOM.
   globalThis.localStorage = { 'imani-wallet:x': '1' } as unknown as Storage
   globalThis.localStorage.removeItem = () => {}
+  globalThis.localStorage.getItem = () => null
 })
 
 describe('logout', () => {
@@ -118,5 +128,30 @@ describe('logout', () => {
     expect(wipeWallet).not.toHaveBeenCalled()
     // And the cache stays, because the user is still logged in.
     expect(forgetResume).not.toHaveBeenCalled()
+  })
+})
+
+describe('logout keeps the settled-but-unsaved record (#112)', () => {
+  it('sweeps every imani-wallet key except unsaved-receipts', async () => {
+    const pk = 'ab'.repeat(32)
+    const store: Record<string, string> = {
+      [`imani-wallet:unsaved-receipts:${pk}`]: '[]',
+      [`imani-wallet:receive-ledger:${pk}`]: '[]',
+      [`imani-wallet:notifications:${pk}`]: '[]',
+      'other-app': '1',
+    }
+    const removed: string[] = []
+    globalThis.localStorage = Object.assign(Object.create(null), store) as unknown as Storage
+    Object.defineProperty(globalThis.localStorage, 'removeItem', {
+      value: (k: string) => removed.push(k),
+      enumerable: false,
+    })
+    // Main's logout also reads and rewrites the parked claim links around the sweep.
+    Object.defineProperty(globalThis.localStorage, 'getItem', { value: () => null, enumerable: false })
+    Object.defineProperty(globalThis.localStorage, 'setItem', { value: () => {}, enumerable: false })
+
+    await expect(logout(pk, yes, reload)).resolves.toBe(true)
+
+    expect(removed.sort()).toEqual([`imani-wallet:notifications:${pk}`, `imani-wallet:receive-ledger:${pk}`])
   })
 })

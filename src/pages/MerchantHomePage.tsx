@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom'
+import { ClosedNote } from '../components/StallClosed'
 import { Clock, QrCode, Send, ShieldOff } from 'lucide-react'
 
 import { Button, Screen } from '../components/ui'
@@ -11,6 +12,7 @@ import {
   sessionState,
   type TerminalSession,
 } from '../lib/terminalSession'
+import { mayWarrantSale } from '../lib/warrantSigner'
 
 /**
  * Home, for a merchant: the till.
@@ -56,6 +58,7 @@ export function MerchantHomePage({
   actor,
   session,
   refusal,
+  closed = false,
 }: {
   /** The terminal acting for this stall. Absent on the owner's own device. */
   actor?: Actor
@@ -65,6 +68,12 @@ export function MerchantHomePage({
    * out. Never set on the owner's own device, which holds no credential.
    */
   refusal?: string | null
+  /**
+   * #434: the stall has switched Open for business off. The home stays a merchant home, Sell and
+   * Redeem stay on screen, disabled, with one line saying why and where to reopen. The owner's
+   * device links to the switch; a till is told to ask the owner.
+   */
+  closed?: boolean
 } = {}) {
   const navigate = useNavigate()
 
@@ -90,8 +99,18 @@ export function MerchantHomePage({
     return <NotTrading message={lapse.message} reason={lapse.reason} />
   }
 
-  const mayIssue = actor ? canIssueNow(actor, session ?? null) : true
+  /*
+    Sell needs BOTH the role and session (`canIssueNow`) and a key that can
+    sign a warrant the customer's wallet accepts (`mayWarrantSale`). No
+    terminal has the second until the `delegated` warrant form ships (#159),
+    and `issueAndDeliver` refuses the sale for that reason, so the button is
+    not offered rather than offered and then refused. A till that WOULD be
+    allowed by role says so in one line, so staff know it is not broken.
+  */
+  const roleMayIssue = actor ? canIssueNow(actor, session ?? null) : true
+  const mayIssue = roleMayIssue && (actor ? mayWarrantSale(actor, session ?? null) : true)
   const mayRedeem = actor ? canRedeemNow(actor, session ?? null) : true
+  const owner = !actor
 
   return (
     <Screen>
@@ -104,7 +123,7 @@ export function MerchantHomePage({
             it is a device whose whole job is the one button it has. */}
         <div className={`grid gap-3 ${mayIssue && mayRedeem ? 'grid-cols-2' : 'grid-cols-1'}`}>
           {mayIssue ? (
-            <Button size="lg" onClick={() => navigate('/sell')}>
+            <Button size="lg" disabled={closed} onClick={() => navigate('/sell')}>
               <Send className="mr-2 h-5 w-5" aria-hidden /> Sell
             </Button>
           ) : null}
@@ -114,12 +133,14 @@ export function MerchantHomePage({
               // Outline only when it sits beside Sell. Alone it is the primary
               // action of the screen and should look like one.
               variant={mayIssue ? 'outline' : 'primary'}
+              disabled={closed}
               onClick={() => navigate('/redeem')}
             >
               <QrCode className="mr-2 h-5 w-5" aria-hidden /> Redeem
             </Button>
           ) : null}
         </div>
+        {closed && <ClosedNote owner={owner} />}
       </div>
     </Screen>
   )
@@ -133,7 +154,7 @@ export function MerchantHomePage({
  * holding the device: it will not serve, and the owner is the answer. Two
  * screens would drift, and the one seen less often would drift further.
  */
-function NotTrading({ message, reason }: { message: string; reason: LapseReason }) {
+export function NotTrading({ message, reason }: { message: string; reason: LapseReason }) {
   return (
     <Screen>
       <div className="flex min-h-[calc(100svh-9rem)] flex-col justify-center">

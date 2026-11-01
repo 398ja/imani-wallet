@@ -42,6 +42,8 @@ export type {
   RedemptionErrorEvent,
   RedemptionRefusedEvent,
   RedemptionUnsavedEvent,
+  RedemptionHeldEvent,
+  RedemptionReleasedEvent,
   SubscriptionStateEvent,
   DmPollEvents,
   FailedEvent,

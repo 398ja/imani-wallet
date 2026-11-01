@@ -5,8 +5,10 @@ import { PaymentRequestHandler, VoucherRedeemHandler } from 'imani-qr'
 
 import { Button, Screen, BackLink, PageHeader, Alert, Input } from '../components/ui'
 import { toRecipientPubkey } from '../lib/issue'
+import { routeForAddress } from '../lib/scanRoute'
 import { readClipboard } from '../lib/native'
 import { scannerBlocked } from '../lib/scannerSupport'
+import { CODES_RETIRED, isRetiredCashbackCode } from '../lib/cashlinkCopy'
 
 /**
  * Scan: the one camera for both things a customer points it at.
@@ -52,8 +54,25 @@ export function ScanPage() {
       if (resolving.current) return
       resolving.current = true
       try {
+        // A typed cashback code (`CB-…`). Codes are retired (wallet#268): say so and look
+        // nothing up. Checked first so the code never reaches the address resolver.
+        if (isRetiredCashbackCode(text)) {
+          setError(CODES_RETIRED)
+          return
+        }
         if (new PaymentRequestHandler().validate(text)) {
           navigate(`/pay?paymentRequest=${encodeURIComponent(text.trim())}`)
+          return
+        }
+        // A terminal setup code (#160, owner report on wallet 0.19.0). It is scanned by the
+        // device being set up, on its setup screen, and the owner's operator reached this screen
+        // instead, which said "not a payment request, a voucher, or an account". Sent to
+        // /terminal/setup with the code. Scan only exists in the signed-in app, so this lands on
+        // the authed route, which answers with why a device holding a personal wallet cannot
+        // become a terminal. (The signed-out setup screen does not read `?code=` today.)
+        const { parseSetupCode } = await import('../lib/terminalDelivery')
+        if (parseSetupCode(text)) {
+          navigate(`/terminal/setup?code=${encodeURIComponent(text.trim())}`)
           return
         }
         // A pass barcode. Routed to the merchant's own record of the coupon,
@@ -71,7 +90,9 @@ export function ScanPage() {
           return
         }
         const hex = await toRecipientPubkey(text)
-        if (hex) navigate(`/send?to=${hex}`)
+        // A stall's own QR opens its profile, where Buy and Pay live (#280);
+        // anyone else keeps the send flow.
+        if (hex) navigate(await routeForAddress(hex))
         else setError('That is not a payment request, a voucher, or an account we can find.')
       } finally {
         resolving.current = false

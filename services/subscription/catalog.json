@@ -1,0 +1,24 @@
+{
+  "version": 4,
+  "overshoot_pct": 10,
+  "tiers": {
+    "free": {
+      "features": [],
+      "limits": {
+        "sales": { "period": "lifetime", "amounts": { "AUD": 10000, "CAD": 10000, "CHF": 10000, "EUR": 10000, "GBP": 10000, "USD": 10000 } },
+        "terminals": 1
+      }
+    },
+    "basic": {
+      "features": ["terminals"],
+      "limits": { "sales": null, "terminals": 3 },
+      "badge": "bronze"
+    },
+    "pro": {
+      "features": ["terminals", "api", "ecommerce"],
+      "limits": { "sales": null, "terminals": null },
+      "badge": "silver"
+    }
+  },
+  "fx": { "XAF": { "per_usd": 600, "decimals": 0 } }
+}

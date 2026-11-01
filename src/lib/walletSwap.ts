@@ -23,7 +23,7 @@ import { bytesToHex, randomBytes } from '@noble/hashes/utils'
  * step rather than holding custody: it may see an output secret, and it still
  * cannot spend the proof, because `r` never leaves here.
  *
- * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ * See `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
  *
  * ## What this module is not
  *
@@ -63,6 +63,8 @@ export interface UnblindedProof {
   secret: string
   /** The unblinded signature, compressed hex. */
   C: string
+  /** NUT-12: the mint's DLEQ with our blinding factor, when the mint sent one (#295 phase 4). */
+  dleq?: { e: string; s: string; r: string }
 }
 
 /** A blind signature as the mint returns it. */
@@ -70,6 +72,8 @@ export interface BlindSignatureResponse {
   id: string
   amount: number
   C_: string
+  /** NUT-12 DLEQ `(e, s)`, when the mint sent one. */
+  dleq?: { e: string; s: string }
 }
 
 /**
@@ -258,10 +262,12 @@ function buildProof(
     new TextEncoder().encode(output.secret),
     point(mintKey),
   )
+  const dleq = signature.dleq
   return {
     amount: output.amount,
     id: output.id,
     secret: output.secret,
     C: serializeProof(proof).C,
+    ...(dleq && typeof dleq.e === 'string' && typeof dleq.s === 'string' ? { dleq: { e: dleq.e, s: dleq.s, r: output.r } } : {}),
   }
 }

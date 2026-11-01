@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { discharge, type Obligation, type Ports } from '../discharge'
 import { CREDENTIAL_HEADER, IssuanceFailed, issueBody } from '../issuer'
+import { STALL, delegatedCredential, ninetyDayTerm } from './stallFixture'
 
 /**
  * What happens when issuing a paid-for coupon goes wrong.
@@ -18,26 +19,25 @@ import { CREDENTIAL_HEADER, IssuanceFailed, issueBody } from '../issuer'
  *   second coupon for one payment.
  */
 
-const CREDENTIAL = {
-  stallPubkey: 'b'.repeat(64),
-  credentialId: 'cred-1',
-  lockKeyHex: '11'.repeat(32),
-}
+// A real stall and its real delegation: since #152 nothing mints without one.
+const CREDENTIAL = delegatedCredential()
 
 const OBLIGATION: Obligation = {
   id: 'evt_1',
   paymentRequestId: '0123456789abcdef0123456789abcdef',
-  stallPubkey: 'b'.repeat(64),
+  stallPubkey: STALL,
   faceValue: 2500,
   faceUnit: 'GBP',
   faceDecimals: 2,
   memo: 'Voucher',
   recipient: { kind: 'pubkey', pubkey: 'c'.repeat(64) },
   attempts: 0,
+  processorReference: 'pi_3Test',
 }
 
 function ports(over: Partial<Ports> = {}): Ports {
   return {
+    validityFor: ninetyDayTerm,
     credentialFor: async () => CREDENTIAL,
     tokenFor: async () => '',
     now: () => Date.now(),
@@ -59,7 +59,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 'cashuB123' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     const outcome = await discharge('http://gw', OBLIGATION, ports())
@@ -69,6 +69,7 @@ describe('discharging a purchase', () => {
       voucherId: 'v1',
       issuerId: '',
       eventId: 'ev1',
+      pendingSale: null,
     })
   })
 
@@ -79,7 +80,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     await discharge('http://gw', OBLIGATION, ports())
@@ -94,6 +95,46 @@ describe('discharging a purchase', () => {
     expect(JSON.parse(init.body).paymentRequestId).toBeUndefined()
   })
 
+  // imani-wallet#287 (U3), red on main: without voucher_id gc cannot tell the issuer's own
+  // hand-over, so nothing reaches gateway-core and the discharge is refused for ever (E2).
+  it('names the voucher it delivers, in snake case (#287)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await discharge('http://gw', OBLIGATION, ports())
+
+    const sent = JSON.parse(fetchMock.mock.calls[1][1].body)
+    expect(sent.voucher_id).toBe('v1')
+    expect(sent.voucherId).toBeUndefined()
+  })
+
+  // imani-wallet#287 (U3) + #289 (E4), red on main: a 2xx without fulfilment_recorded was a
+  // discharge. It is undelivered-for-the-outbox now, and the reason says the voucher WAS delivered.
+  it('treats a 2xx without fulfilment_recorded as delivered but unconfirmed (#287, #289)', async () => {
+    for (const answer of [{ event_id: 'ev1' }, { event_id: 'ev1', fulfilment_recorded: 'true' }, {}]) {
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't' }))
+          .mockResolvedValueOnce(reply(200, answer)),
+      )
+
+      const outcome = await discharge('http://gw', OBLIGATION, ports())
+
+      expect(outcome.kind).toBe('undelivered')
+      if (outcome.kind === 'undelivered') {
+        expect(outcome.delivered).toBe(true)
+        expect(outcome.reason).toContain('DELIVERED')
+        expect(outcome.reason).toContain('discharge is not yet confirmed')
+        expect(outcome.reason).toContain(OBLIGATION.paymentRequestId)
+      }
+    }
+  })
+
   it('issues as the stall, naming no issuer of its own', async () => {
     // The gateway derives the issuer from the credential. Sending one would be
     // asserting something we are not the authority on, and an unauthenticated
@@ -102,7 +143,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't' }))
-      .mockResolvedValueOnce(reply(200, {}))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     await discharge('http://gw', OBLIGATION, ports())
@@ -181,7 +222,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: '' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' }))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     let polls = 0
@@ -192,6 +233,36 @@ describe('discharging a purchase', () => {
     expect(outcome.kind).toBe('discharged')
   })
 
+  it('refuses to mint a card purchase that carries no processor reference (#267)', async () => {
+    // A delegated warrant without `ref` would be minted and then reported as
+    // rail "unknown" rather than "card", and the stall could never reconcile
+    // it. Checkout in payment mode always yields a payment_intent, so a
+    // missing one is a defect upstream: block it for a person, mint nothing.
+    for (const processorReference of [null, undefined, '']) {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+
+      const outcome = await discharge('http://gw', { ...OBLIGATION, processorReference }, ports())
+
+      expect(outcome.kind).toBe('blocked')
+      expect(outcome).toMatchObject({ reason: expect.stringContaining('no processor reference') })
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  })
+
+  it('refuses a guest purchase before minting, since Cashlink delivery is not wired (#267)', async () => {
+    // Minting first would leave a paid coupon issued, undelivered and retried
+    // forever. Checkout already refuses guests; this catches any debt that
+    // predates that refusal.
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const outcome = await discharge('http://gw', { ...OBLIGATION, recipient: { kind: 'claim' } }, ports())
+
+    expect(outcome.kind).toBe('blocked')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('falls back to manual issuance when the stall holds no credential', async () => {
     // Not an error. A stall that never enrolled an issuer is the ordinary
     // configuration, and the debt is discharged by hand.
@@ -199,6 +270,7 @@ describe('discharging a purchase', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const outcome = await discharge('http://gw', OBLIGATION, ports({
+      validityFor: ninetyDayTerm,
       credentialFor: async () => null,
     }))
 
@@ -210,7 +282,7 @@ describe('discharging a purchase', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: '' }))
-      .mockResolvedValueOnce(reply(200, {}))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     let polls = 0

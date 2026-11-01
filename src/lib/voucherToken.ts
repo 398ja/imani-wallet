@@ -28,8 +28,17 @@ import type { WarrantVerdict } from './issuanceWarrant'
 
 const BREAK = Symbol('cbor-break')
 
+/**
+ * The keys of each decoded CBOR map whose value arrived as a FLOAT (major type 7), even an
+ * integral one. JS has one number type, so 1000.0 and 1000 read the same; Java's
+ * `Long.parseLong` does not, and the legacy window must refuse a float where an integer was
+ * signed (#194). Kept beside the object rather than in it, so every other reader is unchanged.
+ */
+const FLOAT_KEYS = new WeakMap<object, Set<string>>()
+
 class CborReader {
   private i = 0
+  private lastWasFloat = false
   // Written out rather than a `constructor(private readonly b)` parameter
   // property: that syntax is not erasable, and the wallet API typechecks under
   // `erasableSyntaxOnly` because Node strips types rather than compiling them.
@@ -93,7 +102,10 @@ class CborReader {
       if (ai === 21) return true
       if (ai === 22) return null
       if (ai === 23) return undefined
-      if (ai >= 25 && ai <= 27) return this.float(ai)
+      if (ai >= 25 && ai <= 27) {
+        this.lastWasFloat = true
+        return this.float(ai)
+      }
       return this.arg(ai)
     }
 
@@ -118,15 +130,23 @@ class CborReader {
       }
       case 5: {
         const out: Record<string, unknown> = {}
+        const floats = new Set<string>()
+        const entry = (key: unknown): void => {
+          this.lastWasFloat = false
+          out[String(key)] = this.read()
+          if (this.lastWasFloat) floats.add(String(key))
+          this.lastWasFloat = false
+        }
         if (n === null) {
           for (;;) {
             const key = this.read()
             if (key === BREAK) break
-            out[String(key)] = this.read()
+            entry(key)
           }
-          return out
+        } else {
+          for (let k = 0; k < n; k++) entry(this.read())
         }
-        for (let k = 0; k < n; k++) out[String(this.read())] = this.read()
+        if (floats.size > 0) FLOAT_KEYS.set(out, floats)
         return out
       }
       case 6:
@@ -255,6 +275,12 @@ export interface SignedVoucherFields {
    * cashu-voucher#48.
    */
   canonicalNumbers?: boolean
+  /**
+   * True when face_value, expires_at or face_decimals arrived in the CBOR blob as a FLOAT, even an
+   * integral one like 1000.0. JS reads 1000.0 as 1000; Java's `Long.parseLong` reads
+   * `"1000.0"` as no number at all, so such a voucher gets no legacy window (#194).
+   */
+  integralAsFloat?: boolean
 }
 
 export interface ParsedVoucherToken {
@@ -263,6 +289,29 @@ export interface ParsedVoucherToken {
   memo?: string
   /** Summed proof amounts, in sats. */
   tokenAmount: number
+  /**
+   * The sats this token may be CREDITED for: each proof's amount, clamped to
+   * its own signed `max_sats` (imani-gateway-customer#141). Never more than
+   * `tokenAmount`.
+   *
+   * A re-signed or split voucher proof gets its sats from the swap that mints
+   * it, and the mint cannot see which blinded output carries a voucher secret,
+   * so a holder can fund a full-face successor with sats bought today. The
+   * gateway therefore signs a `max_sats` into every successor, summing to at
+   * most what was burnt, and this is where a redeemer honours it.
+   *
+   * Per proof, because each proof carries its own bound, and each locked proof's
+   * own issuer signature is verified (a proof that does not verify under proof
+   * 0's issuer key counts 0). A locked proof with no tag (pre-#141) counts its
+   * whole amount, bounded by face and the ledger: the accepted legacy residual
+   * (see `creditableSatsOf`). An unlocked voucher counts its whole amount, as before.
+   * A proof whose tag is present but unreadable counts 0: reading it as absent
+   * would let a holder downgrade a bound by mangling it.
+   *
+   * Optional so a hand-built `ParsedVoucherToken` keeps compiling and means
+   * "no bound known", exactly as an untagged token does.
+   */
+  creditableSats?: number
   proofCount: number
   voucher: SignedVoucherFields
 }
@@ -412,6 +461,22 @@ export interface TokenProof {
   secret: string
   /** The unblinded signature, hex. */
   C: string
+  /**
+   * The mint's NUT-12 DLEQ proof with its blinding factor, hex, when the token carries one.
+   *
+   * A Cashlink lock or re-sign proves the burnt proof's amount with it (imani-gateway-customer#141),
+   * so it is read when present and never invented. Absent on most tokens, which is fine everywhere
+   * else: nothing but the Cashlink routes asks for it.
+   */
+  dleq?: { e: string; s: string; r: string }
+}
+
+function dleqOf(raw: unknown): TokenProof['dleq'] {
+  if (!raw || typeof raw !== 'object') return undefined
+  const { e, s, r } = raw as Record<string, unknown>
+  const hex = (v: unknown) => (v instanceof Uint8Array ? bytesToHex(v) : typeof v === 'string' ? v : undefined)
+  const [he, hs, hr] = [hex(e), hex(s), hex(r)]
+  return he && hs && hr ? { e: he, s: hs, r: hr } : undefined
 }
 
 /**
@@ -437,11 +502,13 @@ export function tokenProofs(token: string): TokenProof[] {
     return ((entry.p ?? []) as Array<Record<string, unknown>>).map((p) => {
       if (typeof p.s !== 'string') throw new Error('proof has no NUT-10 secret')
       const c = p.c
+      const dleq = dleqOf(p.d)
       return {
         amount: Number(p.a ?? 0),
         id,
         secret: p.s,
         C: c instanceof Uint8Array ? bytesToHex(c) : String(c ?? ''),
+        ...(dleq ? { dleq } : {}),
       }
     })
   })
@@ -519,8 +586,126 @@ export function parseVoucherToken(token: string): ParsedVoucherToken {
     unit: String(root.u ?? ''),
     memo: typeof root.d === 'string' ? root.d : undefined,
     tokenAmount: proofs.reduce((sum, p) => sum + Number(p.a ?? 0), 0),
+    creditableSats: proofs.reduce(
+      (sum, p) => sum + creditableSatsOf(Number(p.a ?? 0), String(p.s), voucher),
+      0,
+    ),
     proofCount: proofs.length,
     voucher,
+  }
+}
+
+/** The `max_sats` tag key (imani-gateway-customer#141). */
+export const MAX_SATS_TAG = 'max_sats'
+
+/**
+ * The one spelling of a `max_sats` value: a positive decimal, no sign, no
+ * leading zero, no exponent, at most 16 digits.
+ *
+ * The tag is NOT one of the canonicaliser's numeric tags, so it is hashed as
+ * the string it is, and `"1"` and `"01"` are different signed bytes. Accepting
+ * only this form, exactly as the gateway's `SatBound` does, means the Java and
+ * TS readers can never read one signed bound as two numbers (cashu-voucher#48).
+ */
+const CANONICAL_MAX_SATS = /^[1-9][0-9]{0,15}$/
+
+/** What a proof's secret says about its sat bound. */
+export type SatBound =
+  | { kind: 'absent' }
+  | { kind: 'present'; sats: number }
+  | { kind: 'malformed' }
+
+/**
+ * Reads a proof secret's `max_sats` tag.
+ *
+ * Only the locked kind carries tags on the wire. An unlocked `VOUCHER` keeps
+ * its fields in a CBOR blob with an empty tag array, and the gateway never
+ * signs a bound into one, so it reads as absent.
+ */
+export function satBoundOf(secret: string): SatBound {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(secret)
+  } catch {
+    return { kind: 'absent' }
+  }
+  if (!Array.isArray(parsed) || parsed[0] !== 'P2PK_VOUCHER') return { kind: 'absent' }
+  const tags = (parsed[1] as { tags?: unknown } | undefined)?.tags
+  if (!Array.isArray(tags)) return { kind: 'absent' }
+  const rows = tags.filter((t): t is unknown[] => Array.isArray(t) && t[0] === MAX_SATS_TAG)
+  if (rows.length === 0) return { kind: 'absent' }
+  // Two bounds, or one bound with two values, are two claims. Neither is trusted.
+  if (rows.length > 1 || rows[0].length !== 2 || typeof rows[0][1] !== 'string') {
+    return { kind: 'malformed' }
+  }
+  const wire = rows[0][1]
+  return CANONICAL_MAX_SATS.test(wire)
+    ? { kind: 'present', sats: Number(wire) }
+    : { kind: 'malformed' }
+}
+
+/**
+ * One proof's creditable sats (imani-gateway-customer#141).
+ *
+ * - An unlocked `VOUCHER` proof: its amount. Every proof of the token was
+ *   already required to carry proof 0's exact signed blob, so proof 0's
+ *   signature covers it. The blob is shared by every output, so it cannot carry
+ *   a per-output bound: that is the known residual, bounded by the face value
+ *   and the shared ledger.
+ * - A locked `P2PK_VOUCHER` proof: 0 unless its OWN issuer signature verifies
+ *   under proof 0's issuer key. Callers verify proof 0 only, so a self-made later
+ *   proof with the same voucher_id and lock (forged, or signed by some other
+ *   key) would otherwise be credited in full.
+ * - A verified locked proof with a canonical `max_sats`: `min(amount, max_sats)`.
+ * - A verified locked proof with NO `max_sats` (pre-#141): its amount, the
+ *   pre-#141 rule, bounded with the rest by the face value and the shared ledger.
+ *   Its funded amount is signed nowhere, and the mint signs any blinded output,
+ *   so its sats may be a same-secret twin's: that is the ACCEPTED LEGACY
+ *   RESIDUAL. Crediting 0 instead stranded every locked voucher sold before
+ *   #141 (round 4 count on staging: a handful, 2 known, each bounded by its
+ *   own signed face). Every locked output issued since #141 carries a bound
+ *   from birth, so only pre-#141 locked vouchers read as untagged.
+ * - A malformed `max_sats`: 0. Reading it as absent would be a downgrade.
+ */
+function creditableSatsOf(amount: number, secret: string, first: SignedVoucherFields): number {
+  const locked = lockedVoucherFrom(secret)
+  if (locked === null) return amount
+  if (
+    locked.issuerPublicKey.toLowerCase() !== first.issuerPublicKey.toLowerCase() ||
+    !verifyVoucher(locked).signatureValid
+  ) {
+    return 0
+  }
+  const bound = satBoundOf(secret)
+  if (bound.kind === 'absent') return amount
+  if (bound.kind === 'malformed') return 0
+  return Math.min(amount, bound.sats)
+}
+
+/**
+ * The sats to credit: the token's amount, clamped to its per-proof bounds.
+ *
+ * `min` rather than `creditableSats` alone, so a caller that overrides
+ * `tokenAmount` with a smaller figure (`signedPartOf` in `pay.ts` does) still
+ * gets the smaller one.
+ */
+function creditedSats(parsed: ParsedVoucherToken): number {
+  return Math.min(parsed.tokenAmount, parsed.creditableSats ?? parsed.tokenAmount)
+}
+
+/**
+ * The voucher a single proof secret carries, in either shape, or null when it is not a voucher.
+ * Exported for the Cashlink lock (#295 phase 4), which re-forms a gift proof's terms into the
+ * link-locked successor and back, and must read them exactly as `parseVoucherToken` does.
+ */
+export function voucherOfSecret(secret: string): SignedVoucherFields | null {
+  try {
+    const locked = lockedVoucherFrom(secret)
+    if (locked) return locked
+    const dataHex = voucherBlobHex(secret)
+    return dataHex === null ? null : readVoucherFields(decodeCbor(hexToBytes(dataHex)) as Record<string, unknown>)
+  } catch {
+    return null
   }
 }
 
@@ -596,7 +781,7 @@ function lockedVoucherFrom(secret: string): SignedVoucherFields | null {
  * the signature), rendering the four numeric tags bare and everything else
  * quoted.
  */
-function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][]): Uint8Array {
+export function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][]): Uint8Array {
   const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
   const AFTER_SIGNING = ['issuer_sig', 'issuer_pubkey']
 
@@ -632,20 +817,55 @@ function lockedCanonicalBytes(dataHex: string, nonce: string, rows: unknown[][])
  * picks. Dropping the Java face-value clamp is what that buys.
  *
  * So a voucher whose bytes only became canonical BECAUSE we normalised them is
- * refused. Mirrors `VoucherCanonicalBytes.hasCanonicalNumericTags` on the Java
- * side, and the two must stay in step. cashu-voucher#48.
+ * refused. Mirrors `VoucherCanonicalBytes.hasVerifiableNumericTags` on the Java
+ * side (the verify-time rule, with the one legacy `issuance_ratio` spelling of
+ * cashu-voucher#59), and the two must stay in step. cashu-voucher#48.
  */
-function hasCanonicalNumericTags(rows: unknown[][]): boolean {
+export function hasCanonicalNumericTags(rows: unknown[][]): boolean {
   const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
   return rows.every((row) => {
-    if (!NUMERIC.includes(String(row[0]))) return true
+    const key = String(row[0])
+    if (!NUMERIC.includes(key)) return true
     return row.slice(1).every((value) => {
       const wire = String(value)
       const parsed = Number(wire)
       if (!Number.isFinite(parsed)) return false
-      return appendNumber(parsed, false) === wire
+      const canonical = appendNumber(parsed, false)
+      if (canonical === wire) return true
+      // cashu-voucher#59: the one legacy spelling, for issuance_ratio only.
+      return key === 'issuance_ratio' && wire === legacyWholeRatioSpelling(canonical)
     })
   })
+}
+
+/**
+ * What cashu-lib up to 0.30.6 wrote for a whole-number ratio: Java's
+ * `Double.toString` of it, so `"50.0"` for 50 and `"1.0E7"` for ten million.
+ * Undefined for a fractional canonical form, which has no legacy spelling.
+ *
+ * Those vouchers are live and their proof secret cannot be rewritten, and every
+ * reader of the ratio parses it as a number, so `"50"` and `"50.0"` mean 50 to all
+ * of them and hash to the same signed bytes. That is why this one spelling is
+ * accepted for `issuance_ratio` and nothing else is: `"50.00"`, `"5e1"` and the
+ * like were never written by an issuer, and the integral tags are read with
+ * `Long.parseLong` in Java, where a decimal point means no value at all (#48).
+ * Mirrors `VoucherCanonicalBytes.hasVerifiableNumericTags`.
+ */
+function legacyWholeRatioSpelling(canonical: string): string | undefined {
+  if (!/^-?\d+$/.test(canonical)) return undefined
+  const n = Number(canonical)
+  // Java renders a whole double through `long`, which saturates at ±2^63, so it
+  // has no legacy spelling for anything larger: "1.0E19" reads as 2^63-1 there and
+  // is refused. Without this the wallet accepted it and the mint did not.
+  if (Math.abs(n) > 2 ** 63) return undefined
+  // Java's Double.toString for an integral double: plain with ".0" on [1e-3, 1e7),
+  // otherwise E notation, which javaDoubleToString already reproduces.
+  return Math.abs(n) < 1e7 ? `${canonical}.0` : javaDoubleToString(n)
+}
+
+/** Whether `key` of a decoded CBOR map arrived as a float, integral or not (#194). */
+export function cborFieldIsFloat(map: object, key: string): boolean {
+  return FLOAT_KEYS.get(map)?.has(key) ?? false
 }
 
 function readVoucherFields(blob: Record<string, unknown>): SignedVoucherFields {
@@ -676,6 +896,11 @@ function readVoucherFields(blob: Record<string, unknown>): SignedVoucherFields {
     nonce: required('nonce'),
     issuerSignature: required('issuerSignature'),
     issuerPublicKey: required('issuerPublicKey'),
+    // A float where an integer belongs, even 1000.0: Java's Long.parseLong refuses it (#194).
+    // So is any non-number there (a string "1000"): Java reads only a CBOR integer as a long.
+    integralAsFloat: ['faceValue', 'expiresAt', 'faceDecimals'].some(
+      (k) => blob[k] != null && (typeof blob[k] !== 'number' || cborFieldIsFloat(blob, k)),
+    ),
   }
 }
 
@@ -859,17 +1084,22 @@ export interface VoucherValidation {
 /**
  * The value to credit for a token, and the evidence behind it.
  *
- * `currentFace = tokenAmount * issuanceRatio` is how a partially-spent voucher
+ * `currentFace = sats * issuanceRatio` is how a partially-spent voucher
  * reports what is left, but the ratio is unsigned on legacy vouchers, so it is
  * clamped to the signed face value. That clamp is the only bound that holds
  * against a rewritten ratio, and it needs no network.
+ *
+ * `sats` is each proof's amount clamped to its signed `max_sats`
+ * (`creditableSats`, imani-gateway-customer#141), so a re-signed proof funded
+ * with more sats than were burnt for it is credited for the burn and no more.
+ * A token with no `max_sats` is credited exactly as before.
  */
 export function creditableFaceValue(parsed: ParsedVoucherToken): {
   faceValue: number
   cappedAtFaceValue: boolean
 } {
-  const { voucher, tokenAmount } = parsed
-  const derived = Math.round(tokenAmount * voucher.issuanceRatio)
+  const { voucher } = parsed
+  const derived = Math.round(creditedSats(parsed) * voucher.issuanceRatio)
   if (voucher.faceValue > 0 && derived > voucher.faceValue) {
     return { faceValue: voucher.faceValue, cappedAtFaceValue: true }
   }
@@ -886,8 +1116,8 @@ export function creditableFaceValue(parsed: ParsedVoucherToken): {
  * ledger rounds the running total instead.
  */
 export function exactFaceValue(parsed: ParsedVoucherToken): number {
-  const { voucher, tokenAmount } = parsed
-  const exact = tokenAmount * voucher.issuanceRatio
+  const { voucher } = parsed
+  const exact = creditedSats(parsed) * voucher.issuanceRatio
   if (voucher.faceValue > 0 && exact > voucher.faceValue) return voucher.faceValue
   return exact
 }
@@ -924,7 +1154,18 @@ export function verifyVoucher(v: SignedVoucherFields): VoucherVerification {
     if (schnorr.verify(sig, sha256(voucherCanonicalBytes(v, false)), pub)) {
       return { signatureValid: true, legacyCanonical: false }
     }
-    if (schnorr.verify(sig, sha256(voucherCanonicalBytes(v, true)), pub)) {
+    // The legacy form truncates every number, but only `issuance_ratio` was ever fractional on a
+    // genuine pre-fix voucher. A fraction in face_value, expires_at or face_decimals is a rewrite
+    // chosen to truncate back to the signed integer (expires_at 1000 -> 1000.5, which Java's
+    // Long.parseLong then reads as no expiry at all), so it gets no legacy window (#194, mirroring
+    // cashu-voucher#54's `integralTagsAreIntegers`).
+    //
+    // "Integer" means what Long.parseLong means: an integral FLOAT (1000.0) is not one either,
+    // even though JS cannot tell it from 1000 once decoded, so the CBOR reader reports it.
+    const integral =
+      v.integralAsFloat !== true &&
+      [v.faceValue, v.expiresAt, v.faceDecimals].every((n) => n === undefined || Number.isInteger(n))
+    if (integral && schnorr.verify(sig, sha256(voucherCanonicalBytes(v, true)), pub)) {
       return { signatureValid: true, legacyCanonical: true }
     }
     return { signatureValid: false, legacyCanonical: false }

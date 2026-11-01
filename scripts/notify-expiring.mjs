@@ -114,6 +114,11 @@ function alreadySent(row, expiresAt, daysLeft) {
   return (row.notices ?? []).some((n) => n.expiresAt === expiresAt && n.daysLeft === daysLeft)
 }
 
+/** A refunded (revoked, imani-wallet#226) subscription gets no renewal reminders. */
+export function remindable(row) {
+  return !row.revoked_at
+}
+
 function recordSent(row, expiresAt, daysLeft) {
   row.notices = [...(row.notices ?? []), { expiresAt, daysLeft, at: Math.floor(Date.now() / 1000) }]
 }
@@ -224,6 +229,7 @@ async function main() {
 
   let sent = 0
   for (const row of rows) {
+    if (!remindable(row)) continue
     const daysLeft = noticeDueOn(row.expires_at, now)
     if (daysLeft === null) continue
     if (alreadySent(row, row.expires_at, daysLeft)) continue

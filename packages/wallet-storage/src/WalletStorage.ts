@@ -65,8 +65,9 @@ export class WalletStorage {
           'WalletStorage.init: either config.db or config.userId must be provided'
         );
       }
-      this.db = await openOwnDatabase(`${DEFAULT_DB_BASE_NAME}-${userId}`);
+      this.db = await openOwnDatabase(`${DEFAULT_DB_BASE_NAME}-${userId}`, this.config.onBlocked);
       this.ownsDb = true;
+      this.watchVersionChange(this.db);
     }
 
     // Sanity check — required stores must exist (the shared-DB owner is
@@ -105,8 +106,9 @@ export class WalletStorage {
 
   // === Voucher operations ===
 
-  async saveVoucher(voucher: VoucherRow): Promise<VoucherRow> {
+  async saveVoucher(input: VoucherRow): Promise<VoucherRow> {
     this.ensureInitialized('saveVoucher');
+    const voucher = this.normalise(input);
 
     // Defense-in-depth: backstop the token shape at the substrate layer.
     if (voucher.token && !looksLikeCashuToken(voucher.token)) {
@@ -284,8 +286,9 @@ export class WalletStorage {
    * Used by `shared/storage.js`'s restore-from-backup writer (site 6561).
    * Per spec 025 FR-002, data-model.md §1, contracts §1.2 C-PKG-BULK-2+.
    */
-  async clearAndReplaceAllVouchers(rows: VoucherRow[]): Promise<void> {
+  async clearAndReplaceAllVouchers(input: VoucherRow[]): Promise<void> {
     this.ensureInitialized('clearAndReplaceAllVouchers');
+    const rows = input.map((row) => this.normalise(row));
     const db = this.db!;
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORES.VOUCHERS, 'readwrite');
@@ -304,6 +307,67 @@ export class WalletStorage {
     });
 
     this.postEvent('vouchers:changed');
+  }
+
+  /**
+   * Rewrite stored voucher rows in place: a repair pass over data already held
+   * (#157 uses it to bring old `expires_at` values into the stored format).
+   *
+   * `rewrite` returns the replacement row, or null to leave the row alone. It
+   * is called with the row AS IT IS IN THE STORE at that moment, inside one
+   * readwrite transaction over the whole store, and must be synchronous: an
+   * IndexedDB transaction closes on the first `await`.
+   *
+   * Safe when two tabs run it at once, and against writes landing meanwhile,
+   * because IndexedDB serialises readwrite transactions whose scopes overlap.
+   * Nothing is read in one transaction and written in another, so there is no
+   * window in which a concurrent `saveVoucher` can be overwritten with a stale
+   * copy: a write either commits before this pass (and the pass sees it) or
+   * after (and lands on the rewritten row). A `rewrite` that is idempotent
+   * makes a second concurrent run a no-op.
+   *
+   * The primary key is never changed. Returns how many rows were rewritten, and
+   * posts one `vouchers:changed` event if any were.
+   */
+  async rewriteVouchers(rewrite: (row: VoucherRow) => VoucherRow | null): Promise<number> {
+    this.ensureInitialized('rewriteVouchers');
+    const db = this.db!;
+    const count = await new Promise<number>((resolve, reject) => {
+      const tx = db.transaction(STORES.VOUCHERS, 'readwrite');
+      const store = tx.objectStore(STORES.VOUCHERS);
+      let rewritten = 0;
+      const cursorReq = store.openCursor();
+      cursorReq.onerror = () => reject(cursorReq.error);
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (!cursor) return;
+        const current = cursor.value as VoucherRow;
+        let next: VoucherRow | null;
+        try {
+          next = rewrite(current);
+        } catch (err) {
+          try { tx.abort(); } catch { /* already aborted */ }
+          reject(err);
+          return;
+        }
+        if (next) {
+          const updateReq = cursor.update({ ...next, token_id: current.token_id });
+          updateReq.onerror = () => reject(updateReq.error);
+          rewritten++;
+        }
+        cursor.continue();
+      };
+      tx.oncomplete = () => resolve(rewritten);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('rewriteVouchers: tx aborted'));
+    });
+
+    if (count > 0) this.postEvent('vouchers:changed');
+    return count;
+  }
+
+  private normalise(row: VoucherRow): VoucherRow {
+    return this.config.normaliseVoucher ? this.config.normaliseVoucher(row) : row;
   }
 
   // === Transaction operations ===
@@ -485,7 +549,7 @@ export class WalletStorage {
     transactions?: TransactionRow[];
   }): Promise<void> {
     this.ensureInitialized('atomicallyWrite');
-    const vouchers = input.vouchers ?? [];
+    const vouchers = (input.vouchers ?? []).map((row) => this.normalise(row));
     const transactions = input.transactions ?? [];
     if (vouchers.length === 0 && transactions.length === 0) {
       return; // No-op.
@@ -630,6 +694,30 @@ export class WalletStorage {
   }
 
   // === Internals ===
+
+  /**
+   * Let go of the DB when another connection asks for it (#352).
+   *
+   * Without this handler a connection ignores `versionchange`, so another
+   * tab's `deleteDatabase` (logout's wipe) stays blocked for as long as this
+   * tab lives, and every later `open` of the same DB queues behind that delete
+   * with NO event: the next login sat on "Opening wallet…" until every other
+   * wallet tab was closed. Observed on staging 0.33.0 with two other tabs.
+   */
+  private watchVersionChange(db: IDBDatabase): void {
+    db.onversionchange = () => {
+      db.onversionchange = null;
+      void (async () => {
+        try {
+          await this.config.onVersionChange?.();
+        } catch {
+          // The close below still has to happen, or the other tab stays stuck.
+        }
+        if (this.db === db) await this.close();
+        else db.close();
+      })();
+    };
+  }
 
   private ensureInitialized(operation: string): void {
     if (!this.initialized || !this.db) {
@@ -792,7 +880,7 @@ async function upsertRow<T extends Record<string, unknown>>(
  * `createSharedDatabase`. Mirrors the upgrade flow there but only
  * creates wallet-storage stores (doesn't touch nostr-vouchers').
  */
-function openOwnDatabase(dbName: string): Promise<IDBDatabase> {
+function openOwnDatabase(dbName: string, onBlocked?: () => void): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') {
       reject(new Error('WalletStorage: indexedDB is not available in this realm'));
@@ -800,6 +888,15 @@ function openOwnDatabase(dbName: string): Promise<IDBDatabase> {
     }
     const req = indexedDB.open(dbName, DEFAULT_DB_VERSION);
     req.onerror = () => reject(req.error);
+    // Other connections still hold the DB at an older version. The open goes
+    // ahead by itself once they close; the caller only needs to know why it waits.
+    req.onblocked = () => {
+      try {
+        onBlocked?.();
+      } catch {
+        // A listener error must not break the open.
+      }
+    };
     req.onupgradeneeded = () => {
       const db = req.result;
       for (const def of WALLET_STORAGE_STORE_DEFINITIONS) {

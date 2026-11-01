@@ -29,7 +29,6 @@
 import type { Event } from 'nostr-tools'
 
 import { allEvents } from './relay'
-import { gatewayEvents } from './gatewayNostr'
 import { NIP60_TOKEN_KIND } from './voucherRecords'
 
 /**
@@ -135,21 +134,16 @@ function withTimeout<T>(work: Promise<T>, fallback: T): Promise<T> {
  * and refuse. Neither can lose a coupon.
  */
 async function readSpentIds(pubkey: string): Promise<SpentIds> {
-  const NONE: Event[] = []
+  // #428: one read, through the cache (owner rule: never the relay directly). `allEvents`
+  // throws when the gateway did not answer, so `known` is now exact.
+  const events = await withTimeout<Event[] | null>(allEvents(pubkey, NIP60_TOKEN_KIND), null)
 
-  // Settled rather than raced, so one source failing does not discard the
-  // other's answer — the union is worth having even from one store.
-  const [relayed, gatewayed] = await Promise.all([
-    withTimeout(allEvents(pubkey, NIP60_TOKEN_KIND), NONE),
-    withTimeout(gatewayEvents(pubkey, NIP60_TOKEN_KIND), NONE),
-  ])
-
-  const ids = new Set<string>([...tombstonedIds(relayed), ...tombstonedIds(gatewayed)])
+  const ids = new Set<string>(tombstonedIds(events ?? []))
 
   // `known` is about whether anything ANSWERED, not whether anything was found.
   // A wallet that has spent nothing legitimately has an empty set, and a
   // caller must be able to tell that from a read that failed.
-  const known = relayed.length > 0 || gatewayed.length > 0
+  const known = events !== null
 
   return { ids, known }
 }

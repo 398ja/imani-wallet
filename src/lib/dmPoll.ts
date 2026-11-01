@@ -6,6 +6,7 @@ import {
   type NostrdbAdapter,
   type Profile,
   type RedemptionAdapter,
+  type RedemptionErrorEvent,
   type RedemptionOptions,
   type StorageAdapter,
   type SubscriptionHandle,
@@ -21,8 +22,13 @@ import {
   type ArrivedVoucher,
 } from './arrivalToast'
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
+import { gatesSealed, receivesOpen } from './receiveGate'
 import { announceRefusal } from './refusalToast'
+import { announceUnsaved, resumeUnsavedReceipts } from './unsavedReceipt'
 import { recordRefusal } from './refusedCoupons'
+import { heldCoupons, recordHeld, releaseHeld } from './heldCoupons'
+import { clearReceiveTrouble, fromRedemptionError, fromRedemptionUnsaved } from './receiveTrouble'
+import { announceHeld } from './heldToast'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
 
@@ -38,17 +44,40 @@ import {
   transferIdFor,
 } from './transferSignature'
 import { createDmCryptoAdapter, toLegacyMetadata } from './dmCrypto'
-import { resetChunkAssembly } from './dmChunks'
+import { confirmChunkDeliveries, resetChunkAssembly } from './dmChunks'
 import { cancelDeferredWrite, deferWrite, flushDeferredWrites } from './deferredWrite'
 import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
+import { ForeignVoucherRefusedError, MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN, refuseForeignVouchers } from './merchantVouchers'
 import { checkPart, checkRedemption, redeemLockName } from './redemptionLedger'
 import { exactFaceValue, parseVoucherToken, type VoucherValidation } from './voucherToken'
+import { raiseHomecomingAlert } from './terminalHomecoming'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
+import { shopAttributionFor } from './shopTakings'
 import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
+import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './trustedMint'
+import { couponReference, fullyRedeemedMessage, isVoucherFullyRedeemed } from './fullyRedeemed'
+
+/**
+ * A receive the mint refused as redeemed in full (cashu-mint#540), as dm-poll's terminal refusal.
+ * Anything else is returned unchanged.
+ */
+export function asFullyRedeemedRefusal(failure: unknown, meta: Record<string, unknown> | undefined): unknown {
+  if (!isVoucherFullyRedeemed(failure)) return failure
+  const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
+  const signed = Number((meta?.validation as { signedFaceValue?: unknown } | undefined)?.signedFaceValue ?? 0)
+  console.warn('[dmPoll] coupon refused by the mint: redeemed in full', { reference: couponReference(voucherId) })
+  return new RedemptionRefusedError(
+    fullyRedeemedMessage(voucherId),
+    voucherId,
+    Number.isFinite(signed) ? signed : 0,
+    Number.isFinite(signed) ? signed : 0,
+    'fully-redeemed',
+  )
+}
 
 /**
  * Gateway REST, same-origin: `/api/v1/...` reaches customer-wallet through the
@@ -547,6 +576,13 @@ function storageAdapter(): StorageAdapter {
       return [...readSet(PROCESSED_KEY)]
     },
     async saveProcessedEventIds(ids: string[]) {
+      // The one moment a chunked coupon's transfer may be remembered as
+      // completed (#204). dm-poll calls this only after an outcome it will not
+      // retry (saved, already held, refused for good), so a transfer whose
+      // completing event is in `ids` is durably handled. Before this, the
+      // transfer was tombstoned the moment its pieces decoded, and a reload or
+      // any retryable failure in the redemption stranded the coupon.
+      confirmChunkDeliveries(ids)
       // Deferred and coalesced, unlike `markTokenAsReceived` above.
       //
       // dm-poll calls this once per event it finishes, and `localStorage` is
@@ -781,9 +817,26 @@ function exactOf(token: string | undefined): number | undefined {
  * refusal one line later, after `redeem()`, would already have taken the money
  * at the mint and left the customer with neither the coupon nor the goods.
  *
- * All three unauthorised states are refused together — no warrant, a warrant
- * signed as `none`, and a warrant that was present and did not hold. They are
- * different claims and the merchant-facing copy says so, but at the till they
+ * **Every recipient refuses, not only the issuing stall (#159, Option B).**
+ * Unlike `refuseIfAnotherStalls`, this has no merchant guard, deliberately: a
+ * customer's wallet receiving a coupon by DM refuses it exactly as the issuing
+ * stall's till would. The alternative — refusing only at the till and letting
+ * customers hold these — was rejected because it lets a customer pay for a
+ * coupon the stall that issued it will then refuse to honour. Refusing on
+ * receipt keeps the coupon the sender's (it reclaims at their next login)
+ * rather than the customer's useless asset.
+ *
+ * The cost is that a sale that cannot produce a verifiable warrant cannot be
+ * delivered to anyone. A terminal is the case that matters: its key is not
+ * the stall's, so it can only send `none`. Sell therefore refuses on a
+ * terminal before anything is minted (`mayWarrantSale` in warrantSigner.ts).
+ * The `delegated` form is verified since #152 (`issuerDelegation.ts`) and the
+ * card purchase issuer signs with it; terminals at the counter do not yet.
+ *
+ * All four unauthorised states are refused together — no warrant, a warrant
+ * signed as `none`, a warrant that was present and did not hold, and an
+ * unsigned `processor` claim nobody here can check (#152). They are
+ * different claims and the merchant-facing copy says so, but on receipt they
  * have one answer: nobody outside the service that minted this says the stall
  * it names issued it.
  *
@@ -827,6 +880,27 @@ function attestReceived(token: string): string | undefined {
   }
 }
 
+/**
+ * The home-coming check for one coupon (#160 phase 6). Only for this stall's own coupons, read
+ * from the SIGNED voucher. Never throws and never refuses.
+ */
+export function homecomingAlertFor(
+  meta: Record<string, unknown> | undefined,
+  stallPubkey: string | undefined,
+  token: string,
+): void {
+  try {
+    if (!stallPubkey) return
+    const { voucher } = parseVoucherToken(token)
+    if (voucher.issuerId.toLowerCase() !== stallPubkey.toLowerCase()) return
+    const id = typeof meta?.voucherId === 'string' ? meta.voucherId : voucher.voucherId
+    // Not awaited: an alert never holds up a redemption. Never rejects.
+    void raiseHomecomingAlert(stallPubkey.toLowerCase(), voucher.issuanceWarrant, id)
+  } catch {
+    // Not a voucher, or unreadable: there is no till to check.
+  }
+}
+
 export function refuseIfUnwarranted(meta: Record<string, unknown> | undefined): void {
   const validation = meta?.validation as VoucherValidation | undefined
   if (!validation?.signatureValid) return
@@ -838,7 +912,13 @@ export function refuseIfUnwarranted(meta: Record<string, unknown> | undefined): 
   if (
     validation.warrant !== 'absent' &&
     validation.warrant !== 'unwarranted' &&
-    validation.warrant !== 'failed'
+    validation.warrant !== 'failed' &&
+    // An unsigned `processor` warrant (#152). It names a payment record but
+    // carries no signature, and nothing on this device can check the record,
+    // so it is the issuing service's word alone: the trust a warrant exists to
+    // remove. Any merchant session could mint one. The card path signs a
+    // `delegated` warrant instead, which verifies (`issuerDelegation.ts`).
+    validation.warrant !== 'claimed'
   ) {
     return
   }
@@ -853,6 +933,41 @@ export function refuseIfUnwarranted(meta: Record<string, unknown> | undefined): 
     validation.signedFaceValue,
     'unwarranted',
   )
+}
+
+/**
+ * The owner rule of 2026-10-13 on the DM path: a merchant account takes only its own stall's
+ * vouchers. `refuseIfAnotherStalls` answers it synchronously for a verified voucher on a device
+ * holding the stall's record; this asks the rest through `refuseForeignVouchers` (relay role,
+ * unverified issuer, licence and credential exemptions), before the swap. A refusal is terminal and
+ * nothing moved, so the coupon stays the sender's.
+ */
+export async function refuseForeignForMerchant(
+  meta: Record<string, unknown> | undefined,
+  account: string | undefined,
+  token: string,
+): Promise<void> {
+  if (!account) return
+  try {
+    await refuseForeignVouchers([token], account)
+  } catch (e) {
+    if (!(e instanceof ForeignVoucherRefusedError)) throw e
+    const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
+    if (e.reason === 'unknown') {
+      // Not terminal: the role may be known on the next tick. Thrown as an ordinary error, which
+      // dm-poll treats as transient and retries; nothing was swapped.
+      throw new Error(`${MERCHANT_STATUS_UNKNOWN} (coupon ${voucherId || 'unknown'})`)
+    }
+    const validation = meta?.validation as VoucherValidation | undefined
+    throw new RedemptionRefusedError(
+      `Coupon ${voucherId || '(unknown)'}: ${MERCHANT_FOREIGN_VOUCHER} Refusing before the mint swap, so the ` +
+        'coupon stays the sender\u2019s.',
+      voucherId,
+      0,
+      validation?.signedFaceValue ?? 0,
+      'another-stall',
+    )
+  }
 }
 
 export function refuseIfAnotherStalls(
@@ -905,6 +1020,71 @@ export function refuseIfAnotherStalls(
 }
 
 /**
+ * Redemptions under way: swapped (or about to be) and not yet written.
+ *
+ * For logout (review of #326, owner rule 2026-10-18): stopping the poller ends
+ * NEW deliveries but not one already inside `redeem`, which swaps at the mint
+ * and THEN writes the coupon. Logout must see that write before its final
+ * backup check, or it deletes a coupon that exists only in IndexedDB.
+ */
+let redemptionsInFlight = 0
+const drainWaiters = new Set<() => void>()
+/**
+ * Bumped by `stopDmPoll`. An adapter refuses every redeem once its poller has
+ * been stopped (second check of #326): `DmPollService.stop()` does not end a
+ * catch-up batch already looping, so without this the batch's NEXT gift wrap
+ * swapped at the mint after the drain had answered "nothing in flight", and
+ * after the wipe, burning proofs that were then written nowhere.
+ */
+let pollerGeneration = 0
+
+function countingInFlight(adapter: RedemptionAdapter): RedemptionAdapter {
+  const generation = pollerGeneration
+  return {
+    ...adapter,
+    async redeem(...args: Parameters<RedemptionAdapter['redeem']>) {
+      if (generation !== pollerGeneration || gatesSealed()) {
+        // Before anything is swapped, so the delivery stays the sender's and
+        // unprocessed: the next poller (this account after a refused logout,
+        // or the next login) offers it again. Sealed: this tab let go of the
+        // store for another tab (#353), and a poller restarted since (a resume
+        // from a refused logout elsewhere) must not swap into a closed store.
+        throw Object.assign(new Error('redemption deferred: the poller was stopped'), {
+          code: 'RECEIVE_DEFERRED',
+        })
+      }
+      redemptionsInFlight++
+      try {
+        return await adapter.redeem(...args)
+      } finally {
+        redemptionsInFlight--
+        if (redemptionsInFlight === 0) for (const wake of [...drainWaiters]) wake()
+      }
+    },
+  }
+}
+
+/**
+ * Resolve once no redemption is in flight, or after `timeoutMs`. Returns
+ * whether it drained. Never throws.
+ */
+export function drainDmPoll(timeoutMs: number): Promise<boolean> {
+  if (redemptionsInFlight === 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const wake = () => {
+      clearTimeout(timer)
+      drainWaiters.delete(wake)
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      drainWaiters.delete(wake)
+      resolve(redemptionsInFlight === 0)
+    }, timeoutMs)
+    drainWaiters.add(wake)
+  })
+}
+
+/**
  * Redemption, delegated to imani-apps' canonical coordinator.
  *
  * This is the only caller of `saveVoucher` in dm-poll's flow — without a
@@ -919,6 +1099,9 @@ export function refuseIfAnotherStalls(
  */
 function redemptionAdapter(): RedemptionAdapter {
   return {
+    // Where the value is, asked by dm-poll before every redeem (#131). Plain ecash
+    // and vouchers alike: a rogue mint does not need to forge a coupon to be paid.
+    checkBacking: checkTokenBacking,
     async redeem(token: string, options?: RedemptionOptions) {
       // Loads the legacy layer and re-supplies NIP-98 credentials, which
       // api.receive signs with. Re-supplied on every redeem so a lock/reunlock
@@ -958,7 +1141,15 @@ function redemptionAdapter(): RedemptionAdapter {
         : undefined
       const checkSwapAndWrite = async (): Promise<Voucher> => {
         refuseIfAnotherStalls(meta, currentPubkey, token)
+        // Owner rule 2026-10-13, the cases the synchronous check above cannot see: a stall known
+        // only from the relay (this device holds no stall record), an unverified voucher, and an
+        // account whose role cannot be checked (fail closed). Own coupons never ask.
+        await refuseForeignForMerchant(meta, currentPubkey, token)
         refuseIfUnwarranted(meta)
+        // Trigger (a) of the home-coming roster check (#160 phase 6, decision 5 Q2): a coupon a
+        // till sold, coming home to its stall, under a credential the stall's list never had.
+        // An alert only: the coupon is honoured, because the customer paid.
+        homecomingAlertFor(meta, currentPubkey, token)
         // The part's CUMULATIVE credit, when the token could be read: what is
         // booked and honoured from here on, in place of the per-part rounding
         // dmCrypto put on `faceValue`. See `refuseIfOverRedeemed`.
@@ -1056,6 +1247,8 @@ function redemptionAdapter(): RedemptionAdapter {
             // Files the row against the voucher the stall ISSUED, so its claimed
             // figure and redemption ceiling see it (#90). See merchantClaim.ts.
             claim,
+            // #402: an online shop's hand-in names its terminal on the stall's row. See shopTakings.ts.
+            terminalPubkey: claim ? shopAttributionFor(opts?.senderPubkey, currentPubkey) : undefined,
           },
           (correlationId) =>
             redemption.redeem(token, {
@@ -1101,6 +1294,19 @@ function redemptionAdapter(): RedemptionAdapter {
             },
           },
           )) as unknown as Voucher
+        } catch (failure) {
+          // #301 review: the redemption gave up on the receive pacer (#300). dm-poll
+          // keeps the delivery unprocessed, but in SSE mode nothing re-polls on a
+          // timer, so without this the retry waited for the stream's ten-minute
+          // redial. One catch-up, shortly after, offers it again.
+          if ((failure as { deferredBy?: unknown } | null)?.deferredBy === 'receive-gate-timeout') {
+            scheduleDeferredCatchUpFor(token)
+          }
+          // cashu-mint#540: gateway-customer declared this home-coming coupon and the mint refused
+          // it as redeemed in full (400 VOUCHER_FULLY_REDEEMED). Nothing was swapped. Terminal: as
+          // a typed refusal, dm-poll marks the delivery handled and announces it, rather than
+          // retrying a coupon whose answer cannot change.
+          throw asFullyRedeemedRefusal(failure, meta)
         } finally {
           // The wait is over, whichever way it went — and `finally` because the
           // way that matters most is the one that throws. A toast saying "still
@@ -1115,6 +1321,7 @@ function redemptionAdapter(): RedemptionAdapter {
         return voucher
       }
       const voucher = lockName ? await withWebLock(lockName, checkSwapAndWrite) : await checkSwapAndWrite()
+      deferredRetries.delete(token)
 
       // tokenRedemption wrote straight into IndexedDB, and this tab does not
       // hear its own BroadcastChannel post — see notifyWalletChanged.
@@ -1140,7 +1347,43 @@ function redemptionAdapter(): RedemptionAdapter {
       // total and count ride along as display hints only: the row above was
       // written from the coupon itself, and nothing here touches it. A coupon
       // with no usable declaration takes the plain `announceArrival` path.
-      void announceBundleArrival(
+      // A licence is not a payment either: no money toast, no "+…" and no `voucher_received`
+      // row, but its own notice naming the PLAN ("Imani Essentials plan activated", or "renewed"), from
+      // the token's signed metadata, as `licences.ts` reads it for the balance. Never the seller's
+      // key: no npub is shown to end users.
+      const licence = licenceFromToken(token)
+      if (licence) {
+        // Lazily, like every toast module on this path: sonner touches the DOM at import.
+        const voucherId = String(meta?.voucherId ?? '')
+        const voucherKey = licence.subscriptionId + ':' + voucherId
+        void (async () => {
+          // A renewal when this device already held ANOTHER licence of the same subscription. This
+          // one is already in the store by now, under its post-swap token, so it is told apart by
+          // its SIGNED voucher id (a renewal is a new voucher), not by the token string.
+          let renewal = false
+          try {
+            const { listVouchers } = await import('./wallet')
+            const { licenceIn } = await import('./licences')
+            const signedId = (t: string): string | null => {
+              try {
+                return parseVoucherToken(t).voucher.voucherId
+              } catch {
+                return null
+              }
+            }
+            const own = signedId(token)
+            renewal = (await listVouchers()).some((row) => {
+              if (licenceIn(row)?.subscriptionId !== licence.subscriptionId) return false
+              const other = signedId(row.token)
+              return other !== null && other !== own
+            })
+          } catch {
+            // Wording only: "activated" is right enough when the store cannot be read.
+          }
+          const m = await import('./notMoneyNotice')
+          m.showNotice(m.licenceNotice(voucherKey, licence, { renewal }), currentPubkey)
+        })().catch(() => undefined)
+      } else void announceBundleArrival(
         toArrivedVoucher(voucher),
         declaredBundleOf(meta),
         currentPubkey,
@@ -1335,9 +1578,166 @@ let onSseOpen: (() => void) | undefined
  * a redundant catch-up costs one query and no writes.
  */
 function catchUp(): void {
-  void service?.fetchRecentDms()
+  // The trusted-mint list first, in case the start-up load failed: a coupon
+  // deferred for want of it is offered again by this very query (#133). Free once
+  // the list has loaded.
+  const polling = service
+  void loadTrustedMints().then(() => polling?.fetchRecentDms())
   void flushUnacknowledgedEscrows()
+  // #410 G14: a gift locked to this wallet whose claim failed (or whose key could not be lent) is
+  // tried again on every catch-up. Never throws.
+  void import('./lockedGiftsApp').then((m) => m.sweepLockedGifts()).catch(() => undefined)
+  // #402: checkout codes (resume, the store's `GET /mine` fallback, expiry). Never throws.
+  if (currentPubkey) void import('./checkoutCodesApp').then((m) => m.reconcileCheckoutCodesNow(currentPubkey!)).catch(() => 0)
 }
+
+/**
+ * In-session recovery for a receive that failed (#314).
+ *
+ * dm-poll keeps a failed delivery for a retry, but behind its one-hour
+ * cooldown, and in SSE mode nothing re-polls on a timer anyway. So a coupon
+ * whose receive failed was in practice picked up only by the merchant's NEXT
+ * session, while the till's strip said the wallet "will keep trying". This is
+ * the keeping-trying: the same delivery is offered again on a short backoff,
+ * a bounded number of times, for as long as this poller runs.
+ *
+ * Safe to repeat: every try reuses the token's idempotency key
+ * (`rcv_<fingerprint>`, tokenRedemption), spends from its per-token call budget
+ * and waits in the pacer. A receive the gateway already settled comes back as
+ * that settlement, never as a second receive.
+ *
+ * Logout (#331/#340/#353): no try starts once the receive gate is closed or the
+ * poller is stopped. `stopDmPoll` clears the timers, and the adapter refuses a
+ * redeem from a stopped poller as RECEIVE_DEFERRED in any case. The delivery
+ * stays unprocessed, so the next session still receives it: deferred, not lost.
+ */
+export const RECEIVE_RETRY_BACKOFFS_MS: readonly number[] = [10_000, 30_000, 90_000, 300_000]
+/** gift wrap id → its pending in-session retry. Per poller: cleared by stopDmPoll. */
+const receiveRetries = new Map<string, { attempt: number; timer: ReturnType<typeof setTimeout> }>()
+
+function scheduleReceiveRetry(polling: DmPollService, eventId: string, attempt = 0): void {
+  if (!eventId || attempt >= RECEIVE_RETRY_BACKOFFS_MS.length) return
+  // Only for the poller that is running now (review of #314): a stopped poller's in-flight
+  // redeem can still report its failure after stopDmPoll cleared the timers, and must not
+  // arm a new one, let alone one bound to the next account's poller.
+  if (service !== polling) return
+  const pending = receiveRetries.get(eventId)
+  if (pending) {
+    // One chain per delivery: a failure reported by the chain's own try (or by
+    // a catch-up of the same wrap) does not start a second, faster one.
+    if (pending.attempt >= attempt) return
+    clearTimeout(pending.timer)
+  }
+  const timer = setTimeout(() => {
+    void retryReceive(polling, eventId, attempt)
+  }, RECEIVE_RETRY_BACKOFFS_MS[attempt])
+  receiveRetries.set(eventId, { attempt, timer })
+}
+
+async function retryReceive(polling: DmPollService | undefined, eventId: string, attempt: number): Promise<void> {
+  // Logout started, or this tab let go of the store: nothing is tried. The
+  // delivery is still unprocessed and the next session offers it again.
+  if (polling === undefined || service !== polling || !receivesOpen() || gatesSealed()) {
+    receiveRetries.delete(eventId)
+    return
+  }
+  console.info('[dmPoll] trying a failed receive again', { eventId: eventId.substring(0, 8), attempt: attempt + 1 })
+  let received = false
+  try {
+    received = (await polling.replayEvent(eventId)) === true
+  } catch (error) {
+    console.warn('[dmPoll] retry of a failed receive did not complete', error)
+  }
+  if (receiveRetries.get(eventId)?.attempt === attempt) receiveRetries.delete(eventId)
+  if (received || service !== polling) return
+  // Still waiting in dm-poll's failed list (a deferral emits no error, so the
+  // chain is carried on from here rather than by the next error event).
+  const stillFailed =
+    typeof polling.getFailedEvents !== 'function' ||
+    polling.getFailedEvents().some((f) => f.eventId === eventId)
+  if (stillFailed) scheduleReceiveRetry(polling, eventId, attempt + 1)
+}
+
+/** dm-poll's `redemption:error`: start the in-session retry unless it has given up for good. */
+function onReceiveFailed(polling: DmPollService, event: RedemptionErrorEvent | undefined): void {
+  if (!event?.eventId || event.retryable === false) return
+  scheduleReceiveRetry(polling, event.eventId)
+}
+
+function clearReceiveRetries(): void {
+  for (const { timer } of receiveRetries.values()) clearTimeout(timer)
+  receiveRetries.clear()
+}
+
+/** How long after a receive-gate deferral the coupon is offered again (#301 review). */
+export const DEFERRED_RETRY_MS = 5_000
+/**
+ * How many early catch-ups one token may schedule (#301 second check). A pacer
+ * that never frees would otherwise re-defer the same coupon every gate timeout
+ * plus 5 s for the whole session. Past the cap the coupon waits for the
+ * ordinary offers (SSE reopen, online, visibility), as before #301.
+ */
+export const MAX_DEFERRED_RETRIES_PER_TOKEN = 3
+let deferredRetryTimer: ReturnType<typeof setTimeout> | undefined
+/** token → early catch-ups it has scheduled. Per poller: cleared by stopDmPoll. */
+const deferredRetries = new Map<string, number>()
+
+/** Schedules the early catch-up unless this token has used its share. */
+function scheduleDeferredCatchUpFor(token: string): void {
+  const used = deferredRetries.get(token) ?? 0
+  if (used >= MAX_DEFERRED_RETRIES_PER_TOKEN) return
+  deferredRetries.set(token, used + 1)
+  scheduleDeferredCatchUp()
+}
+
+/**
+ * One catch-up shortly after a redemption deferred on the receive pacer. The
+ * deferral returned its pacer wait, so the retry queues afresh; coalesced, so a
+ * bundle of deferred parts costs one query. Scoped to the poller that was
+ * running, so a logout in between cannot re-poll under the next account.
+ */
+function scheduleDeferredCatchUp(): void {
+  if (deferredRetryTimer !== undefined) return
+  const polling = service
+  deferredRetryTimer = setTimeout(() => {
+    deferredRetryTimer = undefined
+    if (polling !== undefined && service === polling) catchUp()
+  }, DEFERRED_RETRY_MS)
+}
+
+/**
+ * The trusted mints changed: the gateway answered after a failure, or named a
+ * mint it did not name before (#133 review, MEDIUM-2). Every deferred delivery is
+ * offered again by a catch-up, and every HELD one by id, however old, since a
+ * coupon held longer than the poll window would otherwise never be offered again.
+ */
+function onMintsChanged(): void {
+  catchUp()
+  void reofferHeld()
+}
+
+async function reofferHeld(): Promise<void> {
+  const polling = service
+  const owner = currentPubkey
+  if (!polling || !owner) return
+  const held = heldCoupons(owner)
+  // Anything the poller has since consumed (redeemed, or refused for a reason no
+  // configuration can change) is no longer waiting.
+  for (const coupon of held) {
+    if (typeof polling.hasProcessed === 'function' && polling.hasProcessed(coupon.eventId)) {
+      releaseHeld(owner, coupon.eventId)
+    }
+  }
+  const waiting = heldCoupons(owner)
+  if (waiting.length === 0 || typeof polling.reofferEvents !== 'function') return
+  const since = Math.min(...waiting.map((c) => c.createdAt)) - 60
+  await polling.reofferEvents(
+    waiting.map((c) => c.eventId),
+    since,
+  )
+}
+
+let stopMintListener: (() => void) | undefined
 
 /**
  * Acknowledge escrows an earlier redemption left HELD (#110). Never throws.
@@ -1354,8 +1754,10 @@ function catchUp(): void {
  * so `_ackGate` stays tokenRedemption's no-op.
  */
 function installPacingGates(redemption: object): void {
-  const r = redemption as { _receiveGate?: () => Promise<void> }
-  r._receiveGate = () => receivePacer().acquire(CALLS_PER_RECEIVE)
+  const r = redemption as { _receiveGate?: (signal?: AbortSignal) => Promise<void> }
+  // The signal is #301's: tokenRedemption aborts it when its step timeout gives
+  // up on the gate, so the abandoned wait never books a slot.
+  r._receiveGate = (signal?: AbortSignal) => receivePacer().acquire(CALLS_PER_RECEIVE, signal)
 }
 
 async function flushUnacknowledgedEscrows(): Promise<void> {
@@ -1409,6 +1811,9 @@ export function startDmPoll(pubkey: string): DmPollService {
   // the rest. Display state only; never throws.
   resumeBundleArrivals(pubkey)
 
+  // Settled-but-unsaved vouchers (#112) survive logout; the bell rows do not.
+  resumeUnsavedReceipts(pubkey)
+
   // Before the poller reads its processed set, not after: coupons abandoned by
   // a build that could not reassemble chunks are recoverable only if their
   // tombstones are gone by the time the first catch-up runs.
@@ -1426,7 +1831,10 @@ export function startDmPoll(pubkey: string): DmPollService {
     // Wider than the 24h default. NIP-59 randomises a gift wrap's created_at
     // into the past to frustrate timing analysis, so a coupon sent minutes ago
     // can carry a timestamp from two days back and fall outside a 24h `since`
-    // window — present on the relay, invisible to the wallet.
+    // window — present on the relay, invisible to the wallet. This window is
+    // measured on WRAP time, so it needs no allowance; dm-poll's
+    // `reofferEvents`, which starts from a rumor time, adds
+    // GIFT_WRAP_BACKDATE_SECONDS itself (#175 review).
     recentDmsSince: 7 * 24 * 60 * 60,
     /**
      * The processed set must be able to cover the FETCH WINDOW above.
@@ -1457,7 +1865,7 @@ export function startDmPoll(pubkey: string): DmPollService {
     nostrdbAdapter: nostrdbAdapter(),
     cryptoAdapter: createDmCryptoAdapter(),
     storageAdapter: storageAdapter(),
-    redemptionAdapter: redemptionAdapter(),
+    redemptionAdapter: countingInFlight(redemptionAdapter()),
     // Without this the adapter above is never called: dm-poll only redeems when
     // auto-redemption is on AND an adapter exists.
     enableAutoRedemption: true,
@@ -1479,14 +1887,58 @@ export function startDmPoll(pubkey: string): DmPollService {
   // "you receive no coupons at all" — a cosmetic feature taking down the
   // money path. The guard is cheap and the failure it prevents is total.
   if (typeof service.on === 'function') {
-    service.on('redemption:refused', announceRefusal)
+    // A stall explains a refusal to the person at its counter; a customer is told what to do
+    // about their own payment (#160 5b-5). Asked per event: the merchant record can arrive later.
+    service.on('redemption:refused', (event) =>
+      announceRefusal(event, currentPubkey && loadMerchant(currentPubkey) !== null ? 'stall' : 'customer'),
+    )
     // And remember it against the payment it belonged to, so the payment's
     // screen still says so after the toast has gone (#145).
     const owner = currentPubkey
     service.on('redemption:refused', (event) => recordRefusal(owner ?? '', event))
+    // Held, not refused (#133 review): kept visible as "waiting to be verified",
+    // announced once, and forgotten when the delivery is finally redeemed.
+    service.on('redemption:held', (event) => {
+      if (recordHeld(owner ?? '', event)) announceHeld(event)
+    })
+    service.on('redemption:released', (event) => releaseHeld(owner ?? '', event?.eventId))
+    service.on('redemption:success', (event) => releaseHeld(owner ?? '', event?.eventId))
+    // A coupon that answered a payment request and then failed to arrive (#300). The till may
+    // already show that sale Paid on gateway-core's verdict, so the failure is kept against the
+    // request for it to show. A later success of the same delivery clears it.
+    service.on('redemption:error', (event) => fromRedemptionError(owner ?? '', event))
+    // And try it again in this session, so the strip's "will keep trying" is kept (#314).
+    const emitter = service
+    service.on('redemption:error', (event) => onReceiveFailed(emitter, event))
+    service.on('redemption:unsaved', (event) => fromRedemptionUnsaved(owner ?? '', event))
+    // #112: a voucher the gateway settled but this wallet did not save: toast, bell, operator log.
+    service.on('redemption:unsaved', (event) => announceUnsaved(pubkey, event))
+    service.on('redemption:success', (event) => clearReceiveTrouble(owner ?? '', event?.eventId))
   }
 
-  void service.start()
+  // Re-offer held and deferred coupons whenever the trusted mints change. The
+  // loader retries on its own backoff, so this is what makes a deferral heal
+  // without a reload or a manual retry (#133 review, MEDIUM-2).
+  stopMintListener?.()
+  stopMintListener = onTrustedMintsChange(onMintsChanged)
+
+  // The trusted-mint list FIRST, then the poller (#133). Its first catch-up
+  // redeems at once, and every redeem asks `checkTokenBacking`; before the list
+  // has loaded that answer is "defer", so starting first would park the whole
+  // backlog until the next catch-up. `loadTrustedMints` never rejects, and a
+  // gateway that cannot be reached leaves the list unknown, which still defers
+  // rather than waving anything through. `catchUp` retries the load.
+  const starting = service
+  void loadTrustedMints().then(() => {
+    // Not if the poller was stopped, or replaced by an account switch, meanwhile.
+    if (service === starting) {
+      // Then the coupons held in an earlier session, however old, in case the
+      // configuration was fixed while the app was closed.
+      void starting.start().then(() => {
+        if (service === starting) void reofferHeld()
+      })
+    }
+  })
   // Startup half of the ack retry (#110). The legacy API client is signed in
   // by now, so the per-account ledger resolves to this account.
   void flushUnacknowledgedEscrows()
@@ -1516,7 +1968,18 @@ function onVisible(): void {
  * failed, and are retried after dm-poll's cooldown.
  */
 export function stopDmPoll(): void {
+  // First, and synchronously: from here no redeem of this poller can start,
+  // so `drainDmPoll` waiting for the ones already started is enough.
+  pollerGeneration++
   onSseOpen = undefined
+  if (deferredRetryTimer !== undefined) clearTimeout(deferredRetryTimer)
+  deferredRetryTimer = undefined
+  deferredRetries.clear()
+  // #314: no in-session retry of a failed receive survives the poller. The
+  // deliveries stay unprocessed for the next session.
+  clearReceiveRetries()
+  stopMintListener?.()
+  stopMintListener = undefined
   document.removeEventListener('visibilitychange', onVisible)
   window.removeEventListener('online', catchUp)
   void service?.stop()

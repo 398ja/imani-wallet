@@ -69,8 +69,12 @@
  * with the wallet in front of them saw a notification and concluded push
  * worked. A phone in a pocket got nothing.
  *
- * `voucher_expiring` is the one still dark: expiry is a clock event with no
- * request to hang a call on, so it needs a scheduler that does not exist yet.
+ * `voucher_expiring` is still dark ON THE SERVER: expiry is a clock event with no request to hang
+ * a call on, so a push would need a scheduler and a server-side list of who holds what, which
+ * does not exist (gateway-core `notifyVoucherExpiring` has no caller). The WALLET files it
+ * instead (#265, owner decision 2026-10-15, wallet-only): `expiryReminders.ts` writes a
+ * `voucher_expiring` bell entry when the app is opened, from the coupons on this device, gated
+ * by `couponExpiring`. So the switch is no longer decorative, but a closed app is not reminded.
  *
  * This is deliberately NOT surfaced in the settings screen. A wallet that
  * labelled two of its three switches "not yet" would be describing the
@@ -103,6 +107,13 @@ export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
 
 /** A type we do not recognise still has to render. */
 export type NotificationTypeOrGeneric = NotificationType | 'generic'
+
+/**
+ * Bell rows the wallet files itself for things that arrive and are NOT money (#160 owner report):
+ * a terminal credential, its renewal, a licence. Never sent by the gateway, so never on the push
+ * wire, and kept out of `voucher_received` so nothing reads them as a payment.
+ */
+export type NotMoneyNoticeType = 'terminal_setup_request' | 'terminal_renewal' | 'licence_received'
 
 export function isNotificationType(value: unknown): value is NotificationType {
   return typeof value === 'string' && (NOTIFICATION_TYPES as readonly string[]).includes(value)

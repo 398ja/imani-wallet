@@ -14,7 +14,7 @@ import {
 } from '../licenceStatus'
 import { forgetLicenceParses } from '../licences'
 import { licenceIssueParams, LICENCE_FEATURES, type LicenceTerms } from '../licenceIssue'
-import { buildVoucherToken } from './voucherFixtures'
+import { buildLicenceVoucherToken as buildVoucherToken } from './voucherFixtures'
 
 /**
  * What the device believes about its subscription.

@@ -35,7 +35,7 @@ import {
  * `tokenRedemption.js`, and a voucher receive, which needs the two swaps that
  * `voucherReissue.ts` provides the middle of. The transport and the token-level
  * entry point exist, so this comment no longer lists them: see the status table in
- * `docs/explanation/the-wallet-swaps-its-own-receives.md`, which is kept current
+ * `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`, which is kept current
  * because a comment listing "what is missing" goes stale the moment it is fixed.
  *
  * What it establishes: the wallet chooses the secrets and the blinding factors, so
@@ -65,7 +65,7 @@ import {
  * failures that matter, which are exactly the ones a real mint will not produce
  * on request. `swapRecoveryProbe` covers the same flow against the live mint.
  *
- * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ * See `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
  */
 
 /** A proof being received, with its witness when the coupon is locked. */
@@ -111,6 +111,15 @@ export interface ReceiveRequest {
   pubkey: string
   mintUrl: string
   proofs: ReceivableProof[]
+  /**
+   * Swap a voucher's proofs into plain sats on purpose, giving up the coupon.
+   *
+   * Only `swapBack.ts` sets this, for a coupon the mint refused as redeemed in full
+   * (cashu-mint#540): the coupon can no longer be spent as one, and the holder chose to
+   * take its sats. Everywhere else a voucher is refused, because stripping one by
+   * accident is a silent loss of everything the coupon promised.
+   */
+  releaseVoucher?: true
 }
 
 export interface ReceiveResult {
@@ -133,6 +142,12 @@ function swapIdFor(proofs: ReceivableProof[]): string {
   const material = proofs.map((proof) => `${proof.id}:${proof.amount}:${proof.secret}`).join('|')
   return bytesToHex(sha256(utf8ToBytes(material))).slice(0, 32)
 }
+
+/**
+ * The id a receive of these proofs is recorded under, so a caller can tag its own record with it
+ * BEFORE the swap and find it again when the recovery sweep hands back that swap's proofs.
+ */
+export const receiveSwapId = swapIdFor
 
 /** The outputs as the mint wants them: blinded messages, nothing else. */
 function asMintOutputs(outputs: { amount: number; id: string; B_: string }[]) {
@@ -169,7 +184,7 @@ export async function receiveByOwnSwap(
   // endpoint exists a voucher receive must keep using the old path, so this
   // refuses instead of failing quietly or corrupting money.
   const voucherInput = proofs.find((proof) => isVoucherSecret(proof.secret))
-  if (voucherInput) {
+  if (voucherInput && request.releaseVoucher !== true) {
     throw new Error(
       'cannot receive a voucher by wallet-side swap yet: its fresh secret needs the ' +
         'issuer signature, so this path would strip the voucher and its warrant',

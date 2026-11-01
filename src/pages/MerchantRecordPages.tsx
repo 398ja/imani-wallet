@@ -27,7 +27,12 @@ import {
   Switch,
 } from '../components/ui'
 import { present } from '../lib/detailRows'
+import { CopyReferenceButton, PaymentReferenceBlock } from '../components/PaymentReference'
+import { cardReferenceOf } from '../lib/paymentReference'
 import { onWalletChanged } from '../lib/wallet'
+import { handlerFor } from '../lib/terminalAttribution'
+import { onRosterView } from '../lib/terminalRoster'
+import { collectTillSalesForOwner } from '../lib/tillSalesNet'
 import { repairedTransactions } from '../lib/redemptionLedger'
 import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
@@ -47,6 +52,7 @@ import {
   describeAttestation,
   describeCashbackKind,
   describeCashbackClaim,
+  describeUnderstatedSale,
   type EvidenceLine,
   type EvidenceTone,
 } from '../lib/issuedVoucherWording'
@@ -194,8 +200,22 @@ export function MerchantTransactionsPage() {
  * heading that counted a set the list is not showing is the kind of quiet
  * disagreement that makes a merchant distrust the whole screen.
  */
-export function IssuedCouponsPage() {
+export function IssuedCouponsPage({ stallPubkey }: { stallPubkey?: string } = {}) {
   const state = useMerchantTransactions()
+  // A till's sales arrive by DM (#160 phase 6, wallet#202): look for new ones whenever this list
+  // opens, so a sale made on a till shows here without a re-login.
+  useEffect(() => {
+    if (stallPubkey) void collectTillSalesForOwner(stallPubkey)
+  }, [stallPubkey])
+  // The till names come from the roster, which the login sync may merge in after this list opened
+  // (on a restored phone, #160 phase 6 E4): re-render when it does.
+  const [, setRosterRev] = useState(0)
+  useEffect(() => {
+    if (!stallPubkey) return
+    return onRosterView((stall) => {
+      if (stall === stallPubkey) setRosterRev((n) => n + 1)
+    })
+  }, [stallPubkey])
   const [includeExpired, setIncludeExpired] = useState(false)
 
   // Recomputed only when the rows or the filter change, which is a cost
@@ -278,10 +298,10 @@ export function IssuedCouponsPage() {
         <EmptyRow>
           {expiredCount > 0 && !includeExpired
             ? 'Nothing still valid. Turn on “Include expired” to see the ones that have run out.'
-            : 'None yet. Vouchers you sell and cashback you issue show up here.'}
+            : 'None yet. Vouchers you sell and Cashlinks you create show up here.'}
         </EmptyRow>
       ) : (
-        visible.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} />)
+        visible.map((tx) => <IssuedCouponRow key={tx.id} tx={tx} now={state?.loadedAt ?? 0} stallPubkey={stallPubkey} />)
       )}
     </ListFrame>
   )
@@ -386,7 +406,11 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
   const money = (minor: number) => formatFace(minor, { unit: row.unit, decimals: row.decimals })
 
   const rail = describeRail(voucher.rail)
-  const warrant = describeWarrant(voucher.warrantVerdict)
+  // A sale that is signed for more than reached the customer reads as that,
+  // in figures, rather than as a signature that does not hold (#462).
+  const warrant = voucher.shortfall
+    ? describeUnderstatedSale(voucher.shortfall, money)
+    : describeWarrant(voucher.warrantVerdict)
   const attestation = describeAttestation(voucher.attestationVerdict)
 
   return (
@@ -417,7 +441,7 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         <p className="text-amount text-mono-900 dark:text-mono-50">{money(row.amount)}</p>
         <p className="truncate text-sm text-mono-500">{row.memo || 'Voucher issued'}</p>
         {cashbackClaimLabel(row) ? (
-          <p className="text-sm text-mono-500">Cashback code · {cashbackClaimLabel(row)}</p>
+          <p className="text-sm text-mono-500">Cashlink · {cashbackClaimLabel(row)}</p>
         ) : null}
 
         <ClaimedBar
@@ -471,9 +495,8 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
           // Kept even when absent, unlike the rest: "expires 3 Sep" and "never
           // expires" are different facts, and a missing row reads as the second.
           ['Expires', formatDate(row.expiresAt) || 'No expiry'],
-          // Who they are, not their key: face, name, handle. The key itself
-          // is one tap away in the raw details below, where a merchant
-          // chasing a specific customer can still find it.
+          // Who they are, not their key: face, name, handle (#324: the key
+          // is not shown anywhere on this screen).
           ['Customer', row.counterparty ? <IdentityInline pubkey={row.counterparty} /> : undefined],
           ['Voucher id', row.voucherId],
         ]).map(([label, value]) => (
@@ -496,7 +519,7 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         >
           <span className="shrink-0 text-sm text-mono-500">Transaction</span>
           <span className="flex min-w-0 items-center gap-1 text-right text-mono-900 dark:text-mono-50">
-            {row.type === 'cashback' ? 'The cashback this came from' : 'The sale this came from'}
+            {row.type === 'cashback' ? 'The Cashlink this came from' : 'The sale this came from'}
             <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
           </span>
         </Link>
@@ -541,6 +564,15 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
         ) : (
           <>
             <EvidenceRow label="Paid" line={rail} />
+            {/* The processor's id, copyable and beside the amount and date a
+                merchant on an Express dashboard needs to find it (#267). */}
+            {voucher.rail.kind === 'card' && voucher.rail.reference ? (
+              <PaymentReferenceBlock
+                reference={voucher.rail.reference}
+                amount={money(row.amount)}
+                date={formatDate(row.at)}
+              />
+            ) : null}
             <EvidenceRow label="Authorised" line={warrant} />
             <EvidenceRow label="Customer receipt" line={attestation} />
           </>
@@ -594,7 +626,9 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
           // The link back to the movement, in the record itself rather than
           // only in the nav — this is the pairing the two screens are built on.
           ['Transaction id', row.id],
-          ['Customer pubkey', row.counterparty],
+          // The customer is named above as a person (#324). The raw key that
+          // used to sit here as "Customer pubkey" was the one place a merchant
+          // saw it, and nobody matches a sale by reading 64 characters.
           ['Face decimals', String(row.decimals)],
           ['Unit', row.unit],
           // The sale's own identity, from inside the signature. It is what
@@ -785,7 +819,7 @@ function EvidenceRow({ label, line }: { label: string; line: EvidenceLine }) {
   )
 }
 
-function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
+function IssuedCouponRow({ tx, now, stallPubkey }: { tx: WalletTransaction; now: number; stallPubkey?: string }) {
   // Expiry is the one thing a merchant gets asked about after the sale ("how
   // long do I have?"), so it leads the second line rather than hiding in detail.
   // `now` is the load time, not a fresh clock read — see useMerchantTransactions.
@@ -794,8 +828,12 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
   // and a merchant's list is mostly repeat customers.
   const customer = useIdentity(tx.counterparty)
   const claimLabel = cashbackClaimLabel(tx)
+  // A card sale's processor reference, compact and copyable (#267). The copy
+  // button sits OUTSIDE the row's link: a button nested in an anchor is
+  // invalid HTML and a tap on it would also navigate.
+  const cardRef = tx.type === 'cashback' ? undefined : cardReferenceOf(tx.issuanceWarrant)
 
-  return (
+  const link = (
     <Link
       // The VOUCHER, not the transaction that issued it. The row is a coupon
       // and the question behind it is "what happened to this coupon" — how
@@ -826,6 +864,11 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
           {tx.counterparty ? ` · ${identityLabel(tx.counterparty, customer)}` : ''}
           {/* A cashback's claim state comes from the portal, which does know it. */}
           {claimLabel ? ` · ${claimLabel}` : ''}
+          {/* Which till sold it (#160 phase 6, F3), named from the roster, "(no longer in
+              service)" once revoked. Absent on the owner's own sales. */}
+          {tx.terminalPubkey && stallPubkey
+            ? ` · Sold on ${handlerFor({ terminalPubkey: tx.terminalPubkey }, stallPubkey).label}`
+            : ''}
         </p>
       </div>
       <p className="shrink-0 text-right text-mono-900 dark:text-mono-50">
@@ -833,5 +876,16 @@ function IssuedCouponRow({ tx, now }: { tx: WalletTransaction; now: number }) {
       </p>
       <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
     </Link>
+  )
+
+  if (!cardRef) return link
+  return (
+    <div>
+      {link}
+      <div className="-mt-3 flex items-center gap-1 px-4 pb-3 pl-11 text-xs text-mono-500">
+        <span>Card</span>
+        <CopyReferenceButton reference={cardRef} compact />
+      </div>
+    </div>
   )
 }

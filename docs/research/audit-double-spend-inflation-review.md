@@ -50,7 +50,7 @@ the merchant's own NIP-98 signature on the cash path, a Stripe charge on the
 stall's own connected account on the card path. Forging a large coupon then
 requires routing that much real money into the victim's account, so it is
 self-defeating rather than merely detectable. Our reply, including one
-correction and one gap we found in it, is `docs/reply-issuance-warrant.md`.
+correction and one gap we found in it, is `imani-docs/wallet/reply-issuance-warrant.md`.
 
 **The recordable decision, per their §9.3, verbatim:** a coupon's `issuerId`
 is an **assertion by the issuing service**, not a claim proven by the named
@@ -63,7 +63,7 @@ completes.
 amount before the Sell request leaves it; the gateway refuses a warrant that
 does not cover the sale; the signature is inside the voucher's signed bytes so
 a compromised service cannot strip it; and a redeeming merchant sees the state
-on the coupon. See `docs/plan-issuance-warrant.md` for what shipped and the
+on the coupon. See `imani-docs/wallet/plan-issuance-warrant.md` for what shipped and the
 three things that plan got wrong.
 
 **Finding 6 is narrowed, not closed, and the distinction matters.** A

@@ -295,7 +295,7 @@ async function serveBundleFrom(browserContext: BrowserContext, dir: string): Pro
   const shell = join(root, 'index.html')
   await browserContext.route(`${BASE}/**`, async (route) => {
     const path = new URL(route.request().url()).pathname
-    if (path.startsWith('/api/') || path.startsWith('/.well-known/')) return route.continue()
+    if (path.startsWith('/api/') || path.startsWith('/.well-known/') || path.startsWith('/fcaptcha/')) return route.continue()
     const file = await bundleFile(root, path, shell)
     return route.fulfill({ status: 200, body: await readFile(file), contentType: CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' })
   })

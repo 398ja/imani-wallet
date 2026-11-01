@@ -96,6 +96,13 @@ export function worstCaseBundleMs(parts: number): number {
 
 type Sleep = (ms: number) => Promise<void>
 
+/** Settles when `signal` aborts; never without one. Wakes a sleeping waiter. */
+function aborted(signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise<void>(() => {})
+  if (signal.aborted) return Promise.resolve()
+  return new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }))
+}
+
 /** A waiter the pacer dropped because it was reset (logout / account switch). */
 export class PacerResetError extends Error {
   /** Shared with tokenRedemption's budget deferral: a quiet, retryable non-success. */
@@ -111,9 +118,11 @@ export interface ReceivePacer {
    * Resolves when `calls` more calls fit in the window, and books them.
    * Waiters are served in arrival order. Rejects ONLY with PacerResetError,
    * when `reset()` runs while it waits: a call queued for the previous account
-   * must never go out under the next one's session.
+   * must never go out under the next one's session. Or with the signal's
+   * reason once `signal` aborts (#301): a caller that gave up waiting (the
+   * #300 step timeout) must not book a slot for a call it will never make.
    */
-  acquire(calls?: number): Promise<void>
+  acquire(calls?: number, signal?: AbortSignal): Promise<void>
   /** Empty the window and settle every waiter with PacerResetError. */
   reset(): void
 }
@@ -136,10 +145,13 @@ export function createReceivePacer(opts: {
   let wake: () => void = () => {}
   let resetSignal = new Promise<void>((r) => (wake = r))
 
-  async function take(calls: number, gen: number): Promise<void> {
+  async function take(calls: number, gen: number, signal?: AbortSignal): Promise<void> {
     const need = Math.max(1, Math.min(calls, limit))
     for (;;) {
       if (gen !== generation) throw new PacerResetError()
+      // #301: abandoned while queued or asleep. Booking now would spend a
+      // slot on a call that never goes out and delay every waiter behind it.
+      if (signal?.aborted) throw signal.reason ?? new Error('receive pacer wait abandoned')
       const t = now()
       starts = starts.filter((s) => t - s < windowMs)
       if (starts.length + need <= limit) {
@@ -147,14 +159,14 @@ export function createReceivePacer(opts: {
         return
       }
       const freeAt = starts[starts.length + need - limit - 1] + windowMs
-      await Promise.race([sleep(Math.max(1, freeAt - t)), resetSignal])
+      await Promise.race([sleep(Math.max(1, freeAt - t)), resetSignal, aborted(signal)])
     }
   }
 
   return {
-    acquire(calls = 1) {
+    acquire(calls = 1, signal?: AbortSignal) {
       const gen = generation
-      const turn = queue.then(() => take(calls, gen), () => take(calls, gen))
+      const turn = queue.then(() => take(calls, gen, signal), () => take(calls, gen, signal))
       queue = turn.catch(() => undefined)
       return turn
     },

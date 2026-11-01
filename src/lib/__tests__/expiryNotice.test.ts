@@ -15,7 +15,7 @@ import {
 import { forgetVerification, licenceStatus } from '../licenceStatus'
 import { forgetLicenceParses } from '../licences'
 import { licenceIssueParams, type LicenceTerms } from '../licenceIssue'
-import { buildVoucherToken } from './voucherFixtures'
+import { buildLicenceVoucherToken as buildVoucherToken } from './voucherFixtures'
 
 /**
  * Telling a stall owner their subscription is ending.

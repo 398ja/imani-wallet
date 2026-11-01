@@ -14,6 +14,15 @@ import {
   recordTerminal,
   revocationBitesAt,
   revokeTerminal,
+  waitingTerminals,
+  expiredWaiting,
+  isRevocable,
+  holdsLiveCredential,
+  LiveCredentialError,
+  unmintedWaiting,
+  mintingTerminals,
+  MAX_WAITING,
+  WAITING_TTL_MS,
   type TerminalRecord,
 } from '../terminalRoster'
 import { TERMINAL_ROLES } from '../terminalRole'
@@ -38,7 +47,8 @@ function terminal(over: Partial<TerminalRecord> = {}): TerminalRecord {
     name: 'Door',
     role: TERMINAL_ROLES.REDEEM_ONLY,
     enrolledAt: 1_000_000,
-    revocationSecret: 'secret-for-door',
+    token: 'cashuB-door',
+    voucherId: 'cred-door',
     ...over,
   }
 }
@@ -72,13 +82,39 @@ describe('the list of what is out', () => {
   })
 
   it('does not duplicate a terminal that is re-recorded', () => {
-    // Re-enrolling a replacement device under the same key is one terminal, not
-    // two rows the owner has to work out the difference between.
-    recordTerminal(STALL, terminal())
+    // Re-enrolling a device whose old row holds nothing to revoke (set up
+    // before revocation existed) is one terminal, not two rows the owner has
+    // to work out the difference between.
+    recordTerminal(STALL, terminal({ token: undefined }))
     recordTerminal(STALL, terminal({ name: 'Door (replaced)' }))
 
     expect(liveTerminals(STALL)).toHaveLength(1)
     expect(liveTerminals(STALL)[0].name).toBe('Door (replaced)')
+  })
+
+  // BLOCKER from the #160 review. A live row's token is the only way to revoke
+  // its credential. Recording a second credential for the same device used to
+  // replace that row, leaving the first credential live and unrevocable. Now
+  // it throws and the first row is unchanged.
+  it('refuses to replace a row whose credential is still live', () => {
+    recordTerminal(STALL, terminal({ status: 'waiting' }))
+
+    expect(() => recordTerminal(STALL, terminal({ token: 'cashuB-second' }))).toThrow(
+      LiveCredentialError,
+    )
+    expect(allTerminals(STALL)).toHaveLength(1)
+    expect(allTerminals(STALL)[0].token).toBe('cashuB-door')
+    expect(holdsLiveCredential(STALL, DOOR.toUpperCase())).toBe(true)
+  })
+
+  // A revoked row has nothing left to revoke, so a fresh credential for the
+  // same device may take its place.
+  it('lets a revoked device be recorded again', () => {
+    recordTerminal(STALL, terminal({ revokedAt: 5 }))
+
+    expect(holdsLiveCredential(STALL, DOOR)).toBe(false)
+    recordTerminal(STALL, terminal({ token: 'cashuB-second' }))
+    expect(allTerminals(STALL)[0].token).toBe('cashuB-second')
   })
 
   it('drops a row whose role it cannot state', () => {
@@ -247,5 +283,76 @@ describe('there is no pause', () => {
     recordTerminal(STALL, terminal({ name: 'Door (re-enrolled)' }))
     expect(isRevoked(STALL, DOOR)).toBe(false)
     expect(enrolledCount(STALL)).toBe(1)
+  })
+})
+
+describe('#160 decision 4: waiting rows', () => {
+  // A row that never reached its device does not use up the free terminal, so
+  // a botched setup never blocks the owner from trying again.
+  it('does not count a waiting row against the allowance', () => {
+    recordTerminal(STALL, terminal({ status: 'waiting' }))
+    recordTerminal(STALL, terminal({ terminalPubkey: COUNTER, status: 'in-service' }))
+
+    expect(enrolledCount(STALL)).toBe(1)
+    expect(waitingTerminals(STALL).map((t) => t.terminalPubkey)).toEqual([DOOR])
+  })
+
+  // Waiting rows live 24 hours. One past its time is due for cancelling; one
+  // inside it is not.
+  it('finds waiting rows past their 24 hours, and only those', () => {
+    recordTerminal(STALL, terminal({ status: 'waiting', enrolledAt: 0, waitingUntil: 10 * HOUR }))
+    recordTerminal(
+      STALL,
+      terminal({ terminalPubkey: COUNTER, status: 'waiting', enrolledAt: 0, waitingUntil: 30 * HOUR }),
+    )
+
+    expect(expiredWaiting(STALL, 20 * HOUR).map((t) => t.terminalPubkey)).toEqual([DOOR])
+    expect(WAITING_TTL_MS).toBe(24 * HOUR)
+    expect(MAX_WAITING).toBe(2)
+  })
+
+  // A row written before the token existed is not revocable, so the screen can
+  // say so instead of pretending.
+  it('knows which rows hold what revoking needs', () => {
+    expect(isRevocable(terminal())).toBe(true)
+    expect(isRevocable(terminal({ token: undefined }))).toBe(false)
+  })
+
+  // The token and voucher id survive a round trip through storage, and a
+  // non-string token reads as absent rather than being trusted.
+  it('stores the credential token and reads back only strings', () => {
+    recordTerminal(STALL, terminal())
+    expect(allTerminals(STALL)[0].token).toBe('cashuB-door')
+
+    localStorage.setItem(
+      `imani-wallet:terminals:${STALL}`,
+      JSON.stringify([{ ...terminal(), token: 42 }]),
+    )
+    expect(allTerminals(STALL)[0].token).toBeUndefined()
+  })
+})
+
+describe('#160 review: phase 0 waiting rows do not block Add', () => {
+  // Phase 0 recorded waiting rows without minting anything, so they hold no
+  // token. Under phase 1 two of them used to fill the waiting limit forever:
+  // they could not be cancelled and never expired. They are not counted now,
+  // and are listed separately so the owner can remove them.
+  it('does not count a token-less waiting row', () => {
+    recordTerminal(STALL, terminal({ status: 'waiting', token: undefined }))
+    recordTerminal(STALL, terminal({ terminalPubkey: COUNTER, status: 'waiting', token: undefined }))
+
+    expect(waitingTerminals(STALL)).toEqual([])
+    expect(unmintedWaiting(STALL).map((t) => t.terminalPubkey).sort()).toEqual([DOOR, COUNTER].sort())
+  })
+
+  // A row still being minted counts as waiting: it becomes one the moment its
+  // credential is checked, and two of them must still hold the limit.
+  it('counts a minting row as waiting, and not against the allowance', () => {
+    recordTerminal(STALL, terminal({ status: 'minting', token: undefined, mintKey: 'k' }))
+
+    expect(waitingTerminals(STALL)).toHaveLength(1)
+    expect(mintingTerminals(STALL)).toHaveLength(1)
+    expect(enrolledCount(STALL)).toBe(0)
+    expect(holdsLiveCredential(STALL, DOOR)).toBe(true)
   })
 })

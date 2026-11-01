@@ -24,7 +24,7 @@
  * So a clean reconciliation here means "every coupon I issued, I meant to
  * issue". A merchant who wants "and I was paid for each one" needs a till count,
  * and no amount of signing reaches that fact. See
- * `docs/cash-warrant-reconciliation.md`.
+ * `imani-docs/wallet/cash-warrant-reconciliation.md`.
  */
 import { parseCashAttestation, verifyCashAttestation } from './cashAttestation'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
@@ -45,10 +45,36 @@ export type ReconciledIssuance = {
    *   row written before warrants, and every sale made while locked.
    * `mismatch` — a warrant is present and does NOT verify. The one that wants
    *   looking at, because it means the row and the signature disagree.
+   * `understated` — every signature verifies, but the rows of this sale add up
+   *   to LESS than the total the stall signed (#462). The usual cause is a
+   *   multi-part sale that landed only partly; it can also be history restored
+   *   in pieces or a row deleted. Worth looking at, but it is not a forgery and
+   *   must never be worded as one.
+   * `overstated` — the rows of one sale add up to MORE than the stall signed.
+   *   Each row fits under the ceiling on its own, so only the sum shows it, and
+   *   unlike `understated` it is the shape the ceiling exists to refuse. Counted
+   *   with the mismatches.
    */
-  verdict: 'authorised' | 'unwarranted' | 'mismatch'
-  /** Why, when the verdict is `mismatch`. */
+  verdict: 'authorised' | 'unwarranted' | 'mismatch' | 'understated' | 'overstated'
+  /** Why, when the verdict is `mismatch` or `overstated`. */
   reason?: string
+  /**
+   * For `understated` (and `overstated`): the total the stall signed for the
+   * sale, what its rows add up to, and the sale's identity so a total can
+   * count sales rather than rows.
+   */
+  sale?: {
+    key: string
+    signedMinor: number
+    deliveredMinor: number
+    /**
+     * True when the row itself recorded that the sale landed only partly
+     * (`saleTotalMinor` / `deliveredMinor`, written by `issue.ts` since #462),
+     * and what it recorded agrees with the rows found. Older rows lack it and
+     * are judged by the nonce grouping alone.
+     */
+    partlyDelivered: boolean
+  }
   /**
    * Whether the CUSTOMER attested paying for this sale.
    *
@@ -102,11 +128,16 @@ export function reconcileIssuances(
     // point of re-checking rather than re-reading. A stored warrant that no
     // longer covers the row beside it means one of the two was altered after
     // the fact, and that is exactly the tampering an audit is looking for.
-    const verdict = verifyIssuanceWarrant(warrant, stallPubkey, {
-      faceValueMinor: row.amount,
-      unit: row.unit,
-      faceDecimals: row.decimals,
-    })
+    //
+    // A delegated warrant is judged at the moment the row was recorded, not
+    // today, so a past card sale does not turn "failed" the day its delegation
+    // lapses (#176 review).
+    const verdict = verifyIssuanceWarrant(
+      warrant,
+      stallPubkey,
+      { faceValueMinor: row.amount, unit: row.unit, faceDecimals: row.decimals },
+      row.at > 0 ? { issuedAt: row.at } : {},
+    )
 
     // Checked against the SALE the warrant describes, not against the row,
     // because one payment covers a whole sale however many coupons it became.
@@ -191,19 +222,32 @@ function flagUnderstatedSales(items: ReconciledIssuance[]): ReconciledIssuance[]
     else bySale.set(key, { warrantTotal: warrant.saleTotalMinor, group: [item] })
   }
 
-  for (const { warrantTotal, group } of bySale.values()) {
+  for (const [key, { warrantTotal, group }] of bySale) {
     const summed = group.reduce(
       (total, item) => total + (Number.isFinite(item.row.amount) ? item.row.amount : 0),
       0,
     )
     if (summed === warrantTotal) continue
 
+    // Below the total is NOT a forgery (#462): every signature here verified,
+    // and the common cause is a split sale that landed only partly. It gets its
+    // own verdict so the screen can say "€800.00 missing" rather than "does not
+    // match its signature". Above the total stays an alarm.
     const direction = summed < warrantTotal ? 'understated' : 'overstated'
+    const partlyDelivered =
+      direction === 'understated' &&
+      group.some(
+        (item) =>
+          item.row.saleTotalMinor === warrantTotal && item.row.deliveredMinor === summed,
+      )
     for (const item of group) {
-      item.verdict = 'mismatch'
-      item.reason =
-        `sale ${direction}: rows for this warrant total ${summed} ` +
-        `but it authorised ${warrantTotal}`
+      item.verdict = direction
+      item.sale = { key, signedMinor: warrantTotal, deliveredMinor: summed, partlyDelivered }
+      if (direction === 'overstated') {
+        item.reason =
+          `sale overstated: rows for this warrant total ${summed} ` +
+          `but it authorised ${warrantTotal}`
+      }
     }
   }
 
@@ -270,8 +314,18 @@ export interface ReconciliationTotals {
   authorisedMinor: number
   /** Sum of rows carrying no usable warrant. */
   unwarrantedMinor: number
-  /** Sum of rows whose warrant is present and does not verify. */
+  /** Sum of rows whose warrant is present and does not verify, or that overstate their sale. */
   mismatchedMinor: number
+  /**
+   * Sales whose signatures verify but whose rows fall short (#462).
+   *
+   * `understatedMinor` is what those rows DO carry, so authorised + unwarranted
+   * + mismatched + understated is every row exactly once. `understatedSignedMinor`
+   * is what the stall signed for those sales, and `missingMinor` the gap.
+   */
+  understatedMinor: number
+  understatedSignedMinor: number
+  missingMinor: number
   /**
    * Of the authorised total, how much the CUSTOMER also attested paying.
    *
@@ -280,8 +334,12 @@ export interface ReconciliationTotals {
    * it is the figure a merchant would have to defend if a sale were disputed.
    */
   attestedMinor: number
-  /** Row counts, since one large mismatch and fifty small ones differ. */
-  counts: { authorised: number; unwarranted: number; mismatch: number }
+  /**
+   * Row counts, since one large mismatch and fifty small ones differ.
+   * `understated` counts SALES, not rows: one sale delivered in two parts of
+   * five is one thing to look at.
+   */
+  counts: { authorised: number; unwarranted: number; mismatch: number; understated: number }
 }
 
 /**
@@ -300,9 +358,13 @@ export function totalReconciliation(
     authorisedMinor: 0,
     unwarrantedMinor: 0,
     mismatchedMinor: 0,
+    understatedMinor: 0,
+    understatedSignedMinor: 0,
+    missingMinor: 0,
     attestedMinor: 0,
-    counts: { authorised: 0, unwarranted: 0, mismatch: 0 },
+    counts: { authorised: 0, unwarranted: 0, mismatch: 0, understated: 0 },
   }
+  const understatedSales = new Set<string>()
 
   for (const item of reconciled) {
     const amount = Number.isFinite(item.row.amount) ? item.row.amount : 0
@@ -313,6 +375,19 @@ export function totalReconciliation(
     } else if (item.verdict === 'unwarranted') {
       totals.unwarrantedMinor += amount
       totals.counts.unwarranted += 1
+    } else if (item.verdict === 'understated') {
+      totals.understatedMinor += amount
+      // The signed total belongs to the SALE, so it is added once per sale
+      // however many of its rows are here.
+      const key = item.sale?.key ?? item.row.id
+      if (!understatedSales.has(key)) {
+        understatedSales.add(key)
+        const signed = item.sale?.signedMinor ?? amount
+        const delivered = item.sale?.deliveredMinor ?? amount
+        totals.understatedSignedMinor += signed
+        totals.missingMinor += Math.max(0, signed - delivered)
+        totals.counts.understated += 1
+      }
     } else {
       totals.mismatchedMinor += amount
       totals.counts.mismatch += 1
@@ -370,11 +445,16 @@ export interface ReconciliationLine {
   unwarrantedMinor: number
   /** Sales whose warrant is present and does not hold. */
   mismatchedMinor: number
+  /** See `ReconciliationTotals.understatedMinor` and its siblings (#462). */
+  understatedMinor: number
+  understatedSignedMinor: number
+  missingMinor: number
   counts: ReconciliationTotals['counts']
   /**
    * Whether anything here needs a human.
    *
-   * True only for MISMATCHES. Unwarranted sales are not an alarm - they are
+   * True for MISMATCHES and for understated sales: both want a human, though
+   * only the first is worded as an alarm about the signature. Unwarranted sales are not an alarm - they are
    * every sale issued before warrants shipped, and every sale a terminal made,
    * and raising them all would bury the one row that actually disagrees with
    * its own signature.
@@ -413,8 +493,11 @@ export function summariseReconciliation(
       attestedMinor: totals.attestedMinor,
       unwarrantedMinor: totals.unwarrantedMinor,
       mismatchedMinor: totals.mismatchedMinor,
+      understatedMinor: totals.understatedMinor,
+      understatedSignedMinor: totals.understatedSignedMinor,
+      missingMinor: totals.missingMinor,
       counts: totals.counts,
-      needsAttention: totals.counts.mismatch > 0,
+      needsAttention: totals.counts.mismatch > 0 || totals.counts.understated > 0,
     })
   }
 

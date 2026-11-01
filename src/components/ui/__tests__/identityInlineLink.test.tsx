@@ -89,7 +89,7 @@ describe('a stall’s row on any screen', () => {
   it('stays inert where a caller turns the link off', async () => {
     draw(<IdentityInline pubkey={STALL} linkToProfile={false} />)
 
-    await waitFor(() => expect(screen.getByText(/aaaa/)).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Someone')).toBeTruthy())
     expect(screen.queryByRole('link')).toBeNull()
   })
 })
