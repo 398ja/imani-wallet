@@ -14,6 +14,12 @@ import { MemoryRouter } from 'react-router-dom'
 
 const STALL = 'b'.repeat(64)
 let ready: () => Promise<boolean> = async () => true
+// #434: the stall's open-for-business status is asked of the portal. Open here: these tests
+// are about something else, and an unmocked fetch would (correctly) fail closed.
+vi.mock('../../lib/merchantStatus', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchantStatus')>()),
+  fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
+}))
 vi.mock('../../lib/cardSalesEnrolment', () => ({
   cardSalesReadiness: async () => ((await ready()) ? 'ready' : 'not-ready'),
 }))

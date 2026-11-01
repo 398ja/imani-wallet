@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Check, Copy, Send, Share2 } from 'lucide-react'
+import { Send } from 'lucide-react'
 
 import {
   Button,
@@ -23,10 +23,10 @@ import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pa
 import { useBranding } from '../hooks/useBranding'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
 import { LocationMap } from '../components/LocationMap'
-import { MerchantActions } from '../components/MerchantActions'
+import { CouponCodeAction, MerchantActions } from '../components/MerchantActions'
+import { checkoutCodesEnabled } from '../lib/checkoutCodePorts'
 import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
-import { canShare, shareText } from '../lib/native'
 
 /** How many transactions the summary list shows before deferring to a full page. */
 const PREVIEW = 3
@@ -171,6 +171,7 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
   const name = branding.organizationName
   const acceptsCards = record?.acceptsCards === true
   const isSelf = viewerPubkey !== undefined && viewerPubkey === pubkey
+  const codesOn = checkoutCodesEnabled()
 
   return (
     <Screen>
@@ -212,21 +213,23 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
           <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} />
         )}
 
-        {/* Send stays, one row down and quieter. It is a different errand from
-            Pay: Pay hands this stall its own coupon back at the till, Send gives
-            one to a friend. Paired with Share so the secondary actions take one
-            row rather than stacking into a column of full-width buttons. Send
-            is hidden with nothing to send, as before. A size down from Buy and
-            Pay, and a lone Share/Copy is not stretched to full width, so it
-            never competes with the main actions. */}
-        <div className={couponCount > 0 && !isSelf ? 'grid grid-cols-2 gap-3' : 'flex justify-center'}>
-          {couponCount > 0 && !isSelf && (
-            <Button size="md" variant="outline" onClick={() => navigate(`/send?from=${pubkey}`)}>
-              <Send className="mr-2 h-5 w-5" /> Send
-            </Button>
-          )}
-          <ShareMerchant nip05={branding.nip05} />
-        </div>
+        {/* Send and Coupon code, one row down and quieter. Send is a different errand from
+            Pay: Pay hands this stall its own coupon back at the till, Send gives one to a
+            friend. Coupon code (#402) turns this stall's coupons into a code for its online
+            shop, drawn whenever the feature is on and disabled with the reason when the stall
+            has no shop: the shopper learns what the stall offers instead of finding nothing.
+            It took the place of Share, which handed over a handle few people used. Send is
+            hidden with nothing to send, as before, and neither is shown on your own stall. */}
+        {!isSelf && (couponCount > 0 || codesOn) && (
+          <div className={couponCount > 0 && codesOn ? 'grid grid-cols-2 gap-3' : 'grid'}>
+            {couponCount > 0 && (
+              <Button size="md" variant="outline" onClick={() => navigate(`/send?from=${pubkey}`)}>
+                <Send className="mr-2 h-5 w-5" /> Send
+              </Button>
+            )}
+            {codesOn && <CouponCodeAction pubkey={pubkey} sellsOnline={Boolean(record?.onlineShop)} viewerPubkey={viewerPubkey} />}
+          </div>
+        )}
       </div>
 
       {/* Renders nothing when the stall has no location, which is the common
@@ -334,57 +337,5 @@ function StallHeader({
         </p>
       )}
     </div>
-  )
-}
-
-/**
- * Hand this stall to somebody else.
- *
- * What goes out is the merchant's own handle — the full `name@domain` from
- * their kind-0, or their npub when they have not claimed one — and nothing
- * else. A bare string is what a wallet can consume: whoever receives it pastes
- * it into Scan or Send and lands on this same merchant. Wrapped in a sentence
- * it would read better and paste worse.
- *
- * Copy stands in where there is no share sheet, so the slot is never dead in a
- * desktop browser. Either way it is one button doing one job, and it says which.
- */
-function ShareMerchant({ nip05 }: { nip05?: string }) {
-  const [copied, setCopied] = useState(false)
-
-  // The handle only (#324). Sharing the npub used to be the fallback for a stall
-  // with no handle, but every stall has a profile, and a raw key is nothing a
-  // shopper can read back. Without a handle there is nothing to hand over, so
-  // the button does not appear.
-  const handle = nip05 ?? null
-
-  if (handle === null) return null
-
-  const shareable = canShare()
-
-  const act = async () => {
-    if (await shareText(handle)) return
-    try {
-      await navigator.clipboard.writeText(handle)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard denied. Nothing a message would let them do differently.
-    }
-  }
-
-  return (
-    <Button size="md" variant="outline" onClick={act}>
-      {shareable ? (
-        <Share2 className="mr-2 h-5 w-5" />
-      ) : copied ? (
-        <Check className="mr-2 h-5 w-5" />
-      ) : (
-        <Copy className="mr-2 h-5 w-5" />
-      )}
-      <span aria-live="polite">
-        {shareable ? 'Share' : copied ? 'Copied' : 'Copy'}
-      </span>
-    </Button>
   )
 }

@@ -13,6 +13,7 @@ import {
   signedPartOf,
 } from '../pay'
 import { VoucherFullyRedeemedError } from '../fullyRedeemed'
+import { RequestAlreadyPaidError } from '../settledSends'
 import { fullyRedeemedRows, spendable } from '../merchants'
 
 // Stand-ins for the wallet store and imani-apps' classic-script API client. The
@@ -601,6 +602,8 @@ describe('sendVouchers and payRequest', () => {
     stubs.unreachable.clear()
     // A send left in flight by an earlier test would hold its coupon out of this one (#128).
     localStorage.removeItem(`imani-wallet:pending-sends:${PAYER}`)
+    // #461: and the settled ledger, or a send id reused by a later test reads as a replay.
+    localStorage.removeItem(`imani-wallet:settled-sends:${PAYER}`)
   })
 
   // Review of #340: every send is counted by the spend gate, and refused once a
@@ -2017,6 +2020,8 @@ describe('a coupon the mint refuses as redeemed in full (cashu-mint#540)', () =>
   beforeEach(() => {
     stubs.rows = [source]
     localStorage.removeItem(`imani-wallet:pending-sends:${PAYER}`)
+    // #461: and the settled ledger, or a send id reused by a later test reads as a replay.
+    localStorage.removeItem(`imani-wallet:settled-sends:${PAYER}`)
   })
 
   it('tells the holder, with the stall and reference, and never retries or reclaims', async () => {
@@ -2060,5 +2065,202 @@ describe('a coupon the mint refuses as redeemed in full (cashu-mint#540)', () =>
     expect(await reconcilePendingSends(PAYER)).toBe(0)
     expect(saved).toEqual([expect.objectContaining({ status: 'fully_redeemed' })])
     expect(loadPendingSends(PAYER)).toEqual([])
+  })
+})
+
+describe('a settled payment request is never paid, or settled, twice (#461)', () => {
+  const PAYER = 'c'.repeat(64)
+  const ISSUER = 'f'.repeat(64)
+  const merchant = { pubkey: ISSUER, name: 'Hill Farm', groups: [], voucherCount: 0 }
+  const CHANGE_TOKEN = `cashuB${'k'.repeat(30)}`
+  const source = {
+    token_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    token: `cashuB${'o'.repeat(30)}`,
+    voucher_id: 'v-1',
+    face_value: 500,
+    face_unit: 'EUR',
+    face_decimals: 2,
+    token_amount: 500,
+    amount: 500,
+    issuer_id: ISSUER,
+    status: 'active',
+  } as unknown as VoucherRow
+
+  /** A wallet whose rows really change, so the change coupon can be paid from. */
+  function liveWallet(initial: VoucherRow[]) {
+    const rows = [...initial]
+    const removed: string[] = []
+    const transactions: Record<string, unknown>[] = []
+    stubs.rows = rows
+    Object.assign(stubs.wallet, {
+      getVoucher: async (id: string) => rows.find((r) => r.token_id === id) ?? null,
+      removeVoucher: async (id: string) => {
+        removed.push(id)
+        const at = rows.findIndex((r) => r.token_id === id)
+        if (at >= 0) rows.splice(at, 1)
+        return at >= 0
+      },
+      saveVoucher: async (next: VoucherRow) => void rows.push(next),
+      addTransaction: async (tx: Record<string, unknown>) => void transactions.push(tx),
+    })
+    return { rows, removed, transactions }
+  }
+
+  /**
+   * gateway-core before the fix: the request hash covers sender|recipient|amount|voucherId|memo
+   * only, so the same key with a different token REPLAYS the stored send. The replay answers
+   * COMPLETED with no keep_token: the original's change was acked and cleared.
+   */
+  function oldGateway() {
+    const byKey = new Map<string, { hash: string; sendId: string }>()
+    const keys: string[] = []
+    const calls = { initiate: 0 }
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (p: Record<string, unknown>, key?: string | null) => {
+        calls.initiate += 1
+        keys.push(String(key))
+        const hash = [p.recipientPubkey, p.amount, p.voucherId, p.memo ?? ''].join('|')
+        const seen = key ? byKey.get(key) : undefined
+        if (seen && seen.hash === hash) return { send_id: seen.sendId, status: 'COMPLETED' }
+        const sendId = `as_${byKey.size + 1}`
+        if (key) byKey.set(key, { hash, sendId })
+        return { send_id: sendId, status: 'PENDING' }
+      },
+      getAtomicSendStatus: async () => ({
+        status: 'COMPLETED',
+        keep_token: CHANGE_TOKEN,
+        keep_face_value: 375,
+        is_full_send: false,
+      }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    return { keys, calls }
+  }
+
+  beforeEach(() => {
+    stubs.notified.count = 0
+    stubs.merchants.clear()
+    stubs.unreachable.clear()
+    localStorage.removeItem(`imani-wallet:pending-sends:${PAYER}`)
+    localStorage.removeItem(`imani-wallet:settled-sends:${PAYER}`)
+  })
+
+  it('refuses to pay the request again from the change, before any call, and keeps the coupon', async () => {
+    const { rows, removed, transactions } = liveWallet([source])
+    const { calls, keys } = oldGateway()
+    const req = request(125, { paymentId: '41bcaa6ab3d4fb90', issuerId: ISSUER, unit: 'EUR' })
+
+    const first = await payRequest({ request: req, raw: 'vreqA…', merchant, payer: PAYER })
+    expect(first.delivered).toBe(125)
+    // The split kept the change, under the SAME voucher_id, re-keyed to its own token.
+    const change = rows.find((r) => r.token === CHANGE_TOKEN)!
+    expect(change).toBeDefined()
+    expect(change.voucher_id).toBe('v-1')
+    expect(keys[0]).toBe(`pay_41bcaa6ab3d4fb90_${source.token_id}`)
+
+    const removedBefore = [...removed]
+    await expect(
+      payRequest({ request: req, raw: 'vreqA…', merchant, payer: PAYER }),
+    ).rejects.toBeInstanceOf(RequestAlreadyPaidError)
+
+    expect(calls.initiate).toBe(1)
+    expect(removed).toEqual(removedBefore)
+    expect(rows.map((r) => r.token)).toEqual([CHANGE_TOKEN])
+    expect(transactions).toHaveLength(1)
+  })
+
+  it('keys a payment on the source token, so the change never reuses the first key', async () => {
+    const { rows } = liveWallet([source])
+    const { keys } = oldGateway()
+    await payRequest({ request: request(125, { paymentId: 'r-1', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER })
+    const change = rows.find((r) => r.token === CHANGE_TOKEN)!
+    await payRequest({ request: request(125, { paymentId: 'r-1b', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER })
+    expect(keys).toEqual([`pay_r-1_${source.token_id}`, `pay_r-1b_${change.token_id}`])
+    expect(change.token_id).not.toBe(source.token_id)
+  })
+
+  it('never deletes a coupon on a gateway replay answer, even with no local record of the request', async () => {
+    // A wiped wallet, or another device: the ledger cannot refuse, so the answer must.
+    const { rows, removed, transactions } = liveWallet([source])
+    let acked = 0
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_old', status: 'COMPLETED', idempotent_replay: true }),
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => void (acked += 1),
+      reclaimAtomicSend: async () => ({}),
+    })
+
+    await expect(
+      payRequest({ request: request(125, { paymentId: 'r-2', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER }),
+    ).rejects.toBeInstanceOf(RequestAlreadyPaidError)
+
+    expect(removed).toEqual([])
+    expect(rows).toEqual([source])
+    expect(transactions).toEqual([])
+    expect(acked).toBe(0)
+    expect(loadPendingSends(PAYER)).toEqual([])
+  })
+
+  it('never settles an answer naming a send this wallet already settled', async () => {
+    const { rows, removed } = liveWallet([source])
+    oldGateway()
+    await payRequest({ request: request(125, { paymentId: 'r-3', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER })
+    const after = rows.map((r) => r.token_id)
+    const removedBefore = [...removed]
+    // A different request, but the gateway answers with the settled as_1 and no change.
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_1', status: 'COMPLETED' }),
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+    })
+    await expect(
+      payRequest({ request: request(125, { paymentId: 'r-4', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER }),
+    ).rejects.toBeInstanceOf(RequestAlreadyPaidError)
+    expect(rows.map((r) => r.token_id)).toEqual(after)
+    expect(removed).toEqual(removedBefore)
+  })
+
+  it('never settles an answer about a different source token', async () => {
+    const { rows, removed } = liveWallet([source])
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_x', status: 'PENDING' }),
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED', token_fingerprint: 'b'.repeat(32) }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    await expect(
+      sendVouchers({ payer: PAYER, recipient: { pubkey: 'd'.repeat(64) }, merchant, unit: 'EUR', amount: 500 }),
+    ).rejects.toThrow(/earlier send/)
+    expect(removed).toEqual([])
+    expect(rows).toEqual([source])
+  })
+
+  it('maps the gateway refusal request_already_paid to the typed error, coupon untouched', async () => {
+    const { rows, removed } = liveWallet([source])
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => {
+        throw Object.assign(new Error('Payment request already paid'), { status: 409, code: 'request_already_paid' })
+      },
+    })
+    await expect(
+      payRequest({ request: request(125, { paymentId: 'r-5', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER }),
+    ).rejects.toBeInstanceOf(RequestAlreadyPaidError)
+    expect(removed).toEqual([])
+    expect(rows).toEqual([source])
+  })
+
+  it('still settles a real full send and a real reconcile', async () => {
+    const { rows, removed } = liveWallet([source])
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_full', status: 'PENDING' }),
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED', is_full_send: true, token_fingerprint: source.token_id }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    const result = await payRequest({ request: request(500, { paymentId: 'r-6', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER })
+    expect(result.delivered).toBe(500)
+    expect(removed).toEqual([source.token_id])
+    expect(rows).toEqual([])
+    expect(await reconcilePendingSends(PAYER)).toBe(0)
   })
 })

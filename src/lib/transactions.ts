@@ -2,6 +2,8 @@ import type { TransactionRow } from '@imani/wallet-storage'
 import type { VoucherValidation } from './voucherToken'
 import { displayDecimals } from './format'
 import { asLockedGiftRecord, lockedGiftMemo, type LockedGiftRecord } from './lockedGiftRecord'
+import { asCheckoutCodeSnapshot, type CheckoutCodeSnapshot } from './checkoutCodeHistory'
+import { parseSpendSource, type SpendSource } from './spendSource'
 
 /**
  * A transaction, in the shape the screens actually need.
@@ -78,6 +80,15 @@ export interface WalletTransaction {
    * See `buildIssueTransaction` for what it does and does not establish.
    */
   saleVoucherIds?: readonly string[]
+  /**
+   * Written only when a sale landed PARTLY (#462): the total the sale was for,
+   * and how much of it reached the customer, both in minor units. Lets a
+   * reconciliation say "partly delivered" from the row itself rather than
+   * inferring it from missing siblings. Absent on every complete sale and on
+   * every row written before #462.
+   */
+  saleTotalMinor?: number
+  deliveredMinor?: number
   /**
    * The customer's signed assertion that they paid for this sale, if they gave
    * one. See `cashAttestation.ts`; always optional, and its absence is never a
@@ -178,6 +189,10 @@ export interface WalletTransaction {
    * the kind-7378 receipt this wallet published. Never shown; kept for audit.
    */
   transferSignature?: string
+  /** A checkout code's snapshot on its `checkout_code` row (#402). See `checkoutCodeHistory.ts`. */
+  checkoutCode?: CheckoutCodeSnapshot
+  /** #402 traceability: where an online shop spent this incoming coupon. See `spendSource.ts`. */
+  spendSource?: SpendSource
 }
 
 /**
@@ -210,6 +225,10 @@ function lockedOf(r: Record<string, unknown>): LockedGiftRecord | undefined {
   return asLockedGiftRecord(r.lockedGift)
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
@@ -229,7 +248,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // merchant is. 'sent' is the customer's own version of the same thing —
     // a voucher passed to someone else. Anything else is incoming.
     direction:
-      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback' || type === 'gift_sent'
+      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback' || type === 'gift_sent' || type === 'checkout_code'
         ? 'out'
         : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
@@ -282,6 +301,8 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // recovered".
     issuanceWarrant: str(r.issuanceWarrant) ?? str(r.issuance_warrant),
     cashAttestation: str(r.cashAttestation) ?? str(r.cash_attestation),
+    saleTotalMinor: finiteNumber(r.saleTotalMinor) ?? finiteNumber(r.sale_total_minor),
+    deliveredMinor: finiteNumber(r.deliveredMinor) ?? finiteNumber(r.delivered_minor),
     saleVoucherIds: Array.isArray(r.saleVoucherIds)
       ? (r.saleVoucherIds as string[]).filter((id): id is string => typeof id === 'string')
       : Array.isArray(r.sale_voucher_ids)
@@ -300,6 +321,8 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // screen. Either spelling, as for the evidence above.
     terminalPubkey: str(r.terminalPubkey) ?? str(r.terminal_pubkey),
     link: asGiftLinkRecord(r.link),
+    ...(asCheckoutCodeSnapshot(r.checkoutCode) ? { checkoutCode: asCheckoutCodeSnapshot(r.checkoutCode) } : {}),
+    ...(parseSpendSource(r.spendSource ?? r.spend_source) ? { spendSource: parseSpendSource(r.spendSource ?? r.spend_source) } : {}),
   }
 }
 
@@ -606,6 +629,9 @@ export function buildIssueTransaction(input: {
    * because there is no third party to ask.
    */
   cashAttestation?: string
+  /** See `WalletTransaction.saleTotalMinor`. Pass both only for a partly delivered sale. */
+  saleTotalMinor?: number
+  deliveredMinor?: number
 }): TransactionRow {
   return {
     id: `issued:${input.voucherId}`,
@@ -634,6 +660,11 @@ export function buildIssueTransaction(input: {
       : {}),
     ...(input.merchantId ? { merchantId: input.merchantId } : {}),
     ...(input.cashAttestation ? { cashAttestation: input.cashAttestation } : {}),
+    ...(input.saleTotalMinor !== undefined &&
+    input.deliveredMinor !== undefined &&
+    input.deliveredMinor !== input.saleTotalMinor
+      ? { saleTotalMinor: input.saleTotalMinor, deliveredMinor: input.deliveredMinor }
+      : {}),
   } as unknown as TransactionRow
 }
 
@@ -830,5 +861,6 @@ export function transactionLabel(tx: WalletTransaction): string {
   // #410 G14: a gift minted locked. Neither row is balance: the memo says where it stands.
   if (tx.type === 'gift_sent') return 'Gift sent'
   if (tx.type === 'gift_pending') return 'Gift'
+  if (tx.type === 'checkout_code') return 'Checkout code'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }

@@ -71,6 +71,21 @@ export function deriveRefundSecret(identitySecret: Uint8Array, i: number): Uint8
   return scalarBytes(scalarFrom(identitySecret, `${REFUND_LABEL}${i}`))
 }
 
+/**
+ * #402: the refund key of the `i`-th checkout part this wallet ever locks, under its own label so it
+ * can never equal a Cashlink's refund key for the same index. The shop holds `S`, so `R` must stay
+ * the customer's: after `x` it is the customer, and only the customer, who takes the part back.
+ *
+ * `i` is a wallet-wide counter, never the part's index within one code: reusing it across codes
+ * would put the same `R` on parts of different codes, and the relay could link them to one customer.
+ */
+export const CHECKOUT_REFUND_LABEL = 'imani-checkout-refund/v1/'
+
+export function deriveCheckoutRefundSecret(identitySecret: Uint8Array, i: number): Uint8Array {
+  if (!Number.isSafeInteger(i) || i < 0) throw new Error('part index must be a non-negative integer')
+  return scalarBytes(scalarFrom(identitySecret, `${CHECKOUT_REFUND_LABEL}${i}`))
+}
+
 /** A random refund key, for an account whose key this wallet cannot read (kept on the link record). */
 export function randomRefundSecret(): Uint8Array {
   for (;;) {
@@ -94,7 +109,22 @@ const xOnlyOf = (key: string): string => (key.length === 66 ? key.slice(2) : key
  * What a derived value is for. Separate labels, so no two steps can ever produce the same output:
  * a refund output that equalled a burn output would let one swap's restore answer for the other.
  */
-export type DerivedPurpose = 'burn' | 'refund' | 'takeback' | 'mint-link' | 'mint-refund' | 'lock' | 'resign-link' | 'resign-refund'
+export type DerivedPurpose =
+  | 'burn'
+  | 'refund'
+  | 'takeback'
+  | 'mint-link'
+  | 'mint-refund'
+  | 'lock'
+  | 'resign-link'
+  | 'resign-refund'
+  | 'unlock-burn'
+  | 'unlock'
+  | 'mint-unlock'
+  /** #402 bearer split: the burn's outputs, each part's nonce, and the carriers the parts are minted in. */
+  | 'split-burn'
+  | 'split-part'
+  | 'split-mint'
 
 const anchorOf = (secret: string) => bytesToHex(sha256(utf8(secret)))
 
@@ -271,6 +301,16 @@ export function lockWindowProblem(x: number, couponExpiresAt: number | undefined
   return null
 }
 
+/**
+ * The latest `x` {@link lockWindowProblem} accepts for one coupon, or null when no `x` would do.
+ * Derived from the same constants, so the two answers cannot disagree (#402 `maxExpiryFor`).
+ */
+export function latestLockX(couponExpiresAt: number | undefined, nowS: number): number | null {
+  let x = nowS + 30 * DAY_S
+  if (couponExpiresAt !== undefined) x = Math.min(x, couponExpiresAt - DAY_S - CLOCK_SLACK_S)
+  return lockWindowProblem(x, couponExpiresAt, nowS) === null ? x : null
+}
+
 // ─── Building the two proposals ─────────────────────────────────────────────
 
 /** Tags that decide who can spend, or that the issuer sets. Never terms. */
@@ -305,10 +345,30 @@ function termTags(v: SignedVoucherFields): string[][] {
 /** Why a gift proof cannot be locked as it is. Checked before anything is burnt. */
 export type UnlockableReason = 'not_a_bearer_voucher' | 'unverified' | 'non_integer_terms' | 'whole_ratio'
 
-/** The bearer voucher a gift proof carries, or why it cannot be locked. */
-export function lockableVoucher(giftSecret: string): { voucher: SignedVoucherFields } | { problem: UnlockableReason } {
+/**
+ * #402: whether a proof is locked to `selfPub` ALONE (`P2PK_VOUCHER(data = 02|03 || selfPub)`, no
+ * locktime, refund, other keys or SIG_ALL): a bearer split's part, or a coupon given back by a shop.
+ * gateway-customer's `/cashlink/lock` takes such a proof when `selfPub` authorises it.
+ */
+export function isSelfLocked(secret: string, selfPub: string): boolean {
+  const s = nut10(secret)
+  if (!s || s.kind !== 'P2PK_VOUCHER' || !HEX66.test(s.data) || xOnlyOf(s.data) !== xOnlyOf(selfPub)) return false
+  const keys = s.rows.map((r) => r[0])
+  if (new Set(keys).size !== keys.length) return false
+  if (keys.some((k) => k === 'locktime' || k === 'refund' || k === 'pubkeys' || k === 'n_sigs_refund')) return false
+  const flag = s.rows.find((r) => r[0] === 'sigflag')?.[1]
+  if (flag !== undefined && flag !== 'SIG_INPUTS') return false
+  const nSigs = s.rows.find((r) => r[0] === 'n_sigs')?.[1]
+  return nSigs === undefined || nSigs === '1'
+}
+
+/**
+ * The voucher a gift proof carries, or why it cannot be locked: a bearer proof, or (#402, with
+ * `selfPub`) one locked to this wallet's own key alone.
+ */
+export function lockableVoucher(giftSecret: string, selfPub?: string): { voucher: SignedVoucherFields } | { problem: UnlockableReason } {
   const v = voucherOfSecret(giftSecret)
-  if (!v || v.lockKey) return { problem: 'not_a_bearer_voucher' }
+  if (!v || (v.lockKey && !(selfPub && isSelfLocked(giftSecret, selfPub)))) return { problem: 'not_a_bearer_voucher' }
   // A float where Java reads a long (#194) would be re-spelled by the gateway's codec, and the
   // terms would no longer match: refused here, before the burn, rather than there, after it.
   if (v.integralAsFloat || ![v.faceValue, v.faceDecimals, v.expiresAt ?? 0].every(Number.isInteger)) {
@@ -329,6 +389,8 @@ export interface LinkLockProposal {
   /** The burnt proof's amount: the successor's sat bound (#141). */
   maxSats: number
   nonce: string
+  /** #402: the wallet's own key, x-only, when the gift proof is locked to it rather than bearer. */
+  selfPub?: string
 }
 
 /**
@@ -337,16 +399,49 @@ export interface LinkLockProposal {
  * voucher id and terms, then the locktime, the ONE refund key and the sat bound.
  */
 export function linkLockProposal(p: LinkLockProposal): string {
-  const found = lockableVoucher(p.giftSecret)
+  return lockProposal({ ...p, lockPub: p.linkPub }, 'link')
+}
+
+export interface CheckoutLockProposal {
+  giftSecret: string
+  /** `S`, x-only: the stall's online-shop redeem key, read from its profile and nowhere else. */
+  shopPub: string
+  /** x-only. Per part, from {@link deriveCheckoutRefundSecret}. Never `S`. */
+  refundPub: string
+  x: number
+  maxSats: number
+  nonce: string
+  /** #402: the wallet's own key, x-only, when the coupon is locked to it rather than bearer. */
+  selfPub?: string
+}
+
+/**
+ * One part of a checkout code (#402, contract §2): the coupon locked to the shop key `S` instead of
+ * a link key. Byte for byte the link lock's layout, signed by the same gateway route, and built by
+ * the same internal so the two can never drift apart, least of all on the refund rule.
+ */
+export function checkoutLockProposal(p: CheckoutLockProposal): string {
+  return lockProposal({ ...p, lockPub: p.shopPub }, 'shop')
+}
+
+/**
+ * The one builder behind both proposals. `lockPub` is whoever may spend before `x`: the link key
+ * for a Cashlink, `S` for a checkout code. Ends in {@link assertNotOpenAfterLocktime}, the one gate.
+ */
+function lockProposal(
+  p: { giftSecret: string; lockPub: string; refundPub: string; x: number; maxSats: number; nonce: string; selfPub?: string },
+  lockName: 'link' | 'shop',
+): string {
+  const found = lockableVoucher(p.giftSecret, p.selfPub)
   if ('problem' in found) throw new Error(`this gift cannot be locked: ${found.problem}`)
-  if (xOnlyOf(p.refundPub) === xOnlyOf(p.linkPub)) throw new CashlinkInvariantError('the refund key must not be the link key')
+  if (xOnlyOf(p.refundPub) === xOnlyOf(p.lockPub)) throw new CashlinkInvariantError(`the refund key must not be the ${lockName} key`)
   if (!Number.isSafeInteger(p.x) || p.x <= 0 || p.x > 2_147_483_647) throw new Error('the expiry is not a usable locktime')
   if (!Number.isSafeInteger(p.maxSats) || p.maxSats <= 0) throw new Error('the sat bound must be a positive integer')
   const secret = JSON.stringify([
     'P2PK_VOUCHER',
     {
       nonce: p.nonce,
-      data: compressed(p.linkPub),
+      data: compressed(p.lockPub),
       tags: [
         ['n_sigs', '1'],
         ['sigflag', 'SIG_ALL'],
@@ -360,6 +455,91 @@ export function linkLockProposal(p: LinkLockProposal): string {
   ])
   assertNotOpenAfterLocktime(secret)
   return secret
+}
+
+/**
+ * #402: one part of a bearer split (gateway-customer `POST /vouchers/bearer-split`): the bearer
+ * coupon's terms in tag form, unsigned, locked to `selfPub` ALONE (no locktime, refund or sigflag,
+ * the gateway's `isPlainLock`), with its own `max_sats`. `data` is `02 || selfPub`: the route takes
+ * even keys only.
+ */
+export function splitPartProposal(bearerSecret: string, selfPub: string, maxSats: number, nonce: string): string {
+  const found = lockableVoucher(bearerSecret)
+  if ('problem' in found) throw new Error(`this coupon cannot be split: ${found.problem}`)
+  if (!Number.isSafeInteger(maxSats) || maxSats <= 0) throw new Error('the sat bound must be a positive integer')
+  return JSON.stringify([
+    'P2PK_VOUCHER',
+    {
+      nonce,
+      data: compressed(selfPub),
+      tags: [['voucher_id', found.voucher.voucherId], ...termTags(found.voucher), ['max_sats', String(maxSats)]],
+    },
+  ])
+}
+
+/**
+ * Whether the gateway's signed split part is the proposal: the same lock key alone (no other way to
+ * spend it), the same nonce, the same `max_sats` and terms, signed by the bearer coupon's own issuer
+ * key and verifying. Compared by meaning, not bytes: the gateway re-serialises (tag order, explicit
+ * `n_sigs`/`sigflag` defaults). Nothing is minted otherwise.
+ */
+export function isTheSplitPartAskedFor(signed: string, proposal: string, bearer: SignedVoucherFields): boolean {
+  try {
+    const s = nut10(signed)
+    const p = nut10(proposal)
+    const v = voucherOfSecret(signed)
+    if (!s || !p || !v || s.kind !== 'P2PK_VOUCHER' || s.data.toLowerCase() !== p.data.toLowerCase()) return false
+    if (!isSelfLocked(signed, p.data)) return false
+    const [, sb] = JSON.parse(signed) as [string, { nonce?: string }]
+    const [, pb] = JSON.parse(proposal) as [string, { nonce?: string }]
+    if (sb.nonce !== pb.nonce) return false
+    if (maxSatsOf(signed) === null || maxSatsOf(signed) !== maxSatsOf(proposal)) return false
+    return v.issuerPublicKey.toLowerCase() === bearer.issuerPublicKey.toLowerCase() && termsKey(v) === termsKey(bearer) && verifySigned(v)
+  } catch {
+    return false
+  }
+}
+
+export const BEARER_SPLIT_TAG = 'imani/voucher-bearer-split/v1'
+
+/**
+ * `sha256(TAG || lp(predecessor) || u32be(n) || lp(part)... || u32be(m) || (u64be(amount) || lp(B_))...)`,
+ * as gateway-customer's `VoucherBearerSplitService.digest`. `lp` is a 4-byte big-endian length then
+ * the UTF-8 bytes; `B_` lowercased.
+ */
+export function bearerSplitDigest(predecessor: string, parts: readonly string[], outputs: ReadonlyArray<{ amount: number; B_: string }>): Uint8Array {
+  const chunks: Uint8Array[] = [utf8(BEARER_SPLIT_TAG)]
+  const u32 = (n: number) => {
+    const b = new Uint8Array(4)
+    new DataView(b.buffer).setUint32(0, n, false)
+    return b
+  }
+  const lp = (text: string) => {
+    const bytes = utf8(text)
+    chunks.push(u32(bytes.length), bytes)
+  }
+  lp(predecessor)
+  chunks.push(u32(parts.length))
+  for (const part of parts) lp(part)
+  chunks.push(u32(outputs.length))
+  for (const o of outputs) {
+    const b = new Uint8Array(8)
+    new DataView(b.buffer).setBigUint64(0, BigInt(o.amount), false)
+    chunks.push(b)
+    lp(o.B_.toLowerCase())
+  }
+  const message = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+  let at = 0
+  for (const c of chunks) {
+    message.set(c, at)
+    at += c.length
+  }
+  return sha256(message)
+}
+
+/** The bearer split's `authorization`, by the parts' lock key, deterministic. */
+export function bearerSplitAuthorization(key: Uint8Array, predecessor: string, parts: readonly string[], outputs: ReadonlyArray<{ amount: number; B_: string }>): string {
+  return bytesToHex(deterministicSign(bearerSplitDigest(predecessor, parts, outputs), key))
 }
 
 /**
@@ -423,6 +603,8 @@ const verifySigned = (v: SignedVoucherFields): boolean => verifyVoucher(v).signa
 
 export const CASHLINK_LOCK_TAG = 'imani/voucher-cashlink-lock/v1'
 export const CASHLINK_RESIGN_TAG = 'imani/voucher-cashlink-resign/v1'
+/** #402 contract §5: a returned checkout coupon locked to `R`, unlocked by `R`. */
+export const CHECKOUT_UNLOCK_TAG = 'imani/voucher-checkout-unlock/v1'
 
 /** `sha256(TAG || u32be(len) || predecessor || u32be(len) || proposed)`, as `LockAuthorization`. */
 export function cashlinkDigest(tag: string, predecessor: string, proposed: string): Uint8Array {

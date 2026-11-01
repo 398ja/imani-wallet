@@ -14,6 +14,12 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 const STALL = 'a'.repeat(64)
 
+// #434: the stall's open-for-business status is asked of the portal. Open here: these tests
+// are about something else, and an unmocked fetch would (correctly) fail closed.
+vi.mock('../../lib/merchantStatus', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchantStatus')>()),
+  fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
+}))
 vi.mock('../../lib/branding', () => ({
   knownBranding: () => undefined,
   onBrandingChanged: () => () => {},
@@ -47,5 +53,24 @@ describe('a stall page opened with no wallet', () => {
     const pay = screen.getByRole('button', { name: 'Pay with your vouchers' }) as HTMLButtonElement
     expect(pay.disabled).toBe(true)
     expect(screen.getByText('Log in to pay with your vouchers')).toBeTruthy()
+  })
+
+  it('shows Coupon code in place of Share, disabled with why for a stall with no online shop (#402)', async () => {
+    vi.stubEnv('VITE_CHECKOUT_CODES', 'on')
+    try {
+      render(
+        <MemoryRouter initialEntries={[`/merchants/${STALL}`]}>
+          <Routes>
+            <Route path="/merchants/:pubkey" element={<MerchantPage />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+      const code = (await screen.findByRole('button', { name: /coupon code/i })) as HTMLButtonElement
+      expect(code.disabled).toBe(true)
+      expect(screen.getByText("This merchant doesn't sell online")).toBeTruthy()
+      expect(screen.queryByRole('button', { name: /^(Share|Copy)$/ })).toBeNull()
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })

@@ -10,6 +10,9 @@ import {
   findMerchant,
   withPastMerchants,
   findMerchantWithHistory,
+  holdingForUnit,
+  totalForUnit,
+  unitHoldings,
 } from '../merchants'
 import type { WalletTransaction } from '../transactions'
 import { formatSats } from '../format'
@@ -434,5 +437,34 @@ describe('findMerchantWithHistory', () => {
 
   it('is undefined for a shop in neither', () => {
     expect(findMerchantWithHistory([], [], PUBKEY_B)).toBeUndefined()
+  })
+})
+
+describe('holdingForUnit / totalForUnit (#460)', () => {
+  const eur = (face_value: number, token_amount: number) =>
+    row({
+      issuer_id: PUBKEY_A,
+      face_value,
+      face_unit: 'EUR',
+      face_decimals: 2,
+      token_amount,
+      amount: token_amount,
+      backing_strategy: 'PROPORTIONAL',
+    })
+
+  it('sums every group in the unit, across issuance ratios', () => {
+    const [merchant] = toMerchants([eur(500, 500), eur(700, 350)])
+    expect(merchant.groups).toHaveLength(2)
+    expect(totalForUnit(merchant, 'eur')).toBe(1200)
+    expect(holdingForUnit(merchant, 'EUR')?.vouchers).toHaveLength(2)
+    expect(holdingForUnit(merchant, 'SAT')).toBeUndefined()
+    expect(totalForUnit(merchant, 'SAT')).toBe(0)
+  })
+
+  it('unitHoldings gives one option per merchant and unit', () => {
+    const merchants = toMerchants([eur(500, 500), eur(700, 350)])
+    const options = unitHoldings(merchants)
+    expect(options).toHaveLength(1)
+    expect(options[0].totalFaceValue).toBe(1200)
   })
 })

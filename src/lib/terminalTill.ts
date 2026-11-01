@@ -22,6 +22,9 @@ import { parseVoucherToken } from './voucherToken'
 /** The fetch this module calls. Swapped by tests. */
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>
 
+/** Above this the witnesses travel in the body (a 7-proof header hit nginx's 8 KB limit). */
+export const WITNESS_HEADER_MAX_BYTES = 6 * 1024
+
 /**
  * The terminal's mint client: `validateToken` reads, `receive` spends.
  *
@@ -43,13 +46,22 @@ export function terminalMintApi(fetchImpl: Fetch = (i, init) => fetch(i, init)):
     },
     async receive(token, options) {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      const body: { token: string; witnesses?: unknown } = { token }
       const witnesses = witnessHeaderForToken(token)
-      if (witnesses) headers['X-Cashu-Witnesses'] = witnesses
+      // Same rule as shared/api.js placeWitnesses: header while small (works on any gateway),
+      // body `witnesses` once it would overflow proxy header limits.
+      if (witnesses) {
+        if (new TextEncoder().encode(witnesses).length < WITNESS_HEADER_MAX_BYTES) {
+          headers['X-Cashu-Witnesses'] = witnesses
+        } else {
+          body.witnesses = JSON.parse(witnesses)
+        }
+      }
       if (options?.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey
       const res = await fetchImpl('/api/v1/wallet/receive', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ token }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error(`receive ${res.status}`)
       return res.json() as Promise<unknown>

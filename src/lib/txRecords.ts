@@ -86,6 +86,9 @@ export type HistoryContent = Nip60HistoryContent & {
   issuance_warrant?: string
   sale_voucher_ids?: readonly string[]
   cash_attestation?: string
+  /** See `WalletTransaction.saleTotalMinor` (#462). Only on a partly delivered sale. */
+  sale_total_minor?: number
+  delivered_minor?: number
   /** See `WalletTransaction.exactValue`. Restored so the ceiling survives a wipe. */
   exact_value?: number
   /**
@@ -116,6 +119,9 @@ export type HistoryContent = Nip60HistoryContent & {
    * inside the owner's own NIP-44 encryption like everything else here.
    */
   locked_gift?: unknown
+  /** A checkout code's status snapshot on its `checkout_code` row (#402). Nothing secret. */
+  checkout_code?: unknown
+  spend_source?: unknown
   /**
    * What the wallet checked about a received coupon (the issuer signature and
    * the warrant verdict), on `received` rows.
@@ -232,12 +238,16 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     issuance_warrant: tx.issuanceWarrant,
     sale_voucher_ids: tx.saleVoucherIds,
     cash_attestation: tx.cashAttestation,
+    sale_total_minor: tx.saleTotalMinor,
+    delivered_minor: tx.deliveredMinor,
     exact_value: tx.exactValue,
     transfer_id: tx.transferId,
     transfer_signature: tx.transferSignature,
     terminal_pubkey: tx.terminalPubkey,
     ...(tx.link ? { gift_link: tx.link } : {}),
     ...(tx.lockedGift ? { locked_gift: tx.lockedGift } : {}),
+    ...(tx.checkoutCode ? { checkout_code: tx.checkoutCode } : {}),
+    ...(tx.spendSource ? { spend_source: tx.spendSource } : {}),
     ...(tx.validation ? { validation: tx.validation } : {}),
   }
 }
@@ -281,12 +291,16 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     issuanceWarrant: content.issuance_warrant,
     saleVoucherIds: content.sale_voucher_ids,
     cashAttestation: content.cash_attestation,
+    saleTotalMinor: content.sale_total_minor,
+    deliveredMinor: content.delivered_minor,
     exactValue: content.exact_value,
     transferId: content.transfer_id,
     transferSignature: content.transfer_signature,
     ...(content.terminal_pubkey ? { terminalPubkey: content.terminal_pubkey } : {}),
     ...(asGiftLinkRecord(content.gift_link) ? { link: asGiftLinkRecord(content.gift_link) } : {}),
     ...(asLockedGiftRecord(content.locked_gift) ? { lockedGift: asLockedGiftRecord(content.locked_gift) } : {}),
+    ...(content.checkout_code ? { checkoutCode: content.checkout_code } : {}),
+    ...(content.spend_source ? { spendSource: content.spend_source } : {}),
     // Read back through `toTransaction`'s own `isValidation` guard, so a
     // garbled value reads as "Not checked", never as a pass.
     ...(content.validation ? { validation: content.validation } : {}),

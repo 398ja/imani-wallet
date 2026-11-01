@@ -17,8 +17,11 @@ import {
   describeAttestation,
   describeCashbackKind,
   describeCashbackClaim,
+  describeUnderstatedSale,
+  describeUnderstatedLine,
   type EvidenceLine,
 } from '../issuedVoucherWording'
+import { formatFace } from '../format'
 
 const DATE = (ms: number) => `day ${ms}`
 const claimLine = (status: string | undefined, expired = false, claimedAt?: number) =>
@@ -196,5 +199,32 @@ describe('a cashback claim', () => {
       expect(line.label).not.toBe('Not collected')
       expect(line.label).not.toBe('At the counter')
     }
+  })
+})
+
+
+describe('a sale delivered short of its signature (#462)', () => {
+  const eur = (minor: number) => formatFace(minor, { unit: 'EUR', decimals: 2 })
+
+  it('states the figures, never a signature failure', () => {
+    const line = describeUnderstatedSale(
+      { signedMinor: 100_000, deliveredMinor: 20_000, partlyDelivered: true },
+      eur,
+    )
+    expect(line.tone).not.toBe('alarming')
+    expect(line.label).toBe('Partly delivered')
+    expect(line.detail).toContain('sale signed')
+    expect(line.detail).toContain('missing')
+    expect(line.detail).not.toMatch(/does not match/i)
+  })
+
+  it('gives the panel one line with the count', () => {
+    const text = describeUnderstatedLine(
+      { understatedSignedMinor: 100_000, understatedMinor: 20_000, counts: { understated: 1 } },
+      eur,
+    )
+    expect(text).toBe(
+      `${eur(100_000)} sale signed, ${eur(20_000)} delivered: ${eur(80_000)} missing, 1 sale to look at.`,
+    )
   })
 })

@@ -1,0 +1,119 @@
+{
+  "alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+  "generate": [
+    {
+      "data": "7K3Q9MXP2DV",
+      "check": "3",
+      "display": "IMANI-7K3Q-9MXP-2DV3",
+      "canonical": "IMANI7K3Q9MXP2DV3",
+      "code_hash": "4680d29dd4b015f091ca47320d009355496f7d488651e44331ec0faf803bce8e"
+    },
+    {
+      "data": "00000000000",
+      "check": "0",
+      "display": "IMANI-0000-0000-0000",
+      "canonical": "IMANI000000000000",
+      "code_hash": "544f9e2e4797cc3692768d2e8680248983b9c54490c63cec814dd780deabbb39"
+    },
+    {
+      "data": "ZZZZZZZZZZZ",
+      "check": "B",
+      "display": "IMANI-ZZZZ-ZZZZ-ZZZB",
+      "canonical": "IMANIZZZZZZZZZZZB",
+      "code_hash": "99141756f88ab0901a7f3ddd9d5f7f80bfdcb0611ce99daeedef72a613f696ab"
+    },
+    {
+      "data": "1234567890A",
+      "check": "6",
+      "display": "IMANI-1234-5678-90A6",
+      "canonical": "IMANI1234567890A6",
+      "code_hash": "b27ce8e9625e7e287216799886cc81e0ab396349d49fb623c9ee3a7a0f3da968"
+    },
+    {
+      "data": "H8RT4WQXYZ0",
+      "check": "Y",
+      "display": "IMANI-H8RT-4WQX-YZ0Y",
+      "canonical": "IMANIH8RT4WQXYZ0Y",
+      "code_hash": "149a0ea216abd8d63e8fb4411ecbff220cd2a0039b8ab9464da6f030328b5607"
+    },
+    {
+      "data": "QRSTVWXYZ01",
+      "check": "Z",
+      "display": "IMANI-QRST-VWXY-Z01Z",
+      "canonical": "IMANIQRSTVWXYZ01Z",
+      "code_hash": "0ea8517ba947e7f8bd43942f4abbbcd7f0a53991034bcf264ba2e62117d2638c"
+    }
+  ],
+  "normalise": [
+    {
+      "input": "IMANI-7K3Q-9MXP-2DV3",
+      "canonical": "IMANI7K3Q9MXP2DV3"
+    },
+    {
+      "input": "IMANI7K3Q9MXP2DV3",
+      "canonical": "IMANI7K3Q9MXP2DV3"
+    },
+    {
+      "input": "imani-7k3q-9mxp-2dv3",
+      "canonical": "IMANI7K3Q9MXP2DV3"
+    },
+    {
+      "input": "  imani 7k3q 9mxp 2dv3 ",
+      "canonical": "IMANI7K3Q9MXP2DV3"
+    },
+    {
+      "input": "IMANI_7K3Q.9MXP-2DV3",
+      "canonical": "IMANI7K3Q9MXP2DV3"
+    },
+    {
+      "input": "IMANI-OOOO-OOOO-OOOO",
+      "canonical": "IMANI000000000000"
+    },
+    {
+      "input": "imani-l234-5678-90a6",
+      "canonical": "IMANI1234567890A6"
+    },
+    {
+      "input": "IMANI-I234-5678-90A6",
+      "canonical": "IMANI1234567890A6"
+    }
+  ],
+  "reject": [
+    {
+      "input": "IMANI-7K3Q-9MXP-2DV4",
+      "reason": "check"
+    },
+    {
+      "input": "IMANI-7K3Q-9MXP-D2V3",
+      "reason": "check"
+    },
+    {
+      "input": "IMANI-7K3Q-9MXP-2DV",
+      "reason": "not_a_code"
+    },
+    {
+      "input": "IMANI-7K3Q-9MXP-2DV33",
+      "reason": "not_a_code"
+    },
+    {
+      "input": "IMANI-7K3U-9MXP-2DV3",
+      "reason": "not_a_code"
+    },
+    {
+      "input": "SUMMER10",
+      "reason": "not_a_code"
+    },
+    {
+      "input": "",
+      "reason": "not_a_code"
+    },
+    {
+      "input": "IMAN1-7K3Q-9MXP-2DV3",
+      "reason": "not_a_code"
+    },
+    {
+      "input": "IMANI-7K3Q-9MXP-2DV3é",
+      "reason": "not_a_code"
+    }
+  ]
+}

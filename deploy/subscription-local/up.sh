@@ -26,6 +26,7 @@ case "$GATEWAY" in
     WALLET_PUBLIC_URL=
     EDGE=${EDGE_SECRET:-unused-against-staging}
     export VITE_WALLET_ORIGIN=${VITE_WALLET_ORIGIN:-http://127.0.0.1:18924}
+    export VITE_RELAY_URL=${VITE_RELAY_URL:-wss://relay.staging.398ja.xyz}
     ;;
   local)
     # The local stack's gateway-customer, by name on its network. It binds NIP-98 `u` to the wallet
@@ -43,6 +44,8 @@ case "$GATEWAY" in
     WALLET_PUBLIC_URL=${WALLET_DEV_ORIGIN:-http://localhost:5173}
     EDGE=dev-edge-secret-local-only-32-plus-chars
     export VITE_WALLET_ORIGIN=${VITE_WALLET_ORIGIN:-$WALLET_PUBLIC_URL}
+    # The local stack's relay, as the wallet dev server reads it (src/lib/relay.ts default).
+    export VITE_RELAY_URL=${VITE_RELAY_URL:-ws://localhost:27778}
     ;;
   *) echo "GATEWAY must be staging or local" >&2; exit 1 ;;
 esac
@@ -50,6 +53,9 @@ esac
 docker network inspect imani-test_imani-internal >/dev/null 2>&1 || docker network create imani-test_imani-internal >/dev/null
 
 umask 077
+# The site's badge reader pins the seller (build arg): the PUBLIC half of the nsec above, read from
+# the same env file's GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS (its first entry).
+export VITE_LICENCE_SELLER_PUBKEY=${VITE_LICENCE_SELLER_PUBKEY:-$(get GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS | cut -d, -f1)}
 cat > .env <<EOF
 STRIPE_SECRET_KEY=$STRIPE_SECRET_KEY
 STRIPE_WEBHOOK_SECRET=$WHSEC

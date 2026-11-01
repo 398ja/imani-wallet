@@ -593,6 +593,8 @@ export async function sendGift({
   // #379: from here until the arm has finished, no settle and no restore scan in this tab touches it.
   linksInFlight.add(k)
   sendingNow.add(k)
+  let sendDone!: () => void
+  sendsRunning.set(k, new Promise<void>((r) => (sendDone = r)))
   try {
   const result = await sendVouchers({
     payer,
@@ -627,6 +629,8 @@ export async function sendGift({
   } finally {
     sendingNow.delete(k)
     linksInFlight.delete(k)
+    sendsRunning.delete(k)
+    sendDone()
   }
 }
 
@@ -735,6 +739,17 @@ async function armLink(pubkey: string, k: string, linkSecret: Uint8Array, i: num
 
 /** Links whose send (not only the arm) is still running in this tab. */
 const sendingNow = new Set<string>()
+/**
+ * The send-and-arm of each link still running in this tab, so a "Take it back" tapped during it
+ * waits for it (see `takeBack`).
+ */
+const sendsRunning = new Map<string, Promise<void>>()
+
+/**
+ * How long a "Take it back" waits for its own link's send and arm. They finish in seconds; the cap
+ * only stops a hung send from holding the tap forever.
+ */
+export const TAKE_BACK_WAITS_FOR_SEND_MS = 90_000
 
 async function refuseForeignIssuerForGift(issuer: string, payer: string): Promise<void> {
   try {
@@ -920,6 +935,16 @@ export type TakeBackOutcome = GiftRedeemOutcome | { kind: 'not_found' }
 export async function takeBack(k: string): Promise<TakeBackOutcome> {
   const secret = secretFromText(k)
   if (!secret) return { kind: 'not_found' }
+  // A tap seconds after "Cashlink ready" can land while this tab is still locking the gift to its
+  // link. Read now, the gift is the bearer copy the lock is about to burn: the tap took THAT back
+  // and the lock then left the real gift on the link, claimable, under a row that said "taken back"
+  // (staging, 2026-10-30). Every background check already leaves such a link alone (linksInFlight);
+  // the tap waits for the send instead, then takes back whatever it left.
+  const sending = sendsRunning.get(k)
+  if (sending) {
+    const finished = await Promise.race([sending.then(() => true), new Promise<false>((r) => setTimeout(() => r(false), TAKE_BACK_WAITS_FOR_SEND_MS))])
+    if (!finished) return { kind: 'failed', message: 'This Cashlink is still being sent. Try again in a moment.' }
+  }
   const rows = (await linkRows()).filter((r) => r.link.k === k)
   let tokens: GiftToken[]
   try {

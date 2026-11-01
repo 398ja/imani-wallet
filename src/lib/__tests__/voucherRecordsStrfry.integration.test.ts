@@ -45,7 +45,6 @@ vi.mock('../wallet', () => ({
 describe.skipIf(!URL_)('coupon backup through a real strfry (#203)', () => {
   it('is accepted in full and a fresh device restores the 7-proof terminal coupon', async () => {
     const { publishVoucher, restoreVouchers, NIP60_TOKEN_KIND } = await import('../voucherRecords')
-    const { allEvents } = await import('../relay')
     const token = readFileSync(new URL('./fixtures/terminal-coupon-7-proofs.txt', import.meta.url), 'utf8').trim()
     const coupon = {
       token_id: 'ef'.repeat(32),

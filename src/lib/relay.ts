@@ -77,14 +77,19 @@ export { GatewayUnreachableError }
  * Locked by relayPublishCount.test.ts against a real socket. The silence in
  * #203 was a CALLER ignoring this result; every caller must check `ok`.
  */
-export async function publish(event: Event, relays: string[] = [RELAY_URL]): Promise<PublishResult> {
+export async function publish(
+  event: Event,
+  relays: string[] = [RELAY_URL],
+  /** A longer connect window, for a caller that has seen the default lose a race (#402). */
+  opts: { connectMs?: number } = {},
+): Promise<PublishResult> {
   // #428 WRITE-THROUGH. Reads go only through the gateway now, and for non-addressable kinds it
   // answers from nostrdb alone while its copy is "fresh" (30 min), never asking the relay. An event
   // published only to strfry stayed invisible: on staging a sender's history read 4 of 46 events.
   // So every publish also stores the event in the cache. Best effort, in parallel, never blocks or
   // changes the relay result.
   void cacheEvent(event)
-  const pool = new SimplePool()
+  const pool = opts.connectMs ? new SimplePool({ maxWaitForConnection: opts.connectMs } as never) : new SimplePool()
   try {
     const results = await Promise.allSettled(pool.publish(relays, event))
     // A relay that could not be REACHED does not reject. nostr-tools (2.24)
