@@ -19,6 +19,7 @@ import {
 import type { NUT18VRequest } from '../lib/nap'
 import { passedOverNote } from '../lib/passedOverWording'
 import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
+import { RequestAlreadyPaidError } from '../lib/settledSends'
 import { SwapBackOffer } from '../components/SwapBackOffer'
 import {
   Button,
@@ -41,6 +42,8 @@ type Status =
   | { step: 'failed'; message: string; swapBackTokenId?: string }
   /** The gateway took the payment and its outcome is unknown: Pay stays locked (#128). */
   | { step: 'unconfirmed'; message: string }
+  /** #461: this wallet already paid the request. Pay stays locked: a second tap would pay twice. */
+  | { step: 'alreadyPaid'; message: string }
 
 /**
  * Confirmation for a scanned voucher payment request, then the payment itself.
@@ -260,7 +263,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       {!expired && payable && passedNote && (
         <p className="mb-2 text-sm text-mono-500">{passedNote}</p>
       )}
-      {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
+      {(status.step === 'failed' || status.step === 'unconfirmed' || status.step === 'alreadyPaid') && (
+        <Alert>{status.message}</Alert>
+      )}
       {status.step === 'failed' && status.swapBackTokenId && (
         <SwapBackOffer tokenId={status.swapBackTokenId} pubkey={pubkey} />
       )}
@@ -268,7 +273,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       <Button
         size="lg"
         className="mt-4 w-full"
-        disabled={!payable || status.step === 'paying' || status.step === 'unconfirmed'}
+        disabled={
+          !payable || status.step === 'paying' || status.step === 'unconfirmed' || status.step === 'alreadyPaid'
+        }
         onClick={async () => {
           setStatus({ step: 'paying' })
           try {
@@ -285,6 +292,10 @@ export function PayPage({ pubkey }: { pubkey: string }) {
             const result = await payRequest({ request, raw, merchant: merchant!, payer: pubkey })
             setStatus({ step: 'done', result })
           } catch (e) {
+            if (e instanceof RequestAlreadyPaidError) {
+              setStatus({ step: 'alreadyPaid', message: e.message })
+              return
+            }
             setStatus({
               step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
               message: userMessage(e, 'Payment failed.'),
@@ -294,7 +305,13 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           }
         }}
       >
-        {status.step === 'paying' ? 'Paying…' : status.step === 'unconfirmed' ? 'Still going through' : 'Pay'}
+        {status.step === 'paying'
+          ? 'Paying…'
+          : status.step === 'unconfirmed'
+            ? 'Still going through'
+            : status.step === 'alreadyPaid'
+              ? 'Already paid'
+              : 'Pay'}
       </Button>
     </Screen>
   )

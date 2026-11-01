@@ -20,6 +20,12 @@ import { withSpend } from './receiveGate'
 import { PENDING_SEND_LIFETIME_MS as SEND_LIFETIME, pendingSendsKey } from './inFlightMoney'
 import { checkoutHeldTokenIds } from './checkoutCodeRecords'
 import { forgetSendIntent, gatewayAnswered, keyForSend, pendingIntentVoucher } from './sendIntent'
+import {
+  RequestAlreadyPaidError,
+  isSettledSend,
+  rememberSettledSend,
+  settledAgainstRequest,
+} from './settledSends'
 
 /**
  * The money decisions now live in `@imani/wallet-core`.
@@ -100,6 +106,13 @@ type SendStatus = {
   error_message?: string
   /** Why a FAILED send failed. `VOUCHER_FULLY_REDEEMED` is the mint's 90025 (cashu-mint#540). */
   error_code?: string
+  /**
+   * #461: set by a gateway that answers an initiate with a send it already had for this
+   * idempotency key. Such an answer describes an EARLIER send, never this one.
+   */
+  idempotent_replay?: boolean
+  /** #461: sha256(source token)[:32] of the send the gateway is describing, when it says. */
+  token_fingerprint?: string
 }
 
 /**
@@ -455,9 +468,39 @@ export function signedPartOf(
   }
 }
 
+/**
+ * Why a COMPLETED answer is NOT this send's own completion, or undefined when it is (#461).
+ *
+ * The rule this enforces: a coupon is deleted only when this exact token was consumed by this
+ * exact send. A gateway that replays an idempotency key answers with the EARLIER send's state,
+ * and before this `settleSend` took that as its own: no keep_token (the original's change had
+ * been acked and cleared), so it took the full-send branch and deleted the change coupon, whose
+ * proofs never left the wallet. Any doubt here leaves the coupon alone: a coupon that is shown
+ * but already spent is refused by the mint on its next use, a coupon deleted while unspent is
+ * money the customer cannot see.
+ */
+export function replayedSendReason(
+  payer: string,
+  pending: Pick<PendingSend, 'sendId' | 'tokenId'>,
+  status: SendStatus,
+): string | undefined {
+  if (isSettledSend(payer, pending.sendId)) return 'this wallet already settled that send'
+  if (status.idempotent_replay === true) return 'the gateway replayed an earlier send'
+  if (status.token_fingerprint && status.token_fingerprint !== pending.tokenId) {
+    return 'the gateway describes a send of a different coupon'
+  }
+  // A partial send whose change is missing. A real one hands the change back until it is acked,
+  // and once acked the source row is already replaced (caught above as "already settled").
+  if (!status.keep_token && status.is_full_send === false) {
+    return 'a partial send came back without its change'
+  }
+  return undefined
+}
+
 async function settleSend(
   api: { ackKeepToken(sendId: string): Promise<void> },
   wallet: ReturnType<typeof getWallet>,
+  payer: string,
   pending: PendingSend,
   status: SendStatus,
   /**
@@ -468,6 +511,13 @@ async function settleSend(
   transferIdLater?: () => Promise<string | undefined>,
 ): Promise<boolean> {
   const spentTokenId = pending.tokenId
+  // #461: never settle an answer that describes some other send. No removeVoucher, no row, no
+  // ack (the ack belongs to the send that really completed).
+  const replay = replayedSendReason(payer, pending, status)
+  if (replay) {
+    console.error('[pay] not settling a replayed send, coupon kept:', pending.sendId, replay)
+    return false
+  }
   const source = await wallet.getVoucher(spentTokenId)
   if (!source) {
     console.warn('[pay] source coupon already settled, skipping:', pending.sendId)
@@ -594,6 +644,16 @@ async function settleSend(
     void signing.catch((error) => console.error('[pay] transfer signature failed', error))
   }
 
+  // #461: remembered so a second payment of the same request, or a replayed answer naming this
+  // send, is refused instead of settled again.
+  rememberSettledSend(payer, {
+    sendId: pending.sendId,
+    tokenId: spentTokenId,
+    paymentRequestId: pending.paymentRequestId,
+    amount: pending.amount,
+    at: Date.now(),
+  })
+
   await api.ackKeepToken(pending.sendId).catch(() => {
     // Non-fatal: the backend expires its copy anyway, and the money has moved.
   })
@@ -662,7 +722,7 @@ async function reconcileOnce(pubkey: string): Promise<number> {
       }
 
       if (status.status === 'COMPLETED') {
-        if (await settleSend(api, wallet, send, status)) settled += 1
+        if (await settleSend(api, wallet, pubkey, send, status)) settled += 1
         continue
       }
 
@@ -906,7 +966,7 @@ async function initiateOnFirstFree(
   keyFor: (candidate: Voucher) => string,
   /** Told when the gateway answered for a key (accepted, or refused before anything moved). */
   answered: (key: string) => void = () => {},
-): Promise<{ sendId: string; status?: string; voucher: Voucher; sourceRow: VoucherRow }> {
+): Promise<{ sendId: string; status: SendStatus; voucher: Voucher; sourceRow: VoucherRow }> {
   let lastRefusal: Error | null = null
 
   for (const candidate of candidates) {
@@ -919,6 +979,13 @@ async function initiateOnFirstFree(
         // #179: only a definite refusal frees the key. A lost answer keeps it, so the retry
         // (now, or after a reload) carries the SAME key and the gateway replays the first send.
         if (gatewayAnswered(error)) answered(key)
+        // #461: gateway-core refuses a second send against a single-use request it saw paid.
+        // Nothing moved, so this is the same refusal the local ledger gives, never a failure.
+        if ((error as { code?: unknown } | null)?.code === 'request_already_paid') {
+          answered(key)
+          const requestId = buildParams(candidate).paymentRequestId
+          throw new RequestAlreadyPaidError(typeof requestId === 'string' ? requestId : undefined)
+        }
         throw error
       }
       answered(key)
@@ -926,7 +993,19 @@ async function initiateOnFirstFree(
       if (!sendId) throw new Error('Gateway accepted the send but returned no send id.')
       const sourceRow = rowOf.get(candidate)
       if (!sourceRow) throw new Error('Lost track of the voucher being spent.')
-      return { sendId, status: initiated.status, voucher: candidate, sourceRow }
+      // #461: the replay markers ride along with the status, so a replayed initiate that says
+      // COMPLETED at once (and is never polled) is still recognised as someone else's send.
+      const answer = initiated as SendStatus
+      return {
+        sendId,
+        status: {
+          status: initiated.status,
+          ...(answer.idempotent_replay !== undefined ? { idempotent_replay: answer.idempotent_replay } : {}),
+          ...(answer.token_fingerprint ? { token_fingerprint: answer.token_fingerprint } : {}),
+        },
+        voucher: candidate,
+        sourceRow,
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (message.includes('active send already exists')) {
@@ -1025,7 +1104,7 @@ async function awaitAndSettle(
   api: SendApi,
   payer: string,
   pending: PendingSend,
-  initialStatus: string | undefined,
+  initialStatus: SendStatus,
 ): Promise<void> {
   // ponytail: poll rather than subscribe. The saga also streams over SSE
   // (api.subscribeAtomicSendEvents), which is what the vanilla app uses — but
@@ -1041,9 +1120,22 @@ async function awaitAndSettle(
   // mint had already burned its proofs, and nothing on the next login went
   // looking. A bundle multiplies that window by its part count, which is what
   // brought it to light.
+  // #461: an initiate that already says it is describing an earlier send is refused BEFORE it
+  // is written to the pending ledger. Recorded, a later reconcile would read that send's status
+  // by id, without the marker, and settle it as this wallet's own.
+  const replayedAtInitiate = replayedSendReason(payer, pending, initialStatus)
+  if (replayedAtInitiate) {
+    console.error('[pay] initiate answered with an earlier send, nothing settled:', pending.sendId, replayedAtInitiate)
+    if (pending.paymentRequestId) throw new RequestAlreadyPaidError(pending.paymentRequestId, pending.sendId)
+    throw new Error(
+      `The gateway answered with an earlier ${pending.recipientPubkey ? 'send' : 'payment'} ` +
+        `(send ${pending.sendId}). Nothing was sent this time and your voucher is unchanged.`,
+    )
+  }
+
   rememberPendingSend(payer, pending)
 
-  let status: SendStatus = { status: initialStatus }
+  let status: SendStatus = initialStatus
   let polled = false
   let unreadable: unknown
   let delayMs = POLL_INTERVAL_MS
@@ -1133,7 +1225,19 @@ async function awaitAndSettle(
     )
   }
 
-  await settleSend(api, wallet, pending, status, transferIdLater)
+  // #461: an answer that describes an earlier send settles nothing, and is not reported as sent.
+  const replay = replayedSendReason(payer, pending, status)
+  if (replay) {
+    forgetPendingSend(payer, pending.sendId)
+    console.error('[pay] gateway answered with an earlier send, nothing settled:', pending.sendId, replay)
+    if (pending.paymentRequestId) throw new RequestAlreadyPaidError(pending.paymentRequestId, pending.sendId)
+    throw new Error(
+      `The gateway answered with an earlier ${noun} (send ${pending.sendId}). Nothing was sent ` +
+        'this time and your voucher is unchanged.',
+    )
+  }
+
+  await settleSend(api, wallet, payer, pending, status, transferIdLater)
   forgetPendingSend(payer, pending.sendId)
   notifyWalletChanged()
 }
@@ -1154,6 +1258,12 @@ export async function payRequest({
   // and the coupons would go out against a request the issuer has timed out.
   if (request.expiresAt !== undefined && request.expiresAt * 1000 < Date.now()) {
     throw new Error('This payment request has expired.')
+  }
+
+  // #461: a request this wallet has already paid is refused before anything is asked of the
+  // gateway, so no coupon can be touched by a second attempt.
+  if (settledAgainstRequest(payer, request.paymentId) > 0) {
+    throw new RequestAlreadyPaidError(request.paymentId)
   }
 
   const api = await sendApi()
@@ -1327,7 +1437,9 @@ async function sendPart(
       bundle
         ? `bundle:${bundle.bundleId}:${bundle.index}:0`
         : ctx.paymentRequestId
-          ? `pay_${ctx.paymentRequestId}_${candidate.voucher_id}`
+          ? // #461: keyed on the source TOKEN, not voucher_id. The change of a split keeps its
+            // voucher_id, so the old key made a second payment from the change replay the first.
+            `pay_${ctx.paymentRequestId}_${ctx.rowOf.get(candidate)?.token_id ?? candidate.voucher_id}`
           : keyForSend(ctx.payer, {
               recipientPubkey: ctx.recipient.pubkey,
               amount,
