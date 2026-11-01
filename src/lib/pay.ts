@@ -6,6 +6,7 @@ import { legacyApi } from './legacyBridge'
 import { couponsFor, issuerKey, toMerchants, toVoucher, type Merchant } from './merchants'
 import { merchantStatus } from './merchant'
 import { getSigner } from './nap'
+import { hasSelfLockedProof } from './selfLockedCoupons'
 import { spentTokenIds, withoutSpent } from './spentCoupons'
 import { buildPaymentTransaction, buildSentTransaction, type GiftLinkRecord } from './transactions'
 import { sendTransferSignature } from './transferSignature'
@@ -859,7 +860,12 @@ async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
   mine: Voucher[]
   rowOf: Map<Voucher, VoucherRow>
 }> {
-  const rows = withoutInFlight(couponsFor(await listVouchers(), merchantPubkey), payer)
+  // #402: a bearer split's change is locked to this wallet's own key, and gateway-core's send cannot
+  // split a locked proof (LOCKED_VOUCHER_SPLIT_REQUIRES_HOLDER): a €1 send failed on a €7 change row
+  // on staging, 2026-11-01. Unlock such rows first, so what the send draws on is ordinary coupons.
+  // Never blocks: a row that could not be unlocked yet is simply left out below.
+  await unlockSelfLockedFirst(payer)
+  const rows = withoutSelfLocked(withoutInFlight(couponsFor(await listVouchers(), merchantPubkey), payer))
 
   /**
    * Drop anything this wallet has already spent, according to its own
@@ -894,6 +900,33 @@ async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
     return voucher
   })
   return { mine, rowOf }
+}
+
+/**
+ * #402: unlock this wallet's self-locked coupon rows (a split's change) before a send draws on the
+ * holding. Bounded, so a slow mint or gateway never holds a payment up for long; never throws.
+ */
+async function unlockSelfLockedFirst(payer: string): Promise<void> {
+  try {
+    const app = await import('./selfLockedCouponsApp')
+    await Promise.race([app.unlockSelfLockedCouponsNow(payer), new Promise((r) => setTimeout(r, 15_000))])
+  } catch {
+    // Left for the catch-up sweep; the rows are left out of this send below.
+  }
+}
+
+/**
+ * #402: rows still holding a proof locked to this wallet's own key, left out of a send: the gateway
+ * would refuse to split them, after the confirmation screen had promised the payment.
+ */
+function withoutSelfLocked(rows: VoucherRow[]): VoucherRow[] {
+  let selfPub: string
+  try {
+    selfPub = getSigner().pubkey
+  } catch {
+    return rows
+  }
+  return rows.filter((row) => !row.token || !hasSelfLockedProof(row.token, selfPub))
 }
 
 /**

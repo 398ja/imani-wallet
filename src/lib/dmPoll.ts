@@ -1588,6 +1588,9 @@ function catchUp(): void {
   void import('./lockedGiftsApp').then((m) => m.sweepLockedGifts()).catch(() => undefined)
   // #402: checkout codes (resume, the store's `GET /mine` fallback, expiry). Never throws.
   if (currentPubkey) void import('./checkoutCodesApp').then((m) => m.reconcileCheckoutCodesNow(currentPubkey!)).catch(() => 0)
+  // #402: a split's change is locked to this wallet's own key, and no ordinary send can spend it until
+  // it is unlocked (a €1 send failed on it, 2026-11-01). Never throws.
+  if (currentPubkey) void import('./selfLockedCouponsApp').then((m) => m.unlockSelfLockedCouponsNow(currentPubkey!)).catch(() => 0)
 }
 
 /**
