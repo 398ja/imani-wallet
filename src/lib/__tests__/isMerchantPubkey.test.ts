@@ -39,9 +39,11 @@ describe('isMerchantPubkey', () => {
     expect(await isMerchantPubkey(nextPubkey())).toBe(true)
   })
 
-  it('is false once the shop is retired', async () => {
+  // #434: closing a stall (Open for business off) leaves it a stall. Its badge stays; only
+  // trading stops, and that is the portal status endpoint's answer, not this one's.
+  it('is still true once the shop is closed for business', async () => {
     query.mockResolvedValue(record({ active: false }))
-    expect(await isMerchantPubkey(nextPubkey())).toBe(false)
+    expect(await isMerchantPubkey(nextPubkey())).toBe(true)
   })
 
   it('is false with no record, and DOES ask again — a miss is not cached', async () => {

@@ -79,6 +79,16 @@ export type RefusalReason =
    * distinguishes them; the refusal does not need to.
    */
   | 'unwarranted'
+  /** The token's proofs are not in the unit the wallet credits (sat). */
+  | 'wrong-unit'
+  /** The token could not be read well enough to say where its value is. */
+  | 'undecodable'
+  /**
+   * The MINT refused to credit it: the coupon's declared credits already reach the sats issued
+   * for it (cashu-mint#540, 90025, gateway code `VOUCHER_FULLY_REDEEMED`). Nothing was swapped,
+   * so the token is still the sender's. Terminal: a retry is refused the same way.
+   */
+  | 'fully-redeemed'
 
 /**
  * The recipient refused a redemption on policy grounds, before any swap.

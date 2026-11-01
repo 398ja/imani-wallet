@@ -18,27 +18,11 @@
 
 import type { Voucher } from '@imani/voucher-send'
 
+import { readExpiry } from './expiry'
 
-
-/**
- * Milliseconds since the epoch, from whatever shape an expiry arrived in.
- *
- * Copied from the app's `format.ts` rather than imported, because that module
- * is full of `Intl` formatting this package has no business owning — taking it
- * whole would drag currency display into a package about spend decisions.
- *
- * The leniency is not decoration. `expires_at` is typed `string` and is stored
- * as a NUMBER by the redemption path, in seconds or milliseconds depending on
- * who wrote it, so a parser that trusted the type would read every numeric
- * expiry as invalid and sort every coupon as "never expires".
- */
-export function toEpochMs(value: number | string | undefined | null): number | undefined {
-  if (value === undefined || value === null || value === '' || value === 0) return undefined
-
-  const ms =
-    typeof value === 'number' ? (value < 1e11 ? value * 1000 : value) : Date.parse(value)
-  return Number.isFinite(ms) ? ms : undefined
-}
+// The one expiry parser lives in ./expiry (#157). Re-exported from here
+// because callers have long imported `toEpochMs` from the spend module.
+export { toEpochMs } from './expiry'
 
 /**
  * The smallest face amount a coupon can be divided into.
@@ -81,7 +65,10 @@ export function checkSplittable(voucher: Voucher, amount: number): SplitCheck {
 
   // Below here a split is required.
   if (sats <= 0) {
-    return { ok: false, reason: 'This voucher has no sats backing, so it cannot be split.' }
+    return {
+      ok: false,
+      reason: 'This voucher has no sats backing, so it cannot be split.',
+    }
   }
   if (sats <= 1) {
     return {
@@ -92,7 +79,10 @@ export function checkSplittable(voucher: Voucher, amount: number): SplitCheck {
 
   const step = minSplitStep(voucher)
   if (amount < step) {
-    return { ok: false, reason: `The smallest amount this voucher can be split into is ${step}.` }
+    return {
+      ok: false,
+      reason: `The smallest amount this voucher can be split into is ${step}.`,
+    }
   }
   if (face - amount < step) {
     return {
@@ -229,12 +219,104 @@ export function planParts(vouchers: Voucher[], amount: number): SendPlan {
  * the primary key on both send paths is what turned it into the money bug it
  * always looked like.
  *
- * `toEpochMs` is the wallet's one answer to this question — it takes ISO,
- * seconds or milliseconds, and applies the same 1e11 magnitude test used for
- * every other timestamp here.
+ * `readExpiry` (./expiry) is the wallet's one answer to this question: it takes
+ * ISO, seconds or milliseconds, and tells the last two apart at 1e12, so a
+ * far-future expiry in seconds is never mistaken for a 1970s one.
  */
 function expiryMs(voucher: Voucher): number {
-  return toEpochMs(voucher.expires_at as number | string | undefined) ?? Number.MAX_SAFE_INTEGER
+  const expiry = readExpiry(voucher.expires_at)
+  if (expiry.kind === 'at') return expiry.seconds * 1000
+  // Genuinely absent: the coupon in least danger, last.
+  if (expiry.kind === 'none') return Number.MAX_SAFE_INTEGER
+  // Corrupt, the last fallback (#157). Storage canonicalises every readable
+  // format to epoch seconds, so only a value no parser can read gets here. It
+  // might lapse tomorrow, so it goes FIRST: spending it early can only use
+  // value that was at risk, while sorting it as "never expires" could strand it
+  // past a real expiry nobody could read. If the gateway refuses it as expired,
+  // the payer walks on to the next candidate (`initiateOnFirstFree`).
+  return Number.MIN_SAFE_INTEGER
+}
+
+/** Why a coupon that expires sooner than the one spent was not used. */
+export type PassedOverReason = 'issuer' | 'unit' | 'split' | 'small'
+
+export type PassedOver = {
+  voucher: Voucher
+  reason: PassedOverReason
+  /** For 'split', checkSplittable's own sentence. */
+  detail?: string
+}
+
+/**
+ * The issuer id the way `VoucherGrouper` derives it: a missing id is the
+ * 'unknown' stall, a 64-char hex key is lower-cased, and anything else (an
+ * npub, which is case-sensitive bech32) is kept as it is.
+ *
+ * Lives here so the app's grouping (`merchants.ts`) and `passedOver` compare
+ * issuers with one rule (#169 review). A bare toLowerCase folded npubs and
+ * matched an empty payee id to every issuer-less coupon.
+ */
+export function issuerKey(issuerId: string | undefined | null): string {
+  const id = issuerId || 'unknown'
+  if (id.startsWith('npub1')) return id
+  return /^[0-9a-f]{64}$/i.test(id) ? id.toLowerCase() : id
+}
+
+const sameIssuer = (a: string | undefined, b: string) => issuerKey(a) === issuerKey(b)
+const sameUnit = (a: string | undefined, b: string) => (a ?? '').toUpperCase() === b.toUpperCase()
+
+/**
+ * Coupons that expire sooner than what this payment will spend, and why each
+ * was left (#157).
+ *
+ * The spend rule is "soonest-expiring first, within what the payee accepts".
+ * When a sooner coupon is outside that (another issuer, another unit) or cannot
+ * be divided to the amount, leaving it is correct, but from the outside it
+ * looks exactly like the wallet ignoring its own rule. This names them so the
+ * pay screen and the `[pay]` log can say so.
+ *
+ * `vouchers` is the WHOLE holding, not the payee's coupons: the reasons only
+ * exist relative to what was filtered out. Returns [] when nothing can pay,
+ * because the obstacle message already speaks for that case.
+ */
+export function passedOver(
+  vouchers: Voucher[],
+  amount: number,
+  payee: { issuer: string; unit: string },
+): PassedOver[] {
+  const live = vouchers.filter((v) => v.token && isUnspent(v) && (v.face_value ?? 0) > 0)
+  const eligible = live.filter(
+    (v) => sameIssuer(v.issuer_id, payee.issuer) && sameUnit(v.face_unit, payee.unit),
+  )
+
+  const single = selectVouchers(eligible, amount)
+  let spent: Voucher[]
+  if (single.length > 0) spent = [single[0]]
+  else {
+    const plan = planParts(eligible, amount)
+    if (plan.remaining > 0) return []
+    spent = plan.parts.map((p) => p.voucher)
+  }
+  const latestSpent = Math.max(...spent.map(expiryMs))
+  const used = new Set(spent)
+
+  return live
+    .filter((v) => !used.has(v) && expiryMs(v) < latestSpent)
+    .sort((a, b) => expiryMs(a) - expiryMs(b))
+    .map((voucher): PassedOver => {
+      if (!sameIssuer(voucher.issuer_id, payee.issuer)) return { voucher, reason: 'issuer' }
+      if (!sameUnit(voucher.face_unit, payee.unit)) return { voucher, reason: 'unit' }
+      // Worth less than the amount: it could only pay as part of a bundle, and
+      // one coupon that covers the amount is preferred over drawing several.
+      // Not "cannot be divided", which would be untrue of it.
+      if ((voucher.face_value ?? 0) < amount) return { voucher, reason: 'small' }
+      const check = checkSplittable(voucher, amount)
+      return {
+        voucher,
+        reason: 'split',
+        detail: check.ok ? undefined : check.reason,
+      }
+    })
 }
 
 /**

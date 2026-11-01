@@ -36,11 +36,14 @@ const stubs = vi.hoisted(() => ({
   announced: [] as unknown[],
   /** Every settled-but-unsaved receive announced (#112), with its account. */
   unsaved: [] as Array<{ pubkey: string; event: unknown }>,
+  relay: 'customer' as 'merchant' | 'customer' | 'unknown',
 }))
 
 vi.mock('../merchant', () => ({
   loadMerchant: () => stubs.merchant,
   MERCHANT_KIND: 30078,
+  // Owner rule 2026-10-13: the relay's answer for an account with no local stall record.
+  merchantStatus: async () => stubs.relay,
 }))
 vi.mock('../legacyBridge', () => ({
   legacyApi: async () => ({}),
@@ -66,6 +69,8 @@ vi.mock('../attestation', () => ({
   attestRedemption: async () => null,
   nullifierFor: () => 'n'.repeat(64),
 }))
+// sonner touches the DOM at import; the held-coupon toast is its own module for that reason (#133 review).
+vi.mock('../heldToast', () => ({ announceHeld: () => {} }))
 vi.mock('../refusalToast', () => ({
   announceRefusal: (e: unknown) => stubs.announced.push(e),
 }))
@@ -99,6 +104,7 @@ beforeEach(() => {
   stubs.swapped = []
   stubs.announced = []
   stubs.unsaved = []
+  stubs.relay = 'customer'
   // The mint. Records what it was asked to swap and nothing else.
   ;(window as unknown as Record<string, unknown>).TokenRedemption = {
     redeem: async (token: string) => {
@@ -195,6 +201,23 @@ describe('a coupon from another stall, through the installed adapter', () => {
     } as never)
 
     expect(stubs.swapped).toEqual([token])
+  })
+
+  it('refuses a stall known only from the relay (no local record) before the mint (review rmo, W7)', async () => {
+    // Another device of the stall: the synchronous check sees no stall record, so only the owner
+    // rule's relay lookup can refuse here.
+    stubs.merchant = null
+    stubs.relay = 'merchant'
+    const { forgetAccountRoles } = await import('../merchantVouchers')
+    forgetAccountRoles()
+    const { token, voucher } = buildVoucherToken({ faceValue: 400, unit: 'GBP' })
+
+    await expect(
+      installedAdapter().redeem(token, {
+        metadata: { issuerId: voucher.issuerId, voucherId: 'v-1', faceValue: 400, validation: verified },
+      } as never),
+    ).rejects.toBeInstanceOf(RedemptionRefusedError)
+    expect(stubs.swapped).toEqual([])
   })
 
   it('lets a customer wallet redeem anything, since it is not a stall', async () => {

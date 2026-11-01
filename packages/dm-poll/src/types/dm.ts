@@ -119,6 +119,12 @@ export interface TokenMetadata {
   /** Voucher ID if applicable */
   voucherId?: string;
 
+  /**
+   * The payment request this coupon answers, from the payload's `request_id`
+   * (dmCrypto sets it). Sender-written: display and correlation only.
+   */
+  requestId?: string;
+
   // --- Spec 012-multi-voucher-send: bundle metadata ---
   // Per contracts/bundle-metadata-wire-format.md §1. Wire encoding is the
   // `Bundle-*: <value>` text lines added by the gateway-app to the existing

@@ -1,9 +1,17 @@
-import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useId, useState } from 'react'
+import { useStallStatus } from '../hooks/useStallStatus'
+import { closedMessage } from '../lib/merchantStatus'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { CreditCard } from 'lucide-react'
 
-import { Button, Screen, BackLink, Centered } from '../components/ui'
+import { Button, Screen, BackLink, Centered, buttonClasses } from '../components/ui'
 import { startPurchase } from '../lib/purchase'
+import { GUEST_BUY_ELSEWHERE, rememberPurchase } from '../lib/pendingPurchase'
+import { giftingOrigin, giftingPageUrl } from '../lib/giftingPage'
+import { useIdentity } from '../lib/identity'
+import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
+import { cardSalesReason, type CardSalesReadiness } from '../lib/merchantActions'
+
 
 /**
  * Buying a stall's coupon with a card.
@@ -20,8 +28,11 @@ import { startPurchase } from '../lib/purchase'
  * already names the recipient and no second lookup is needed. It is passed in
  * rather than read from a session, because this screen renders in both route
  * trees: the authenticated one knows who is buying, and the public one has
- * nobody to ask. A visitor with no wallet sends none, which is a legitimate
- * purchase — they take delivery by claim link instead.
+ * nobody to ask.
+ *
+ * A visitor with no wallet is sent to the stall's gifting page (#410), which
+ * takes guests: it delivers by handle or emailed Cashlink. This page still
+ * never starts a guest checkout, and payment-adapter still refuses one here.
  *
  * ## Amounts
  *
@@ -35,6 +46,35 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
   const [amount, setAmount] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [cardSales, setCardSales] = useState<CardSalesReadiness>('checking')
+  // #434: a closed stall sells nothing by card, whatever Stripe says.
+  const stall = useStallStatus(pubkey)
+  const stallSells = stall.status === 'open' && stall.sellsByCard
+  const stallNote =
+    stall.status === 'loading'
+      ? 'Checking this merchant is open…'
+      : stall.status === 'open'
+        ? stall.sellsByCard ? null : "Card payments aren't set up for this merchant"
+        : closedMessage(stall.status === 'customer' ? 'unknown' : stall.status)
+  const readinessId = useId()
+
+  /*
+   * #298: can the purchase issuer issue for this stall? A link straight here skips the stall
+   * page's Buy gate, so this page asks too. Fails safe: no answer is "not ready", and a stall that
+   * cannot issue is never sent to Checkout, because the card would be charged for nothing.
+   */
+  useEffect(() => {
+    if (buyerPubkey === null) return
+    let live = true
+    cardSalesReadiness(pubkey)
+      .catch((): 'not-ready' => 'not-ready')
+      .then((ready) => {
+        if (live) setCardSales(ready)
+      })
+    return () => {
+      live = false
+    }
+  }, [pubkey, buyerPubkey])
 
   const minor = toMinorUnits(amount)
   /**
@@ -51,6 +91,28 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
     setBusy(true)
     setError(null)
 
+    // Asked again at the tap (#298): the answer on screen may be minutes old, and this is the
+    // last moment nothing has been charged.
+    // #434: and is the stall still open? A stall that closed since the page loaded is never sent
+    // to Stripe.
+    const now = await stall.recheck()
+    if (now.status !== 'open' || !now.sellsByCard) {
+      setBusy(false)
+      setError(`${(closedMessage(now.status === 'customer' ? 'unknown' : now.status) ?? "Card payments aren't available").replace(/\.$/, '')}. Nothing was charged.`)
+      return
+    }
+    const readiness = await cardSalesReadiness(pubkey).catch((): 'not-ready' => 'not-ready')
+    if (readiness !== 'ready') {
+      setCardSales(readiness)
+      setBusy(false)
+      setError(`${cardSalesReason(readiness).replace(/\.$/, '')}. Nothing was charged.`)
+      return
+    }
+
+    // Remembered on THIS device so the return page can name the stall without
+    // trusting anything Stripe puts in the URL. Before the call, so a slow
+    // redirect cannot race it.
+    rememberPurchase(pubkey)
     const result = await startPurchase({
       stallPubkey: pubkey,
       amountMinor: minor,
@@ -70,14 +132,18 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
 
   if (busy) return <Centered>Taking you to the payment page…</Centered>
 
+  if (buyerPubkey === null) {
+    return <GuestBuy pubkey={pubkey} />
+  }
+
   return (
     <Screen>
       <BackLink to={`/merchants/${pubkey}`} label="Back" />
 
       {/* Tracking tightened at this size: a heading reads loose with the body
           tracking the system font ships by default. */}
-      <h1 className="mb-2 text-[22px] font-semibold tracking-[-0.02em]">Buy a voucher</h1>
-      <p className="mb-6 text-[15px] leading-relaxed text-mono-500">
+      <h1 className="mb-2 text-title font-semibold">Buy a voucher</h1>
+      <p className="mb-6 text-callout text-mono-500">
         You pay this stall directly by card. The voucher arrives in your wallet.
       </p>
 
@@ -96,7 +162,7 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
         id="amount"
         inputMode="decimal"
         autoComplete="off"
-        className="mb-2 w-full rounded-xl border border-mono-200 bg-transparent px-4 py-3 text-[17px] tabular-nums outline-none transition-colors duration-100 ease-out placeholder:text-mono-400 focus:border-mono-400 dark:border-mono-800 dark:focus:border-mono-600"
+        className="mb-2 w-full rounded-xl border border-mono-200 bg-transparent px-4 py-3 text-lg tabular-nums outline-none transition-colors duration-100 ease-out placeholder:text-mono-400 focus:border-mono-400 dark:border-mono-800 dark:focus:border-mono-600"
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
         placeholder="25.00"
@@ -111,7 +177,9 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
       )}
 
       {error && (
-        <p className="expand-row mb-4 mt-2 rounded-xl bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700 dark:bg-red-950/50 dark:text-red-300">
+        // `role="alert"`, like the shared `Alert`: it answers the tap the
+        // customer just made, so it is announced rather than painted silently.
+        <p role="alert" className="expand-row mb-4 mt-2 rounded-xl bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700 dark:bg-red-950/50 dark:text-red-300">
           {error}
         </p>
       )}
@@ -122,23 +190,24 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
       <Button
         size="lg"
         className="mt-4 w-full"
-        disabled={minor === null}
+        disabled={minor === null || cardSales !== 'ready' || !stallSells || busy}
+        aria-describedby={cardSales !== 'ready' || !stallSells ? readinessId : undefined}
         onClick={buy}
       >
         <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Pay by card
       </Button>
-
-      {buyerPubkey === null && (
-        <p className="mt-4 text-[15px] leading-relaxed text-mono-500">
-          You will get a link to claim your voucher, so you can install the app
-          afterwards.
+      {/* The reason sits under the button it disables (#281), and is announced with it. */}
+      {(stallNote || cardSales !== 'ready') && (
+        <p id={readinessId} className="mt-2 text-center text-xs text-mono-600 dark:text-mono-400">
+          {stallNote ?? (cardSales !== 'ready' ? cardSalesReason(cardSales) : null)}
         </p>
       )}
 
       {/* A text button, not a second heavy one. Cancelling is the quiet path
           and should not compete with the thing they came here to do. */}
       <button
-        className="pressable mt-6 text-sm text-mono-500 underline"
+        type="button"
+        className="pressable mt-3 inline-block py-3 text-sm text-mono-500 underline"
         onClick={() => navigate(`/merchants/${pubkey}`)}
       >
         Cancel
@@ -160,4 +229,32 @@ function toMinorUnits(raw: string): number | null {
   if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null
   const minor = Math.round(Number(trimmed) * 100)
   return Number.isFinite(minor) && minor > 0 ? minor : null
+}
+
+/** A visitor with no wallet: the stall's gifting page, or a wallet. */
+function GuestBuy({ pubkey }: { pubkey: string }) {
+  const identity = useIdentity(pubkey)
+  const gifting = giftingPageUrl(identity?.nip05)
+  return (
+    <Screen>
+      <BackLink to={`/merchants/${pubkey}`} label="Back" />
+      <h1 className="mb-2 text-title font-semibold">Buy a voucher</h1>
+      <p className="mb-6 text-callout text-mono-500">{GUEST_BUY_ELSEWHERE}</p>
+      {gifting && (
+        <a href={gifting} className={`${buttonClasses('primary', 'lg')} mb-3 w-full`}>
+          Buy on the gifting page
+        </a>
+      )}
+      <Link to="/" className={`${buttonClasses(gifting ? 'secondary' : 'primary', 'lg')} w-full`}>
+        Create a wallet
+      </Link>
+      {!gifting && (
+        <p className="mt-3 text-xs text-mono-500">
+          {giftingOrigin()
+            ? `This stall has no gifting page yet. Gifting lives at ${giftingOrigin()}.`
+            : 'This stall has no gifting page yet.'}
+        </p>
+      )}
+    </Screen>
+  )
 }

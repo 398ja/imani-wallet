@@ -17,9 +17,8 @@ import { parseLatLng } from '../lib/coords'
  * be an iframe written out here, which was the whole problem: the preview
  * existed only in this edit field, so the promise below — "Customers see this
  * as a pin on a map" — was false until that component was rendered on the
- * pages customers actually open. Sharing it also keeps the embed URL in one
- * place; two hand-written copies is how one of them ends up pointing somewhere
- * else. See `LocationMap` for the CSP `frame-src` requirement it carries.
+ * pages customers actually open. Sharing it also keeps the map (OpenStreetMap
+ * tiles, #263) in one place, so the preview and the stall views cannot drift.
  */
 
 export function LocationField({

@@ -1,7 +1,8 @@
 import { nip19, type EventTemplate } from 'nostr-tools'
 
 import { fetchNewestKind0, imageUrl, str } from './branding'
-import { handleLabel } from './format'
+import { handleLabel, OWN_ACCOUNT } from './format'
+import { readTermsAcceptance, type TermsAcceptance } from './terms'
 
 /**
  * The current user's own profile.
@@ -42,6 +43,15 @@ export interface Profile {
    * unrelated clocks and meanings.
    */
   eventAt?: number
+  /**
+   * Which Terms and Conditions this account accepted, and when (#357). Set once, at registration.
+   *
+   * Local only: never published in the kind-0 (it is not profile metadata, and another client
+   * would drop it), and never overwritten by a kind-0 merge. It lives here because this record is
+   * what the backup file and the Drive backup carry, so a restored account keeps it. Optional, so
+   * a record or backup written before #357 still reads; absent means "no acceptance on record".
+   */
+  termsAccepted?: TermsAcceptance
 }
 
 /** The user-editable subset. `nip05` is excluded — it is claimed, not typed. */
@@ -75,12 +85,28 @@ function webUrl(value: unknown): string | undefined {
 
 /** Strip anything unsafe from a profile that came from outside this app. */
 export function sanitiseProfile(profile: Profile): Profile {
+  const { termsAccepted, ...rest } = profile
+  const terms = readTermsAcceptance(termsAccepted)
   return {
-    ...profile,
+    ...rest,
     picture: imageUrl(profile.picture),
     banner: imageUrl(profile.banner),
     website: webUrl(profile.website),
+    nip05: lowerNip05(profile.nip05),
+    // A backup file is a trust boundary: only a well-formed acceptance comes back in (#357).
+    ...(terms ? { termsAccepted: terms } : {}),
   }
+}
+
+/**
+ * Owner rule (#342): a handle is always stored and published lowercase and
+ * trimmed. The directory folds case anyway, so this loses nothing, and one form
+ * everywhere means a cached handle always equals the one that resolves.
+ */
+function lowerNip05(nip05: string | undefined): string | undefined {
+  if (typeof nip05 !== 'string') return nip05
+  const v = nip05.trim().toLowerCase()
+  return v === '' ? undefined : v
 }
 
 // Matches the `imani-wallet:` prefix dmPoll.ts already established. Keyed by
@@ -101,7 +127,8 @@ export function loadProfile(pubkey: string): Profile | null {
 }
 
 export function saveProfile(profile: Profile): void {
-  localStorage.setItem(key(profile.pubkey), JSON.stringify(profile))
+  const stored = profile.nip05 === undefined ? profile : { ...profile, nip05: lowerNip05(profile.nip05) }
+  localStorage.setItem(key(profile.pubkey), JSON.stringify(stored))
 }
 
 export function clearProfile(pubkey: string): void {
@@ -116,13 +143,14 @@ export function emptyProfile(pubkey: string): Profile {
 /**
  * What to show when there is no display name.
  *
- * Falls back through the handle to a shortened npub, so the header and the login
- * card always have something to render — and `Avatar` always has something to
- * derive initials from.
+ * Falls back through the handle to {@link OWN_ACCOUNT}, so the header and the
+ * login card always have something to render without ever printing a key
+ * (#324). Every account has a profile, so the last rung is only reached in the
+ * moment before it is read, which the header covers with a skeleton anyway.
  */
 export function profileName(profile: Profile): string {
   const nip05 = profile.nip05
-  return profile.displayName ?? (nip05 ? handleLabel(nip05) : undefined) ?? `${profile.npub.slice(0, 10)}…`
+  return profile.displayName ?? (nip05 ? handleLabel(nip05) : undefined) ?? OWN_ACCOUNT
 }
 
 /**
@@ -197,7 +225,7 @@ export function mergeKind0(profile: Profile, content: string, createdAt = 0): Pr
     picture: imageUrl(parsed.picture) ?? profile.picture,
     banner: imageUrl(parsed.banner) ?? profile.banner,
     website: webUrl(parsed.website) ?? profile.website,
-    nip05: str(parsed.nip05) ?? profile.nip05,
+    nip05: lowerNip05(str(parsed.nip05)) ?? profile.nip05,
     updatedAt: Date.now(),
     eventAt: createdAt > 0 ? createdAt : profile.eventAt,
   }
@@ -208,10 +236,30 @@ export function mergeKind0(profile: Profile, content: string, createdAt = 0): Pr
  *
  * Never throws: an unreachable gateway means we show the copy we already have,
  * which is the entire reason a local copy exists.
+ *
+ * `onLater` gets the profile again if a store that missed `fetchNewestKind0`'s
+ * 150 ms window answers afterwards with something newer. Without it that answer
+ * was dropped: a FRESH device (nothing stored, cold relay socket) whose only copy
+ * of a stall's name came from the slower store showed "A stall with no public
+ * name" for good. That is the terminal setup screen's case (#160, staging
+ * redeploy 3, "B names the stall": the stall's kind-0 had been on the relay for
+ * 13 s).
  */
-export async function refreshProfile(pubkey: string): Promise<Profile> {
+export async function refreshProfile(
+  pubkey: string,
+  onLater?: (profile: Profile) => void,
+): Promise<Profile> {
   try {
-    const newest = await fetchNewestKind0(pubkey)
+    const newest = await fetchNewestKind0(pubkey, (later) => {
+      try {
+        const stored = loadProfile(pubkey) ?? emptyProfile(pubkey)
+        const merged = mergeKind0(stored, later.content, later.createdAt)
+        if (merged !== stored) saveProfile(merged)
+        onLater?.(merged)
+      } catch {
+        // A late correction is best effort; the screen keeps what it has.
+      }
+    })
     // The stored copy is READ AFTER THE FETCH, not before it.
     //
     // This runs concurrently with itself on every login: OnboardingPage awaits
@@ -261,7 +309,7 @@ export function buildProfileEvent(profile: Profile): EventTemplate {
   put('picture', profile.picture)
   put('banner', profile.banner)
   put('website', profile.website)
-  put('nip05', profile.nip05)
+  put('nip05', lowerNip05(profile.nip05))
 
   return {
     kind: 0,

@@ -7,7 +7,15 @@ import { SimplePool } from 'nostr-tools'
 import { allEvents, newestAddressable } from '../relay'
 
 /**
- * Relay READS must not wait three seconds on a relay that is not there.
+ * Relay READS have a BOUNDED connection wait, and it must not be shorter than a
+ * real `wss://` open on a slow link (imani-deploy#235).
+ *
+ * HISTORY: this file used to pin the budget at <= 1500ms, "well under the 3s
+ * default". That cap failed a healthy relay on a 350ms-round-trip phone link:
+ * the read resolved `[]` and samson's restore showed a 0 balance. See the
+ * comment on READ_CONNECT_TIMEOUT_MS in relay.ts for the measurements, and
+ * relayReadSlowLink.test.ts for the over-a-socket regression test. The original
+ * reasoning, kept for the record:
  *
  * Reads go to the relay and the gateway in parallel and merge the results, so
  * the caller pays for the slower store — and reaching strfry from a browser
@@ -80,10 +88,11 @@ describe('relay reads', () => {
 
     expect(Original).toBeDefined()
     expect(built.length).toBeGreaterThan(0)
-    // Bounded, and well under the 3s default.
+    // Bounded, and NOT below the 3s a slow link needs (#235). Lowering it again
+    // fails here as well as in relayReadSlowLink.test.ts.
     for (const budget of built) {
-      expect(budget).toBeLessThanOrEqual(1500)
-      expect(budget).toBeGreaterThan(0)
+      expect(budget).toBeGreaterThanOrEqual(3000)
+      expect(budget).toBeLessThanOrEqual(5000)
     }
     spy.mockRestore()
   })

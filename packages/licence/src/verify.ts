@@ -1,9 +1,16 @@
 import {
   DENIAL_REASONS,
+  type LicenceLimits,
   type LicenceVerdict,
   type LicenceVoucher,
   type VerifyOptions,
 } from './types.js'
+
+/** The x of a 66-hex compressed key, or the key unchanged. */
+function xOnly(key: string): string {
+  const k = key.trim()
+  return k.length === 66 && /^0[23]/.test(k) ? k.slice(2) : k
+}
 
 /** Constant-time-ish comparison of two hex strings, case-insensitively. */
 function sameKey(a: string | undefined, b: string | undefined): boolean {
@@ -69,6 +76,16 @@ export function verifyLicence(
    * From here every field is SIGNED, so it is a fact rather than a claim.
    */
 
+  // The seller pin (review of imani-wallet#197, MEDIUM-3). Before the lock, because a licence a
+  // stranger minted to us is not ours to reason about either.
+  if (options.sellerPublicKey && !sameKey(voucher.issuerId, options.sellerPublicKey)) {
+    return {
+      granted: false,
+      reason: DENIAL_REASONS.NOT_SOLD_BY_US,
+      detail: 'this licence was not sold by our licence seller',
+    }
+  }
+
   if (!voucher.lockKey) {
     // Refused rather than accepted. A voucher with no lock is one that
     // possession alone unlocks, which is the bearer-credential failure ADR 0006
@@ -87,6 +104,24 @@ export function verifyLicence(
       granted: false,
       reason: DENIAL_REASONS.WRONG_KEY,
       detail: 'this licence is locked to a different key',
+    }
+  }
+
+  // Locked at the MINT, to the same key (review of imani-wallet#197). A plain VOUCHER's lock is
+  // metadata the mint never checks, and gateway-customer refuses it, so the wallet must not show
+  // "licensed" for one either.
+  if (!voucher.mintLockKey) {
+    return {
+      granted: false,
+      reason: DENIAL_REASONS.NOT_LOCKED_AT_MINT,
+      detail: 'this licence is not locked at the mint, so the server will not count it',
+    }
+  }
+  if (!sameKey(xOnly(voucher.mintLockKey), voucher.lockKey)) {
+    return {
+      granted: false,
+      reason: DENIAL_REASONS.WRONG_KEY,
+      detail: 'the mint lock is not the licence lock_key',
     }
   }
 
@@ -111,8 +146,20 @@ export function verifyLicence(
     }
   }
 
+  // Before its window opens: a renewal delivered early (#407 §6) sits here until it starts. Signed,
+  // so an answer rather than an outage. `<` because the opening instant belongs to the window.
+  if (typeof voucher.validFrom === 'number' && Number.isFinite(voucher.validFrom) && options.now < voucher.validFrom) {
+    return {
+      granted: false,
+      reason: DENIAL_REASONS.NOT_YET_VALID,
+      detail: `this licence starts at ${voucher.validFrom}`,
+    }
+  }
+
   const features = voucher.features ?? []
-  if (features.length === 0) {
+  // A hand grant may lift only a LIMIT ("raise this stall to £200", #407 §7) and name no feature,
+  // so a licence confers something if it names a feature OR a limit.
+  if (features.length === 0 && !hasAnyLimit(voucher.limits)) {
     return {
       granted: false,
       reason: DENIAL_REASONS.NO_FEATURES,
@@ -129,6 +176,22 @@ export function verifyLicence(
       subscriptionId: voucher.subscriptionId,
       expiresAt: voucher.expiresAt,
       pilot: voucher.pilot === true,
+      ...(voucher.limits ? { limits: copyLimits(voucher.limits) } : {}),
+      ...(voucher.tier ? { tier: voucher.tier } : {}),
+      ...(typeof voucher.validFrom === 'number' ? { validFrom: voucher.validFrom } : {}),
+      ...(voucher.badge ? { badge: voucher.badge } : {}),
     },
   }
+}
+
+function hasAnyLimit(limits: LicenceLimits | undefined): boolean {
+  return !!limits && (limits.sales !== undefined || limits.terminals !== undefined)
+}
+
+function copyLimits(limits: LicenceLimits): LicenceLimits {
+  const out: LicenceLimits = {}
+  if (limits.terminals !== undefined) out.terminals = limits.terminals
+  if (limits.sales === null) out.sales = null
+  else if (limits.sales) out.sales = { period: limits.sales.period, amounts: { ...limits.sales.amounts } }
+  return out
 }

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Check, Copy, CreditCard, Send, Share2 } from 'lucide-react'
-import { nip19 } from 'nostr-tools'
+import { Send } from 'lucide-react'
 
 import {
   Button,
@@ -17,13 +16,17 @@ import {
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged, walletIsOpen } from '../lib/wallet'
 import { findMerchantWithHistory, couponsFor, type Merchant } from '../lib/merchants'
+import { soonestExpiring } from '../lib/couponExpiry'
+import { StallExpiryCue } from '../components/ui/ExpiryBadge'
+import { useExpiryClock } from '../hooks/useExpiryReminders'
 import { toMerchantPass, EMPTY_BRANDING, type MerchantBranding } from '../lib/pass'
 import { useBranding } from '../hooks/useBranding'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
 import { LocationMap } from '../components/LocationMap'
+import { CouponCodeAction, MerchantActions } from '../components/MerchantActions'
+import { checkoutCodesEnabled } from '../lib/checkoutCodePorts'
 import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
-import { canShare, shareText } from '../lib/native'
 
 /** How many transactions the summary list shows before deferring to a full page. */
 const PREVIEW = 3
@@ -58,11 +61,14 @@ const PREVIEW = 3
  * fact and not merely in type: a stranger's page must still be a page when the
  * only leg they can reach is the relay.
  */
-export function MerchantPage() {
+export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
   const { pubkey = '' } = useParams()
   const navigate = useNavigate()
   const [merchant, setMerchant] = useState<Merchant | null | undefined>(undefined)
   const [couponCount, setCouponCount] = useState(0)
+  // #265: this stall's soonest coupon inside the week, for the cue under its card.
+  const [soonest, setSoonest] = useState<ReturnType<typeof soonestExpiring>>(undefined)
+  const clock = useExpiryClock()
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
   // One line per payment in the preview too, so it agrees with the full list.
   const entries = useMemo(() => groupHistory(transactions), [transactions])
@@ -96,11 +102,15 @@ export function MerchantPage() {
       // Rows, not merchant.groups[].vouchers — only the row carries token_id, and
       // that is what addresses a coupon's detail screen.
       setCouponCount(couponsFor(rows, pubkey).length)
+      setSoonest(soonestExpiring(rows, pubkey))
       setTransactions(history)
     }
     load()
-    return onWalletChanged(load)
-  }, [pubkey])
+    // Same guard as `load`: `onWalletChanged` goes through `getWallet` too, and
+    // threw on a visitor's mount, which blanked this page for everyone without a
+    // session (the shop-sign QR case, and #280's logged-out Buy).
+    return walletIsOpen() ? onWalletChanged(load) : undefined
+  }, [pubkey, clock])
 
   useEffect(() => {
     // A SECOND record, and it has to be: the stall's own kind-30078 carries the
@@ -160,6 +170,8 @@ export function MerchantPage() {
 
   const name = branding.organizationName
   const acceptsCards = record?.acceptsCards === true
+  const isSelf = viewerPubkey !== undefined && viewerPubkey === pubkey
+  const codesOn = checkoutCodesEnabled()
 
   return (
     <Screen>
@@ -175,6 +187,7 @@ export function MerchantPage() {
           <p className="mt-2 text-center text-sm text-mono-500">
             {couponCount === 1 ? '1 voucher' : `${couponCount} vouchers`} · tap to see them
           </p>
+          <StallExpiryCue soonest={soonest} />
         </div>
       ) : (
         <StallHeader
@@ -185,40 +198,38 @@ export function MerchantPage() {
       )}
 
       <div className="mb-6 grid gap-3">
-        {/* Buying is offered to everyone who can be sold to, including someone
-            who already holds coupons and wants more — that is the top-up case,
-            and it needs no separate screen.
+        {/* Buy and Pay side by side, always drawn, disabled with a reason
+            when unavailable (#280). `acceptsCards` is still the gate for Buy
+            and still fails closed: imani-merchant is self-scoped, so the
+            stall's published flag is the only thing a stranger can ask, and an
+            unreachable record means no card offer.
 
-            This note used to say `/buy/:pubkey` was NOT BUILT and that no stall
-            published `acceptsCards`. Both are now false: BuyPage exists and is
-            routed, payment-adapter creates the Checkout Session on the stall's
-            connected account (so the stall is merchant of record, never Imani),
-            and Settings → Payments publishes the flag through
-            `reconcileCardOffer` on every connect, refresh and disconnect.
-
-            The gate stays, and it is the right one. `acceptsCards` is the only
-            channel a stranger has — imani-merchant is self-scoped, so nobody
-            can ask whether SOMEBODY ELSE takes cards — so a stall that has not
-            connected Stripe shows no Buy button rather than a button that can
-            only fail. Fails closed: an unreachable stall record means no offer,
-            never an offer we cannot honour. */}
-        {acceptsCards && (
-          <Button size="lg" onClick={() => navigate(`/buy/${pubkey}`)}>
-            <CreditCard className="mr-2 h-5 w-5" /> Buy a voucher
-          </Button>
+            The owner viewing their own stall gets the same note as their
+            public profile instead: buying from yourself charges your own
+            Stripe account for a coupon you already back. */}
+        {isSelf ? (
+          <p className="text-center text-sm text-mono-500">This is how your stall looks to a shopper.</p>
+        ) : (
+          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} />
         )}
 
-        {/* The other way into /send: the voucher is already settled by being on
-            this page, so it opens on the recipient rather than on the picker.
-            Hidden with nothing to send — a button that can only refuse is worse
-            than no button. */}
-        {couponCount > 0 && (
-          <Button size="lg" variant={acceptsCards ? 'outline' : 'primary'} onClick={() => navigate(`/send?from=${pubkey}`)}>
-            <Send className="mr-2 h-5 w-5" /> Send
-          </Button>
+        {/* Send and Coupon code, one row down and quieter. Send is a different errand from
+            Pay: Pay hands this stall its own coupon back at the till, Send gives one to a
+            friend. Coupon code (#402) turns this stall's coupons into a code for its online
+            shop, drawn whenever the feature is on and disabled with the reason when the stall
+            has no shop: the shopper learns what the stall offers instead of finding nothing.
+            It took the place of Share, which handed over a handle few people used. Send is
+            hidden with nothing to send, as before, and neither is shown on your own stall. */}
+        {!isSelf && (couponCount > 0 || codesOn) && (
+          <div className={couponCount > 0 && codesOn ? 'grid grid-cols-2 gap-3' : 'grid'}>
+            {couponCount > 0 && (
+              <Button size="md" variant="outline" onClick={() => navigate(`/send?from=${pubkey}`)}>
+                <Send className="mr-2 h-5 w-5" /> Send
+              </Button>
+            )}
+            {codesOn && <CouponCodeAction pubkey={pubkey} sellsOnline={Boolean(record?.onlineShop)} viewerPubkey={viewerPubkey} />}
+          </div>
         )}
-
-        <ShareMerchant pubkey={pubkey} nip05={branding.nip05} />
       </div>
 
       {/* Renders nothing when the stall has no location, which is the common
@@ -326,63 +337,5 @@ function StallHeader({
         </p>
       )}
     </div>
-  )
-}
-
-/**
- * Hand this stall to somebody else.
- *
- * What goes out is the merchant's own handle — the full `name@domain` from
- * their kind-0, or their npub when they have not claimed one — and nothing
- * else. A bare string is what a wallet can consume: whoever receives it pastes
- * it into Scan or Send and lands on this same merchant. Wrapped in a sentence
- * it would read better and paste worse.
- *
- * Copy stands in where there is no share sheet, so the slot is never dead in a
- * desktop browser. Either way it is one button doing one job, and it says which.
- */
-function ShareMerchant({ pubkey, nip05 }: { pubkey: string; nip05?: string }) {
-  const [copied, setCopied] = useState(false)
-
-  // Encoding is fallible on a malformed key; without either form there is
-  // nothing to hand over, so the button does not appear.
-  const handle =
-    nip05 ??
-    (() => {
-      try {
-        return nip19.npubEncode(pubkey)
-      } catch {
-        return null
-      }
-    })()
-
-  if (handle === null) return null
-
-  const shareable = canShare()
-
-  const act = async () => {
-    if (await shareText(handle)) return
-    try {
-      await navigator.clipboard.writeText(handle)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard denied. Nothing a message would let them do differently.
-    }
-  }
-
-  return (
-    <Button size="lg" variant="outline" onClick={act}>
-      {shareable ? (
-        <Share2 className="mr-2 h-5 w-5" />
-      ) : copied ? (
-        <Check className="mr-2 h-5 w-5" />
-      ) : (
-        <Copy className="mr-2 h-5 w-5" />
-      )}
-      <span aria-live="polite">
-        {shareable ? 'Share' : copied ? 'Copied' : 'Copy'}
-      </span>
-    </Button>
   )
 }

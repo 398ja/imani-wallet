@@ -107,6 +107,98 @@ producer of a `lock_key` — is called only from tests. So no locked coupon
 reaches the saga today. It becomes a real defect the moment either is switched
 on, which is why the probes exist now rather than later.
 
+## `postdeploy-staging.e2e.mts` — after every staging deploy
+
+The browser half of the post-deploy suite; the server half (escrow states, gateway
+logs, mint API, Flyway) is `imani-deploy/scripts/postdeploy/run.sh`, which runs this
+file and reads the wallets it prints on its `CONTEXT` line. Run it through that script:
+
+```sh
+../imani-deploy/scripts/postdeploy/run.sh snapshot   # before any test traffic
+../imani-deploy/scripts/postdeploy/run.sh all
+```
+
+Against the LIVE staging wallet (`E2E_BASE`, default `https://wallet.staging.398ja.xyz`),
+it registers a merchant and two customers and drives: an EUR sale (#95); the receive,
+its `rcv_` key and a re-submit under a new key answered `409 RECEIVE_ALREADY_SETTLED`
+(#110, #119); a 3-voucher payment between customers, checked on the toast, the bell and
+the Transactions list (#94, #106); and an 8-part payment back to the stall that issued
+it (#110). Customer A logs in with a key the suite generates, so it can sign the #119
+re-submit itself. A pays B everything it holds, so the bundle is always every coupon
+whole (4 parts), and B's 8-part payback count is reported on `CONTEXT` as `payBackParts`
+for `run.sh` to match against the stall's escrows.
+
+Optional environment: `E2E_BASE` (the wallet URL) and `E2E_EXPECTED_BUNDLE` (the
+`index-*.js` the deploy should serve; T0+ fails on any other). The browser runs in the
+`en-GB` locale, because amounts are read off the screen.
+
+Its first runs found imani-wallet#114, #122, #123, imani-wallet-lib#103 and
+imani-gateway-core#112. Flakes it absorbs are on the test host: a crash-looping local
+container churns Docker bridges and Chromium aborts loads with `ERR_NETWORK_CHANGED`,
+so navigation and registration retry once, and each retry is reported.
+
+## `probe-concurrent-redeem.mts` — two coupons at one till at once (#145)
+
+A till must book each coupon against its own voucher, even when two customers pay it in
+the same instant. Before 0.11.1 two overlapping redeems could swap stamps, so one voucher
+carried two rows for one redemption and its owner's last honest payment was refused as
+"already spent".
+
+```sh
+E2E_BASE=https://wallet.staging.398ja.xyz E2E_ROUNDS=3 npx tsx e2e/probe-concurrent-redeem.mts
+```
+
+It registers a till and two customers. Each round, the till sells each customer a EUR 10
+coupon of its own voucher, then both customers pay part of it together, then the rest
+together. The till stays on its home screen, online, so both coupons arrive over live SSE,
+the only path that redeems without waiting. It checks that every payment lands and each
+customer ends at zero, that the till shows no refusal (toast or console), and, from the
+till's own IndexedDB, that every incoming row is stamped with the voucher its coupon was
+signed for and that each voucher has exactly its two redemptions.
+
+To prove the probe still catches the bug, run it against an old build. `E2E_BUNDLE_DIR`
+serves the app from a local `dist` while the API, relay and mint stay live:
+
+```sh
+git worktree add ../w0110 v0.11.0 && (cd ../w0110 && npm ci && npm run build)
+E2E_BUNDLE_DIR=../w0110/dist npx tsx e2e/probe-concurrent-redeem.mts
+```
+
+On 2026-10-01 against staging, 0.11.1 passed 44 of 44 checks over 3 rounds, and 0.11.0
+failed 7 of 44: two refused honest payments ("already paid out 800 of 1000; refusing a
+further 600"), and rows stamped with the other customer's voucher. A failed run leaves a
+screenshot of each wallet in `E2E_SCREENSHOTS` (default `e2e/.probe-concurrent-redeem`).
+
+## `probe-cashback-spend.mts` — a cashback spent back at the stall that issued it
+
+A cashback coupon must be spendable at the merchant who issued it, and the merchant must learn
+it was claimed (imani-gateway-portal#52, #53; imani-wallet#144).
+
+```sh
+E2E_BASE=https://wallet.staging.398ja.xyz npx tsx e2e/probe-cashback-spend.mts
+```
+
+A till issues a EUR cashback code on `/sell/cashback`, and a customer redeems it on
+`/receive/cashback` and pays the whole balance back to the till. (Out of date since typed codes
+were retired, wallet#268 phase 1: the till's screen shows no code and `/receive/cashback` takes
+none. The cleanup phase ports this probe, `probe-cashback-sev1` and `probe-spend-order` to the
+link path.) It checks:
+
+- the generate request carries an issuance warrant;
+- the response returns the voucher id;
+- the customer's coupon carries the warrant inside its signed secret;
+- the till books the payment against that voucher, with no "Coupon not authorised";
+- the portal's stored record (`GET /api/v1/portal/cashback/{id}`) turns Claimed on its own;
+- the till's Vouchers list shows the cashback.
+
+The claim check reads the stored record, not `/status`, because `/status` reconciles with the
+claim service on every read and so reads Claimed even when no notification arrived.
+`E2E_SKIP_CLAIM_STATUS=1` skips that check.
+
+On 2026-10-01, before the fix, staging failed 9 of 15 checks. It reproduced the original
+refusal ("carries no usable authorisation from the stall that issued it", toast "Coupon not
+authorised"). The stored record stayed Unclaimed, and the Vouchers list said "None yet."
+
 ## `purchase.e2e.ts` — the card purchase
 
 Written after a shopper's card was refused inside Stripe's hosted checkout
@@ -129,3 +221,54 @@ Stripe's DOM rather than ours.
 Verified by mutation: flipping `charges_enabled` back to true in the test
 database reproduced the incident exactly, landing the browser on a real
 `checkout.stripe.com` session that would 400 at confirm. 4 of 11 checks red.
+
+## `claimLinks.e2e.ts` — a claim link never redeems on open (claim links phases 0 and 1)
+
+`imani-docs/wallet/spec-claim-links.md`, section 7. A merchant issues cashback; the
+harness builds the link from the portal's own generate response (`claimUrl#k=claimKey`) and checks:
+a headless GET, a prefetch and a sessionless browser spend nothing (CL-BOT); the prompt names the
+stall, the face and the claim-by date and redeems nothing while open; Decline leaves it unclaimed;
+Accept tapped twice redeems once; a claimed, a revoked and the merchant's own link (CL-OWN) offer no
+Add; a different account is offered it as its own; a returning device lands on Login and the parked
+claim waits behind the prompt; and the hosted claim page is `no-store`, `no-referrer`, with no store
+placeholder, handing off to this wallet.
+
+```sh
+# on the local gate (imani-deploy scripts/local-terminal-gate)
+E2E_SCRIPT=claimLinks.e2e.ts E2E_CLAIM_HOST_VIA=http://127.0.0.1:$GATE_EDGE_PORT scripts/local-terminal-gate/run.sh e2e
+```
+
+`E2E_CLAIM_HOST_VIA` serves the deployment's claim host (`cashback_origins[0]`) from the gate's edge,
+so a local run never reaches the real staging claim host. Omit it against staging itself.
+
+## `claimLinksMerchant.e2e.ts` — the merchant's link and QR (claim links phase 2)
+
+`imani-docs/wallet/spec-claim-links.md`, sections 4.1 and 7. The link is taken from
+the merchant's own screen (Share link), never from the generate response:
+
+- **CL-A**: the code stays beside the link, the QR is hidden until Show QR, a logged-in customer
+  opens the shared link and adds it, their balance goes up, and the merchant's open screen flips to
+  *"Claimed just now"* by itself.
+- **CL-RACE**: two customers tap Add within 50 ms: one *"Voucher added"*, one *"already added"*, one
+  `claimed` row in the claim service.
+- **CL-OWN**: the merchant's own link is refused, stays `pending`, and gateway-customer's
+  `voucher_redemption_receipt` has no row for its voucher.
+- **QR-AGAIN**: after a reload the record page rebuilds the identical link from the code (the key is
+  in no web storage), then Cancel cashback revokes it.
+
+The portal's public metadata and by-code share a per-address limiter (10 a minute, then 429 for
+300 s). The harness books its reads under 7 a minute and reads statuses from the databases, so it
+never trips it. Needs `E2E_PORTAL_SQL_CMD` (the gate passes it).
+
+**The edge bot check on by-code.** imani-deploy can run FCaptcha on
+`/api/v1/portal/cashback/by-code/` (`nginx/conf.d/lua/captcha_gate.lua`). Playwright's Chromium is
+scored as a bot, so once that gate is in `enforce` mode, QR-AGAIN and every probe that redeems a
+code (`probe-cashback*.mts`, `probe-spend-order.mts`) need `E2E_CAPTCHA_BYPASS` set to the
+edge's `bypass_secret`. `e2e/captchaBypass.mts` adds it to by-code requests only. A till never
+calls by-code, so `terminalSetup.e2e.ts` registers it only as insurance. The bundle routes
+(`E2E_BUNDLE_DIR`) pass `/fcaptcha/` to the network like `/api/`, so the widget comes from the
+edge (or 404s) rather than the SPA shell. Unset, nothing changes (local stacks, observe mode).
+
+```sh
+E2E_SCRIPT=claimLinksMerchant.e2e.ts E2E_CLAIM_HOST_VIA=http://127.0.0.1:$GATE_EDGE_PORT scripts/local-terminal-gate/run.sh e2e
+```

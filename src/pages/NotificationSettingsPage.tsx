@@ -152,13 +152,6 @@ export function NotificationSettingsPage({ pubkey }: { pubkey: string }) {
                   disabled={busy}
                   onChange={(next) => void toggleEvent('couponClaimed', next)}
                 />
-                <Switch
-                  label="Coupons about to expire"
-                  hint="A coupon you hold runs out soon."
-                  checked={preferences.couponExpiring}
-                  disabled={busy}
-                  onChange={(next) => void toggleEvent('couponExpiring', next)}
-                />
               </div>
             </section>
           )}
@@ -175,6 +168,27 @@ export function NotificationSettingsPage({ pubkey }: { pubkey: string }) {
           )}
         </>
       )}
+
+      {/*
+        #265: the expiry reminder lives in the app, not in push. It is filed under the bell and
+        shown as a banner on home when the wallet is OPENED, from the coupons on this device, and
+        nothing is sent anywhere to do it. So this switch is offered whether or not push is on or
+        even available, which the event switches above are not. It defaults ON
+        (DEFAULT_PREFERENCES): with no server in the loop it costs no privacy, and the customers
+        who most need the reminder are the ones who never open Settings.
+      */}
+      <section className="mt-8">
+        <h2 className="mb-3 px-1 text-[13px] font-medium uppercase tracking-wide text-mono-500">
+          Reminders
+        </h2>
+        <Switch
+          label="Coupons about to expire"
+          hint="When you open Imani: a week before a coupon you hold runs out, and again on its last day. Stays on this device."
+          checked={preferences.couponExpiring}
+          disabled={busy}
+          onChange={(next) => void toggleEvent('couponExpiring', next)}
+        />
+      </section>
 
       {/* Nothing here is a substitute for the in-app toast: the wallet still
           announces arrivals while you are looking at it, whatever this says. */}

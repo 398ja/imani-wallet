@@ -25,6 +25,14 @@ import { parseVoucherToken, verifyVoucher } from '../voucherToken'
  *
  * This token was produced end to end on 2026-09-04:
  *
+ * REPLACED 2026-10-10 (review of #197): the licence is now what gateway-customer mints today, a
+ * one-proof `P2PK_VOUCHER` locked to the buyer, `FIXED` on 1 sat, GBP 40.00 face, signed by the
+ * gateway key and naming the seller stall as issuer. It came from the local gate
+ * (imani-deploy scripts/local-terminal-gate, licenceGate.e2e.ts, gc with the integral-ratio
+ * signature fix), through `licenceIssueBody` from `scripts/sell-subscription.mjs`. The wallet and
+ * the server refuse the plain-VOUCHER licence that used to be here. The history below is the
+ * original's.
+ *
  *   gateway-customer, rebuilt from source with the two metadata fixes
  *   (b0fdca5 + b282e87), against imani-mint-rest with real signing keys, via
  *   `scripts/sell-subscription.mjs`. It is the actual artefact a customer
@@ -47,10 +55,10 @@ import { parseVoucherToken, verifyVoucher } from '../voucherToken'
  * from every balance by `spendable`, which is one of the things asserted below.
  */
 
-const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.token'), 'utf8').trim()
+const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.p2pk'), 'utf8').trim()
 
 /** The customer this licence was actually locked to. */
-const CUSTOMER = '4728fd8ad6a2f5c8930f4065347907e22186fba6c73bd04e145dfd780b98e451'
+const CUSTOMER = '114e0944b34f44f005419d987cd9ebcef988877c79a19564be9579daefe249d0'
 
 const parsed = parseVoucherToken(TOKEN)
 const ISSUER = parsed.voucher.issuerPublicKey

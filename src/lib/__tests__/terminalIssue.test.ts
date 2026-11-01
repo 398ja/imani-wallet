@@ -22,7 +22,11 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 const saved: Array<{ privkeyHex: string; passphrase: string }> = []
 vi.mock('../nap', () => ({
-  keyStore: { save: async (k: string, p: string) => void saved.push({ privkeyHex: k, passphrase: p }) },
+  keyStore: {
+    save: async (k: string, p: string) => void saved.push({ privkeyHex: k, passphrase: p }),
+    // An empty device: the only kind setup may complete on (#160 phase 0).
+    hasKey: async () => false,
+  },
 }))
 
 const { checkEnrolment, prepareEnrolment, ENROLMENT_REFUSAL } = await import('../terminalIssue')
@@ -30,16 +34,23 @@ const { TERMINAL_ROLES } = await import('../terminalRole')
 const { licenceStatus, forgetVerification } = await import('../licenceStatus')
 const { forgetLicenceParses } = await import('../licences')
 const { parseVoucherToken } = await import('../voucherToken')
-const { beginEnrolment, completeEnrolment, forgetPendingKey, forgetTerminal, enrolledActor } =
+const { beginEnrolment, completeEnrolment, forgetPendingKey, forgetTerminal } =
   await import('../terminalEnrol')
+const { terminalActor } = await import('../actor')
 
-const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.token'), 'utf8').trim()
+const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.p2pk'), 'utf8').trim()
 const parsed = parseVoucherToken(TOKEN)
 const ISSUER = parsed.voucher.issuerPublicKey
 const EXPIRES_AT = parsed.voucher.expiresAt!
 /** The licence is locked to this key, so it is the stall for these tests. */
-const STALL = '4728fd8ad6a2f5c8930f4065347907e22186fba6c73bd04e145dfd780b98e451'
-const TERMINAL = 'c'.repeat(64)
+const STALL = '114e0944b34f44f005419d987cd9ebcef988877c79a19564be9579daefe249d0'
+/**
+ * A key that is a real point on the curve. `'c'.repeat(64)` used to stand in
+ * here, and is not one: phase 0 of #160 refuses such keys, as it should.
+ */
+const TERMINAL = 'd'.repeat(64)
+/** 64 hex characters that are nobody's key: no point on secp256k1 has this x. */
+const OFF_CURVE = 'c'.repeat(64)
 /** Somebody else's stall, for the cross-stall attack below. */
 const OTHER_STALL = 'b'.repeat(64)
 const DAY = 86_400
@@ -107,6 +118,19 @@ describe('what an owner must supply', () => {
     if (!check.ready) expect(check.reason).toBe(ENROLMENT_REFUSAL.NO_NAME)
   })
 
+  // Review rw1: the name is signed into every warrant the till builds, and the portal refuses a
+  // warrant over 4,096 units, so an uncapped name would leave a till whose every sale is refused.
+  it('caps the minted name at 64 units, never splitting a character', async () => {
+    const { TERMINAL_NAME_MAX_CHARS } = await import('../terminalIssue')
+    expect(TERMINAL_NAME_MAX_CHARS).toBe(64)
+    const ctx = context({ licence: await subscribed() })
+    expect(prepareEnrolment(request({ name: 'x'.repeat(3_000) }), ctx).name).toBe('x'.repeat(64))
+    // 63 units then an emoji: the pair would straddle the cut, so it goes whole.
+    expect(prepareEnrolment(request({ name: 'a'.repeat(63) + '😀😀' }), ctx).name).toBe('a'.repeat(63))
+    // Trimmed before the cut, so padding does not eat into the name.
+    expect(prepareEnrolment(request({ name: '   Door   ' }), ctx).name).toBe('Door')
+  })
+
   it('will not enrol a terminal with no role', async () => {
     // The first acceptance criterion. A default would be the app deciding what
     // a device may do.
@@ -170,7 +194,7 @@ describe('the subscription gate, at the point of enrolment', () => {
     if (!check.ready) {
       expect(check.reason).toBe(ENROLMENT_REFUSAL.NOT_ALLOWED)
       expect(check.message).toMatch(/free till/)
-      expect(check.message).toMatch(/get in touch/)
+      expect(check.message).toMatch(/Settings › Subscription/)
     }
   })
 
@@ -265,9 +289,10 @@ describe('the whole handshake', () => {
       context({ licence: await subscribed() }),
     )
 
-    await completeEnrolment(credential, 'a passphrase', credential.name)
-
-    const actor = enrolledActor(code.terminalPubkey)
+    // The device's own check, the one `completeEnrolment` runs before storing. Storing also
+    // needs the minted token, which only the gateway can sign for this stall (#160 phase 3), so
+    // the handshake is asserted at the check that decides it.
+    const actor = terminalActor(credential, code.terminalPubkey)
     expect(actor).not.toBeNull()
     expect(actor!.stallPubkey).toBe(STALL)
     expect(actor!.terminalPubkey).toBe(code.terminalPubkey)
@@ -291,5 +316,37 @@ describe('the whole handshake', () => {
       /not a valid authority/,
     )
     expect(saved).toEqual([])
+  })
+})
+
+describe('#160 phase 0: a code that is nobody\'s key', () => {
+  // A 64-character code that is not a point on the curve is a key no device
+  // holds. The gateway would quietly mint an UNLOCKED credential for it, a
+  // bearer authority to the stall, so the owner is refused before any mint.
+  it('refuses an off-curve key before anything is issued', async () => {
+    const check = checkEnrolment(
+      request({ terminalPubkey: OFF_CURVE }),
+      context({ licence: await subscribed() }),
+    )
+    expect(check.ready).toBe(false)
+    if (!check.ready) {
+      expect(check.reason).toBe(ENROLMENT_REFUSAL.NOT_A_KEY)
+      expect(check.message).toMatch(/not a terminal code/)
+    }
+  })
+
+  // And `prepareEnrolment`, which is what a mint call would be built from,
+  // cannot be reached with one either.
+  it('cannot prepare a credential for an off-curve key', async () => {
+    const licence = await subscribed()
+    expect(() =>
+      prepareEnrolment(request({ terminalPubkey: OFF_CURVE }), context({ licence })),
+    ).toThrow(/not a terminal code/)
+  })
+
+  // The control: a real key passes, so the check is not refusing everything.
+  it('accepts a key that is a real point', async () => {
+    const check = checkEnrolment(request(), context({ licence: await subscribed() }))
+    expect(check.ready).toBe(true)
   })
 })

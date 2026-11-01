@@ -1,0 +1,70 @@
+{
+  "extends": "../../tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../node_modules/.tmp/tsconfig.gifting.tsbuildinfo",
+    "baseUrl": "../..",
+    "paths": {
+      "@wallet/*": [
+        "src/*"
+      ],
+      "@/*": [
+        "src/*"
+      ],
+      "@imani/wallet-storage": [
+        "./packages/wallet-storage/src/index.ts"
+      ],
+      "@imani/nostr-vouchers": [
+        "./packages/nostr-vouchers/src/index.ts"
+      ],
+      "@imani/nostr-transactions": [
+        "./packages/nostr-transactions/src/index.ts"
+      ],
+      "@imani/wallet-balance": [
+        "./packages/wallet-balance/src/index.ts"
+      ],
+      "@imani/voucher-send": [
+        "./packages/voucher-send/src/index.ts"
+      ],
+      "@imani/profile-service": [
+        "./packages/profile-service/src/index.ts"
+      ],
+      "@imani/blossom-upload": [
+        "./packages/blossom-upload/src/index.ts"
+      ],
+      "@imani/gateway-client": [
+        "./packages/gateway-client/src/index.ts"
+      ],
+      "@imani/dm-poll": [
+        "./packages/dm-poll/src/index.ts"
+      ],
+      "@imani/money": [
+        "./packages/money/src/index.ts"
+      ],
+      "@imani/wallet-core": [
+        "./packages/wallet-core/src/index.ts"
+      ],
+      "@imani/licence": [
+        "./packages/licence/src/index.ts"
+      ],
+      "@imani/merchant-record": [
+        "./packages/merchant-record/src/index.ts"
+      ],
+      "@imani/redemption": [
+        "./packages/redemption/src/index.ts"
+      ],
+      "@imani/reports": [
+        "./packages/reports/src/index.ts"
+      ],
+      "@imani/payment-requests": [
+        "./packages/payment-requests/src/index.ts"
+      ],
+      "imani-qr": [
+        "./packages/imani-qr/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "../../src/types"
+  ]
+}

@@ -1,0 +1,222 @@
+{
+    "metrics": {
+        "http_req_receiving": {
+            "max": 0.257579,
+            "p(90)": 0.07684080000000003,
+            "p(95)": 0.0900961,
+            "avg": 0.03331232710549003,
+            "min": 0,
+            "med": 0.038134
+        },
+        "http_req_connecting": {
+            "avg": 59.57064290945683,
+            "min": 0,
+            "med": 0.296131,
+            "max": 1231.66177,
+            "p(90)": 115.68472440000001,
+            "p(95)": 127.1767808
+        },
+        "http_reqs": {
+            "count": 3479,
+            "rate": 2.8210095333361966
+        },
+        "customer_drains": {
+            "count": 1235,
+            "rate": 1.001421895277437
+        },
+        "http_req_tls_handshaking": {
+            "p(90)": 134.9208076,
+            "p(95)": 150.8832048,
+            "avg": 64.41476888013791,
+            "min": 0,
+            "med": 0,
+            "max": 363.403301
+        },
+        "vus": {
+            "value": 17,
+            "min": 0,
+            "max": 150
+        },
+        "iteration_ms": {
+            "p(90)": 60006,
+            "p(95)": 60007,
+            "avg": 21567.074004975126,
+            "min": 0,
+            "med": 0,
+            "max": 120039
+        },
+        "hidden_ticks": {
+            "count": 3185,
+            "rate": 2.5826143615049686
+        },
+        "http_req_waiting": {
+            "max": 60001.258798,
+            "p(90)": 59781.0829408,
+            "p(95)": 59783.8716487,
+            "avg": 29781.567258446423,
+            "min": 0.719934,
+            "med": 27978.698517
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(90)": 5.8859524,
+            "p(95)": 11.551448599999986,
+            "avg": 1168.7817830775712,
+            "min": 0.852006,
+            "med": 4.396288,
+            "max": 59068.582489
+        },
+        "data_received": {
+            "count": 9125221,
+            "rate": 7399.34907582629
+        },
+        "outcome_verified": {
+            "passes": 37,
+            "fails": 1472,
+            "thresholds": {
+                "rate>0.90": true
+            },
+            "value": 0.024519549370444003
+        },
+        "signing_ms": {
+            "med": 5,
+            "max": 18,
+            "p(90)": 6,
+            "p(95)": 6,
+            "avg": 4.9247943595769685,
+            "min": 3
+        },
+        "stall_ms": {
+            "max": 60009,
+            "p(90)": 60007,
+            "p(95)": 60007,
+            "avg": 57302.00495049505,
+            "min": 2852,
+            "med": 60006
+        },
+        "customer_ms": {
+            "p(95)": 60007,
+            "avg": 18300.804298642535,
+            "min": 0,
+            "med": 0,
+            "max": 120039,
+            "p(90)": 60006
+        },
+        "http_req_sending": {
+            "avg": 0.05526893848807126,
+            "min": 0.013899,
+            "med": 0.053988,
+            "max": 0.174675,
+            "p(90)": 0.071658,
+            "p(95)": 0.0796201
+        },
+        "iterations": {
+            "count": 4905,
+            "rate": 3.977307203510792
+        },
+        "stall_drains": {
+            "count": 404,
+            "rate": 0.32759064428508866
+        },
+        "http_req_duration": {
+            "p(95)": 59783.9192356,
+            "avg": 29781.65583971203,
+            "min": 0.852006,
+            "med": 27978.840925,
+            "max": 60001.294557,
+            "p(90)": 59781.1438544
+        },
+        "vus_max": {
+            "value": 151,
+            "min": 141,
+            "max": 151
+        },
+        "http_req_blocked": {
+            "avg": 124.06932365651097,
+            "min": 0.006076,
+            "med": 0.384551,
+            "max": 1434.214422,
+            "p(90)": 251.056923,
+            "p(95)": 278.93904549999985
+        },
+        "http_req_failed": {
+            "passes": 1700,
+            "fails": 1779,
+            "value": 0.48864616269042827
+        },
+        "data_sent": {
+            "count": 5027158,
+            "rate": 4076.3612082745985
+        },
+        "dropped_iterations": {
+            "rate": 0.6365313261480064,
+            "count": 785
+        },
+        "gateway_ms": {
+            "p(95)": 60002,
+            "avg": 58643.01035953687,
+            "min": 581,
+            "med": 60001,
+            "max": 60003,
+            "p(90)": 60001
+        },
+        "iteration_duration": {
+            "p(95)": 60006.913874800004,
+            "avg": 27704.775135685915,
+            "min": 0.009079,
+            "med": 10001.008653,
+            "max": 120038.592508,
+            "p(90)": 60006.3383556
+        },
+        "boot_ticks": {
+            "count": 130,
+            "rate": 0.10541283108183547
+        },
+        "checks": {
+            "passes": 1546,
+            "fails": 1472,
+            "value": 0.512259774685222
+        }
+    },
+    "setup_data": {
+        "acquiringRefused": false,
+        "issuanceWorks": true,
+        "issuerConfigured": false,
+        "relayUrl": "wss://relay.staging.398ja.xyz"
+    },
+    "root_group": {
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "stall drain answered": {
+                    "fails": 367,
+                    "name": "stall drain answered",
+                    "path": "::stall drain answered",
+                    "id": "af54d7783467fced278a4ede723ec75d",
+                    "passes": 37
+                },
+                "stall drain not refused": {
+                    "path": "::stall drain not refused",
+                    "id": "669b46a4914beb1541941145a61a1184",
+                    "passes": 404,
+                    "fails": 0,
+                    "name": "stall drain not refused"
+                },
+                "customer drain answered": {
+                    "name": "customer drain answered",
+                    "path": "::customer drain answered",
+                    "id": "bbc7b8370d34e4c4cdf4286b7d0b797f",
+                    "passes": 0,
+                    "fails": 1105
+                },
+                "customer drain not refused": {
+                    "id": "6abe84dbcb68c077ca78d482248620bb",
+                    "passes": 1105,
+                    "fails": 0,
+                    "name": "customer drain not refused",
+                    "path": "::customer drain not refused"
+                }
+            }
+    }
+}

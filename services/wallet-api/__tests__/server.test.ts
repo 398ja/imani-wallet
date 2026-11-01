@@ -25,6 +25,8 @@ import {
   guards,
   setStallLookup,
   resetStallLookup,
+  setStallValidity,
+  resetStallValidity,
   setGatewayFetch,
   resetGatewayFetch,
 } from '../server.js'
@@ -1994,5 +1996,81 @@ describe('preparing a part', () => {
       const res = await prepare({ amount: 2.5 })
       expect(res.body.detail).toContain('cents, not euros')
     })
+  })
+})
+
+/**
+ * #359: a coupon issued headless lives as long as the STALL says, exactly as one from the Sell
+ * screen, the till or a card sale. It used to be a fixed 30 days whatever the stall had chosen.
+ */
+describe('the term of a coupon issued headless', () => {
+  afterAll(() => resetStallValidity())
+
+  async function ask(payload: Record<string, unknown>, signer = makeSigner()) {
+    const body = JSON.stringify(payload)
+    const res = await fetch(`${base}/v1/issue/gateway-request`, {
+      method: 'POST',
+      body,
+      headers: { authorization: await nip98Header('/v1/issue/gateway-request', 'POST', body, signer.signer) },
+    })
+    return { status: res.status, body: await jsonOf(res), signer }
+  }
+  const signed = (r: { body: { body: string } }) => JSON.parse(r.body.body) as Record<string, unknown>
+
+  it.each([30, 60, 90, 400])('carries the stall\u2019s own %i-day validity when no term is named', async (days) => {
+    const asked: string[] = []
+    setStallValidity(async (pubkey) => {
+      asked.push(pubkey)
+      return { kind: 'days', days, source: 'record' }
+    })
+    const r = await ask({ faceValue: 500, faceUnit: 'GBP', faceDecimals: 2 })
+    expect(r.status).toBe(200)
+    expect(signed(r).expires_in_days).toBe(days)
+    // The SIGNER's own stall, never one the body names.
+    expect(asked).toEqual([r.signer.pubkey])
+  })
+
+  it('carries never-expires (0) for a stall that never expires, as the Sell screen would', async () => {
+    setStallValidity(async () => ({ kind: 'days', days: 0, source: 'record' }))
+    const r = await ask({ faceValue: 500, faceUnit: 'GBP', faceDecimals: 2 })
+    expect(r.status).toBe(200)
+    expect(signed(r).expires_in_days).toBe(0)
+  })
+
+  // Second review of #360: no signed record at all is not a never-expiring stall. Minting on the
+  // default there stamped never-expires silently, the guess this endpoint exists to refuse.
+  it('mints nothing on the default when the key has no signed merchant record', async () => {
+    setStallValidity(async () => ({ kind: 'days', days: 0, source: 'default' }))
+    const r = await ask({ faceValue: 500, faceUnit: 'GBP', faceDecimals: 2 })
+    expect(r.status).toBe(422)
+    expect(r.body.error).toBe('no-merchant-record')
+    expect(r.body.body).toBeUndefined()
+  })
+
+  it('still honours a named term for a key with no signed merchant record', async () => {
+    setStallValidity(async () => ({ kind: 'days', days: 0, source: 'default' }))
+    const r = await ask({ faceValue: 500, faceUnit: 'GBP', faceDecimals: 2, expiresInDays: 30 })
+    expect(r.status).toBe(200)
+    expect(signed(r).expires_in_days).toBe(30)
+  })
+
+  it('keeps a per-sale term the caller names, without asking for the stall\u2019s', async () => {
+    let asked = 0
+    setStallValidity(async () => {
+      asked++
+      return { kind: 'days', days: 90, source: 'record' }
+    })
+    const r = await ask({ faceValue: 500, faceUnit: 'GBP', faceDecimals: 2, expiresInDays: 7 })
+    expect(r.status).toBe(200)
+    expect(signed(r).expires_in_days).toBe(7)
+    expect(asked).toBe(0)
+  })
+
+  it('mints nothing on a guess when the stall\u2019s validity cannot be read', async () => {
+    setStallValidity(async () => ({ kind: 'unreadable', reason: 'relay down' }))
+    const r = await ask({ faceValue: 500, faceUnit: 'GBP', faceDecimals: 2 })
+    expect(r.status).toBe(503)
+    expect(r.body.error).toBe('validity-unknown')
+    expect(r.body.body).toBeUndefined()
   })
 })

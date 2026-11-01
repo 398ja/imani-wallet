@@ -28,6 +28,9 @@ function createMockCryptoAdapter(): CryptoAdapter {
 
 function createMockRedemptionAdapter(): RedemptionAdapter {
   return {
+    // Accepts every token: these tests are about dedup and races, not the mint gate
+    // (that is src/core/backingGate.test.ts).
+    checkBacking: vi.fn(() => ({ outcome: 'accept' as const })),
     redeem: vi.fn(async () => ({
       voucher_id: 'v-' + Date.now(),
       token: 'cashuAeyJ0b2tlbiI6InRlc3QifQ',
@@ -206,6 +209,31 @@ describe('DmPollService', () => {
       // Only one should succeed; the other blocked by fingerprint guard
       expect(successful).toHaveLength(1);
       expect(redemptionAdapter.redeem).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the blocked copy unprocessed, so it survives a failure of the first (imani-wallet#204)', async () => {
+      // The first redemption fails retryably. Its copy must still be offered
+      // again, and so must the duplicate that was turned away meanwhile.
+      (redemptionAdapter.redeem as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('HTTP 502'));
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pub',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+      });
+
+      await Promise.all([
+        service.processGiftWrap(createMockGiftWrap({ id: 'first-copy' })),
+        service.processGiftWrap(createMockGiftWrap({ id: 'second-copy' })),
+      ]);
+
+      expect(service.hasProcessed('first-copy')).toBe(false);
+      expect(service.hasProcessed('second-copy')).toBe(false);
+      // And it redeems on the next offer.
+      expect(await service.processGiftWrap(createMockGiftWrap({ id: 'second-copy' }))).not.toBeNull();
     });
 
     it('should allow same fingerprint after first processing completes', async () => {
@@ -602,5 +630,43 @@ describe('DmPollService.fetchRecentDms: a held wrap neither starves later events
     // is answered from the processed set without an unwrap.
     expect(offered).toEqual(['held']);
     expect(await storage.getProcessedEventIds()).not.toContain('held');
+  });
+});
+
+/**
+ * A held coupon is remembered by the time its sender wrote it (the rumor), but
+ * the relay filters on the GIFT WRAP's created_at, which NIP-59 backdates by up
+ * to two days. Re-offering from the rumor time alone missed every wrap that had
+ * been backdated, so a coupon held for more than a week could never be released
+ * (#175 final review). The wrap here is two days older than its rumor and must
+ * still be found.
+ */
+describe('DmPollService.reofferEvents: a backdated gift wrap is still found', () => {
+  it('re-offers a held delivery whose wrap is two days older than its rumor', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const rumorCreatedAt = now - 10 * 86400;
+    const wrap = createMockGiftWrap({ id: 'held-backdated', created_at: rumorCreatedAt - 2 * 86400 });
+    const nostrdb = new MockNostrdbAdapter();
+    nostrdb.addEvent(wrap);
+    const crypto = createMockCryptoAdapter();
+    const offered: string[] = [];
+    crypto.unwrapNip17Dm = vi.fn(async (event: GiftWrapEvent): Promise<UnwrappedDm> => {
+      offered.push(event.id);
+      return { eventId: event.id, senderPubkey: 's', content: 'coupon', createdAt: rumorCreatedAt };
+    });
+    const service = new DmPollService({
+      recipientPubkey: 'recipient-pubkey-456',
+      recipientPrivkey: 'priv',
+      nostrdbAdapter: nostrdb,
+      cryptoAdapter: crypto,
+      storageAdapter: createMockStorageAdapter(),
+      redemptionAdapter: createMockRedemptionAdapter(),
+      fetchRecentOnStart: false,
+    });
+
+    // What the wallet passes: the held record's (rumor) createdAt, less a minute.
+    await service.reofferEvents(['held-backdated'], rumorCreatedAt - 60);
+
+    expect(offered).toEqual(['held-backdated']);
   });
 });
