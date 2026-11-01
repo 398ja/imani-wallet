@@ -10,6 +10,49 @@ import { getWallet, notifyWalletChanged } from './wallet'
 import { carveProofs } from './checkoutCarve'
 import { replaceVoucherToken } from './pay'
 import type { CheckoutPorts, CheckoutStore } from './checkoutCodeFlow'
+import { loadCheckoutCodes, onCheckoutCodeSaved, type CheckoutCodeRecord } from './checkoutCodeRecords'
+import { checkoutCodeRow, checkoutTxId, codeIdOfActivity } from './checkoutCodeHistory'
+
+type TxRow = Parameters<ReturnType<typeof getWallet>['addTransaction']>[0]
+
+let lastPubkey: string | undefined
+const chains = new Map<string, Promise<void>>()
+
+function findRecord(codeId: string): { pubkey: string; record: CheckoutCodeRecord } | undefined {
+  if (!lastPubkey) return undefined
+  try {
+    const record = loadCheckoutCodes(lastPubkey).find((r) => r.id === codeId)
+    return record ? { pubkey: lastPubkey, record } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Write (or rewrite) a code's one history row, through the wrapped writer so the relay gets it.
+ * Writes per code are chained, so a fast run of saves lands in the order it was made. A memo
+ * already on the row is kept unless a new one is given. Never throws: history is display.
+ */
+export function writeCodeRow(pubkey: string, record: CheckoutCodeRecord, memo?: string): Promise<void> {
+  lastPubkey = pubkey
+  const id = checkoutTxId(record.id)
+  const next = (chains.get(id) ?? Promise.resolve()).then(async () => {
+    try {
+      const wallet = getWallet()
+      const existing = (await wallet.getTransaction(id)) as unknown as Record<string, unknown> | null
+      const kept = memo ?? (typeof existing?.memo === 'string' ? existing.memo : undefined)
+      await wallet.addTransaction(checkoutCodeRow(record, kept) as unknown as TxRow)
+      notifyWalletChanged()
+    } catch {
+      // No wallet open (tests, a locked session): the record is the authority either way.
+    }
+  })
+  chains.set(id, next)
+  return next
+}
+
+/** Every code save rewrites its history row (#402), wherever the save came from. */
+onCheckoutCodeSaved((pubkey, record) => void writeCodeRow(pubkey, record))
 
 /** Build-time switch: the feature ships dark until `VITE_CHECKOUT_CODES=on`. */
 export function checkoutCodesEnabled(raw: unknown = import.meta.env.VITE_CHECKOUT_CODES): boolean {
@@ -66,18 +109,11 @@ export function appCheckoutPorts(): CheckoutPorts {
       notifyWalletChanged()
     },
     async activity(row) {
-      await getWallet().addTransaction({
-        id: row.id,
-        txId: row.id,
-        type: 'checkout_code',
-        direction: 'out',
-        timestamp: row.at,
-        amount: row.amount,
-        unit: row.unit,
-        decimals: row.decimals,
-        merchantId: row.stall,
-        memo: row.memo,
-      } as unknown as Parameters<ReturnType<typeof getWallet>['addTransaction']>[0])
+      // One history row per code (#402): the outcome's words go on the code's own row as its memo,
+      // never a second row, so the code is one movement in history, not two.
+      const codeId = codeIdOfActivity(row.id)
+      const record = codeId ? findRecord(codeId) : undefined
+      if (record) await writeCodeRow(record.pubkey, record.record, row.memo)
     },
   }
 }
