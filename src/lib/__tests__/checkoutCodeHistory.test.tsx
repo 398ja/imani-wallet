@@ -147,3 +147,19 @@ describe('checkout codes in history', () => {
     expect(back).toMatchObject({ type: 'checkout_code', direction: 'out', amount: 1500 })
   })
 })
+
+describe('the change a shop gives back (2026-11-01: it was missing from history)', () => {
+  it('is its own incoming row, labelled Change, keyed on the code so a second notice overwrites it', async () => {
+    const row = { id: 'checkout:code1:change', at: Date.UTC(2026, 10, 1, 21), stall: STALL, unit: 'EUR', decimals: 2, amount: 90, memo: 'Change from shop.example.com: €0.90 back in your wallet' }
+    await appCheckoutPorts().changeActivity!(row)
+    await appCheckoutPorts().changeActivity!(row)
+    expect([...rows.keys()]).toEqual(['checkout:code1:change'])
+    const tx = history()[0]!
+    expect(tx).toMatchObject({ type: 'checkout_change', direction: 'in', amount: 90, merchantId: STALL })
+    const { transactionLabel } = await import('../transactions')
+    expect(transactionLabel(tx)).toBe('Change')
+    // Survives the relay round trip.
+    const back = toTransaction(toRow(tx.id, JSON.parse(JSON.stringify(toContent(tx)))))
+    expect(back).toMatchObject({ type: 'checkout_change', direction: 'in', amount: 90 })
+  })
+})

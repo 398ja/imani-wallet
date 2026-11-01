@@ -90,6 +90,11 @@ export interface CheckoutPorts extends CashlinkPorts {
   consume(tokenId: string): Promise<void>
   /** Write a History row. */
   activity(row: CheckoutActivity): Promise<void>
+  /**
+   * The change a shop gave back, as its OWN incoming history row (never the code's memo): value
+   * arrived in the wallet. Optional so test worlds without it fall back to `activity`.
+   */
+  changeActivity?(row: CheckoutActivity): Promise<void>
 }
 
 // --- Making a code ----------------------------------------------------------
@@ -395,7 +400,7 @@ function inputWitness(key: Uint8Array, secret: string): string {
   return JSON.stringify({ signatures: [bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(secret)), key))] })
 }
 
-export type UnlockOutcome = { kind: 'kept'; count: number } | { kind: 'pending'; why: string } | { kind: 'not_ours' }
+export type UnlockOutcome = { kind: 'kept'; count: number; face: number } | { kind: 'pending'; why: string } | { kind: 'not_ours' }
 
 /**
  * Turn coupons returned locked to one of our `R` back into ordinary coupons (contract §5): burn each
@@ -409,6 +414,7 @@ export async function unlockReturned(ports: CheckoutPorts, pubkey: string, token
     const keys = refundKeys(pubkey, identity)
     let count = 0
     let ours = 0
+    let face = 0
     for (const token of tokens) {
       const mintUrl = mintOf(token)
       for (const proof of tokenProofs(token)) {
@@ -419,13 +425,24 @@ export async function unlockReturned(ports: CheckoutPorts, pubkey: string, token
         const done = await unlockOne(ports, mintUrl, proof, R)
         if (done === 'pending') return { kind: 'pending', why: 'part way' }
         if (done === 'kept') count += 1
+        // What came back, whether kept now or by an earlier run that died before it was recorded.
+        face += partFace(mintUrl, proof)
       }
     }
-    return ours === 0 ? { kind: 'not_ours' } : { kind: 'kept', count }
+    return ours === 0 ? { kind: 'not_ours' } : { kind: 'kept', count, face }
   } catch (error) {
     return { kind: 'pending', why: error instanceof Error ? error.message : String(error) }
   } finally {
     identity.fill(0)
+  }
+}
+
+/** One returned proof's credited face, minor units (0 when unreadable). */
+function partFace(mintUrl: string, proof: TokenProof): number {
+  try {
+    return creditableFaceValue(parseVoucherToken(tokenOf(mintUrl, [proof as never]))).faceValue
+  } catch {
+    return 0
   }
 }
 
@@ -588,6 +605,22 @@ export async function handleCheckoutNotice(ports: CheckoutPorts, pubkey: string,
   if (notice.event === 'change' || notice.event === 'cancelled') {
     const out = await unlockReturned(ports, pubkey, notice.tokens ?? [])
     if (out.kind === 'pending') return 'retry'
+    if (notice.event === 'change' && out.kind === 'kept' && out.face > 0) {
+      // The shop gave back what the order did not use. The coupons are already in the wallet; this
+      // is the history row for them (it was missing, 2026-11-01). Recorded once per code: a second
+      // delivery of the notice finds `change` already set and writes nothing.
+      if (record.change === undefined) {
+        record.change = out.face
+        // The store's `redeemed` notice carries the code's amount, not what the order took; the
+        // change says the rest. The code's own row then shows what the shop really spent.
+        if (record.status === 'redeemed') record.spent = Math.max(0, record.amount - out.face)
+        save(pubkey, record)
+        await changeActivity(ports, record, out.face)
+        if (record.status === 'redeemed' && record.spent !== undefined) {
+          await activity(ports, record, 'redeemed', record.spent, `${money(record, record.amount)} code used at ${shopName(record)}: ${money(record, record.spent)} spent, ${money(record, out.face)} back`)
+        }
+      }
+    }
     if (notice.event === 'cancelled') {
       record.status = 'cancelled'
       for (const p of record.parts) if (p.state === 'locked') p.state = 'settled'
@@ -606,6 +639,23 @@ export async function handleCheckoutNotice(ports: CheckoutPorts, pubkey: string,
   if (!after?.done) return 'retry'
   await activity(ports, after, 'expired', after.amount, `${money(after, after.amount)} code expired unused: back in your wallet`)
   return 'handled'
+}
+
+/** The change a shop gave back: its own incoming history row (`checkout:<id>:change`). */
+async function changeActivity(ports: CheckoutPorts, record: CheckoutCodeRecord, face: number): Promise<void> {
+  try {
+    await (ports.changeActivity ?? ports.activity)({
+      id: `checkout:${record.id}:change`,
+      at: ports.now(),
+      stall: record.stall,
+      unit: record.unit,
+      decimals: record.decimals,
+      amount: face,
+      memo: `Change from ${shopName(record)}: ${money(record, face)} back in your wallet`,
+    })
+  } catch {
+    // History is display; the coupons are in the wallet either way.
+  }
 }
 
 async function activity(ports: CheckoutPorts, record: CheckoutCodeRecord, what: string, amount: number, memo: string): Promise<void> {

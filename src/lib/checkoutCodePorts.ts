@@ -14,7 +14,7 @@ import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import type { CheckoutPorts, CheckoutStore } from './checkoutCodeFlow'
 import type { SplitPorts } from './voucherSplit'
 import { loadCheckoutCodes, onCheckoutCodeSaved, type CheckoutCodeRecord } from './checkoutCodeRecords'
-import { checkoutCodeRow, checkoutTxId, codeIdOfActivity } from './checkoutCodeHistory'
+import { checkoutChangeRow, checkoutCodeRow, checkoutTxId, codeIdOfActivity } from './checkoutCodeHistory'
 
 type TxRow = Parameters<ReturnType<typeof getWallet>['addTransaction']>[0]
 
@@ -160,6 +160,17 @@ export function appCheckoutPorts(): CheckoutPorts & SplitPorts {
       const codeId = codeIdOfActivity(row.id)
       const record = codeId ? findRecord(codeId) : undefined
       if (record) await writeCodeRow(record.pubkey, record.record, row.memo)
+    },
+    async changeActivity(row) {
+      // The change is value ARRIVING (its coupons are new rows), so it is its own incoming row, keyed
+      // on the code so a second notice overwrites rather than duplicates. Never adds to a balance:
+      // balances are read from coupon rows only.
+      try {
+        await getWallet().addTransaction(checkoutChangeRow(row) as unknown as TxRow)
+        notifyWalletChanged()
+      } catch {
+        // No wallet open: the coupons are in either way.
+      }
     },
   }
 }

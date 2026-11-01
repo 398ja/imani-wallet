@@ -862,5 +862,6 @@ export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'gift_sent') return 'Gift sent'
   if (tx.type === 'gift_pending') return 'Gift'
   if (tx.type === 'checkout_code') return 'Checkout code'
+  if (tx.type === 'checkout_change') return 'Change'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }
