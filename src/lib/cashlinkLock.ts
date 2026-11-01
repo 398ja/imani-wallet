@@ -125,6 +125,10 @@ export type DerivedPurpose =
   | 'split-burn'
   | 'split-part'
   | 'split-mint'
+  /** #402: a coupon locked to K alone turned back into a bearer coupon (`selfLockedCoupons.ts`). */
+  | 'self-unlock-burn'
+  | 'self-unlock'
+  | 'self-unlock-mint'
 
 const anchorOf = (secret: string) => bytesToHex(sha256(utf8(secret)))
 

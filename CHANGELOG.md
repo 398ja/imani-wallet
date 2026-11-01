@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.1] - 2026-11-01
+
+### Fixed
+- A send failed (`LOCKED_VOUCHER_SPLIT_REQUIRES_HOLDER`) when it drew on the change of a voucher split
+  (#402). The split leaves its change locked to the wallet's own key, which gateway-core's send cannot
+  split. Such coupons are now turned back into ordinary coupons right after the code is made, on every
+  catch-up, and before a send picks its coupons; a row that cannot be unlocked yet is left out of the
+  send instead of failing it. Burn, re-sign and mint are derived from the wallet key, so a page that dies
+  part way resumes, and a definite refusal keeps the value as sats.
+
 ## [0.42.1] - 2026-10-31
 
 ### Fixed
