@@ -907,6 +907,16 @@ async function recordSale(
 ): Promise<void> {
   if (delivered.length === 0) return
   try {
+    // What actually reached the customer against what the sale was for (#462).
+    // Filed on every row only when they differ, which is a sale that landed
+    // partly: the mint or delivery failure caught mid-sale, or a gateway split
+    // whose parts do not add up. The reconciliation then says "partly
+    // delivered" from the row itself instead of guessing from missing siblings.
+    const deliveredMinor = delivered.reduce((sum, v) => sum + partValue(v, params, parts), 0)
+    const partial =
+      deliveredMinor !== params.faceValueMinor
+        ? { saleTotalMinor: params.faceValueMinor, deliveredMinor }
+        : {}
     const rows = delivered.map((ready) =>
       buildIssueTransaction({
         voucherId: ready.voucher_id,
@@ -948,6 +958,7 @@ async function recordSale(
         // reached the customer rather than what was asked for.
         saleVoucherIds: delivered.map((v) => v.voucher_id),
         cashAttestation,
+        ...partial,
       }),
     )
 
