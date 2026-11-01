@@ -1,6 +1,7 @@
 import { drainDmPoll, startDmPoll, stopDmPoll } from './dmPoll'
 import { startRosterSync, stopRosterSync } from './terminalRosterSyncNet'
 import { startIncomingNotifications, stopIncomingNotifications } from './incomingNotifications'
+import { stopOnlineShopSync } from './onlineShopPublisher'
 import {
   closeReceives,
   closeSpends,
@@ -265,6 +266,7 @@ function defaultPause(): void {
   closeSpends()
   stopDmPoll()
   stopRosterSync()
+  stopOnlineShopSync()
   stopIncomingNotifications()
 }
 

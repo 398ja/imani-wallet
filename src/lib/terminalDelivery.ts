@@ -1,4 +1,5 @@
 import { type Event } from 'nostr-tools'
+import { GIFT_WRAP_BACKDATE_SECONDS } from '@imani/dm-poll'
 
 import { parseTerminalMetadata, type TerminalMetadata } from './terminalCredential'
 import { checkCode } from './terminalMint'
@@ -260,6 +261,15 @@ export function enrolledFromRumor(rumor: Rumor, sealer: string): EnrolledNotice 
   }
 }
 
+/**
+ * How far before `sinceSeconds` a terminal-delivery wrap may be dated. NIP-59 backdates a wrap's
+ * `created_at` (and its seal's) to blur timing, by up to two days in other clients: the
+ * checkout-codes shop plugin (imani-coupon-core GiftWrapper) does exactly that. A narrower window
+ * misses the shop's "enrolled" notice and the row never turns In service (#402, staging
+ * 2026-10-31). The same allowance dm-poll uses (GIFT_WRAP_BACKDATE_SECONDS).
+ */
+export const WRAP_BACKDATE_SECONDS = GIFT_WRAP_BACKDATE_SECONDS
+
 /** Gift wraps addressed to `pubkey`, from the gateway's public query. Never throws. */
 export async function giftWrapsFor(pubkey: string, sinceSeconds?: number): Promise<Event[]> {
   try {
@@ -270,8 +280,8 @@ export async function giftWrapsFor(pubkey: string, sinceSeconds?: number): Promi
       body: JSON.stringify({
         kinds: [1059],
         pTags: [pubkey],
-        // Gift wraps carry a randomised created_at up to 10 minutes early.
-        ...(sinceSeconds ? { since: sinceSeconds - 900 } : {}),
+        // A wrap is backdated by up to two days (WRAP_BACKDATE_SECONDS).
+        ...(sinceSeconds ? { since: sinceSeconds - WRAP_BACKDATE_SECONDS } : {}),
         limit: 200,
       }),
     })

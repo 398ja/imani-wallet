@@ -1,14 +1,14 @@
-import type { Event } from 'nostr-tools'
+import { SimplePool, type Event } from 'nostr-tools'
 
 import { getSigner } from './nap'
-import { publish } from './relay'
+import { publish, RELAY_URL } from './relay'
 import { mirrorToGateway } from './transferSignature'
 import { liveTerminals, markInService, waitingTerminals } from './terminalRoster'
 import { adoptRenewRequest, completeRenewals } from './terminalRenewOwner'
 import { renewRequestFromRumor } from './terminalRenewal'
 import { legacyApi } from './legacyBridge'
 import type { CredentialMintApi } from './credentialRevocation'
-import { enrolledNotices, giftWrapsFor, unwrapSealed, type WrapPublisher } from './terminalDelivery'
+import { enrolledNotices, giftWrapsFor, unwrapSealed, WRAP_BACKDATE_SECONDS, type WrapPublisher } from './terminalDelivery'
 import { signedFetch, type RequestSigner } from './nip98'
 
 /**
@@ -69,12 +69,29 @@ export function devicePublisher(signer: RequestSigner): WrapPublisher {
 }
 
 /**
- * Gift wraps for `pubkey`, deduplicated. Never throws. Through the gateway only (owner rule, #428):
- * its query merges a live relay read server-side, so nothing is lost by not asking strfry here.
+ * Gift wraps for `pubkey` from the gateway cache AND the relay, deduplicated. Never throws.
+ * Deliberate exception to the #428 gateway-only read rule: `giftWrapsFor` is ONE capped gateway
+ * page over a two-day backdate window, and a wrap beyond that page was seen hidden while the relay
+ * had it (#402). Listed in relayReadRule.test.ts ALLOWED.
  */
 export async function giftWraps(pubkey: string, sinceSeconds?: number): Promise<Event[]> {
+  const fromRelay = (async () => {
+    const pool = new SimplePool()
+    try {
+      return await pool.querySync(
+        [RELAY_URL],
+        { kinds: [1059], '#p': [pubkey], ...(sinceSeconds ? { since: sinceSeconds - WRAP_BACKDATE_SECONDS } : {}) },
+        { maxWait: 4000 },
+      )
+    } catch {
+      return []
+    } finally {
+      pool.close([RELAY_URL])
+    }
+  })()
+  const [a, b] = await Promise.all([giftWrapsFor(pubkey, sinceSeconds), fromRelay])
   const seen = new Map<string, Event>()
-  for (const e of await giftWrapsFor(pubkey, sinceSeconds)) seen.set(e.id, e)
+  for (const e of [...a, ...b]) seen.set(e.id, e)
   return [...seen.values()]
 }
 

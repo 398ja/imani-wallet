@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import type { VoucherRow } from '@imani/wallet-storage'
 
-import { CARD_SALES_CHECKING, CARD_SALES_NOT_READY, LOG_IN_TO_PAY, NO_CARDS, NO_VOUCHERS, merchantActions, payPath, validVoucherCount } from '../merchantActions'
+import { CARD_SALES_CHECKING, CARD_SALES_NOT_READY, LOG_IN_FOR_CODE, LOG_IN_TO_PAY, NO_CARDS, NO_ONLINE_SHOP, NO_VOUCHERS, merchantActions, payPath, validVoucherCount } from '../merchantActions'
 import { rememberAfterLogin, takeAfterLogin } from '../afterLogin'
 
 /** Buy and Pay enablement, exactly as #280's acceptance table states it. */
@@ -35,6 +35,20 @@ describe('merchantActions', () => {
     const { buy, pay } = merchantActions({ acceptsCards: true, cardSales: 'ready', validVouchers: 0, loggedIn: false })
     expect(buy.enabled).toBe(true)
     expect(pay).toEqual({ enabled: false, reason: LOG_IN_TO_PAY })
+  })
+})
+
+describe('Coupon code (#402)', () => {
+  it('is enabled only for a stall with an online shop and a coupon to put in the code', () => {
+    expect(merchantActions({ acceptsCards: false, validVouchers: 2, loggedIn: true, sellsOnline: true }).online).toEqual({ enabled: true })
+    expect(merchantActions({ acceptsCards: false, validVouchers: 2, loggedIn: true }).online).toEqual({ enabled: false, reason: NO_ONLINE_SHOP })
+    expect(merchantActions({ acceptsCards: false, validVouchers: 0, loggedIn: true, sellsOnline: true }).online).toEqual({ enabled: false, reason: NO_VOUCHERS })
+    expect(merchantActions({ acceptsCards: false, validVouchers: 2, loggedIn: false, sellsOnline: true }).online).toEqual({ enabled: false, reason: LOG_IN_FOR_CODE })
+  })
+
+  it('names the missing shop first, and is not blocked by the till being closed', () => {
+    expect(merchantActions({ acceptsCards: false, validVouchers: 0, loggedIn: false }).online.reason).toBe(NO_ONLINE_SHOP)
+    expect(merchantActions({ acceptsCards: false, validVouchers: 1, loggedIn: true, sellsOnline: true, stallOpen: 'closed' }).online).toEqual({ enabled: true })
   })
 })
 

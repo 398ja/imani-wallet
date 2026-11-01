@@ -52,6 +52,7 @@ import {
   describeAttestation,
   describeCashbackKind,
   describeCashbackClaim,
+  describeUnderstatedSale,
   type EvidenceLine,
   type EvidenceTone,
 } from '../lib/issuedVoucherWording'
@@ -405,7 +406,11 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
   const money = (minor: number) => formatFace(minor, { unit: row.unit, decimals: row.decimals })
 
   const rail = describeRail(voucher.rail)
-  const warrant = describeWarrant(voucher.warrantVerdict)
+  // A sale that is signed for more than reached the customer reads as that,
+  // in figures, rather than as a signature that does not hold (#462).
+  const warrant = voucher.shortfall
+    ? describeUnderstatedSale(voucher.shortfall, money)
+    : describeWarrant(voucher.warrantVerdict)
   const attestation = describeAttestation(voucher.attestationVerdict)
 
   return (

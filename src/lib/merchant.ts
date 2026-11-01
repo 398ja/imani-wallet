@@ -2,6 +2,7 @@ import type { EventTemplate } from 'nostr-tools'
 
 import { newestAddressable } from './relay'
 import { str } from './branding'
+import { onlineShopField, parseOnlineShop, type OnlineShop } from './onlineShop'
 import {
   DEFAULT_VALIDITY_DAYS,
   MERCHANT_D_TAG,
@@ -105,6 +106,11 @@ export interface MerchantProfile {
    * Like `acceptsCards`, only a literal `true` counts, and absent means no.
    */
   giftingIndexable?: boolean
+  /**
+   * The stall's online shop and its redeem key `S` (#402, contract §4), or absent. Read
+   * fail-closed by `parseOnlineShop`: a malformed field is no shop, never a repaired one.
+   */
+  onlineShop?: OnlineShop
   /** When this record was last written locally, ms. For display only. */
   updatedAt: number
   /**
@@ -271,6 +277,28 @@ export function isMerchant(merchant: MerchantProfile | null): merchant is Mercha
   return merchant !== null && merchant.active
 }
 
+/**
+ * Is this identity a merchant at all, open or closed? (imani-wallet#434)
+ *
+ * The ROLE, which `isMerchant` (above) conflates with the STATE: a stall that switched Open for
+ * business off is still a stall, keeps its home, menus and history, and only stops trading.
+ * Use this for "which wallet is this"; use `canTrade` for "may it sell right now".
+ */
+export function hasStall(merchant: MerchantProfile | null): merchant is MerchantProfile {
+  return merchant !== null
+}
+
+/**
+ * May a stall that holds `coupon:issue` show the merchant home and its screens? The role check
+ * for the trading SCREENS, without the open/closed state: a closed stall sees them, greyed out.
+ */
+export function canRunStall(
+  permissions: readonly string[],
+  merchant: MerchantProfile | null,
+): merchant is MerchantProfile {
+  return permissions.includes(COUPON_ISSUE) && hasStall(merchant)
+}
+
 /** The permission gateway-portal demands of anything that issues a coupon. */
 export const COUPON_ISSUE = 'coupon:issue'
 
@@ -328,6 +356,8 @@ export function buildMerchantEvent(merchant: MerchantProfile): EventTemplate {
   // agree rather than needing to be told apart.
   if (merchant.acceptsCards === true) content.acceptsCards = true
   if (merchant.giftingIndexable === true) content.giftingIndexable = true
+  // Republished as read, so saving the profile here never drops a shop another client connected.
+  if (merchant.onlineShop) content.online_shop = onlineShopField(merchant.onlineShop)
 
   return {
     kind: MERCHANT_KIND,
@@ -387,6 +417,9 @@ export function mergeMerchantEvent(
     // the old value would keep a Buy button alive on a stall that disconnected.
     acceptsCards: parsed.acceptsCards === true,
     giftingIndexable: parsed.giftingIndexable === true,
+    // Absent or malformed means no shop, for the reason `acceptsCards` gives: a record that stops
+    // naming a key has stopped being evidence for it, and a stale `S` would lock money to it.
+    onlineShop: parseOnlineShop(parsed.online_shop) ?? undefined,
     updatedAt: Date.now(),
     eventAt: createdAt > 0 ? createdAt : merchant.eventAt,
   }
@@ -453,12 +486,14 @@ async function fetchMerchantStatus(pubkey: string): Promise<MerchantStatus> {
   // present — `refreshMerchant` saved it at login — so their own badge costs no
   // round trip at all. Nothing is saved for anyone else: their record is not
   // ours to keep, and the session cache above is enough.
-  if (isMerchant(loadMerchant(pubkey))) return 'merchant'
+  // `hasStall`, not `isMerchant` (#434): a closed stall is still a stall, and its badge stays.
+  if (hasStall(loadMerchant(pubkey))) return 'merchant'
 
   try {
     const event = await newestAddressable(pubkey, MERCHANT_KIND, MERCHANT_D_TAG)
     if (event === null) return 'customer'
-    return isMerchant(mergeMerchantEvent(emptyMerchant(pubkey), event.content, event.created_at))
+    // A record exists: a stall, open or closed (#434).
+    return hasStall(mergeMerchantEvent(emptyMerchant(pubkey), event.content, event.created_at))
       ? 'merchant'
       : 'customer'
   } catch {
@@ -516,7 +551,10 @@ export async function fetchMerchantRecord(pubkey: string): Promise<MerchantProfi
     // `mergeMerchantEvent` clamps relay-sourced values because a kind-30078 is
     // attacker-controllable — anyone can publish one claiming to be this key.
     // Nothing here is trusted beyond being displayed.
-    return isMerchant(merged) ? merged : null
+    // The record, open or closed (#434). Callers that SELL check `active` (or the portal's
+    // status) themselves: a terminal needs a closed stall's record to show it as closed, not
+    // to hang on "Reading the stall…".
+    return merged
   } catch {
     return null
   }

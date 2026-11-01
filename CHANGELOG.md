@@ -9,6 +9,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-10-31
+
+### Fixed
+
+- "Use online" offers only amounts it can actually make: a code's split part is carved from the
+  coupon's own proofs, and when no subset makes the amount the next coupon is split instead, or the
+  screen says so before Get code. Before, the code was refused after Get code (#449, #402).
+- The stall's online-shop profile publish gets an 8 s relay connect window instead of 3 s. Right
+  after enrolment it lost the 3 s race every time (#450, #402).
+
+## [0.42.0] - 2026-10-31
+
+### Changed
+
+- **Open for business pauses trading instead of turning the wallet into a customer's (#434).** A
+  closed stall keeps its merchant home, header, menus and history. Sell, Redeem and Cashback stay on
+  screen, disabled, with the reason, on the owner's device and every linked terminal. Closing asks for
+  the passphrase and says why first. Reopening saves at once.
+- Customers cannot pay or buy by card from a closed stall, or one nobody could confirm is open: Buy
+  and Pay, the payment-request Pay screen, paying a stall from Send, and card checkout all gate on
+  the portal's verified status, polled every 15 s and asked again right before anything is sent.
+- Terminals see a close within the 30 s target, without a reload or re-pairing.
+
+Needs gateway-portal >= 0.16.1 (status endpoint); 0.17.0 also refuses issuance server-side.
+
+## [0.41.6] - 2026-10-31
+
+### Fixed
+
+- Lint is clean again: the stall profile publisher moved out of the Terminals page, which only
+  exports components (#445). No behaviour change from 0.41.5.
+
+## [0.41.5] - 2026-10-31
+
+### Fixed
+
+- The stall's online-shop profile publish is retried every 5 seconds while Terminals is open,
+  until the relay takes it. A connect timeout right after enrolment was never retried (#443, #402).
+
+## [0.41.4] - 2026-10-31
+
+### Fixed
+
+- The stall's online-shop profile counts as published only once the relay accepts it. A copy that
+  only the gateway took was pruned on the next read, and the retry had already stopped. Relay
+  refusals are logged (#441, #402).
+
+## [0.41.3] - 2026-10-31
+
+### Fixed
+
+- A stall's profile now names its online shop reliably. The republish is retried until the relay
+  or the gateway confirms it, and it goes through the gateway's mirror too. Before, a lost publish
+  was never retried and customers saw "This stall does not sell online" (#438, #402).
+
+## [0.41.2] - 2026-10-31
+
+### Fixed
+
+- An online shop enrolled as a terminal now turns In service, and the stall advertises it. The
+  shop's "enrolled" notice is backdated by up to two days (NIP-59), and the wallet only looked 15
+  minutes back, so the row stayed Waiting (#436, #402).
+
+## [0.41.1] - 2026-10-30
+
+### Fixed
+
+- The stall's gifting page link (Settings, and the guest Buy page) now points at the gifting site this
+  build is configured for (`VITE_GIFTING_SITE_URL`). A staging wallet linked to the production gifting
+  site. A build with no gifting site shows no link. New optional build arg `VITE_GIFTING_HANDLE_DOMAIN` (#432).
+
+## [0.41.0] - 2026-10-30
+
+A **minor** release: checkout codes for online shops (#402), shipped **dark**, plus fixes to
+licences, the subscription site and Cashlink take-back.
+
+### Added
+
+- **Checkout codes for online shops** (#402). A customer makes a code (`IMANI-XXXX-XXXX-XXXX`) from
+  their coupons at one stall and types it at that stall's online shop (WooCommerce, WordPress,
+  Magento). Behind **"Use online"**: pick the stall, the amount and the expiry; the wallet locks 1..N
+  coupons of that stall to the shop key, all or nothing, and deposits them with the code store. The
+  value is shown as reserved, logout waits while a code is outstanding, and change comes back as a
+  coupon locked to the customer. Store notices arrive by DM, with `GET /mine` as the fallback.
+- **Online shops as redeem-only terminals** (#402). A stall enrols its shop with a setup code; the
+  Terminals page shows the shop and its outstanding codes ("3 codes, €45.00 outstanding"), and
+  revoking it withdraws the shop from the stall's profile.
+- The flag: shown only when built with **`VITE_CHECKOUT_CODES=on`**, with
+  `VITE_CHECKOUT_CODES_URL` for the exposure figure. Both are now declared in the Dockerfile.
+- A staging end-to-end test (`e2e/checkout-codes-staging.e2e.mts`) and a VAT brief for an adviser
+  (`docs/handoff/vat-coupons-q4.md`, #402 Q4).
+
+### Fixed
+
+- **Licences never verified in a built wallet.** The Dockerfile did not declare
+  `VITE_LICENCE_ISSUER_PUBKEY`, so the issuer key was always empty and every delivered plan was
+  ignored. It is now a build arg.
+- **"Take it back" right after "Cashlink ready" left the gift claimable** under a row reading
+  "Taken back": the tap took back the bearer copy the send was about to burn. A take-back now waits
+  for its own link's send to finish (up to 90 s), then takes back the real gift.
+- **The subscription site's header** showed "Someone", no avatar and no badge. The wallet now passes
+  the stall's name, handle and https avatar to the site; the site is built with `VITE_RELAY_URL` and
+  `VITE_LICENCE_SELLER_PUBKEY` so it can read profiles and verification badges itself.
+
 ## [0.40.3] - 2026-10-29
 
 A **patch**: the wallet-api image did not build on 0.40.x (#425). No behaviour change.

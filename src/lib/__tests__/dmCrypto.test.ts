@@ -86,6 +86,18 @@ describe('dm-poll CryptoAdapter', () => {
     expect((meta as unknown as Record<string, unknown>).expiresAt).toBe(1794346639)
   })
 
+  it('carries an online shop\'s source block through to the stored row\'s metadata (#402)', () => {
+    const withSource = JSON.stringify({
+      ...JSON.parse(DELIVERED),
+      source: { kind: 'online_shop', shop_url: 'https://shop.example', platform: 'woocommerce', order_number: '55', code_ref: 'd322d4d32d3a', amount_applied: 500 },
+    })
+    const meta = crypto.parseTokenTransferMessage(withSource) as unknown as Record<string, unknown>
+    expect(meta.spendSource).toMatchObject({ shopHost: 'shop.example', orderNumber: '55' })
+    expect((toLegacyMetadata(meta).spend_source as { orderNumber?: string }).orderNumber).toBe('55')
+    // No source, no field.
+    expect((crypto.parseTokenTransferMessage(DELIVERED) as unknown as Record<string, unknown>).spendSource).toBeUndefined()
+  })
+
   describe('unwrapNip17Dm', () => {
     /** A real NIP-17 gift wrap, so the unwrap path is exercised for real. */
     function giftWrap() {

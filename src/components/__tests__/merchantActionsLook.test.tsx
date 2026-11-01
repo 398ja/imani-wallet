@@ -7,6 +7,12 @@ import { MemoryRouter } from 'react-router-dom'
 
 // The purchase issuer says this stall's card sales are ready (#298), so Buy is enabled when the
 // stall takes cards. `merchantActionsCardSales.test.tsx` covers the not-ready states.
+// #434: the stall's open-for-business status is asked of the portal. Open here: these tests
+// are about something else, and an unmocked fetch would (correctly) fail closed.
+vi.mock('../../lib/merchantStatus', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchantStatus')>()),
+  fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
+}))
 vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReadiness: async () => 'ready' }))
 const { MerchantActions } = await import('../MerchantActions')
 

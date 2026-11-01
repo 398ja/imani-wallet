@@ -251,3 +251,23 @@ describe('#160 review: the device accepts only the offer the setup code names', 
     expect(parseSetupCode('imani-terminal:1:nothex:abc')).toBeNull()
   })
 })
+
+describe('giftWrapsFor (#402): the since window covers NIP-59 backdating', () => {
+  it('asks for wraps from two days and an hour before the enrolment, not ten minutes', async () => {
+    const { giftWrapsFor, WRAP_BACKDATE_SECONDS } = await import('../terminalDelivery')
+    const bodies: Array<Record<string, unknown>> = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (_url: unknown, init?: { body?: string }) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return new Response(JSON.stringify({ events: [] }), { status: 200 })
+    }) as typeof fetch
+    try {
+      await giftWrapsFor('a'.repeat(64), 1_793_372_653)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+    // The shop plugin (coupon-core GiftWrapper) backdates up to 172800 s: a wrap that old must be in.
+    expect(WRAP_BACKDATE_SECONDS).toBeGreaterThanOrEqual(172_800)
+    expect(bodies[0].since).toBe(1_793_372_653 - WRAP_BACKDATE_SECONDS)
+  })
+})

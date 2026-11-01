@@ -51,7 +51,7 @@ import {
   type IssuanceWarrant,
   type WarrantVerdict,
 } from './issuanceWarrant'
-import { saleFor, saleIsComplete } from './reconcileIssuance'
+import { reconcileIssuances, saleFor, saleIsComplete } from './reconcileIssuance'
 import { isVoucherIssuance, type WalletTransaction } from './transactions'
 
 export { isVoucherIssuance }
@@ -109,6 +109,12 @@ export interface VoucherRecord {
   sale: WalletTransaction[]
   /** Whether all of that sale's coupons are present in this history. */
   saleComplete: boolean
+  /**
+   * Present when this coupon's signature holds but its sale's coupons add up to
+   * less than the stall signed (#462): the figures the page states instead of
+   * calling the signature into question.
+   */
+  shortfall?: { signedMinor: number; deliveredMinor: number; partlyDelivered: boolean }
 }
 
 /**
@@ -300,5 +306,23 @@ export function issuedVoucher(
     rail: paymentRail(warrant),
     sale: saleFor(rows, voucherId),
     saleComplete: saleIsComplete(rows, voucherId),
+    shortfall: shortfallFor(rows, row, stallPubkey),
   }
+}
+
+/**
+ * The same sale-level judgement the "Coupons you issued" panel makes, for one
+ * row (#462). Summing a sale needs its siblings, so this reconciles the rows
+ * that share this row's warrant rather than re-deriving the rule here.
+ */
+function shortfallFor(
+  rows: readonly WalletTransaction[],
+  row: WalletTransaction,
+  stallPubkey: string,
+): VoucherRecord['shortfall'] {
+  if (!row.issuanceWarrant) return undefined
+  const found = reconcileIssuances(rows, stallPubkey).find((item) => item.row === row)
+  if (found?.verdict !== 'understated' || !found.sale) return undefined
+  const { signedMinor, deliveredMinor, partlyDelivered } = found.sale
+  return { signedMinor, deliveredMinor, partlyDelivered }
 }

@@ -24,6 +24,7 @@ import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
 import { collectTillSalesForOwner } from './lib/tillSalesNet'
 import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
+import { startOnlineShopSync } from './lib/onlineShopPublisher'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
 import { restoreCashbackStash } from './lib/cashbackStash'
 import { useLogout } from './lib/useLogout'
@@ -36,6 +37,7 @@ import { ReauthDialog } from './components/ui/ReauthDialog'
 import { HeldCouponsNotice } from './components/ui/HeldCouponsNotice'
 import {
   canTrade,
+  canRunStall,
   loadMerchant,
   refreshMerchant,
   type MerchantProfile,
@@ -53,6 +55,7 @@ import { isTerminalDevice } from './lib/terminalEnrol'
 import { WelcomePage } from './pages/WelcomePage'
 import { MerchantsPage } from './pages/MerchantsPage'
 import { MerchantHomePage } from './pages/MerchantHomePage'
+import { OpenStallOnly } from './components/StallClosed'
 import {
   MerchantTransactionsPage,
   IssuedCouponsPage,
@@ -83,6 +86,8 @@ import { useExpiryReminders } from './hooks/useExpiryReminders'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
 import { PayPage } from './pages/PayPage'
+import { UseOnlinePage } from './pages/UseOnlinePage'
+import { checkoutCodesEnabled } from './lib/checkoutCodePorts'
 import { SendPage } from './pages/SendPage'
 import { SendLinkPage } from './pages/SendLinkPage'
 import { ReceivePage } from './pages/ReceivePage'
@@ -209,6 +214,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // Every change to the terminal list is published, debounced, to the owner's other
         // devices (#160 phase 6). Stopped on logout.
         startRosterSync(pubkey)
+        // And the stall's profile follows it: a shop turning In service is advertised from any
+        // screen, not only while Terminals is open (#402).
+        startOnlineShopSync(pubkey)
 
         // This account's own avatar reads the licences it holds as well as the public attestation
         // (#418), so its badge is right the moment a plan arrives, before the service publishes.
@@ -495,10 +503,13 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   // The session's authority AND a stall to sell from — see `canTrade`. A `const`
   // so TypeScript narrows `merchant` for the screens behind it.
   const trading = canTrade(permissions, merchant)
+  // #434: the ROLE, open or closed. A closed stall keeps the merchant home, header and every
+  // trading route; the screens grey their actions out and say why instead of disappearing.
+  const stallOwner = canRunStall(permissions, merchant)
 
   return (
     <>
-      <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
+      <Header profile={profile} merchant={stallOwner} terminal={terminal.actor !== null} onLogout={onLogout} />
       {/* Coupons the trusted-mint gate is holding, so a wait is never mistaken for a loss (#133). */}
       <HeldCouponsNotice pubkey={pubkey} className="mt-2" />
       {/* #352: the wallet opens first and the vouchers fill in as they come back. */}
@@ -528,11 +539,12 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             */
             <ResumeParkedClaim pubkey={pubkey}>
               <ResumeAfterLogin>
-              {trading ? (
+              {stallOwner ? (
                 <MerchantHomePage
                   actor={terminal.actor ?? undefined}
                   session={terminal.session}
                   refusal={terminal.refusal}
+                  closed={!merchant.active}
                 />
               ) : (
                 <MerchantsPage pubkey={pubkey} />
@@ -541,17 +553,19 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             </ResumeParkedClaim>
           }
         />
-        {trading && (
+        {stallOwner && (
           <>
             <Route
               path="/sell"
               element={
-                <SellPage
-                  pubkey={pubkey}
-                  merchant={merchant}
-                  actor={terminal.actor ?? undefined}
-                  session={terminal.session}
-                />
+                <OpenStallOnly merchant={merchant}>
+                  <SellPage
+                    pubkey={pubkey}
+                    merchant={merchant}
+                    actor={terminal.actor ?? undefined}
+                    session={terminal.session}
+                  />
+                </OpenStallOnly>
               }
             />
             {/* Under /sell because it is the other half of the same job —
@@ -560,23 +574,27 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             <Route
               path="/sell/cashback"
               element={
-                <CashbackIssuePage
-                  merchant={merchant}
-                  actor={terminal.actor ?? undefined}
-                  session={terminal.session}
-                />
+                <OpenStallOnly merchant={merchant}>
+                  <CashbackIssuePage
+                    merchant={merchant}
+                    actor={terminal.actor ?? undefined}
+                    session={terminal.session}
+                  />
+                </OpenStallOnly>
               }
             />
             <Route
               path="/redeem"
               element={
-                <RedeemPage
-                  pubkey={pubkey}
-                  merchant={merchant}
-                  actor={terminal.actor ?? undefined}
-                  fulfilment={OWNER_FULFILMENT}
-                  register={OWNER_REGISTER}
-                />
+                <OpenStallOnly merchant={merchant}>
+                  <RedeemPage
+                    pubkey={pubkey}
+                    merchant={merchant}
+                    actor={terminal.actor ?? undefined}
+                    fulfilment={OWNER_FULFILMENT}
+                    register={OWNER_REGISTER}
+                  />
+                </OpenStallOnly>
               }
             />
             {/*
@@ -622,6 +640,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             device, so this explains rather than sets anything up. */}
         <Route path="/terminal/setup" element={<WalletHolderIsNotATerminal />} />
         <Route path="/pay" element={<PayPage pubkey={pubkey} />} />
+        {/* #402: checkout codes, dark until VITE_CHECKOUT_CODES=on. */}
+        {checkoutCodesEnabled() && <Route path="/online" element={<UseOnlinePage pubkey={pubkey} />} />}
+        {checkoutCodesEnabled() && <Route path="/online/code/:id" element={<UseOnlinePage pubkey={pubkey} />} />}
         <Route path="/send" element={<SendPage pubkey={pubkey} />} />
         <Route path="/send/link" element={<SendLinkPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />

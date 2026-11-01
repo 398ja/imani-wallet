@@ -13,6 +13,12 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 const startPurchase = vi.fn()
+// #434: the stall's open-for-business status is asked of the portal. Open here: these tests
+// are about something else, and an unmocked fetch would (correctly) fail closed.
+vi.mock('../../lib/merchantStatus', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchantStatus')>()),
+  fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
+}))
 vi.mock('../../lib/purchase', () => ({ startPurchase: (...a: unknown[]) => startPurchase(...a) }))
 vi.mock('../../hooks/useBranding', () => ({
   useBranding: (pubkey: string | undefined) => ({
@@ -50,6 +56,7 @@ afterEach(() => {
   cardSalesReady = vi.fn(async () => true)
   readinessOverride = null
   sessionStorage.clear()
+  vi.unstubAllEnvs()
 })
 
 function buy(buyerPubkey: string | null) {
@@ -64,6 +71,8 @@ function buy(buyerPubkey: string | null) {
 
 describe('Buy page, guest (#267 item 2, #410)', () => {
   it('points a guest to the gifting page (by handle) and offers no card button here', async () => {
+    vi.stubEnv('VITE_GIFTING_SITE_URL', 'https://gifting.imani.casa')
+    vi.stubEnv('VITE_GIFTING_HANDLE_DOMAIN', '')
     identity = { nip05: 'mama@imani.casa' }
     buy(null)
     expect(screen.getByText(/buy this voucher by card on the gifting page/)).toBeTruthy()

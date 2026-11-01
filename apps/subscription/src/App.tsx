@@ -6,7 +6,7 @@ import { Button } from '@wallet/components/ui/Button'
 import { IdentityInline } from '@wallet/components/ui/IdentityInline'
 import { Centered, Screen } from '@wallet/components/ui/layout'
 import { api, SessionEnded, type Me } from './lib/api'
-import { currentAccount, expectedStall, signInThroughWallet, signOut, SignInError, type Account, type SignInFailure } from './lib/session'
+import { currentAccount, expectedStall, signInThroughWallet, signOut, SignInError, stallLabel, type Account, type SignInFailure } from './lib/session'
 import { PlansPage } from './pages/PlansPage'
 import { AccountPage } from './pages/AccountPage'
 import { DonePage } from './pages/DonePage'
@@ -31,6 +31,7 @@ export function App() {
   const [gate, setGate] = useState<Gate>({ state: 'checking' })
   const [me, setMe] = useState<Me | null>(null)
   const expected = expectedStall()
+  const [label] = useState(() => stallLabel())
 
   // Who this stall is on the service, and its plans: loaded once the gate opens, and again on demand.
   const loadMe = useCallback(async () => {
@@ -94,7 +95,14 @@ export function App() {
       header={
         <div className="flex items-center gap-3 text-sm text-mono-500">
           <Link to="/account" className="pressable min-w-0 max-w-[14rem]" aria-label="My plan">
-            <IdentityInline pubkey={account.pubkey} size="sm" linkToProfile={false} />
+            <IdentityInline
+              pubkey={account.pubkey}
+              size="sm"
+              linkToProfile={false}
+              fallbackName={label?.pubkey === account.pubkey ? label.name : undefined}
+              fallbackHandle={label?.pubkey === account.pubkey ? label.nip05 : undefined}
+              fallbackPicture={label?.pubkey === account.pubkey ? label.picture : undefined}
+            />
           </Link>
           {me?.admin ? (
             <Link to="/admin" className="pressable">

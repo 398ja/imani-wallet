@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { getDecimals } from '@imani/money'
 
 import { listVouchers } from '../lib/wallet'
-import { issuerKey, toMerchants, type Merchant } from '../lib/merchants'
+import { holdingForUnit, issuerKey, toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
 import {
@@ -19,6 +19,7 @@ import {
 import type { NUT18VRequest } from '../lib/nap'
 import { passedOverNote } from '../lib/passedOverWording'
 import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
+import { RequestAlreadyPaidError } from '../lib/settledSends'
 import { SwapBackOffer } from '../components/SwapBackOffer'
 import {
   Button,
@@ -31,6 +32,8 @@ import {
   Panel,
 } from '../components/ui'
 import { userMessage } from '../lib/userMessage'
+import { useStallStatus } from '../hooks/useStallStatus'
+import { closedMessage, mayTradeWith } from '../lib/merchantStatus'
 
 type Status =
   | { step: 'review' }
@@ -39,6 +42,8 @@ type Status =
   | { step: 'failed'; message: string; swapBackTokenId?: string }
   /** The gateway took the payment and its outcome is unknown: Pay stays locked (#128). */
   | { step: 'unconfirmed'; message: string }
+  /** #461: this wallet already paid the request. Pay stays locked: a second tap would pay twice. */
+  | { step: 'alreadyPaid'; message: string }
 
 /**
  * Confirmation for a scanned voucher payment request, then the payment itself.
@@ -93,6 +98,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // called conditionally. It is the same fetch the merchant pages make, cached per
   // pubkey, so asking here costs nothing extra.
   const issuer = useIdentity(parsed.ok ? parsed.request.issuerId : undefined)
+  // #434: is the stall taking payments? Polled while this screen is up; fail closed.
+  const stall = useStallStatus(parsed.ok ? parsed.request.issuerId : undefined)
 
   if (!parsed.ok) return <Fatal title="Cannot read this request" detail={parsed.error} />
   const request = parsed.request
@@ -100,7 +107,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   if (merchants === null) return <Centered>Checking your vouchers…</Centered>
 
   const merchant = merchants.find((f) => issuerKey(f.pubkey) === issuerKey(request.issuerId))
-  const group = merchant?.groups.find((g) => g.unit.toUpperCase() === request.unit.toUpperCase())
+  // Every group in the unit, not the first: coupons from several sales (different
+  // issuance ratios) are separate groups but one balance (#460).
+  const group = merchant ? holdingForUnit(merchant, request.unit) : undefined
   const available = group?.totalFaceValue ?? 0
   // How to read `request.amount`, which is MINOR UNITS.
   //
@@ -140,7 +149,12 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   const passedNote = passedOverNote(
     passedOver(allVouchers, request.amount, { issuer: request.issuerId, unit: request.unit }),
   )
-  const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle
+  const stallOpen = mayTradeWith(stall.status === 'loading' ? 'unknown' : stall.status)
+  const stallNote =
+    stall.status === 'loading'
+      ? 'Checking this merchant is open…'
+      : closedMessage(stall.status === 'customer' ? 'unknown' : stall.status, issuer?.name ?? merchant?.name)
+  const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle && stallOpen
 
   if (status.step === 'done') {
     // A payment drawn across several coupons can land in pieces, and what landed
@@ -234,6 +248,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       </Panel>
 
       {expired && <Alert>This payment request has expired.</Alert>}
+      {!expired && !stallOpen && stallNote && status.step !== 'failed' && <Alert>{stallNote}</Alert>}
       {!expired && !merchant && (
         <Alert>You have no vouchers from this merchant.</Alert>
       )}
@@ -250,7 +265,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       {!expired && payable && passedNote && (
         <p className="mb-2 text-sm text-mono-500">{passedNote}</p>
       )}
-      {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
+      {(status.step === 'failed' || status.step === 'unconfirmed' || status.step === 'alreadyPaid') && (
+        <Alert>{status.message}</Alert>
+      )}
       {status.step === 'failed' && status.swapBackTokenId && (
         <SwapBackOffer tokenId={status.swapBackTokenId} pubkey={pubkey} />
       )}
@@ -258,13 +275,29 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       <Button
         size="lg"
         className="mt-4 w-full"
-        disabled={!payable || status.step === 'paying' || status.step === 'unconfirmed'}
+        disabled={
+          !payable || status.step === 'paying' || status.step === 'unconfirmed' || status.step === 'alreadyPaid'
+        }
         onClick={async () => {
           setStatus({ step: 'paying' })
           try {
+            // #434: ask again right before money moves. A stall that closed since the last poll
+            // must not be paid, and nothing has left the wallet yet.
+            const now = await stall.recheck()
+            if (!mayTradeWith(now.status)) {
+              setStatus({
+                step: 'failed',
+                message: closedMessage(now.status === 'customer' ? 'unknown' : now.status, issuer?.name ?? merchant?.name) ?? 'Payment failed.',
+              })
+              return
+            }
             const result = await payRequest({ request, raw, merchant: merchant!, payer: pubkey })
             setStatus({ step: 'done', result })
           } catch (e) {
+            if (e instanceof RequestAlreadyPaidError) {
+              setStatus({ step: 'alreadyPaid', message: e.message })
+              return
+            }
             setStatus({
               step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
               message: userMessage(e, 'Payment failed.'),
@@ -274,7 +307,13 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           }
         }}
       >
-        {status.step === 'paying' ? 'Paying…' : status.step === 'unconfirmed' ? 'Still going through' : 'Pay'}
+        {status.step === 'paying'
+          ? 'Paying…'
+          : status.step === 'unconfirmed'
+            ? 'Still going through'
+            : status.step === 'alreadyPaid'
+              ? 'Already paid'
+              : 'Pay'}
       </Button>
     </Screen>
   )

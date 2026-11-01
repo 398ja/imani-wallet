@@ -45,6 +45,8 @@ import { requestCredential } from '../lib/terminalRequestCredential'
 import { openTillSales } from '../lib/tillSalesNet'
 import { checkForRenewal, sendRenewRequest, RENEWAL_POLL_MS } from '../lib/terminalRenewalNet'
 import { pendingTillSales, UNSENT_SALES_WARNING } from '../lib/tillSales'
+import { useStallStatus } from '../hooks/useStallStatus'
+import { ClosedNote, OpenStallOnly } from '../components/StallClosed'
 
 /**
  * The till, on a device enrolled as a terminal (#160 phase 3, spec 2.3 and 2.4).
@@ -88,6 +90,16 @@ export function TerminalApp() {
   const fulfilment = useMemo(() => fulfilmentOf(), [])
   // The request's terms go to gateway-core before its code is shown (#160 review, BLOCKER).
   const register = useMemo(() => registerRequestTerms(), [])
+  /*
+    #434: is the stall open? Polled from the portal (signed record, verified there) every 15 s and
+    on focus, so the owner closing the stall reaches this till within the 30 s target, without a
+    reload or re-pairing. Only `open` trades: closed, unknown and not-yet-asked all hold Sell,
+    Redeem and Cashback back. The record's own `active` decides only while the portal has not
+    answered, and only towards closed.
+  */
+  const stallStatus = useStallStatus(record?.stallPubkey)
+  const open = stallStatus.status === 'open' && stall?.active !== false
+  const closed = !open
 
   useEffect(() => {
     if (!record) return
@@ -186,6 +198,7 @@ export function TerminalApp() {
           <TerminalHome
             till={till}
             stall={stall}
+            closed={closed}
             stallName={stallName}
             stallLook={stallLook}
             terminalName={record.name}
@@ -198,6 +211,8 @@ export function TerminalApp() {
         element={
           !canRedeemNow(till.actor, till.session) ? (
             <Navigate to="/" replace />
+          ) : stall && closed ? (
+            <OpenStallOnly merchant={{ active: false }} owner={false}>{null}</OpenStallOnly>
           ) : stall ? (
             <RedeemPage
               pubkey={till.devicePubkey}
@@ -222,7 +237,9 @@ export function TerminalApp() {
         path="/sell"
         element={
           stall && mayWarrantSale(till.actor, till.session) ? (
-            <SellPage pubkey={till.devicePubkey} merchant={stall} actor={till.actor} session={till.session} />
+            <OpenStallOnly merchant={{ active: !closed }} owner={false}>
+              <SellPage pubkey={till.devicePubkey} merchant={stall} actor={till.actor} session={till.session} />
+            </OpenStallOnly>
           ) : (
             <SellUnavailable till={till} stall={stall} />
           )
@@ -232,7 +249,9 @@ export function TerminalApp() {
         path="/sell/cashback"
         element={
           stall && mayWarrantSale(till.actor, till.session) ? (
-            <CashbackIssuePage merchant={stall} actor={till.actor} session={till.session} />
+            <OpenStallOnly merchant={{ active: !closed }} owner={false}>
+              <CashbackIssuePage merchant={stall} actor={till.actor} session={till.session} />
+            </OpenStallOnly>
           ) : (
             <SellUnavailable till={till} stall={stall} />
           )
@@ -405,6 +424,7 @@ export function TerminalUnlockPage({
 function TerminalHome({
   till,
   stall,
+  closed,
   stallName,
   stallLook = {},
   terminalName,
@@ -412,6 +432,8 @@ function TerminalHome({
 }: {
   till: Till
   stall: MerchantProfile | null
+  /** #434: the stall is closed (or could not be confirmed open). Buttons stay, disabled. */
+  closed: boolean
   stallName: string | null
   stallLook?: StallLook
   terminalName?: string
@@ -469,16 +491,17 @@ function TerminalHome({
         </div>
         <div className={`grid gap-3 ${mayIssue && mayRedeem ? 'grid-cols-2' : 'grid-cols-1'}`}>
           {mayIssue ? (
-            <Button size="lg" onClick={() => navigate('/sell')}>
+            <Button size="lg" disabled={closed} onClick={() => navigate('/sell')}>
               <Send className="mr-2 h-5 w-5" aria-hidden /> Sell
             </Button>
           ) : null}
           {mayRedeem ? (
-            <Button size="lg" variant={mayIssue ? 'outline' : 'primary'} onClick={() => navigate('/redeem')}>
+            <Button size="lg" variant={mayIssue ? 'outline' : 'primary'} disabled={closed} onClick={() => navigate('/redeem')}>
               <QrCode className="mr-2 h-5 w-5" aria-hidden /> Redeem
             </Button>
           ) : null}
         </div>
+        {closed && stall !== null && <ClosedNote owner={false} />}
         {/* A selling role the stall never attested (spec 4.6.5): Redeem only, and the owner's
             one-tap Renew, which this till can ask for (#160 phase 6, Q3). */}
         {till.actor.attested !== true &&

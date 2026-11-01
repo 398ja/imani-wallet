@@ -54,6 +54,7 @@ import { raiseHomecomingAlert } from './terminalHomecoming'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
+import { shopAttributionFor } from './shopTakings'
 import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './trustedMint'
@@ -1245,6 +1246,8 @@ function redemptionAdapter(): RedemptionAdapter {
             // Files the row against the voucher the stall ISSUED, so its claimed
             // figure and redemption ceiling see it (#90). See merchantClaim.ts.
             claim,
+            // #402: an online shop's hand-in names its terminal on the stall's row. See shopTakings.ts.
+            terminalPubkey: claim ? shopAttributionFor(opts?.senderPubkey, currentPubkey) : undefined,
           },
           (correlationId) =>
             redemption.redeem(token, {
@@ -1583,6 +1586,8 @@ function catchUp(): void {
   // #410 G14: a gift locked to this wallet whose claim failed (or whose key could not be lent) is
   // tried again on every catch-up. Never throws.
   void import('./lockedGiftsApp').then((m) => m.sweepLockedGifts()).catch(() => undefined)
+  // #402: checkout codes (resume, the store's `GET /mine` fallback, expiry). Never throws.
+  if (currentPubkey) void import('./checkoutCodesApp').then((m) => m.reconcileCheckoutCodesNow(currentPubkey!)).catch(() => 0)
 }
 
 /**

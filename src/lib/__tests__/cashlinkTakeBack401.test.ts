@@ -237,3 +237,35 @@ describe('#401 a started take-back is finished first, and only once', () => {
     expect((takeBackRow.link as Link).status).toBe('reclaimed')
   })
 })
+
+/**
+ * Staging, 2026-10-30 05:08: "Take it back" tapped seconds after "Cashlink ready". The tap made no
+ * mint swap and no gateway call, and said only "Could not take it back just now. Try again." while
+ * the row stayed "Waiting to be claimed". The link was armed a moment later. A take-back tapped
+ * while its own arm is still running must wait for that arm, then take the gift back.
+ */
+describe('a take-back tapped while the link is still being armed', () => {
+  it('waits for the arm it overlaps, then takes the gift back', async () => {
+    let releaseDeposit!: () => void
+    const deposited = new Promise<void>((r) => (releaseDeposit = r))
+    const call = w.ports.gateway.call.bind(w.ports.gateway)
+    w.ports.gateway.call = async (method, path, body) => {
+      if (path.includes('/cashlink/refunds')) await deposited
+      return call(method, path, body)
+    }
+    sent.token = tokenOf([w.mint.issue(bearerSecret(), 64)])
+    const sending = giftLinks.sendGift({ payer: PUB, merchant: { pubkey: PUB } as never, unit: 'GBP', amount: 1000, x: X, settleBudgetMs: 10_000 })
+    await vi.waitFor(() => expect(h.rows).toHaveLength(1))
+    const k = (h.rows[0].link as Link).k
+    h.state = mintState
+    // The sender taps while the arm is still waiting on its deposit.
+    const tap = giftLinks.takeBack(k)
+    releaseDeposit()
+    await sending
+    // RED before the fix: the tap ran beside the arm and answered "failed" with nothing taken back.
+    expect((await tap).kind).toBe('ok')
+    expect((h.rows[0].link as Link).status).toBe('reclaimed')
+    const secret = deriveLinkSecret(ID, (h.rows[0].link as Link).i!)
+    expect(await mintState(lockedOn(secret)[0])).toBe('SPENT')
+  })
+})

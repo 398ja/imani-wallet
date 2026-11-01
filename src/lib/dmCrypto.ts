@@ -17,6 +17,7 @@ import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
 import { isOpenAfterLocktime, readLinkLock } from './cashlinkLock'
 import { parseGiftSent } from './lockedGifts'
 import { parseSubscriptionStatus, SUBSCRIPTION_STATUS_DM_TYPE } from './subscriptionStatus'
+import { parseSpendSource } from './spendSource'
 import {
   heldWrapDecision,
   holdTransferSignatureWrap,
@@ -151,6 +152,8 @@ interface TokenTransferPayload {
   bundle_total?: number | null
   bundle_part_index?: number | null
   bundle_part_count?: number | null
+  /** #402: where an online shop spent this coupon (`spendSource.ts`). Declared by the shop. */
+  source?: unknown
 }
 
 /**
@@ -173,6 +176,7 @@ function ride(payload: TokenTransferPayload) {
     // declaration degrades to today's per-part behaviour rather than to a
     // "0 of NaN" on screen.
     ...(payload.bundle_id ? declaredBundle(payload) : {}),
+    ...(parseSpendSource(payload.source) ? { spendSource: parseSpendSource(payload.source) } : {}),
   }
 }
 
@@ -607,6 +611,20 @@ export function createDmCryptoAdapter(): CryptoAdapter {
           }
         }
 
+        /**
+         * #402: the code store telling the customer what became of a checkout code. Believed only
+         * from the store's own key, read from the verified SEAL (checked against `/info` inside).
+         * Awaited: a `change`/`cancelled` carries coupons, so a notice not yet handled stays
+         * unprocessed (null) and is offered again.
+         */
+        if (rumor.content.includes('imani-checkout-code/1')) {
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          const me = getSigner().pubkey
+          const outcome = await import('./checkoutCodesApp').then((m) => m.onCheckoutNoticeDm(me, rumor.content, sealAuthor)).catch(() => 'retry' as const)
+          if (outcome === 'retry') return null
+          if (outcome) return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+        }
+
         const transferSignature = parseTransferSignature(rumor.content)
         if (transferSignature) {
           const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
@@ -773,6 +791,7 @@ export function toLegacyMetadata(
     expires_at: m.expiresAt,
     request_id: m.requestId,
     bundle_id: m.bundleId,
+    spend_source: m.spendSource,
     // The PAYLOAD's sender outranks the ENVELOPE's signer.
     //
     // The gateway signs every gift wrap it relays with its own key, so

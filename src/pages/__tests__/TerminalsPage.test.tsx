@@ -674,3 +674,103 @@ describe('renewal on the list (#160 phase 6, decision 1)', () => {
     expect(screen.queryByRole('button', { name: 'Renew Door' })).toBeNull()
   })
 })
+
+describe('#402: an online shop on the list', () => {
+  const shopRow = { shop: { url: 'https://shop.example', platform: 'woocommerce' }, status: 'in-service', name: 'shop.example' }
+
+  it('shows its outstanding codes, publishes online_shop, and withdraws it on revoke', async () => {
+    const { saveMerchant, emptyMerchant, loadMerchant, mergeMerchantEvent } = await import('../../lib/merchant')
+    saveMerchant({ ...emptyMerchant(STALL), acceptsCards: true })
+    enrol(shopRow)
+    const published: Array<{ content: string }> = []
+    let at = 100
+    render(
+      <MemoryRouter>
+        <TerminalsPage
+          sync={noSync}
+          renewals={noRenewals}
+          stallPubkey={STALL}
+          spendApi={async () => fakeMint}
+          collect={collect}
+          confirm={async () => 204}
+          deliver={async () => 0}
+          profile={{ sign: async (t) => ({ ...t, created_at: at++ }), publish: async (e) => (published.push(e as never), { ok: 1 }) }}
+          exposure={async (_s, key) => (key === DOOR ? { codes: 3, amount: 4500, unit: 'EUR' } : null)}
+        />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByTestId('shop-line').textContent).toMatch(/^3 codes, .*45.* outstanding at shop\.example$/))
+    await waitFor(() => expect(published).toHaveLength(1))
+    expect(mergeMerchantEvent(emptyMerchant(STALL), published[0].content, 1).onlineShop?.redeemKey).toBe(DOOR)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    fireEvent.click(screen.getByRole('button', { name: /Revoke shop\.example/ }))
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    await waitFor(() => expect(published).toHaveLength(2))
+    const after = mergeMerchantEvent(emptyMerchant(STALL), published[1].content, 1)
+    expect(after.onlineShop).toBeUndefined()
+    expect(after.acceptsCards).toBe(true)
+    expect(loadMerchant(STALL)?.onlineShop).toBeUndefined()
+  })
+
+  it('retries a publish whose relay connect timed out, with no other change to the list', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { saveMerchant, emptyMerchant } = await import('../../lib/merchant')
+      saveMerchant({ ...emptyMerchant(STALL), acceptsCards: true })
+      enrol(shopRow)
+      let calls = 0
+      render(
+        <MemoryRouter>
+          <TerminalsPage
+            sync={noSync}
+            renewals={noRenewals}
+            stallPubkey={STALL}
+            spendApi={async () => fakeMint}
+            collect={collect}
+            confirm={async () => 204}
+            deliver={async () => 0}
+            profile={{ sign: async (t) => ({ ...t, created_at: 100 + calls }), publish: async () => ({ ok: ++calls >= 3 ? 1 : 0 }) }}
+            exposure={async () => null}
+          />
+        </MemoryRouter>,
+      )
+      await waitFor(() => expect(calls).toBe(1))
+      await vi.advanceTimersByTimeAsync(5_000)
+      await waitFor(() => expect(calls).toBe(2))
+      await vi.advanceTimersByTimeAsync(5_000)
+      await waitFor(() => expect(calls).toBe(3))
+      // Confirmed: the timer stops.
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(calls).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows the shop without a figure when the code store cannot say', async () => {
+    enrol(shopRow)
+    render(
+      <MemoryRouter>
+        <TerminalsPage sync={noSync} renewals={noRenewals} stallPubkey={STALL} spendApi={async () => fakeMint}
+          collect={collect} confirm={async () => 204} deliver={async () => 0} exposure={async () => null} />
+      </MemoryRouter>,
+    )
+    expect(screen.getByTestId('shop-line').textContent).toBe('Online shop at https://shop.example')
+  })
+})
+
+describe('the stall profile publisher (#402): only the relay confirms', () => {
+  it('a gateway-only copy is not "published", so the online_shop republish is retried', async () => {
+    const { profilePublisherVia } = await import('../../lib/onlineShopPublisher')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mirrorOnly = profilePublisherVia(async () => ({ ok: 0, errors: ['publish timed out'] }), async () => true, async (t) => ({ ...t, created_at: 1 }))
+    expect((await mirrorOnly.publish({})).ok).toBe(0)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('publish timed out'))).toBe(true)
+    const relayed = profilePublisherVia(async () => ({ ok: 1, errors: [] }), async () => false, async (t) => ({ ...t, created_at: 1 }))
+    expect((await relayed.publish({})).ok).toBe(1)
+    warn.mockRestore()
+  })
+})
+

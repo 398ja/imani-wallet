@@ -3,6 +3,7 @@ import { ShieldCheck, ShieldAlert } from 'lucide-react'
 import { Panel } from './ui'
 import { formatFace } from '../lib/format'
 import { summariseReconciliation } from '../lib/reconcileIssuance'
+import { describeUnderstatedLine } from '../lib/issuedVoucherWording'
 import type { WalletTransaction } from '../lib/transactions'
 
 /**
@@ -52,7 +53,7 @@ export function IssuanceReconciliation({
       {lines.map((line) => (
         <div key={line.unit} className="mt-4 border-t border-mono-200 pt-3 dark:border-mono-700">
           <div className="flex items-start gap-3">
-            {line.needsAttention ? (
+            {line.counts.mismatch > 0 ? (
               <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-500" aria-hidden />
             ) : (
               <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-mono-400" aria-hidden />
@@ -92,6 +93,18 @@ export function IssuanceReconciliation({
                   {formatFace(line.mismatchedMinor, { unit: line.unit, decimals: line.decimals })} does not
                   match its signature — {line.counts.mismatch} sale
                   {line.counts.mismatch === 1 ? '' : 's'} to look at.
+                </p>
+              )}
+
+              {/* A sale signed for more than reached the customer (#462). Every
+                  signature holds, so this is not worded as a mismatch: it is
+                  usually a split sale that stopped part-way. Its own line, so
+                  the amount missing is the figure a merchant acts on. */}
+              {line.counts.understated > 0 && (
+                <p className="mt-1 text-sm font-medium text-amber-700 dark:text-amber-400">
+                  {describeUnderstatedLine(line, (minor) =>
+                    formatFace(minor, { unit: line.unit, decimals: line.decimals }),
+                  )}
                 </p>
               )}
             </div>
