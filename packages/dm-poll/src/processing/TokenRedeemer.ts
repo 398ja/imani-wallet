@@ -11,6 +11,7 @@ import type { RedemptionAdapter, RedemptionOptions } from '../adapters/Redemptio
 import type { StorageAdapter } from '../adapters/StorageAdapter';
 import type { Nip60WalletAdapter } from '../adapters/Nip60WalletAdapter';
 import type { NostrdbAdapter } from '../adapters/NostrdbAdapter';
+import { assertBackingAccepted } from './backingGate';
 
 /**
  * Options for TokenRedeemer
@@ -96,6 +97,9 @@ export class TokenRedeemer {
     }
 
     try {
+      // The same backing gate DmPollService runs, before the swap (imani-wallet#131).
+      assertBackingAccepted(this.options.redemptionAdapter, token, metadata?.voucherId ?? '');
+
       // Prepare redemption options
       const redemptionOptions: RedemptionOptions = {
         metadata,

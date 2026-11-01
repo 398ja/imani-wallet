@@ -12,6 +12,8 @@ import {
   type StripeResult,
 } from '../lib/stripeAccount'
 import { reconcileCardOffer } from '../lib/cardOffer'
+import { CardSalesSection, type CardSalesDeps } from '../components/CardSalesSection'
+import { GiftingPageSection } from '../components/GiftingPageSection'
 import { buildMerchantEvent, saveMerchant, type MerchantProfile } from '../lib/merchant'
 import { getSigner } from '../lib/nap'
 import { publish } from '../lib/relay'
@@ -45,9 +47,12 @@ import { publish } from '../lib/relay'
 export function PaymentsSettingsPage({
   merchant,
   onSaved,
+  cardSales,
 }: {
   merchant: MerchantProfile
   onSaved: (next: MerchantProfile) => void
+  /** Test seam for the card-sales step (#298). */
+  cardSales?: CardSalesDeps
 }) {
   const [params, setParams] = useSearchParams()
   const [status, setStatus] = useState<StripeAccountStatus | null>(null)
@@ -119,7 +124,7 @@ export function PaymentsSettingsPage({
         const { ok } = await publish(signed)
         setNote(
           ok === 0
-            ? 'Saved on this device, but no relay accepted it. Shoppers may not see this yet.'
+            ? 'Saved on this device, but not sent yet. Shoppers may not see this for a while.'
             : change.merchant.acceptsCards === true
               ? 'Shoppers can now buy your vouchers by card.'
               : `Card payments are off: ${change.reason}.`,
@@ -192,6 +197,28 @@ export function PaymentsSettingsPage({
       setBusy(false)
     }
   }
+
+  /** G1 (#410): publish the gifting-page indexing opt-in with the rest of the stall record. */
+  const toggleIndexing = useCallback(
+    async (indexable: boolean) => {
+      const next: MerchantProfile = { ...current.current, giftingIndexable: indexable }
+      saveMerchant(next)
+      current.current = next
+      onSaved(next)
+      try {
+        const signed = await getSigner().signEvent(buildMerchantEvent(next))
+        const published = { ...next, eventAt: signed.created_at }
+        saveMerchant(published)
+        current.current = published
+        onSaved(published)
+        const { ok } = await publish(signed)
+        setNote(ok === 0 ? 'Saved on this device, but not sent yet.' : indexable ? 'Search engines may now list your gifting page.' : 'Your gifting page is hidden from search engines.')
+      } catch {
+        setNote('Saved on this device, but it could not be published.')
+      }
+    },
+    [onSaved],
+  )
 
   if (status === null && error === null) return <Centered>Loading…</Centered>
 
@@ -270,6 +297,14 @@ export function PaymentsSettingsPage({
           </p>
         </div>
       )}
+
+      {/* #298: Stripe pays the stall; this lets Imani issue the voucher that was paid for. Shown
+          once Stripe can charge, because before that there is nothing to issue. Beside Connect
+          Stripe, so the two halves of "selling by card" read as one setup. */}
+      {live && !currencyMismatch && <CardSalesSection deps={cardSales} />}
+
+      {/* #410: once shoppers can pay by card, the stall's own gifting page and its indexing opt-in. */}
+      {live && !currencyMismatch && <GiftingPageSection merchant={merchant} onToggleIndexing={toggleIndexing} />}
 
       <div className="grid gap-3">
         {!connected && (

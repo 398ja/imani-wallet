@@ -43,6 +43,7 @@ function cryptoAdapter(): CryptoAdapter {
 
 function redemptionAdapter(): RedemptionAdapter {
   return {
+    checkBacking: vi.fn(() => ({ outcome: 'accept' as const })),
     redeem: vi.fn(async () => ({
       voucher_id: 'v-1',
       token: 'cashuAeyJ0b2tlbiI6InRlc3QifQ',

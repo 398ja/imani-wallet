@@ -2,6 +2,29 @@ import type { EventTemplate } from 'nostr-tools'
 
 import { newestAddressable } from './relay'
 import { str } from './branding'
+import { onlineShopField, parseOnlineShop, type OnlineShop } from './onlineShop'
+import {
+  DEFAULT_VALIDITY_DAYS,
+  MERCHANT_D_TAG,
+  MERCHANT_KIND,
+  NEVER_EXPIRES,
+  VALIDITY_DAYS,
+  validValidityDays,
+} from '@imani/merchant-record'
+
+// The record's kind and the validity rules live in `@imani/merchant-record`, shared with the
+// purchase issuer so a card coupon gets the same term as one sold over the counter (#312).
+export {
+  DEFAULT_VALIDITY_DAYS,
+  MAX_VALIDITY_DAYS,
+  MERCHANT_D_TAG,
+  MERCHANT_KIND,
+  MIN_VALIDITY_DAYS,
+  NEVER_EXPIRES,
+  VALIDITY_DAYS,
+  validValidityDays,
+  validityFromRecord,
+} from '@imani/merchant-record'
 
 /**
  * The merchant side of an identity.
@@ -78,6 +101,16 @@ export interface MerchantProfile {
    * separate thing for a stall to remember.
    */
   acceptsCards?: boolean
+  /**
+   * The stall opted in to search-engine indexing of its gifting page (#410 G1).
+   * Like `acceptsCards`, only a literal `true` counts, and absent means no.
+   */
+  giftingIndexable?: boolean
+  /**
+   * The stall's online shop and its redeem key `S` (#402, contract §4), or absent. Read
+   * fail-closed by `parseOnlineShop`: a malformed field is no shop, never a repaired one.
+   */
+  onlineShop?: OnlineShop
   /** When this record was last written locally, ms. For display only. */
   updatedAt: number
   /**
@@ -90,10 +123,6 @@ export interface MerchantProfile {
    */
   eventAt?: number
 }
-
-/** The kind and `d` tag that make an event a merchant record. */
-export const MERCHANT_KIND = 30078
-export const MERCHANT_D_TAG = 'imani:merchant'
 
 /**
  * Business categories, from possa-merchant's `BusinessStep.tsx`.
@@ -134,68 +163,7 @@ export const CURRENCIES = [
   'XAF',
 ] as const
 
-/** Coupon validity options in days, from possa-merchant's `IssuanceStep.tsx`. */
-export const VALIDITY_DAYS = [30, 60, 90] as const
-
 export const DEFAULT_CURRENCY = 'EUR'
-
-/**
- * A coupon that never expires, as a validity.
- *
- * `null` was not available: it already means "not a validity" — the state a
- * half-typed custom term sits in — and SellPage disables its submit button on
- * exactly that. Zero is outside `MIN_VALIDITY_DAYS`, so nothing that reads a
- * day count can mistake it for one, and `issue.ts` drops `expiry_days` from the
- * request rather than sending it.
- */
-export const NEVER_EXPIRES = 0
-
-/**
- * What a stall issues when it has never said otherwise.
- *
- * Never expiring, because an expiry is a promise to a customer that the stall
- * has to keep track of, and a market stall that has not chosen a term has not
- * chosen to make that promise. A stall that wants one picks it.
- */
-export const DEFAULT_VALIDITY_DAYS: number = NEVER_EXPIRES
-
-/**
- * What a coupon's life may be set to, in whole days.
- *
- * A bound exists because the number is now typed rather than picked: `730` is
- * two years, past any market stall's horizon, and it is the difference between
- * a mistyped `3000` being caught here and a coupon dated to the next decade
- * being minted by a gateway that publishes no ceiling of its own.
- */
-export const MIN_VALIDITY_DAYS = 1
-export const MAX_VALIDITY_DAYS = 730
-
-/**
- * A validity, or null for anything that is not one.
- *
- * One gate for three callers that all reach `expiry_days` eventually: what a
- * merchant types into either form, and what an event off the relay claims —
- * and that last one is publishable by anyone, see `mergeMerchantEvent`.
- */
-export function validValidityDays(value: unknown): number | null {
-  if (value === '' || value === null || value === undefined) return null
-  // Shape before value, and this order is load-bearing. `Number()` maps `false`,
-  // `[]`, `' '`, `'\n'`, `'0.0'` and `'0x0'` ALL onto 0. That was harmless while
-  // 0 meant nothing — every one of them failed the `>= MIN_VALIDITY_DAYS` bound
-  // along with it. Now that 0 is a deliberate term, anything reaching the
-  // `=== NEVER_EXPIRES` test has to be a number or a plain run of digits
-  // first, or a relay event carrying `false` reads as a stall that chose
-  // never-expiring.
-  if (typeof value === 'string') {
-    if (!/^\s*\d+\s*$/.test(value)) return null
-  } else if (typeof value !== 'number') {
-    return null
-  }
-  const days = Number(value)
-  if (!Number.isInteger(days)) return null
-  if (days === NEVER_EXPIRES) return NEVER_EXPIRES
-  return days >= MIN_VALIDITY_DAYS && days <= MAX_VALIDITY_DAYS ? days : null
-}
 
 /**
  * The terms to offer as chips, this stall's own first.
@@ -309,6 +277,28 @@ export function isMerchant(merchant: MerchantProfile | null): merchant is Mercha
   return merchant !== null && merchant.active
 }
 
+/**
+ * Is this identity a merchant at all, open or closed? (imani-wallet#434)
+ *
+ * The ROLE, which `isMerchant` (above) conflates with the STATE: a stall that switched Open for
+ * business off is still a stall, keeps its home, menus and history, and only stops trading.
+ * Use this for "which wallet is this"; use `canTrade` for "may it sell right now".
+ */
+export function hasStall(merchant: MerchantProfile | null): merchant is MerchantProfile {
+  return merchant !== null
+}
+
+/**
+ * May a stall that holds `coupon:issue` show the merchant home and its screens? The role check
+ * for the trading SCREENS, without the open/closed state: a closed stall sees them, greyed out.
+ */
+export function canRunStall(
+  permissions: readonly string[],
+  merchant: MerchantProfile | null,
+): merchant is MerchantProfile {
+  return permissions.includes(COUPON_ISSUE) && hasStall(merchant)
+}
+
 /** The permission gateway-portal demands of anything that issues a coupon. */
 export const COUPON_ISSUE = 'coupon:issue'
 
@@ -365,6 +355,9 @@ export function buildMerchantEvent(merchant: MerchantProfile): EventTemplate {
   // also what an older client that never knew the field publishes, so the two
   // agree rather than needing to be told apart.
   if (merchant.acceptsCards === true) content.acceptsCards = true
+  if (merchant.giftingIndexable === true) content.giftingIndexable = true
+  // Republished as read, so saving the profile here never drops a shop another client connected.
+  if (merchant.onlineShop) content.online_shop = onlineShopField(merchant.onlineShop)
 
   return {
     kind: MERCHANT_KIND,
@@ -423,6 +416,10 @@ export function mergeMerchantEvent(
     // record that stops asserting it has stopped being evidence for it. Holding
     // the old value would keep a Buy button alive on a stall that disconnected.
     acceptsCards: parsed.acceptsCards === true,
+    giftingIndexable: parsed.giftingIndexable === true,
+    // Absent or malformed means no shop, for the reason `acceptsCards` gives: a record that stops
+    // naming a key has stopped being evidence for it, and a stale `S` would lock money to it.
+    onlineShop: parseOnlineShop(parsed.online_shop) ?? undefined,
     updatedAt: Date.now(),
     eventAt: createdAt > 0 ? createdAt : merchant.eventAt,
   }
@@ -489,12 +486,14 @@ async function fetchMerchantStatus(pubkey: string): Promise<MerchantStatus> {
   // present — `refreshMerchant` saved it at login — so their own badge costs no
   // round trip at all. Nothing is saved for anyone else: their record is not
   // ours to keep, and the session cache above is enough.
-  if (isMerchant(loadMerchant(pubkey))) return 'merchant'
+  // `hasStall`, not `isMerchant` (#434): a closed stall is still a stall, and its badge stays.
+  if (hasStall(loadMerchant(pubkey))) return 'merchant'
 
   try {
     const event = await newestAddressable(pubkey, MERCHANT_KIND, MERCHANT_D_TAG)
     if (event === null) return 'customer'
-    return isMerchant(mergeMerchantEvent(emptyMerchant(pubkey), event.content, event.created_at))
+    // A record exists: a stall, open or closed (#434).
+    return hasStall(mergeMerchantEvent(emptyMerchant(pubkey), event.content, event.created_at))
       ? 'merchant'
       : 'customer'
   } catch {
@@ -552,7 +551,10 @@ export async function fetchMerchantRecord(pubkey: string): Promise<MerchantProfi
     // `mergeMerchantEvent` clamps relay-sourced values because a kind-30078 is
     // attacker-controllable — anyone can publish one claiming to be this key.
     // Nothing here is trusted beyond being displayed.
-    return isMerchant(merged) ? merged : null
+    // The record, open or closed (#434). Callers that SELL check `active` (or the portal's
+    // status) themselves: a terminal needs a closed stall's record to show it as closed, not
+    // to hang on "Reading the stall…".
+    return merged
   } catch {
     return null
   }

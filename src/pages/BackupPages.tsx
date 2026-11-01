@@ -1,17 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { nip19 } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
-import { Link, useNavigate } from 'react-router-dom'
-import { Check, Cloud, CloudDownload, Copy, Download } from 'lucide-react'
+import { Check, Cloud, Copy, Download } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
-import { applyBackup, backupFilename, createBackup, parseBackup, type ParsedBackup } from '../lib/backup'
+import { backupFilename, createBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
-import { getBackup } from '../lib/drive'
 import { useDriveBackup } from '../lib/useDriveBackup'
-import { handleLabel } from '../lib/format'
 import { keyStore } from '../lib/nap'
-import { profileName, refreshProfile, type Profile } from '../lib/profile'
+import { type Profile } from '../lib/profile'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Save a copy of the account.
@@ -35,7 +33,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
       downloadText(backupFilename(profile), createBackup(profile.pubkey))
       setDownloaded(true)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     }
   }
 
@@ -47,7 +45,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
       setNsec(nip19.nsecEncode(hexToBytes(hex)))
       setPassphrase('')
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }
@@ -102,7 +100,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
           {canReveal && nsec && (
             <Button variant="secondary" className="flex-col px-2 py-2 text-xs" onClick={() => void copy()}>
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              <span className="mt-1">{copied ? 'Copied' : 'Copy key'}</span>
+              <span className="mt-1">{copied ? 'Copied' : 'Copy backup key'}</span>
             </Button>
           )}
 
@@ -128,7 +126,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
 
         {canReveal && nsec && (
           <Button variant="ghost" className="mt-2 w-full" onClick={() => setNsec(null)}>
-            Hide key
+            Hide backup key
           </Button>
         )}
 
@@ -168,233 +166,5 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
         {(error ?? drive.error) && <Alert>{error ?? drive.error}</Alert>}
       </Panel>
     </Screen>
-  )
-}
-
-/**
- * Restore from the customer's own Google Drive.
- *
- * The order of the screen is the order the customer needs: sign in, then be
- * TOLD whose account this is before being asked for anything. The npub rides in
- * the clear precisely so this step can happen — someone who has lost a phone
- * should not have to recognise an account by whether a passphrase prompt
- * accepts their typing.
- *
- * The passphrase is then required, exactly as it is for a file off disk. Drive
- * is where the file lives, never what protects it: an attacker with the
- * customer's Google account gets an encrypted envelope and nothing else.
- */
-function DriveRestorePanel({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
-  const [parsed, setParsed] = useState<ParsedBackup | null>(null)
-  const [name, setName] = useState<string | null>(null)
-  const [passphrase, setPassphrase] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const navigate = useNavigate()
-
-  // The stored profile is a snapshot from whenever the backup was written, so
-  // the relay is asked for a fresher one. Best-effort: a customer standing in a
-  // shop with no signal must still be able to restore, and the npub below
-  // identifies the account on its own.
-  useEffect(() => {
-    const pubkey = parsed?.profile?.pubkey
-    if (!pubkey) return
-    let live = true
-    void refreshProfile(pubkey)
-      .then((p) => live && setName(profileName(p)))
-      .catch(() => {})
-    return () => {
-      live = false
-    }
-  }, [parsed])
-
-  const fetchBackup = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      const text = await getBackup()
-      if (text === null) {
-        setError('That Google account has no wallet backup in it.')
-        return
-      }
-      const backup = parseBackup(text)
-      setParsed(backup)
-      setName(backup.profile ? profileName(backup.profile) : null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const restore = async () => {
-    if (!parsed) return
-    setBusy(true)
-    setError(null)
-    try {
-      const { privkeyHex } = await applyBackup(parsed, () => keyStore.loadKey(passphrase))
-      await onUnlock(privkeyHex)
-      navigate('/', { replace: true })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <>
-      {!parsed && (
-        <Button size="lg" className="w-full" disabled={busy} onClick={() => void fetchBackup()}>
-          <CloudDownload className="h-4 w-4" />
-          <span className="ml-2">{busy ? 'Checking Google Drive…' : 'Restore from Google Drive'}</span>
-        </Button>
-      )}
-
-      {parsed && (
-        <Panel className="p-4">
-          <p className="text-sm text-mono-500">This backup holds the account</p>
-          <p className="mt-1 font-medium text-mono-900 dark:text-mono-50">
-            {name ?? 'Unnamed account'}
-          </p>
-          {/* Shown in full, not truncated. It is what a customer with two
-              accounts checks before overwriting one. */}
-          {parsed.npub && (
-            <p className="mt-1 break-all font-mono text-xs text-mono-500">{parsed.npub}</p>
-          )}
-
-          <p className="mt-3 text-sm text-mono-600 dark:text-mono-300">
-            Enter the passphrase for this account.
-          </p>
-
-          <Input
-            className="mt-2"
-            type="password"
-            placeholder="Passphrase"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-            autoComplete="current-password"
-            autoFocus
-          />
-
-          <Button
-            size="lg"
-            className="mt-3 w-full"
-            disabled={busy || !passphrase}
-            onClick={() => void restore()}
-          >
-            {busy ? 'Restoring…' : 'Restore this account'}
-          </Button>
-
-          {error && <Alert>{error}</Alert>}
-        </Panel>
-      )}
-
-      {!parsed && error && <Alert>{error}</Alert>}
-    </>
-  )
-}
-
-/**
- * Restore from a backup file.
- *
- * Public: reached from the login screen by someone who has no key in this
- * browser yet. Restoring writes the encrypted key back and then still asks for
- * the passphrase — the file on its own must not be enough to get in.
- */
-export function RestorePage({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
-  const input = useRef<HTMLInputElement>(null)
-  const [parsed, setParsed] = useState<ParsedBackup | null>(null)
-  const [loaded, setLoaded] = useState<string | null>(null)
-  const [passphrase, setPassphrase] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const navigate = useNavigate()
-
-  // Parsing only. Choosing a file must not touch the key this browser already
-  // holds — /restore is linked from the login screen, so there usually is one,
-  // and picking the wrong file would otherwise destroy it before anyone had
-  // typed a passphrase.
-  const pick = async (file: File | undefined) => {
-    if (!file) return
-    setError(null)
-    try {
-      const backup = parseBackup(await file.text())
-      setParsed(backup)
-      const nip05 = backup.profile?.nip05
-      setLoaded((nip05 && handleLabel(nip05)) ?? backup.profile?.displayName ?? file.name)
-    } catch (e) {
-      setParsed(null)
-      setLoaded(null)
-      setError(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  const unlock = async () => {
-    if (!parsed) return
-    setBusy(true)
-    setError(null)
-    try {
-      // applyBackup installs the key, verifies it with this passphrase, and
-      // rolls back to the previous record if the passphrase does not open it.
-      const { privkeyHex } = await applyBackup(parsed, () => keyStore.loadKey(passphrase))
-      await onUnlock(privkeyHex)
-      navigate('/', { replace: true })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-5 p-6">
-      <PageHeader title="Restore" subtitle="Get your account back on this device." />
-
-      <DriveRestorePanel onUnlock={onUnlock} />
-
-      <p className="text-sm text-mono-500">Or open a backup file from another browser or device.</p>
-
-      <input
-        ref={input}
-        type="file"
-        accept="application/json,.json"
-        onChange={(e) => void pick(e.target.files?.[0])}
-        className="block w-full text-sm text-mono-500 file:mr-3 file:rounded-xl file:border-0 file:bg-mono-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-mono-900 dark:file:bg-mono-800 dark:file:text-mono-50"
-      />
-
-      {loaded && (
-        <>
-          <p className="text-sm text-mono-500">
-            Loaded <span className="font-medium text-mono-900 dark:text-mono-50">{loaded}</span>.
-            Enter the passphrase for this backup.
-          </p>
-          <Input
-            type="password"
-            placeholder="Passphrase"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-            autoComplete="current-password"
-            autoFocus
-          />
-          <Button
-            size="lg"
-            className="w-full"
-            disabled={busy || !passphrase}
-            onClick={() => void unlock()}
-          >
-            {busy ? 'Restoring…' : 'Restore and unlock'}
-          </Button>
-        </>
-      )}
-
-      {error && <Alert>{error}</Alert>}
-
-      <p className="text-center text-sm text-mono-500">
-        <Link to="/onboarding" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
-          Back
-        </Link>
-      </p>
-    </div>
   )
 }

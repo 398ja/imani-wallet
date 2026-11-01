@@ -51,7 +51,7 @@ import {
   type IssuanceWarrant,
   type WarrantVerdict,
 } from './issuanceWarrant'
-import { saleFor, saleIsComplete } from './reconcileIssuance'
+import { reconcileIssuances, saleFor, saleIsComplete } from './reconcileIssuance'
 import { isVoucherIssuance, type WalletTransaction } from './transactions'
 
 export { isVoucherIssuance }
@@ -109,6 +109,12 @@ export interface VoucherRecord {
   sale: WalletTransaction[]
   /** Whether all of that sale's coupons are present in this history. */
   saleComplete: boolean
+  /**
+   * Present when this coupon's signature holds but its sale's coupons add up to
+   * less than the stall signed (#462): the figures the page states instead of
+   * calling the signature into question.
+   */
+  shortfall?: { signedMinor: number; deliveredMinor: number; partlyDelivered: boolean }
 }
 
 /**
@@ -174,10 +180,14 @@ export function isExpired(row: WalletTransaction, now: number): boolean {
 export function paymentRail(warrant: IssuanceWarrant): PaymentRail {
   if (warrant.state !== 'present') return { kind: 'unknown' }
   if (warrant.form === 'processor') return { kind: 'card', reference: warrant.reference }
-  // `merchant` only. A `delegated` warrant is not verifiable in this build
-  // (`verifyIssuanceWarrant` refuses it rather than half-checking), so naming a
-  // rail for it would assert more than the verifier is willing to.
-  return warrant.form === 'merchant' ? { kind: 'counter' } : { kind: 'unknown' }
+  // A `delegated` warrant is how a card purchase is signed since #152: the
+  // purchase issuer signs as the stall's delegate and carries the processor's
+  // reference inside the signed bytes. A delegated warrant WITHOUT a reference
+  // is some other delegate, so naming a rail for it would be a guess.
+  if (warrant.form === 'delegated') {
+    return warrant.reference ? { kind: 'card', reference: warrant.reference } : { kind: 'unknown' }
+  }
+  return { kind: 'counter' }
 }
 
 /**
@@ -256,11 +266,16 @@ export function issuedVoucher(
   )
 
   const warrant = parseIssuanceWarrant(row.issuanceWarrant)
-  const warrantVerdict = verifyIssuanceWarrant(warrant, stallPubkey, {
-    faceValueMinor: row.amount,
-    unit: row.unit,
-    faceDecimals: row.decimals,
-  })
+  // Judged at the moment the sale was recorded, not today: a card sale made
+  // under a live delegation stays authorised in the stall's ledger after the
+  // delegation lapses (#176 review). A row with no recorded time (0) falls
+  // back to the current clock.
+  const warrantVerdict = verifyIssuanceWarrant(
+    warrant,
+    stallPubkey,
+    { faceValueMinor: row.amount, unit: row.unit, faceDecimals: row.decimals },
+    row.at > 0 ? { issuedAt: row.at } : {},
+  )
 
   const attestation = parseCashAttestation(row.cashAttestation)
   // Checked against the SALE the warrant describes rather than against this
@@ -291,5 +306,23 @@ export function issuedVoucher(
     rail: paymentRail(warrant),
     sale: saleFor(rows, voucherId),
     saleComplete: saleIsComplete(rows, voucherId),
+    shortfall: shortfallFor(rows, row, stallPubkey),
   }
+}
+
+/**
+ * The same sale-level judgement the "Coupons you issued" panel makes, for one
+ * row (#462). Summing a sale needs its siblings, so this reconciles the rows
+ * that share this row's warrant rather than re-deriving the rule here.
+ */
+function shortfallFor(
+  rows: readonly WalletTransaction[],
+  row: WalletTransaction,
+  stallPubkey: string,
+): VoucherRecord['shortfall'] {
+  if (!row.issuanceWarrant) return undefined
+  const found = reconcileIssuances(rows, stallPubkey).find((item) => item.row === row)
+  if (found?.verdict !== 'understated' || !found.sale) return undefined
+  const { signedMinor, deliveredMinor, partlyDelivered } = found.sale
+  return { signedMinor, deliveredMinor, partlyDelivered }
 }

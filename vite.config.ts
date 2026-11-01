@@ -13,10 +13,9 @@ import type { ClientRequest } from 'node:http'
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
 
-// Consume @imani/* and @imani/nap-* straight from source — no build step, no
-// npm link. This is nap's own convention (its packages point `exports` at
-// ./src/index.ts and ship no dist/), and every one of these packages is plain
-// framework-agnostic TS, so there is nothing React-specific to compile first.
+// Consume the @imani/* wallet packages straight from source: no build step, no
+// npm link. Every one of them is plain framework-agnostic TS, so there is
+// nothing React-specific to compile first.
 //
 // Because aliasing bypasses each package's own node_modules, their runtime deps
 // (nostr-tools, qr-scanner, @gandlaf21/bc-ur, buffer) are installed here.
@@ -24,11 +23,13 @@ const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
 // `imani` now points INSIDE this repo. The 11 wallet packages were copied out of
 // imani-apps and this repo owns them, which is what makes a Docker build
 // possible at all: a build context rooted here could never see ../imani-apps.
-// nap is deliberately still a sibling — it is a separate product with other
-// consumers — so the image reproduces the ../nap layout via a second build
-// context. See Dockerfile.
+//
+// The five @imani/nap-* packages are NOT aliased. nap is a separate product with
+// other consumers, and it is an ordinary versioned npm dependency: published as
+// @398ja/nap-* (compiled ESM + .d.ts) and installed under its @imani/nap-* import
+// names through npm aliases in package.json (#212). No ../nap sibling, no second
+// Docker build context.
 const imani = (name: string) => r(`./packages/${name}/src/index.ts`)
-const nap = (name: string) => r(`../nap/packages/${name}/src/index.ts`)
 
 /**
  * The shared secret every edge-gated service trusts its edge proxy with.
@@ -46,7 +47,10 @@ const nap = (name: string) => r(`../nap/packages/${name}/src/index.ts`)
  * Matches GATEWAY_PORTAL_EDGE_SHARED_SECRET in deploy/compose.override.yml and
  * MERCHANT_EDGE_SHARED_SECRET in imani-deploy's test stack.
  */
-const EDGE_SHARED_SECRET = process.env.PORTAL_EDGE_SECRET ?? 'dev-edge-secret-local-only'
+// 32+ characters: NapProxyAuthFilter refuses anything shorter and then IGNORES
+// X-Auth-Pubkey on every request (`edge_shared_secret_too_weak` at startup), so
+// a 26-character value here silently turned every edge-vouched call anonymous.
+const EDGE_SHARED_SECRET = process.env.PORTAL_EDGE_SECRET ?? 'dev-edge-secret-local-only-32-plus-chars'
 
 /** account-app — the only service that can read the NAP session store. */
 const ACCOUNT_APP = 'http://localhost:28081'
@@ -205,6 +209,10 @@ export const proxy = {
   // always talked to that tier. Must be listed BEFORE '/api' to win the prefix
   // match. changeOrigin stays false for the same NIP-98 reason.
   '/api/v1/atomic-send': { target: 'http://localhost:28081', changeOrigin: false },
+  // #160 phase 3: a terminal's Redeem asks gateway-core whether its payment request was paid
+  // (`GET /api/v1/atomic/fulfilment/{id}`, NIP-98). Only that path, so atomic-purchase and voucher
+  // inspect keep their existing dev routing. changeOrigin false for the same NIP-98 reason.
+  '/api/v1/atomic/fulfilment': { target: 'http://localhost:28081', changeOrigin: false },
   // Account registration and runtime config also live on account-app. Without
   // these two they fall into the '/api' rule below and hit customer-wallet,
   // which 404s them — and a 404 on /api/v1/nip05 reads as "the endpoint does not
@@ -230,6 +238,23 @@ export const proxy = {
    * on the origin surviving.
    */
   '/api/v1/checkout': { target: 'http://localhost:28087', changeOrigin: true },
+  /*
+   * #410 G14: the Purchase Issuer's public seal key (`GET /api/v1/gifting/issuer-key`), on
+   * payment-adapter. The wallet reads it to accept a bought gift's `imani_gift_sent` DM only from
+   * that key. Without this rule it falls into the '/api' catch-all and the gift DMs wait forever.
+   * Unauthenticated, public data.
+   */
+  '/api/v1/gifting': { target: 'http://localhost:28087', changeOrigin: true },
+  /*
+   * Card-sales enrolment and readiness (imani-wallet#298), on purchase-issuer. NOT in the local
+   * compose stack: run it from this repo (`npx tsx services/purchase-issuer/server.ts`, default
+   * port 8791, with PURCHASE_PUBLIC_ORIGIN=http://localhost:5173). With it down, readiness reads
+   * as "not ready" and Buy is disabled, which is the fail-safe answer.
+   *
+   * changeOrigin false: the stall signs NIP-98 for the browser origin, and purchase-issuer
+   * checks it against PURCHASE_PUBLIC_ORIGIN.
+   */
+  '/api/v1/card-sales': { target: 'http://localhost:8791', changeOrigin: false },
   /*
    * A stall's own Stripe account, on merchant-service.
    *
@@ -377,6 +402,9 @@ export const proxy = {
   // every authenticated wallet call fail with 401 AUTH_002 "URL mismatch" —
   // which reads as a credential problem, not a proxy one.
   '/api': { target: 'http://localhost:28082', changeOrigin: false },
+  // The subscription site (#407, #411) is NOT proxied here any more: it has its own origin, and the
+  // wallet opens it and signs its login over postMessage. Locally, run deploy/subscription-local
+  // (http://localhost:18910) and set VITE_SUBSCRIPTION_SITE_URL=http://localhost:18910.
 }
 
 /**
@@ -438,6 +466,22 @@ export default defineConfig({
   // is the one failure mode a performance suite cannot afford. Listed
   // explicitly for the same reason as `services/`.
   test: {
+    // The suite must not read THIS machine's `.env.local`. Vite loads it in every mode, and its
+    // values (the local stack's licence issuer and seller keys, the sister-site URLs) are
+    // per-environment config: a developer who points their dev server at a local stack would
+    // otherwise see licence, entitlement and sister-site tests fail, and CI would pass the same
+    // code. Tests set what they need with `vi.stubEnv`. `.env.test` is the place for any
+    // test-wide value; there is none today.
+    env: {
+      VITE_LICENCE_ISSUER_PUBKEY: '',
+      VITE_LICENCE_SELLER_PUBKEY: '',
+      VITE_VOUCHER_ISSUER_PUBKEYS: '',
+      VITE_SUBSCRIPTION_SITE_URL: '',
+      VITE_GIFTING_SITE_URL: '',
+      // The gifting site reads these at module load, so they are set here rather than stubbed.
+      VITE_GIFTING_HANDLE_DOMAIN: 'imani.casa',
+      VITE_WALLET_ORIGIN: 'https://wallet.example.test',
+    },
     // Each package under packages/ ships its OWN vitest.config.ts, and eleven
     // of them were never run by `npm test`. The include globs below only reach
     // `packages/**/src/`, while most of those suites live in `tests/` or
@@ -467,6 +511,11 @@ export default defineConfig({
     include: [
       'src/**/*.test.{ts,tsx}',
       'services/**/*.test.{ts,tsx}',
+      // The gifting site (#410), and the subscription site (#407) once it lands: their own pages and
+      // libraries, tested against the wallet's real modules.
+      'apps/**/src/**/*.test.{ts,tsx}',
+      // The server-side SDKs (#366 @imani/cashlink-sender) reuse the app's engine, so they run here.
+      'sdk/**/*.test.{ts,tsx}',
       'perf/**/*.test.{ts,tsx}',
       // `deploy/` ships the container's nginx.conf, and its CSP is application
       // behaviour, not decoration: `worker-src 'self'` there silently disabled
@@ -489,26 +538,23 @@ export default defineConfig({
   resolve: {
     // ONE React, or the production build renders a blank page.
     //
-    // `@imani/nap-react` is aliased to source in ../nap, so its `import 'react'`
-    // resolves against THAT repo's node_modules — react 19.2.4 there against
-    // 19.2.3 here. Two instances means two hook dispatchers, and the one
-    // nap-react calls is null while the other renders: the whole app dies on
-    // `Cannot read properties of null (reading 'useState')` with an empty body
-    // and a single console line.
+    // `@imani/nap-react` declares react as a peer dependency, so npm resolves its
+    // `import 'react'` to this app's copy and there is only one. This used to be
+    // load-bearing: while nap-react was aliased to source in ../nap, its react
+    // resolved against THAT repo's node_modules (19.2.4 against 19.2.3 here). Two
+    // instances means two hook dispatchers, and the one nap-react calls is null
+    // while the other renders: the whole app dies on `Cannot read properties of
+    // null (reading 'useState')` with an empty body and a single console line.
     //
     // Dev never showed it — the dep optimizer collapses the duplicate — so this
-    // only appears once the app is built, which is exactly when nobody is
-    // looking for a resolution bug.
+    // only appears once the app is built. Kept as a guard: it costs nothing, and
+    // a future dependency that bundles its own react would bring the blank page
+    // straight back.
     dedupe: ['react', 'react-dom'],
     alias: {
       '@': r('./src'),
-
-      // nap — auth
-      '@imani/nap-core': nap('nap-core'),
-      '@imani/nap-client-http': nap('nap-client-http'),
-      '@imani/nap-client-web': nap('nap-client-web'),
-      '@imani/nap-client-nip46': nap('nap-client-nip46'),
-      '@imani/nap-react': nap('nap-react'),
+      // How apps/* import the wallet's modules (apps/gifting/vite.config.ts aliases it the same).
+      '@wallet': r('./src'),
 
       // imani-apps — wallet core. Order matters: nostr-vouchers must precede
       // any shorter prefix that could shadow it.
@@ -527,6 +573,7 @@ export default defineConfig({
       // The money decisions the app and the future wallet API share (#4).
       '@imani/wallet-core': imani('wallet-core'),
       '@imani/licence': imani('licence'),
+      '@imani/merchant-record': imani('merchant-record'),
       '@imani/redemption': imani('redemption'),
       '@imani/reports': imani('reports'),
       '@imani/payment-requests': imani('payment-requests'),

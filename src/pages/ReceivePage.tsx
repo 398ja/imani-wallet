@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { nip19 } from 'nostr-tools'
 
 import { Screen, BackLink, PageHeader, Alert } from '../components/ui'
-import { useCashbackAvailable } from '../lib/cashback'
 import { handleLabel } from '../lib/format'
 import type { Profile } from '../lib/profile'
 
@@ -48,9 +46,20 @@ export function ReceivePage({ profile }: { profile: Profile }) {
 
   useEffect(() => {
     if (!code) return
-    QRCode.toDataURL(code, { width: 512, margin: 1 }).then(setDataUrl, (e: Error) =>
-      setQrError(e.message),
+    // The render is async: drop its result once the page is gone (or the code changed), or the
+    // late setState lands after unmount (#285: after jsdom teardown, an unhandled rejection).
+    let live = true
+    QRCode.toDataURL(code, { width: 512, margin: 1 }).then(
+      (url) => {
+        if (live) setDataUrl(url)
+      },
+      (e: Error) => {
+        if (live) setQrError(e.message)
+      },
     )
+    return () => {
+      live = false
+    }
   }, [code])
 
   // Derived, not stored: "no address at all" is a fact about the profile, known
@@ -68,7 +77,7 @@ export function ReceivePage({ profile }: { profile: Profile }) {
         <div className="flex flex-col items-center gap-4">
           <img
             src={dataUrl}
-            alt={`QR code for ${code}`}
+            alt={profile.nip05 ? `QR code for ${profile.nip05}` : 'Your receive code'}
             className="w-full max-w-xs rounded-2xl bg-white p-4"
           />
           {profile.displayName && (
@@ -83,44 +92,18 @@ export function ReceivePage({ profile }: { profile: Profile }) {
             side needs both halves, while the half a person reads back across a
             stall is the one that is theirs.
 
-            Monospace only when it is the npub: a handle is a word, not a key.
+            Shown only when there is a handle. Every account has one; for an
+            older record without it the code above still scans, and the raw key
+            it carries is never printed under it (#324).
           */}
-          <p
-            className={`break-all text-center text-sm ${
-              profile.nip05
-                ? 'text-mono-900 dark:text-mono-50'
-                : 'font-mono text-mono-500'
-            }`}
-          >
-            {profile.nip05 ? handleLabel(profile.nip05) : code}
-          </p>
+          {profile.nip05 && (
+            <p className="break-all text-center text-sm text-mono-900 dark:text-mono-50">
+              {handleLabel(profile.nip05)}
+            </p>
+          )}
         </div>
       )}
 
-      <CashbackLink />
     </Screen>
-  )
-}
-
-/**
- * The way in for money that was handed over before this wallet existed.
- *
- * Outside the QR block deliberately: someone redeeming a cashback code may be
- * minutes into owning this app, and a profile whose address has not resolved
- * yet must not also hide the one thing they came here to do.
- */
-function CashbackLink() {
-  if (!useCashbackAvailable()) return null
-
-  return (
-    <div className="mt-8 text-center">
-      <p className="text-sm text-mono-500">Given a code by a shop?</p>
-      <Link
-        to="/receive/cashback"
-        className="pressable mt-1 inline-block text-sm font-medium text-mono-900 underline-offset-4 hover:underline dark:text-mono-50"
-      >
-        Enter a cashback code
-      </Link>
-    </div>
   )
 }

@@ -11,7 +11,11 @@ import {
   replaceVoucherToken,
   SendOutcomeUnknownError,
   signedPartOf,
+  unreclaimableNote,
 } from '../pay'
+import { VoucherFullyRedeemedError } from '../fullyRedeemed'
+import { RequestAlreadyPaidError } from '../settledSends'
+import { fullyRedeemedRows, spendable } from '../merchants'
 
 // Stand-ins for the wallet store and imani-apps' classic-script API client. The
 // reconcile path is the only thing here that reaches for either; every other
@@ -64,7 +68,7 @@ vi.mock('../transferSignature', () => ({
 import { tokenIdFrom } from '../../../packages/wallet-storage/src/tokenId'
 import type { NUT18VRequest } from '../nap'
 import { creditableFaceValue, parseVoucherToken } from '../voucherToken'
-import { buildVoucherToken } from './voucherFixtures'
+import { buildLicenceVoucherToken, buildVoucherToken } from './voucherFixtures'
 
 /** A €5.00 coupon, the only denomination this stack issues. */
 const coupon = (over: Partial<Voucher> = {}): Voucher =>
@@ -249,6 +253,29 @@ describe('replaceVoucherToken', () => {
     expect(saved[0].face_unit).toBe('XAF')
     expect(saved[0].face_decimals).toBe(0)
     expect(saved[0].issuance_ratio).toBe(25)
+  })
+
+  it('carries the expiry reminders already filed for the coupon to the change (#269 review)', async () => {
+    const row = sourceRow()
+    const { wallet } = fakeWallet(row)
+    const filedKey = 'imani-wallet:expiry-reminders:' + 'e'.repeat(64)
+    const store = new Map<string, string>([[filedKey, JSON.stringify([`coupon-expiring:${row.token_id}:7d`])]])
+    vi.stubGlobal('localStorage', {
+      get length() { return store.size },
+      key: (i: number) => [...store.keys()][i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    })
+    onTestFinished(() => {
+      vi.unstubAllGlobals()
+    })
+
+    await replaceVoucherToken(wallet, row.token_id, NEW_TOKEN, 2500)
+
+    expect(JSON.parse(localStorage.getItem(filedKey)!)).toContain(
+      `coupon-expiring:${await tokenIdFrom(NEW_TOKEN)}:7d`,
+    )
   })
 
   it('re-keys the change row to the new token', async () => {
@@ -576,6 +603,45 @@ describe('sendVouchers and payRequest', () => {
     stubs.unreachable.clear()
     // A send left in flight by an earlier test would hold its coupon out of this one (#128).
     localStorage.removeItem(`imani-wallet:pending-sends:${PAYER}`)
+    // #461: and the settled ledger, or a send id reused by a later test reads as a replay.
+    localStorage.removeItem(`imani-wallet:settled-sends:${PAYER}`)
+  })
+
+  // Review of #340: every send is counted by the spend gate, and refused once a
+  // logout (here or in another tab) has closed it, before the gateway is asked.
+  it('a send and a payment are refused while logout has spends closed, and nothing moves', async () => {
+    const gate = await import('../receiveGate')
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+    gate.closeSpends()
+    try {
+      await expect(
+        sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 }),
+      ).rejects.toThrow(gate.SPEND_PAUSED_MESSAGE)
+      await expect(
+        payRequest({ request: request(250, { issuerId: ISSUER, unit: 'EUR' }), raw: 'vreqA', merchant, payer: PAYER }),
+      ).rejects.toThrow(gate.SPEND_PAUSED_MESSAGE)
+      expect(sent).toEqual([])
+    } finally {
+      gate.openSpends()
+    }
+  })
+
+  it('a send is counted by the spend gate while it runs', async () => {
+    const gate = await import('../receiveGate')
+    stubs.rows = [row()]
+    let during = -1
+    gateway()
+    const initiate = stubs.api.initiateAtomicSend as (p: Record<string, unknown>) => Promise<unknown>
+    stubs.api.initiateAtomicSend = async (p: Record<string, unknown>) => {
+      during = gate.spendsInFlight()
+      return initiate(p)
+    }
+    wallet([row()])
+    await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 })
+    expect(during).toBe(1)
+    expect(gate.spendsInFlight()).toBe(0)
   })
 
   it('refuses to send to yourself', async () => {
@@ -795,6 +861,40 @@ describe('sendVouchers and payRequest', () => {
 
     // Smallest first, so the busy one is reached before the good one.
     expect(tried).toEqual(['v-busy', 'v-good'])
+    expect(transactions[0].voucherId).toBe('v-good')
+    warn.mockRestore()
+  })
+
+  it('walks past a voucher the gateway refuses as expired (#157)', async () => {
+    // A coupon whose stored expiry nobody can read is spent FIRST, in case it
+    // is about to lapse. If it already has, the gateway says so, and that must
+    // cost one refused attempt, not the payment: the next coupon pays.
+    const odd = row({ token_id: 'o'.repeat(32), voucher_id: 'v-odd', face_value: 600, expires_at: 'garbled' as never })
+    const good = row({ token_id: 'g'.repeat(32), voucher_id: 'v-good', face_value: 600 })
+    stubs.rows = [odd, good]
+    const tried: string[] = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => {
+        tried.push(String(params.voucherId))
+        if (params.voucherId === 'v-odd') throw new Error('Voucher has expired')
+        return { send_id: 'as_3', status: 'COMPLETED' }
+      },
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    const { transactions } = wallet([odd, good])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: FRIEND },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+    })
+
+    expect(tried).toEqual(['v-odd', 'v-good'])
     expect(transactions[0].voucherId).toBe('v-good')
     warn.mockRestore()
   })
@@ -1468,6 +1568,46 @@ describe('sendVouchers and payRequest', () => {
       expect(transactions[0]).toMatchObject({ type: 'sent', transferId: SENT_ID })
     })
 
+    it('a link send never draws a locked voucher or licence, even when the screen did not filter it (spec 4.2)', async () => {
+      // `sendGift` hands over only merchant + unit + amount: this filter is the door, not the picker.
+      const meta = JSON.stringify({ kind: 'imani_licence', v: 1, lock_key: 'b'.repeat(64), product: 'annual' })
+      const { token: locked } = buildLicenceVoucherToken({ merchantMetadata: meta, unit: 'EUR' })
+      const rows = [row({ token: locked })]
+      stubs.rows = rows
+      const sent = completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      wallet(rows)
+      const link = { k: 'A'.repeat(42) + 'E', x: 1_900_000_000, status: 'outstanding' as const, i: 3 }
+      await expect(
+        sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250, link }),
+      ).rejects.toThrow()
+      expect(sent).toEqual([])
+    })
+
+    it("a link send of the sender's own stall's coupons is refused before anything moves (Q6)", async () => {
+      stubs.rows = [row({ issuer_id: PAYER })]
+      const sent = completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      wallet([row({ issuer_id: PAYER })])
+      const link = { k: 'A'.repeat(42) + 'E', x: 1_900_000_000, status: 'outstanding' as const, i: 3 }
+      await expect(
+        sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant: { ...merchant, pubkey: PAYER }, unit: 'EUR', amount: 250, link }),
+      ).rejects.toThrow(/create a Cashlink from Sell/)
+      expect(sent).toEqual([])
+    })
+
+    it('does NOT sign a send to a gift link key (spec 3.3, Q7, pre-check build item 1)', async () => {
+      stubs.rows = [row()]
+      completingWith({ status: 'COMPLETED', sent_voucher_id: SENT_ID })
+      const { transactions } = wallet([row()])
+      const link = { k: 'A'.repeat(42) + 'E', x: 1_900_000_000, status: 'outstanding' as const, i: 3 }
+
+      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250, link })
+      await flush()
+
+      expect(signatures.calls).toHaveLength(0)
+      // The row carries the link, so History can show it and take it back.
+      expect(transactions[0]).toMatchObject({ type: 'sent', link })
+    })
+
     it('does NOT sign a plain send to a stall key, which attests with a 7377 instead (L4)', async () => {
       // Sending a stall its own coupon is allowed without a payment request.
       stubs.rows = [row()]
@@ -1645,5 +1785,558 @@ describe('sendVouchers and payRequest', () => {
       expect(transactions).toHaveLength(1)
       expect(transactions[0]).toMatchObject({ type: 'sent', direction: 'out' })
     })
+  })
+
+  describe('failed-send wording keyed on error_code (#117)', () => {
+    function ending(status: Record<string, unknown>) {
+      const reclaims: string[] = []
+      gateway()
+      stubs.api.getAtomicSendStatus = async () => status
+      stubs.api.initiateAtomicSend = async () => ({ send_id: 'as_1', status: 'PENDING' })
+      stubs.api.reclaimAtomicSend = async (id: string) => {
+        reclaims.push(id)
+        throw new Error('Reclaim requires HTTP receive endpoint')
+      }
+      return reclaims
+    }
+    const send = () =>
+      sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 250 })
+
+    it('SPLIT_NEVER_SIGNED: no reclaim, voucher still in the wallet', async () => {
+      stubs.rows = [row()]
+      const reclaims = ending({ status: 'FAILED', error_code: 'SPLIT_NEVER_SIGNED' })
+      wallet([row()])
+      const err = await send().catch((e: Error) => e)
+      expect(String(err)).toMatch(/did not go through\. Your voucher is still in your wallet/)
+      expect(String(err)).not.toMatch(/held by the gateway/)
+      expect(reclaims).toEqual([])
+    })
+
+    it('SOURCE_PROOFS_NOT_UNSPENT: no reclaim, no held-by-gateway claim', async () => {
+      stubs.rows = [row()]
+      const reclaims = ending({ status: 'FAILED', error_code: 'SOURCE_PROOFS_NOT_UNSPENT' })
+      wallet([row()])
+      const err = await send().catch((e: Error) => e)
+      expect(String(err)).toMatch(/already spent/)
+      expect(String(err)).not.toMatch(/held by the gateway/)
+      expect(reclaims).toEqual([])
+    })
+
+    it.each(['PHANTOM_SPEND', 'SPLIT_PROOFS_SPENT'])('%s: no reclaim, says an earlier attempt spent it', async (code) => {
+      stubs.rows = [row()]
+      const reclaims = ending({ status: 'FAILED', error_code: code })
+      wallet([row()])
+      const err = await send().catch((e: Error) => e)
+      expect(String(err)).toMatch(/earlier attempt already spent this voucher/)
+      expect(String(err)).not.toMatch(/held by the gateway/)
+      expect(reclaims).toEqual([])
+    })
+
+    it.each(['FAILED', 'SPLIT_ERROR', 'EXPIRED'])('%s without a code: no reclaim attempted', async (state) => {
+      stubs.rows = [row()]
+      const reclaims = ending({ status: state })
+      wallet([row()])
+      const err = await send().catch((e: Error) => e)
+      expect(String(err)).not.toMatch(/held by the gateway/)
+      expect(reclaims).toEqual([])
+    })
+
+    // TOKEN_HELD / DM_RETRY_PENDING are reclaimable too but not terminal, so the
+    // poll never settles on them; the terminal held states are exercised here.
+    it.each(['DM_ERROR', 'RECLAIM_READY'])(
+      '%s: reclaims, and says the voucher is held by the gateway when that fails',
+      async (state) => {
+        stubs.rows = [row()]
+        const reclaims = ending({ status: state })
+        wallet([row()])
+        const err = await send().catch((e: Error) => e)
+        expect(reclaims.length).toBeGreaterThan(0)
+        expect(new Set(reclaims)).toEqual(new Set(['as_1']))
+        expect(String(err)).toMatch(/Your voucher is held by the gateway \(send as_1\)/)
+      },
+    )
+
+    it('unreclaimableNote is empty for an unknown code', () => {
+      expect(unreclaimableNote({ status: 'FAILED', error_code: 'X' }, 's')).toBe('')
+    })
+  })
+
+})
+
+/**
+ * #179: one Idempotency-Key per send INTENT, stable across retries and reloads.
+ *
+ * The fake gateway below dedupes exactly as gateway-core's AtomicSendService does: the same key
+ * with the same (recipient, amount, voucher, memo) replays the first send, the same key with any
+ * other of those is refused 409 SEND_IDEMPOTENCY_MISMATCH, and every new key is a new send that
+ * moves money. `moved` counts sends that really happened.
+ */
+describe('a send keeps one Idempotency-Key across retries (#179)', () => {
+  const PAYER = 'c'.repeat(64)
+  const FRIEND = 'd'.repeat(64)
+  const ISSUER = 'f'.repeat(64)
+  const merchant = { pubkey: ISSUER, name: 'Hill Farm', groups: [], voucherCount: 0 }
+  const row = () =>
+    ({
+      token_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      token: `cashuB${'o'.repeat(30)}`,
+      voucher_id: 'v-1',
+      face_value: 1000,
+      face_unit: 'EUR',
+      face_decimals: 2,
+      token_amount: 1000,
+      amount: 1000,
+      issuer_id: ISSUER,
+      status: 'active',
+    }) as unknown as VoucherRow
+
+  function idempotentGateway({ loseFirstAnswer = false } = {}) {
+    const byKey = new Map<string, { hash: string; sendId: string }>()
+    const keys: Array<string | null | undefined> = []
+    const state = { moved: 0, lose: loseFirstAnswer }
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (p: Record<string, unknown>, key?: string | null) => {
+        keys.push(key)
+        const hash = [p.recipientPubkey, p.amount, p.voucherId, p.memo ?? ''].join('|')
+        const seen = key ? byKey.get(key) : undefined
+        if (seen && seen.hash !== hash) {
+          throw Object.assign(new Error('Idempotency key already used with different request parameters'), {
+            status: 409,
+            code: 'SEND_IDEMPOTENCY_MISMATCH',
+          })
+        }
+        let sendId = seen?.sendId
+        if (!sendId) {
+          state.moved += 1
+          sendId = `as_${state.moved}`
+          if (key) byKey.set(key, { hash, sendId })
+        }
+        if (state.lose) {
+          // The send happened at the gateway; only the answer is lost on the way back.
+          state.lose = false
+          throw new TypeError('Failed to fetch')
+        }
+        return { send_id: sendId, status: 'COMPLETED' }
+      },
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    return { keys, state }
+  }
+
+  function wallet() {
+    Object.assign(stubs.wallet, {
+      getVoucher: async (id: string) => (id === row().token_id ? row() : null),
+      removeVoucher: async () => true,
+      saveVoucher: async () => {},
+      addTransaction: async () => {},
+    })
+  }
+
+  const send = (amount = 250, memo?: string, pay: typeof sendVouchers = sendVouchers) =>
+    pay({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount, memo })
+
+  /** Moves the clock on, as the time it takes to read an error and press "Send" again does. */
+  function later(ms: number) {
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now + ms)
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    // The device's storage: it survives a reload (vi.resetModules), module state does not.
+    const ls = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => ls.get(k) ?? null,
+      setItem: (k: string, v: string) => void ls.set(k, v),
+      removeItem: (k: string) => void ls.delete(k),
+    })
+    stubs.rows = [row()]
+    stubs.merchants.clear()
+    stubs.unreachable.clear()
+    wallet()
+  })
+
+  it('a retry after a lost answer replays the first send instead of sending twice', async () => {
+    // The gateway sends, then the answer is lost. Thirty seconds later the user presses Send
+    // again. Before #179 the key was rebuilt from a 10-second clock window, so the retry
+    // carried a NEW key and the gateway paid the friend a second time.
+    const { keys, state } = idempotentGateway({ loseFirstAnswer: true })
+    await expect(send()).rejects.toThrow(/Failed to fetch/)
+
+    later(30_000)
+    await send()
+
+    expect(keys).toHaveLength(2)
+    expect(keys[1]).toBe(keys[0])
+    expect(state.moved).toBe(1)
+  })
+
+  it('a reload keeps the key: the retry from a fresh page load is the same send', async () => {
+    // The answer is lost and the app is closed. On the next start the module state is gone and
+    // only localStorage remains; the key must come back from there, not be made up again.
+    const { keys, state } = idempotentGateway({ loseFirstAnswer: true })
+    await expect(send()).rejects.toThrow(/Failed to fetch/)
+
+    later(5 * 60_000)
+    vi.resetModules()
+    const reloaded = await import('../pay')
+    await send(250, undefined, reloaded.sendVouchers)
+
+    expect(keys[1]).toBe(keys[0])
+    expect(state.moved).toBe(1)
+  })
+
+  it('a different send never reuses the key, so the gateway does not refuse it as a reuse', async () => {
+    // Two different sends (another memo) inside the same 10 seconds shared one key before #179,
+    // so the gateway refused the second as "same key, different body" and the user could not
+    // send it. Each send intent now has its own key, and a finished send frees its key.
+    const { keys, state } = idempotentGateway()
+    await send(250, 'apples')
+    await send(250, 'pears')
+
+    expect(keys[1]).not.toBe(keys[0])
+    expect(state.moved).toBe(2)
+  })
+
+  it('concurrent duplicates of one send carry one key and send once, across a clock boundary', async () => {
+    // A slow gateway holds the first request open; the user taps again 2 ms later, which happens
+    // to be in the next 10-second window. Before #179 the second tap got a new key and the
+    // gateway ran a second send beside the first. Now both attempts of the one intent share the
+    // stored key, and the gateway replays the first.
+    const { keys, state } = idempotentGateway()
+    const initiate = stubs.api.initiateAtomicSend as (p: Record<string, unknown>, k?: string | null) => Promise<unknown>
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    stubs.api.initiateAtomicSend = async (p: Record<string, unknown>, k?: string | null) => {
+      const answer = initiate(p, k)
+      await held
+      return answer
+    }
+    const boundary = Math.ceil(Date.now() / 10_000) * 10_000 + 10_000
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(boundary - 1)
+
+    const first = send()
+    await vi.waitFor(() => expect(keys).toHaveLength(1))
+    clock.mockReturnValue(boundary + 1)
+    const second = send()
+    await vi.waitFor(() => expect(keys).toHaveLength(2))
+    release()
+    await Promise.allSettled([first, second])
+
+    expect(keys[1]).toBe(keys[0])
+    expect(state.moved).toBe(1)
+  })
+
+  it('the key is in the pending ledger logout reads while the answer is unknown', async () => {
+    const { moneyInFlight } = await import('../inFlightMoney')
+    idempotentGateway({ loseFirstAnswer: true })
+    await expect(send()).rejects.toThrow(/Failed to fetch/)
+    expect(moneyInFlight(PAYER).sends).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * cashu-mint#540 phase 2: the mint's redemption cap refused the coupon (90025), which gateway-core
+ * reports as a FAILED send with `error_code = VOUCHER_FULLY_REDEEMED`. Terminal: the holder is told
+ * the coupon is redeemed in full (design §2.13), it is NOT reclaimed (nothing moved), it is never
+ * offered again, and the screen can offer "Swap back to sats" for its row.
+ */
+describe('a coupon the mint refuses as redeemed in full (cashu-mint#540)', () => {
+  const PAYER = 'c'.repeat(64)
+  const ISSUER = 'f'.repeat(64)
+  const VOUCHER = '1b6f3e2a-9c44-4f0b-8a21-3d5e6f7a8b9c'
+  const merchant = { pubkey: ISSUER, name: 'Hill Farm', groups: [], voucherCount: 0 }
+  const source = {
+    token_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    token: `cashuB${'o'.repeat(30)}`,
+    voucher_id: VOUCHER,
+    face_value: 1000,
+    face_unit: 'EUR',
+    face_decimals: 2,
+    token_amount: 1000,
+    amount: 1000,
+    issuer_id: ISSUER,
+    status: 'active',
+  } as unknown as VoucherRow
+
+  function refusingGateway() {
+    const calls = { initiate: 0, reclaim: 0 }
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => {
+        calls.initiate += 1
+        return { send_id: 'as_refused', status: 'PENDING' }
+      },
+      getAtomicSendStatus: async () => ({
+        status: 'FAILED',
+        error_code: 'VOUCHER_FULLY_REDEEMED',
+        error_message: 'This coupon has already been redeemed in full.',
+      }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => {
+        calls.reclaim += 1
+        return {}
+      },
+    })
+    return calls
+  }
+
+  function wallet() {
+    const saved: Record<string, unknown>[] = []
+    Object.assign(stubs.wallet, {
+      getVoucher: async (id: string) => (id === source.token_id ? source : null),
+      removeVoucher: async () => true,
+      saveVoucher: async (row: Record<string, unknown>) => void saved.push(row),
+      addTransaction: async () => {},
+    })
+    return saved
+  }
+
+  beforeEach(() => {
+    stubs.rows = [source]
+    localStorage.removeItem(`imani-wallet:pending-sends:${PAYER}`)
+    // #461: and the settled ledger, or a send id reused by a later test reads as a replay.
+    localStorage.removeItem(`imani-wallet:settled-sends:${PAYER}`)
+  })
+
+  it('tells the holder, with the stall and reference, and never retries or reclaims', async () => {
+    const calls = refusingGateway()
+    const saved = wallet()
+
+    const failure = await payRequest({ request: request(250), raw: 'vreqA', merchant, payer: PAYER }).catch(
+      (e: unknown) => e,
+    )
+
+    expect(failure).toBeInstanceOf(VoucherFullyRedeemedError)
+    expect((failure as Error).message).toBe(
+      'This coupon has already been redeemed in full. If you believe this is wrong, contact Hill Farm, ' +
+        'quoting reference 1b6f3e2a.',
+    )
+    expect((failure as VoucherFullyRedeemedError).tokenId).toBe(source.token_id)
+    expect(calls).toEqual({ initiate: 1, reclaim: 0 })
+    expect(saved).toEqual([expect.objectContaining({ token_id: source.token_id, status: 'fully_redeemed' })])
+    expect(loadPendingSends(PAYER)).toEqual([])
+  })
+
+  it('never offers the refused coupon for a payment again', () => {
+    expect(spendable([{ ...source, status: 'fully_redeemed' } as VoucherRow])).toEqual([])
+    expect(fullyRedeemedRows([{ ...source, status: 'fully_redeemed' } as VoucherRow])).toHaveLength(1)
+  })
+
+  it('marks it on the next login when the refusal arrived after the wallet stopped waiting', async () => {
+    refusingGateway()
+    const saved = wallet()
+    localStorage.setItem(
+      `imani-wallet:pending-sends:${PAYER}`,
+      JSON.stringify([
+        {
+          sendId: 'as_refused', tokenId: source.token_id, amount: 250, unit: 'EUR', decimals: 2,
+          merchantPubkey: ISSUER, voucherId: VOUCHER, sourceFaceValue: 1000, at: Date.now(),
+          paymentRequestId: 'pay-1',
+        },
+      ]),
+    )
+
+    expect(await reconcilePendingSends(PAYER)).toBe(0)
+    expect(saved).toEqual([expect.objectContaining({ status: 'fully_redeemed' })])
+    expect(loadPendingSends(PAYER)).toEqual([])
+  })
+})
+
+describe('a settled payment request is never paid, or settled, twice (#461)', () => {
+  const PAYER = 'c'.repeat(64)
+  const ISSUER = 'f'.repeat(64)
+  const merchant = { pubkey: ISSUER, name: 'Hill Farm', groups: [], voucherCount: 0 }
+  const CHANGE_TOKEN = `cashuB${'k'.repeat(30)}`
+  const source = {
+    token_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    token: `cashuB${'o'.repeat(30)}`,
+    voucher_id: 'v-1',
+    face_value: 500,
+    face_unit: 'EUR',
+    face_decimals: 2,
+    token_amount: 500,
+    amount: 500,
+    issuer_id: ISSUER,
+    status: 'active',
+  } as unknown as VoucherRow
+
+  /** A wallet whose rows really change, so the change coupon can be paid from. */
+  function liveWallet(initial: VoucherRow[]) {
+    const rows = [...initial]
+    const removed: string[] = []
+    const transactions: Record<string, unknown>[] = []
+    stubs.rows = rows
+    Object.assign(stubs.wallet, {
+      getVoucher: async (id: string) => rows.find((r) => r.token_id === id) ?? null,
+      removeVoucher: async (id: string) => {
+        removed.push(id)
+        const at = rows.findIndex((r) => r.token_id === id)
+        if (at >= 0) rows.splice(at, 1)
+        return at >= 0
+      },
+      saveVoucher: async (next: VoucherRow) => void rows.push(next),
+      addTransaction: async (tx: Record<string, unknown>) => void transactions.push(tx),
+    })
+    return { rows, removed, transactions }
+  }
+
+  /**
+   * gateway-core before the fix: the request hash covers sender|recipient|amount|voucherId|memo
+   * only, so the same key with a different token REPLAYS the stored send. The replay answers
+   * COMPLETED with no keep_token: the original's change was acked and cleared.
+   */
+  function oldGateway() {
+    const byKey = new Map<string, { hash: string; sendId: string }>()
+    const keys: string[] = []
+    const calls = { initiate: 0 }
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (p: Record<string, unknown>, key?: string | null) => {
+        calls.initiate += 1
+        keys.push(String(key))
+        const hash = [p.recipientPubkey, p.amount, p.voucherId, p.memo ?? ''].join('|')
+        const seen = key ? byKey.get(key) : undefined
+        if (seen && seen.hash === hash) return { send_id: seen.sendId, status: 'COMPLETED' }
+        const sendId = `as_${byKey.size + 1}`
+        if (key) byKey.set(key, { hash, sendId })
+        return { send_id: sendId, status: 'PENDING' }
+      },
+      getAtomicSendStatus: async () => ({
+        status: 'COMPLETED',
+        keep_token: CHANGE_TOKEN,
+        keep_face_value: 375,
+        is_full_send: false,
+      }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    return { keys, calls }
+  }
+
+  beforeEach(() => {
+    stubs.notified.count = 0
+    stubs.merchants.clear()
+    stubs.unreachable.clear()
+    localStorage.removeItem(`imani-wallet:pending-sends:${PAYER}`)
+    localStorage.removeItem(`imani-wallet:settled-sends:${PAYER}`)
+  })
+
+  it('refuses to pay the request again from the change, before any call, and keeps the coupon', async () => {
+    const { rows, removed, transactions } = liveWallet([source])
+    const { calls, keys } = oldGateway()
+    const req = request(125, { paymentId: '41bcaa6ab3d4fb90', issuerId: ISSUER, unit: 'EUR' })
+
+    const first = await payRequest({ request: req, raw: 'vreqA…', merchant, payer: PAYER })
+    expect(first.delivered).toBe(125)
+    // The split kept the change, under the SAME voucher_id, re-keyed to its own token.
+    const change = rows.find((r) => r.token === CHANGE_TOKEN)!
+    expect(change).toBeDefined()
+    expect(change.voucher_id).toBe('v-1')
+    expect(keys[0]).toBe(`pay_41bcaa6ab3d4fb90_${source.token_id}`)
+
+    const removedBefore = [...removed]
+    await expect(
+      payRequest({ request: req, raw: 'vreqA…', merchant, payer: PAYER }),
+    ).rejects.toBeInstanceOf(RequestAlreadyPaidError)
+
+    expect(calls.initiate).toBe(1)
+    expect(removed).toEqual(removedBefore)
+    expect(rows.map((r) => r.token)).toEqual([CHANGE_TOKEN])
+    expect(transactions).toHaveLength(1)
+  })
+
+  it('keys a payment on the source token, so the change never reuses the first key', async () => {
+    const { rows } = liveWallet([source])
+    const { keys } = oldGateway()
+    await payRequest({ request: request(125, { paymentId: 'r-1', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER })
+    const change = rows.find((r) => r.token === CHANGE_TOKEN)!
+    await payRequest({ request: request(125, { paymentId: 'r-1b', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER })
+    expect(keys).toEqual([`pay_r-1_${source.token_id}`, `pay_r-1b_${change.token_id}`])
+    expect(change.token_id).not.toBe(source.token_id)
+  })
+
+  it('never deletes a coupon on a gateway replay answer, even with no local record of the request', async () => {
+    // A wiped wallet, or another device: the ledger cannot refuse, so the answer must.
+    const { rows, removed, transactions } = liveWallet([source])
+    let acked = 0
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_old', status: 'COMPLETED', idempotent_replay: true }),
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+      ackKeepToken: async () => void (acked += 1),
+      reclaimAtomicSend: async () => ({}),
+    })
+
+    await expect(
+      payRequest({ request: request(125, { paymentId: 'r-2', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER }),
+    ).rejects.toBeInstanceOf(RequestAlreadyPaidError)
+
+    expect(removed).toEqual([])
+    expect(rows).toEqual([source])
+    expect(transactions).toEqual([])
+    expect(acked).toBe(0)
+    expect(loadPendingSends(PAYER)).toEqual([])
+  })
+
+  it('never settles an answer naming a send this wallet already settled', async () => {
+    const { rows, removed } = liveWallet([source])
+    oldGateway()
+    await payRequest({ request: request(125, { paymentId: 'r-3', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER })
+    const after = rows.map((r) => r.token_id)
+    const removedBefore = [...removed]
+    // A different request, but the gateway answers with the settled as_1 and no change.
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_1', status: 'COMPLETED' }),
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED' }),
+    })
+    await expect(
+      payRequest({ request: request(125, { paymentId: 'r-4', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER }),
+    ).rejects.toBeInstanceOf(RequestAlreadyPaidError)
+    expect(rows.map((r) => r.token_id)).toEqual(after)
+    expect(removed).toEqual(removedBefore)
+  })
+
+  it('never settles an answer about a different source token', async () => {
+    const { rows, removed } = liveWallet([source])
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_x', status: 'PENDING' }),
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED', token_fingerprint: 'b'.repeat(32) }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    await expect(
+      sendVouchers({ payer: PAYER, recipient: { pubkey: 'd'.repeat(64) }, merchant, unit: 'EUR', amount: 500 }),
+    ).rejects.toThrow(/earlier send/)
+    expect(removed).toEqual([])
+    expect(rows).toEqual([source])
+  })
+
+  it('maps the gateway refusal request_already_paid to the typed error, coupon untouched', async () => {
+    const { rows, removed } = liveWallet([source])
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => {
+        throw Object.assign(new Error('Payment request already paid'), { status: 409, code: 'request_already_paid' })
+      },
+    })
+    await expect(
+      payRequest({ request: request(125, { paymentId: 'r-5', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER }),
+    ).rejects.toBeInstanceOf(RequestAlreadyPaidError)
+    expect(removed).toEqual([])
+    expect(rows).toEqual([source])
+  })
+
+  it('still settles a real full send and a real reconcile', async () => {
+    const { rows, removed } = liveWallet([source])
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async () => ({ send_id: 'as_full', status: 'PENDING' }),
+      getAtomicSendStatus: async () => ({ status: 'COMPLETED', is_full_send: true, token_fingerprint: source.token_id }),
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    const result = await payRequest({ request: request(500, { paymentId: 'r-6', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER })
+    expect(result.delivered).toBe(500)
+    expect(removed).toEqual([source.token_id])
+    expect(rows).toEqual([])
+    expect(await reconcilePendingSends(PAYER)).toBe(0)
   })
 })

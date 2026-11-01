@@ -29,6 +29,14 @@ export interface LicenceVoucher {
    * being optional widens the type without widening what is allowed.
    */
   lockKey?: string
+  /**
+   * The NUT-11 key the MINT enforces (`data` of a `P2PK_VOUCHER`), hex, x-only or compressed.
+   * Absent on a plain `VOUCHER`, whose lock is only advisory metadata: refused as
+   * `NOT_LOCKED_AT_MINT`, as gateway-customer refuses it (review of imani-wallet#197).
+   */
+  mintLockKey?: string
+  /** The signed `issuer` tag: the stall that SOLD it, which the seller pin compares. */
+  issuerId?: string
   /** Unix SECONDS. A licence with no expiry is refused rather than eternal. */
   expiresAt?: number
   /** What was paid, so the credential is its own receipt. */
@@ -38,7 +46,46 @@ export interface LicenceVoucher {
   features?: readonly string[]
   /** Marks a pilot, so support and revenue are not guesses. */
   pilot?: boolean
+  /** The tier this licence was sold as (`basic`, `pro`, or `custom` for a hand grant). Informational. */
+  tier?: string
+  /**
+   * Unix SECONDS. Before this the licence grants nothing (`NOT_YET_VALID`). Absent on licences sold
+   * before #407, which are valid from issue.
+   */
+  validFrom?: number
+  /** The limits this licence lifts the stall to. Signed, so a hand grant is just different numbers. */
+  limits?: LicenceLimits
+  /** `subscription` (bought) or `custom` (issued by hand, #407 §7). */
+  grantKind?: string
+  /**
+   * The verification badge a HAND GRANT carries (#418 Q3), signed with it. A bought tier carries none:
+   * its badge is the catalog's, so re-mapping a tier needs no re-issue. Unknown values are dropped.
+   */
+  badge?: string
 }
+
+/**
+ * What a licence lifts a stall to (#407).
+ *
+ * `null` means UNLIMITED, and absent means "this licence says nothing about it", so the stall keeps
+ * whatever else grants it. The two must not be confused: a Pro licence writes `null` to remove the
+ * cap, while a terminals-only licence from before #407 writes nothing and must not remove one.
+ */
+export interface LicenceLimits {
+  /**
+   * Sales allowed, in MINOR units of the stall's currency, per period. A map of currency to amount,
+   * so limits never need FX at sale time (#407 Q5).
+   */
+  sales?: { period: SalesPeriod; amounts: Readonly<Record<string, number>> } | null
+  /** Enrolled terminals allowed, beyond nothing: the owner's device is counted as one. */
+  terminals?: number | null
+}
+
+/**
+ * `lifetime` never resets (the free tier, #407 Q1). `month` resets at 00:00 UTC on the 1st (Q6).
+ * `window` is the licence's own `validFrom` to `expiresAt`, which is what a hand grant uses.
+ */
+export type SalesPeriod = 'lifetime' | 'month' | 'window'
 
 /** What a verified licence confers. */
 export interface LicenceGrant {
@@ -47,6 +94,12 @@ export interface LicenceGrant {
   /** Unix SECONDS, so a caller can show "until when" without re-deriving it. */
   expiresAt: number
   pilot: boolean
+  /** Carried so the grace window keeps serving the same limits the verification conferred. */
+  limits?: LicenceLimits
+  tier?: string
+  validFrom?: number
+  /** The grant's own signed badge (#418), when it is a hand grant that names one. */
+  badge?: string
 }
 
 /**
@@ -70,10 +123,25 @@ export const DENIAL_REASONS = {
   UNLOCKED: 'unlocked',
   /** Past its expiry, decided from the signed field and the caller's clock. */
   EXPIRED: 'expired',
+  /** Before its signed `valid_from`. An answer, like an expiry, so no grace window applies. */
+  NOT_YET_VALID: 'not-yet-valid',
   /** No expiry field. Refused rather than treated as eternal. */
   NO_EXPIRY: 'no-expiry',
   /** Verified, and confers nothing. A licence for no features is not a licence. */
   NO_FEATURES: 'no-features',
+  /**
+   * A plain `VOUCHER`: its lock is metadata the mint never enforces, and its NUT-10 nonce is
+   * unsigned, so the server cannot tie it to a proof the mint issued and refuses it. So does this.
+   */
+  NOT_LOCKED_AT_MINT: 'not-locked-at-mint',
+  /** Signed by our gateway key, but sold (`issuer`) by a stall that is not the configured seller. */
+  NOT_SOLD_BY_US: 'not-sold-by-us',
+  /**
+   * The seller ended this subscription (a refund), and the server said so: `422 LICENCE_REVOKED`
+   * (imani-wallet#226). Not something this package can see in the voucher: the caller supplies it
+   * from the server's verdict, and it is final, so no grace window applies.
+   */
+  REVOKED_BY_SELLER: 'revoked-by-seller',
 } as const
 
 export type DenialReason = (typeof DENIAL_REASONS)[keyof typeof DENIAL_REASONS]
@@ -111,4 +179,11 @@ export interface VerifyOptions {
    * the branch where a signature fails without forging one.
    */
   verifySignature: (voucher: LicenceVoucher) => boolean
+  /**
+   * The licence SELLER's stall key, x-only hex (`VITE_LICENCE_SELLER_PUBKEY`). When set, a licence
+   * whose signed `issuer` is anyone else is refused `NOT_SOLD_BY_US`: the gateway key signs every
+   * stall's coupons, so it alone cannot tell a sold licence from a stall's self-made one. Empty or
+   * absent does not pin (the server pins regardless).
+   */
+  sellerPublicKey?: string
 }

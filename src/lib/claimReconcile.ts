@@ -165,22 +165,11 @@ export function candidateClaim(
   if (checkIssuer(parsed) === 'unknown-issuer') return undefined
   // The issuer signature covers the voucher's terms and no mint at all, so a
   // copy backed by another mint's proofs verifies just as well as the real
-  // coupon. `unchecked` passes: a deployment that names no mint is no worse off
-  // than before this gate existed, which is the same direction `checkIssuer`
-  // takes and for the same reason (a gate on money must not strand it).
-  const backing = checkMintAndUnit(parsed)
-  // `not-ready` is also refused, for the reason given in `trustedMint.ts`: it means
-  // the trusted set is not yet knowable, and treating unknown as permitted would let
-  // a delayed /api/v1/config turn the check off. Safe to refuse here because this is
-  // a SWEEP: a row skipped now is a candidate again on the next pass, so the only
-  // cost is a later reconciliation rather than a lost claim.
-  if (
-    backing === 'untrusted-mint' ||
-    backing === 'wrong-unit' ||
-    backing === 'not-ready'
-  ) {
-    return undefined
-  }
+  // coupon. Only a positively trusted mint is claimed. Every other verdict,
+  // `not-ready` and `no-trusted-mint` included (#133 review), is skipped. Safe
+  // because this is a SWEEP: a row skipped now is a candidate again on the next
+  // pass, so the only cost is a later reconciliation rather than a lost claim.
+  if (checkMintAndUnit(parsed) !== 'trusted') return undefined
   if (!v.issuerId || v.issuerId.toLowerCase() !== stallPubkey.toLowerCase()) return undefined
   if (!v.voucherId || !v.unit) return undefined
 

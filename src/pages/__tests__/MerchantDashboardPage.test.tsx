@@ -14,7 +14,7 @@
  *     a summary for.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 const ME = 'a'.repeat(64)
@@ -195,5 +195,49 @@ describe('the issued-vouchers summary', () => {
     const row = within(summary).getByText('Expiring soon').closest('div') as HTMLElement
 
     expect(within(row).getByText('0')).toBeTruthy()
+  })
+})
+
+describe('the range filters', () => {
+  const rangeButtons = () =>
+    screen
+      .getAllByRole('button')
+      .filter((b) => b.hasAttribute('aria-pressed'))
+      .map((b) => b.textContent)
+  const chart = () => screen.queryByRole('img', { name: 'Daily voucher activity' })
+
+  it('are Today, 7 days and 30 days, with 30 days chosen', async () => {
+    show([issued({ id: 'v1', inDays: 2 })])
+
+    await waitFor(() => expect(screen.getByText('Vouchers issued')).toBeTruthy())
+    expect(rangeButtons()).toEqual(['Today', '7 days', '30 days'])
+    expect(screen.queryByText('90 days')).toBeNull()
+    expect(screen.getByRole('button', { name: '30 days' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('shows the daily chart for 7 and 30 days', async () => {
+    show([issued({ id: 'v1', inDays: 2 })])
+
+    await waitFor(() => expect(chart()).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '7 days' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '7 days' }).getAttribute('aria-pressed')).toBe('true'),
+    )
+    expect(chart()).toBeTruthy()
+  })
+
+  it('hides the chart for Today, keeping the totals', async () => {
+    show([issued({ id: 'v1', inDays: 2 })])
+
+    await waitFor(() => expect(chart()).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Today' }).getAttribute('aria-pressed')).toBe('true'),
+    )
+    // One bar is not a chart. The tiles already say everything it would.
+    expect(chart()).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Activity' })).toBeNull()
+    expect(screen.getByText('Vouchers issued')).toBeTruthy()
+    expect(screen.getByText('Came back')).toBeTruthy()
   })
 })

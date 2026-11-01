@@ -18,8 +18,9 @@
  *     counter rail nothing else ever can — so the two are never collapsed into
  *     one "verified" line.
  *  3. **Only a mismatch is an alarm.** Unwarranted sales are every sale made
- *     before warrants shipped and every sale made on a terminal, so colouring
- *     them red would bury the one row that disagrees with its own signature.
+ *     before warrants shipped, and every sale from a till the stall has not
+ *     attested, so colouring them red would bury the one row that disagrees
+ *     with its own signature.
  *     `IssuanceReconciliation` already draws that line; this follows it.
  */
 import type { CashAttestationVerdict } from './cashAttestation'
@@ -85,7 +86,7 @@ export function describeRail(rail: PaymentRail): EvidenceLine {
         label: 'Not recorded',
         tone: 'neutral',
         detail:
-          'Nothing on this sale says how it was paid for. That is every sale made before signing was added, and every sale made on a terminal — not a sign that anything went wrong.',
+          'Nothing on this sale says how it was paid for. That is every sale made before signing was added — not a sign that anything went wrong.',
       }
   }
 }
@@ -122,7 +123,7 @@ export function describeWarrant(verdict: WarrantVerdict): EvidenceLine {
         label: 'Issued unsigned',
         tone: 'neutral',
         detail:
-          'The issuer stated that nothing outside the issuing service authorised this. That is what a terminal issues, because a terminal’s key is not the stall’s.',
+          'Nothing outside the issuing service authorised this sale. That is a sale its issuer marked unauthorised, or one from a till you have not set up again since terminals began carrying your signature. Customers’ wallets refuse such coupons.',
       }
     case 'failed':
       return {
@@ -171,12 +172,12 @@ export function describeAttestation(verdict: CashAttestationVerdict): EvidenceLi
  */
 export function describeCashbackKind(): EvidenceLine {
   return {
-    label: 'Cashback from this stall',
+    label: 'Cashlink from this stall',
     tone: 'neutral',
     // Says what the record cannot carry, not that no money moved: whether
     // anything changed hands at the counter is not something this row saw.
     detail:
-      'A cashback code this stall gave out, not a sale made through Sell. It has no payment method on record and can never carry a customer receipt, so neither is shown.',
+      'A Cashlink this stall gave out, not a sale made through Sell. It has no payment method on record and can never carry a customer receipt, so neither is shown.',
   }
 }
 
@@ -201,7 +202,7 @@ export function describeCashbackClaim(
       return {
         label: on ? `Claimed on ${on}` : 'Claimed',
         tone: 'confirmed',
-        detail: 'The portal records the customer claiming this cashback.',
+        detail: 'The portal records the customer claiming this Cashlink.',
       }
     }
     case 'Expired':
@@ -216,7 +217,7 @@ export function describeCashbackClaim(
       return {
         label: 'Needs a check',
         tone: 'alarming',
-        detail: 'The portal flagged this cashback for a person to look at.',
+        detail: 'The portal flagged this Cashlink for a person to look at.',
       }
     case undefined:
     case 'Unclaimed':
@@ -230,7 +231,7 @@ export function describeCashbackClaim(
         : {
             label: 'Not claimed yet',
             tone: 'neutral',
-            detail: 'No claim has reached this device yet. The code is still open.',
+            detail: 'No claim has reached this device yet. The Cashlink is still open.',
           }
     default:
       return {
@@ -239,4 +240,58 @@ export function describeCashbackClaim(
         detail: 'The portal sent a status this version does not know. It is not read as claimed.',
       }
   }
+}
+
+/**
+ * A sale whose signature holds but whose coupons add up to less than it (#462).
+ *
+ * This used to borrow the mismatch wording, "does not match its signature",
+ * which reads as forgery. It is not one: every signature verified, and the
+ * usual cause is a split sale that reached the customer only partly. So it says
+ * the figures a merchant has to act on (signed, delivered, missing) and stays
+ * out of the alarm tone, which is kept for a signature that does not hold.
+ * `money` is passed in so this module stays free of locale code.
+ */
+export function describeUnderstatedSale(
+  shortfall: { signedMinor: number; deliveredMinor: number; partlyDelivered: boolean },
+  money: (minor: number) => string,
+): EvidenceLine {
+  const missing = Math.max(0, shortfall.signedMinor - shortfall.deliveredMinor)
+  return {
+    label: shortfall.partlyDelivered ? 'Partly delivered' : 'Sale not all here',
+    tone: 'neutral',
+    detail:
+      `${understatedSummary(shortfall, money)}. The signature on this sale holds. ` +
+      (shortfall.partlyDelivered
+        ? 'This sale stopped part-way, so the customer holds only part of it; worth settling the ' +
+          `${money(missing)} with them.`
+        : 'Usually a sale that stopped part-way, or history restored in pieces; worth checking ' +
+          'against the customer.'),
+  }
+}
+
+/** "€1,000.00 sale signed, €200.00 delivered: €800.00 missing", shared by the panel and the record. */
+export function understatedSummary(
+  shortfall: { signedMinor: number; deliveredMinor: number },
+  money: (minor: number) => string,
+): string {
+  const missing = Math.max(0, shortfall.signedMinor - shortfall.deliveredMinor)
+  return (
+    `${money(shortfall.signedMinor)} sale signed, ${money(shortfall.deliveredMinor)} delivered: ` +
+    `${money(missing)} missing`
+  )
+}
+
+/** The panel's line for a currency's understated sales (#462). */
+export function describeUnderstatedLine(
+  line: { understatedSignedMinor: number; understatedMinor: number; counts: { understated: number } },
+  money: (minor: number) => string,
+): string {
+  const n = line.counts.understated
+  return (
+    `${understatedSummary(
+      { signedMinor: line.understatedSignedMinor, deliveredMinor: line.understatedMinor },
+      money,
+    )}, ${n} sale${n === 1 ? '' : 's'} to look at.`
+  )
 }

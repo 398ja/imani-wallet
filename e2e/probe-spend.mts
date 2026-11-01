@@ -117,7 +117,7 @@ const r = await fetch(url, {
     'Content-Type': 'application/json',
     Authorization: nip98(url, 'POST', body),
     'X-Auth-Pubkey': stall.pk,
-    'X-Edge-Auth': process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only',
+    'X-Edge-Auth': process.env.EDGE_SECRET ?? 'dev-edge-secret-local-only-32-plus-chars',
   },
   body,
 })

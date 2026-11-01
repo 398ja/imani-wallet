@@ -157,6 +157,7 @@ type Correlation = {
   exactValue?: number
   zeroCredit?: boolean
   claim?: MerchantClaim
+  terminalPubkey?: string
 }
 
 /** Redeems in flight, by the id each was handed. */
@@ -213,6 +214,11 @@ export async function withCorrelation<T>(
     zeroCredit?: boolean
     /** See `merchantClaim.ts`. Present only on a verified coupon coming home. */
     claim?: MerchantClaim
+    /**
+     * The terminal that handed this coupon in (#402: an online shop's takings), stamped on the
+     * stall's row the way an issuance row names its till. See `shopTakings.ts`.
+     */
+    terminalPubkey?: string
   },
   redeem: (correlationId: string) => Promise<T>,
 ): Promise<T> {
@@ -227,7 +233,8 @@ export async function withCorrelation<T>(
     ids.transferId ||
     ids.exactValue !== undefined ||
     ids.zeroCredit ||
-    ids.claim
+    ids.claim ||
+    ids.terminalPubkey
   inFlight.set(correlationId, hasIds ? ids : undefined)
   try {
     return await redeem(correlationId)
@@ -293,6 +300,7 @@ function stampCorrelation(rows: unknown[], ids: Correlation | undefined): unknow
       ...(t.exactValue === undefined && ids.exactValue !== undefined ? { exactValue: ids.exactValue } : {}),
       // A verified zero credit, which the builder turned into the sats.
       ...(ids.zeroCredit ? { amount: 0 } : {}),
+      ...(ids.terminalPubkey && !t.terminalPubkey ? { terminalPubkey: ids.terminalPubkey } : {}),
       // OVERWRITES, unlike everything above: the builder's voucher id is the
       // gateway's (in practice a random UUID) and its amount can be a derived
       // figure, so neither matches the issuance they must be summed against.

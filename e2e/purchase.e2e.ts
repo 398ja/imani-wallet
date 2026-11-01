@@ -45,6 +45,7 @@
  *   npx tsx e2e/purchase.e2e.ts
  */
 import { chromium, type Browser, type Page } from 'playwright'
+import { registerCustomer } from './register.mts'
 
 const BASE = process.env.E2E_BASE ?? 'http://localhost:5177'
 
@@ -85,7 +86,9 @@ const UNKNOWN_STALL = 'a'.repeat(64)
  */
 async function preflight(page: Page): Promise<boolean> {
   const response = await page.request.post(`${BASE}/api/v1/checkout/purchase`, {
-    data: { stallPubkey: RESTRICTED_STALL, amountMinor: 100, buyerPubkey: null },
+    // A buyer is required since #267: a guest is refused (422) before the
+    // account lookup this preflight exists to probe.
+    data: { stallPubkey: RESTRICTED_STALL, amountMinor: 100, buyerPubkey: 'c'.repeat(64) },
     failOnStatusCode: false,
   })
   if (response.status() === 409) return true
@@ -173,6 +176,11 @@ async function main(): Promise<void> {
   page.on('pageerror', (error) => pageErrors.push(String(error)))
 
   try {
+    // Signed in: since #267 a guest is refused on the Buy page before any
+    // network call (cardPurchaseBuyer.e2e.ts covers that), so the refusal
+    // this suite asserts needs a buyer with a wallet.
+    await registerCustomer(page, BASE)
+
     console.log('\nPreflight')
     const ready = await preflight(page)
     check('the fixture stall exists and cannot take cards', ready)

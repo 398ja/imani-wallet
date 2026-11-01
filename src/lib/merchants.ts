@@ -1,11 +1,13 @@
 import { VoucherGrouper } from '@imani/voucher-send'
 import type { Voucher, MerchantGroup } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
+import { issuerKey as coreIssuerKey, readExpiry } from '@imani/wallet-core'
 
 import { toEpochMs } from './format'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { parseVoucherToken } from './voucherToken'
 import { isLicence } from './licences'
+import { isTerminalCredential } from './notMoney'
 import type { WalletTransaction } from './transactions'
 
 /**
@@ -28,6 +30,9 @@ export interface Merchant {
   /** Total coupons held, across all groups. */
   voucherCount: number
 }
+
+/** What `toVoucher` puts in `expires_at` for a stored expiry nobody can read (#157). */
+export const UNREADABLE_EXPIRY = 'unreadable'
 
 /**
  * Bridge wallet-storage's VoucherRow to voucher-send's Voucher.
@@ -71,7 +76,20 @@ export function toVoucher(row: VoucherRow): Voucher {
     issuance_ratio: issuanceRatioOf(row),
     issuer_id: row.issuer_id,
     status: row.status,
-    expires_at: expiresMs === undefined ? undefined : new Date(expiresMs).toISOString(),
+    // An expiry that is present but unreadable is not erased: erased, it read
+    // as "never expires" and was spent last (#157). wallet-core's `expiryMs`
+    // spends such a coupon first instead. It is passed as a fixed marker, NOT
+    // the raw value: VoucherGrouper's expiry filter is `new Date(expires_at)`,
+    // and V8 reads raw junk like "Section 5" as a date in 2001, which would
+    // drop the coupon from the list while `couponsFor` still counted it. The
+    // marker has no digit, so `new Date` is NaN there and the coupon stays.
+    // The raw value is logged where it is stored (expiryStorage.ts).
+    expires_at:
+      expiresMs !== undefined
+        ? new Date(expiresMs).toISOString()
+        : readExpiry(row.expires_at).kind === 'none'
+          ? undefined
+          : UNREADABLE_EXPIRY,
     created_at: row.created_at,
   } as Voucher
 }
@@ -249,7 +267,25 @@ export function isRedeemed(row: Pick<VoucherRow, 'status'>): boolean {
  */
 export function isSpent(row: Pick<VoucherRow, 'status'>): boolean {
   const status = (row.status ?? '').toLowerCase()
-  return status === 'redeemed' || status === 'spent'
+  return (
+    status === 'redeemed' ||
+    status === 'spent' ||
+    // cashu-mint#540: the mint refuses this coupon as redeemed in full, so it is not money a
+    // payment can spend. Still held (its proofs are untouched): see `fullyRedeemedRows`.
+    status === 'fully_redeemed' ||
+    // Swapped back to sats: the coupon's proofs are spent, its value is in `sats_token`.
+    status === 'swapped_to_sats'
+  )
+}
+
+/**
+ * Coupons the mint refused as redeemed in full (cashu-mint#540), newest first. Their proofs are
+ * still the holder's, so each is offered "Swap back to sats" (`swapBack.ts`).
+ */
+export function fullyRedeemedRows(rows: VoucherRow[]): VoucherRow[] {
+  return rows
+    .filter((row) => (row.status ?? '').toLowerCase() === 'fully_redeemed')
+    .sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')))
 }
 
 /**
@@ -280,10 +316,25 @@ export function isSpent(row: Pick<VoucherRow, 'status'>): boolean {
  * an unparseable token is somebody else's error to report, and treating it as
  * unauthorised here would hide the real failure behind the wrong message.
  *
- * Used to FLAG a coupon on the send screen, not to withhold it. Refusing to let
- * a customer spend money already in their wallet punishes them for an issuer's
- * omission; the refusal that matters happens at the till, where the party who
- * would be defrauded is the one deciding. See `refuseIfUnwarranted`.
+ * Meant to FLAG a coupon on the send screen, not to withhold it. **No screen
+ * calls it yet**: it was written for that flag and the wiring never landed, so
+ * today nothing in the UI reads it.
+ *
+ * The refusal that matters happens on RECEIPT, in every wallet: since #159
+ * (Option B) `refuseIfUnwarranted` refuses an `absent`, `unwarranted` or
+ * `failed` coupon arriving by DM before the mint swap, whether the recipient
+ * is a customer or the issuing stall. So a coupon received by DM and checked
+ * never lands in a wallet unwarranted, and this flag does not exist to warn
+ * about those.
+ *
+ * What it still catches is a coupon that reached the wallet WITHOUT that
+ * check: one received before warrants were checked (its validation has no
+ * `warrant`, so the receive-time check was never asked), and one that arrived
+ * by another route, such as a cashback claim, which records the warrant
+ * verdict but does not refuse on it. The stall that issued such a coupon will
+ * refuse it on receipt, so a send screen calling this could warn the customer
+ * before they offer it. Flagged rather than withheld: blocking money already
+ * in a wallet would strand it with no way to show it to the stall and ask.
  */
 export function isWarranted(row: Pick<VoucherRow, 'token'>): boolean {
   if (!row.token) return true
@@ -295,14 +346,21 @@ export function isWarranted(row: Pick<VoucherRow, 'token'>): boolean {
       unit: parsed.voucher.unit,
       faceDecimals: parsed.voucher.faceDecimals,
     })
-    return verdict.verdict === 'verified' || verdict.verdict === 'claimed'
+    // `claimed` is an unsigned processor warrant, which every wallet now
+    // refuses on receipt (#152), so it is not warranted here either.
+    return verdict.verdict === 'verified'
   } catch {
     return true
   }
 }
 
+/**
+ * The rows that are money. Every balance, the home carousel, `couponsFor`, pay and send go
+ * through here, so a licence and a terminal credential (#160) are excluded once, from their
+ * signed bytes, for all of them. Both rows stay in the store for their own readers.
+ */
 export function spendable(rows: VoucherRow[]): VoucherRow[] {
-  return rows.filter((row) => !isSpent(row) && !isLicence(row))
+  return rows.filter((row) => !isSpent(row) && !isLicence(row) && !isTerminalCredential(row))
 }
 
 /**
@@ -322,12 +380,7 @@ export function spendable(rows: VoucherRow[]): VoucherRow[] {
  * balance and a count, and then that merchant's own page reported 0 coupons and an
  * empty list. Real money, unreachable.
  */
-export function issuerKey(issuerId: string | undefined | null): string {
-  const id = issuerId || 'unknown'
-  // npub stays as-is: the grouper says it would decode to hex but does not.
-  if (id.startsWith('npub1')) return id
-  return /^[0-9a-f]{64}$/i.test(id) ? id.toLowerCase() : id
-}
+export const issuerKey = coreIssuerKey
 
 /**
  * A merchant's coupons as STORED ROWS, newest first.
@@ -403,4 +456,64 @@ export function walletTotals(merchants: Merchant[]): UnitTotal[] {
   }
 
   return [...byUnit.values()].sort((a, b) => b.minor - a.minor)
+}
+
+/**
+ * What one merchant holds in one currency: every group of theirs in that unit,
+ * merged. A merchant's `groups` split by issuance ratio too, which matters for
+ * backing but not for what can be spent, so reading `groups.find(unit)` alone
+ * under-reports the balance when coupons came from several sales (#460).
+ */
+export interface UnitHolding {
+  merchant: Merchant
+  unit: string
+  decimals: number
+  totalFaceValue: number
+  voucherCount: number
+  vouchers: Voucher[]
+}
+
+/** The merchant's holding in `unit` (case-insensitive), or undefined if they hold none. */
+export function holdingForUnit(merchant: Merchant, unit: string): UnitHolding | undefined {
+  const wanted = unit.toUpperCase()
+  let found: UnitHolding | undefined
+  for (const group of merchant.groups) {
+    if (group.unit.toUpperCase() !== wanted) continue
+    if (found) {
+      found.totalFaceValue += group.totalFaceValue
+      found.voucherCount += group.voucherCount
+      found.vouchers.push(...group.vouchers)
+    } else {
+      found = {
+        merchant,
+        unit: group.unit,
+        decimals: group.decimals,
+        totalFaceValue: group.totalFaceValue,
+        voucherCount: group.voucherCount,
+        vouchers: [...group.vouchers],
+      }
+    }
+  }
+  return found
+}
+
+/** Total face value, in minor units, the merchant holds in `unit`. */
+export function totalForUnit(merchant: Merchant, unit: string): number {
+  return holdingForUnit(merchant, unit)?.totalFaceValue ?? 0
+}
+
+/** One holding per merchant and unit, most valuable first (the send picker's options). */
+export function unitHoldings(merchants: Merchant[]): UnitHolding[] {
+  const out: UnitHolding[] = []
+  for (const merchant of merchants) {
+    const seen = new Set<string>()
+    for (const group of merchant.groups) {
+      const key = group.unit.toUpperCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      const holding = holdingForUnit(merchant, group.unit)
+      if (holding) out.push(holding)
+    }
+  }
+  return out.sort((a, b) => b.totalFaceValue - a.totalFaceValue)
 }

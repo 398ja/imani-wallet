@@ -148,6 +148,26 @@ describe('verifyVoucher', () => {
   it('returns not-verified rather than throwing on malformed input', () => {
     expect(verifyVoucher({ ...STAGING, issuerSignature: 'nonsense' }).signatureValid).toBe(false)
   })
+
+  /*
+    #194, mirroring cashu-voucher#54. The legacy form truncates every number before hashing, so
+    on this real legacy voucher an expiry rewritten from 1808069579 to 1808069579.5 hashes to the
+    very bytes the issuer signed. Java's Long.parseLong then reads that expiry as ABSENT, so an
+    expired coupon would pass an offline check as one that never expires. Only the ratio was
+    ever fractional on a genuine voucher, so a fraction anywhere else gets no legacy window.
+  */
+  it('refuses an expiry rewritten to a fraction under the legacy window (#194)', () => {
+    expect(verifyVoucher({ ...STAGING, expiresAt: 1808069579.5 })).toEqual({
+      signatureValid: false,
+      legacyCanonical: false,
+    })
+  })
+
+  it('refuses a fractional face value or face_decimals under the legacy window (#194)', () => {
+    // 1000.9 truncates to the signed 1000; 2.5 truncates to the signed 2.
+    expect(verifyVoucher({ ...STAGING, faceValue: 1000.9 }).signatureValid).toBe(false)
+    expect(verifyVoucher({ ...STAGING, faceDecimals: 2.5 }).signatureValid).toBe(false)
+  })
 })
 
 describe('javaDoubleToString', () => {
@@ -305,5 +325,80 @@ describe('parseVoucherToken', () => {
   it('rejects a non-voucher token', () => {
     const plain = JSON.stringify(['P2PK', blobHex, 'n', []])
     expect(() => parseVoucherToken(makeToken([plain]))).toThrow(/not a voucher/)
+  })
+})
+
+/*
+  #194, the integral FLOAT. Java's integer check is Long.parseLong(String.valueOf(value)), and a
+  CBOR float 1000.0 stringifies as "1000.0", which it refuses. JS decodes that float as plain 1000,
+  so Number.isInteger said yes and the wallet granted the legacy window the Java denies. The
+  CBOR reader now reports which fields arrived as floats, and the legacy window refuses them.
+*/
+describe('the legacy window refuses an integral float, as Java does (#194)', () => {
+  const pair = (k: string, v: Uint8Array) => cborBytes(tstr(k), v)
+  const float64 = (n: number) => {
+    const b = new Uint8Array(9)
+    b[0] = 0xfb
+    new DataView(b.buffer).setFloat64(1, n)
+    return b
+  }
+  const uint32 = (n: number) => new Uint8Array([0x1a, n >>> 24, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff])
+  /** The real legacy STAGING voucher as a CBOR blob, with `expiresAt` and `faceValue` as given. */
+  const stagingToken = (
+    expires: Uint8Array,
+    face: Uint8Array = cborBytes(0x19, 0x03, 0xe8),
+    decimals: Uint8Array = uint(2),
+  ) => {
+    const blob = cborBytes(
+      head(5, 12),
+      pair('voucherId', tstr(STAGING.voucherId)),
+      pair('issuerId', tstr(STAGING.issuerId)),
+      pair('unit', tstr(STAGING.unit)),
+      pair('faceValue', face),
+      pair('expiresAt', expires),
+      pair('memo', tstr(STAGING.memo!)),
+      pair('backingStrategy', tstr(STAGING.backingStrategy!)),
+      pair('issuanceRatio', float64(STAGING.issuanceRatio)),
+      pair('faceDecimals', decimals),
+      pair('nonce', tstr(STAGING.nonce)),
+      pair('issuerSignature', tstr(STAGING.issuerSignature)),
+      pair('issuerPublicKey', tstr(STAGING.issuerPublicKey)),
+    )
+    const hex = Array.from(blob).map((b) => b.toString(16).padStart(2, '0')).join('')
+    return parseVoucherToken(makeToken([objectSecretFor(hex, 'n')]))
+  }
+
+  it('fixture: the real voucher read from CBOR integers still verifies under the legacy window', () => {
+    expect(verifyVoucher(stagingToken(uint32(STAGING.expiresAt!)).voucher)).toEqual({
+      signatureValid: true,
+      legacyCanonical: true,
+    })
+  })
+
+  it('refuses the same voucher whose expiresAt arrived as the float 1808069579.0', () => {
+    const parsed = stagingToken(float64(STAGING.expiresAt!))
+    expect(parsed.voucher.expiresAt).toBe(STAGING.expiresAt)
+    expect(verifyVoucher(parsed.voucher).signatureValid).toBe(false)
+  })
+
+  it('refuses the same voucher whose faceValue arrived as the float 1000.0', () => {
+    const parsed = stagingToken(uint32(STAGING.expiresAt!), float64(1000))
+    expect(parsed.voucher.faceValue).toBe(1000)
+    expect(verifyVoucher(parsed.voucher).signatureValid).toBe(false)
+  })
+
+  // faceDecimals is a long in Java too: 2.0 as a CBOR float is not one, so no legacy window.
+  it('refuses the same voucher whose faceDecimals arrived as the float 2.0', () => {
+    const parsed = stagingToken(uint32(STAGING.expiresAt!), undefined, float64(2))
+    expect(parsed.voucher.faceDecimals).toBe(2)
+    expect(verifyVoucher(parsed.voucher).signatureValid).toBe(false)
+  })
+
+  // A text string "1000" where Java expects a CBOR integer is not a long either. The wallet's
+  // Number() would quietly read it as 1000, so the legacy window must be closed to it.
+  it('refuses the same voucher whose faceValue arrived as the text "1000"', () => {
+    const parsed = stagingToken(uint32(STAGING.expiresAt!), tstr('1000'))
+    expect(parsed.voucher.faceValue).toBe(1000)
+    expect(verifyVoucher(parsed.voucher).signatureValid).toBe(false)
   })
 })

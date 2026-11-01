@@ -30,7 +30,7 @@
 # backup and run the migration.
 set -euo pipefail
 
-VAULT_DB="${VAULT_DB:-imani-vault-db-test}"
+VAULT_DB="${VAULT_DB:-mint-db-test}"
 VAULT_DB_NAME="${VAULT_DB_NAME:-imani_vault}"
 MINT="${MINT:-imani-mint-rest-test}"
 HASHI="${HASHI:-cashu-mint-hashicorp-vault-1}"
@@ -62,7 +62,7 @@ d = json.load(open('/tmp/imani-preload.json'))
 ids = [k['id'] for k in d['keys']]
 q = "select count(*) from t_key where id in (%s);" % ','.join("'%s'" % i for i in ids)
 out = subprocess.run(
-    ['docker', 'exec', os.environ.get('VAULT_DB', 'imani-vault-db-test'),
+    ['docker', 'exec', os.environ.get('VAULT_DB', 'mint-db-test'),
      'psql', '-U', 'postgres', '-d', os.environ.get('VAULT_DB_NAME', 'imani_vault'), '-tAc', q],
     capture_output=True, text=True).stdout.strip()
 print(f"{out}/{len(ids)}")

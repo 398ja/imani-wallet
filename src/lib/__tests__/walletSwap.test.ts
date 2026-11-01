@@ -19,7 +19,7 @@ import {
  * secrets and the blinding factors are what make a proof spendable, so whoever
  * generates them owns the money. This module moves that to the wallet.
  *
- * See `docs/explanation/the-wallet-swaps-its-own-receives.md`.
+ * See `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
  *
  * ## The blinding factor is the whole security argument
  *

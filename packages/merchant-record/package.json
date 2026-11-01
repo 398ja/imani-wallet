@@ -1,0 +1,17 @@
+{
+  "name": "@imani/merchant-record",
+  "version": "0.1.0",
+  "description": "The stall's public merchant record: its kind, its d tag, and what a coupon validity may be",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT"
+}

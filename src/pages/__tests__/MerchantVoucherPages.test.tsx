@@ -16,7 +16,7 @@
  *    be reported as cash.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
@@ -339,5 +339,59 @@ describe('one voucher', () => {
 
     await waitFor(() => expect(screen.getByText('Expired')).toBeTruthy())
     expect(container.querySelector('.text-red-500')).toBeTruthy()
+  })
+})
+
+/**
+ * #160 phase 6 (F3): a sale a till made reads "Sold on <till>" on the list itself, not only on
+ * the record behind it. The gate's e2e waited for the till's name on this list.
+ */
+describe('a till sale on the vouchers list', () => {
+  const TILL = 'ab'.repeat(32)
+  const tillSale = { ...issued({ id: 'till', inDays: 30 }), terminalPubkey: TILL }
+
+  function showListFor(stall: string, transactions: Record<string, unknown>[]) {
+    rows.length = 0
+    rows.push(...transactions)
+    return render(
+      <MemoryRouter>
+        <IssuedCouponsPage stallPubkey={stall} />
+      </MemoryRouter>,
+    )
+  }
+
+  afterEach(() => localStorage.clear())
+
+  it('names the till that sold it', async () => {
+    localStorage.setItem(
+      `imani-wallet:terminals:${STALL}`,
+      JSON.stringify([{ terminalPubkey: TILL, name: 'Sales counter', role: 'issue-and-redeem', enrolledAt: 1 }]),
+    )
+    showListFor(STALL, [tillSale, issued({ id: 'own', inDays: 30 })])
+
+    await waitFor(() => expect(screen.getByText(/Sold on Sales counter/)).toBeTruthy())
+    // The owner's own sale says nothing about a till.
+    expect(screen.getAllByText(/Sold on/)).toHaveLength(1)
+  })
+
+  it('says so when the till is no longer in service', async () => {
+    localStorage.setItem(
+      `imani-wallet:terminals:${STALL}`,
+      JSON.stringify([{ terminalPubkey: TILL, name: 'Sales counter', role: 'issue-and-redeem', enrolledAt: 1, revokedAt: 2 }]),
+    )
+    showListFor(STALL, [tillSale])
+    await waitFor(() => expect(screen.getByText(/Sold on Sales counter \(no longer in service\)/)).toBeTruthy())
+  })
+
+  // Found by the local gate (E4): on a restored phone the list opens before the login sync has
+  // merged the roster, so the till is unknown at first render. The merge must reach the list.
+  it('names the till once the roster sync brings its row in', async () => {
+    showListFor(STALL, [tillSale])
+    await waitFor(() => expect(screen.getByText(/Sold on A terminal no longer listed/)).toBeTruthy())
+
+    const { replaceRoster } = await import('../../lib/terminalRoster')
+    act(() => replaceRoster(STALL, [{ terminalPubkey: TILL, name: 'Sales counter', role: 'issue-and-redeem', enrolledAt: 1 }], []))
+
+    await waitFor(() => expect(screen.getByText(/Sold on Sales counter/)).toBeTruthy())
   })
 })

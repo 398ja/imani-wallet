@@ -5,6 +5,42 @@
 import type { Voucher } from './voucher';
 import type { GiftWrapEvent, Profile, TokenDm } from './dm';
 import type { RefusalReason } from '../errors';
+import type { HoldReason } from '../adapters/RedemptionAdapter';
+
+/**
+ * Emitted when the backing gate HOLDS a token instead of redeeming it
+ * (imani-wallet#133 review): its mint is not on the wallet's list, or the wallet
+ * knows no trusted mint at all.
+ *
+ * Not a refusal. Nothing was swapped, nothing is marked received, and the
+ * delivery is left unconsumed, so it is offered again on every later poll and is
+ * redeemed as soon as the configuration names its mint. The wallet uses this to
+ * keep the coupon VISIBLE as "waiting to be verified" rather than letting it sit
+ * silently until it ages out of the poll window.
+ */
+export interface RedemptionHeldEvent {
+  eventId: string;
+  senderPubkey: string;
+  /** May be empty for plain ecash. */
+  voucherId: string;
+  reason: HoldReason;
+  detail: string;
+  /** The token, kept so the wallet can re-offer it after a configuration change. */
+  token: string;
+  /** When the delivery was created, epoch seconds. */
+  createdAt: number;
+  /** Display only, from the envelope: sender-written. */
+  faceValue?: number;
+  faceUnit?: string;
+  faceDecimals?: number;
+  /** The payer the payload names, as on `redemption:refused`. */
+  payerPubkey?: string;
+}
+
+/** A delivery held earlier in this session has now been redeemed. */
+export interface RedemptionReleasedEvent {
+  eventId: string;
+}
 
 /**
  * Emitted when a token DM is received
@@ -71,6 +107,20 @@ export interface RedemptionErrorEvent {
 
   /** Gift wrap event ID */
   eventId: string;
+
+  /**
+   * The payment request this coupon answered, when the DM named one (imani-wallet#300), so a
+   * till that already showed Paid on gateway-core's verdict can say the coupon did not arrive.
+   * Sender-written and display only.
+   */
+  requestId?: string;
+
+  /**
+   * Whether this service will offer the delivery again (imani-wallet#314). False only when it
+   * has given up on it for good (a token the mint can never accept), so a listener can stop
+   * promising "will keep trying". Absent from older emitters: treat that as retryable.
+   */
+  retryable?: boolean;
 }
 
 /**
@@ -240,6 +290,8 @@ export type DmPollEvents = {
   'redemption:error': RedemptionErrorEvent;
   'redemption:refused': RedemptionRefusedEvent;
   'redemption:unsaved': RedemptionUnsavedEvent;
+  'redemption:held': RedemptionHeldEvent;
+  'redemption:released': RedemptionReleasedEvent;
   'subscription:state': SubscriptionStateEvent;
   [key: string]: unknown;
 };
@@ -256,4 +308,6 @@ export interface RedemptionUnsavedEvent {
   receiveId: string | null;
   /** e.g. 'already-settled' | 'replay-without-token'. */
   reason: string | null;
+  /** The payment request this coupon answered, when the DM named one (imani-wallet#300). */
+  requestId?: string;
 }

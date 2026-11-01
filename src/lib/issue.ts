@@ -1,4 +1,5 @@
 import { nip19 } from 'nostr-tools'
+import { toEpochSeconds as sharedToEpochSeconds } from '@imani/wallet-core'
 
 import { gatewayConfig } from './config'
 import { resolveNip05 } from './identity'
@@ -10,10 +11,17 @@ import { issuingStall, mayIssue, type Actor } from './actor'
 import { canIssueNow, sessionState, type TerminalSession } from './terminalSession'
 import { attributionFor } from './terminalAttribution'
 import { currencyDecimals } from './format'
-import { buildIssuanceWarrant } from './warrantSigner'
+import {
+  UnwarrantedSaleError,
+  assertSaleWarranted,
+  buildIssuanceWarrant,
+  holdsWarrantCredential,
+} from './warrantSigner'
 import { parseIssuanceWarrant } from './issuanceWarrant'
 import type { AttestedSale } from './cashAttestation'
 import { NEVER_EXPIRES } from './merchant'
+import { assertWithinSalesLimit, SALES_LIMIT_MESSAGE } from './entitlement'
+import { recordTillSale } from './tillSales'
 
 /**
  * Issuing a coupon and delivering it to a customer.
@@ -287,14 +295,9 @@ export type IssueStage = 'issuing' | 'minting' | 'delivering'
  * `@JsonProperty("expires_at") Long` in seconds.
  */
 export function toEpochSeconds(value: number | string | undefined | null): number | undefined {
-  if (value === undefined || value === null || value === '') return undefined
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value) || value <= 0) return undefined
-    // Below 1e11 can only be seconds — the same magnitude test `toEpochMs` uses.
-    return Math.floor(value < 1e11 ? value : value / 1000)
-  }
-  const ms = Date.parse(String(value))
-  return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000)
+  // The wallet's one expiry parser (#157). This copy used `Date.parse` on any
+  // string, so a numeric-string expiry was dropped from the DM it sent.
+  return sharedToEpochSeconds(value)
 }
 
 /** Surface the gateway's own error message; they are specific and actionable. */
@@ -302,7 +305,9 @@ async function detail(response: Response, fallback: string): Promise<string> {
   const text = await response.text().catch(() => '')
   if (!text) return `${fallback} (${response.status}).`
   try {
-    const body = JSON.parse(text) as { error?: string | { message?: string }; message?: string }
+    const body = JSON.parse(text) as { error?: string | { message?: string }; message?: string; code?: string }
+    // The gateway's sales-limit refusal (#407), worded the same as the device's own.
+    if (body.code === 'SALES_LIMIT_REACHED' || body.error === 'SALES_LIMIT_REACHED') return SALES_LIMIT_MESSAGE
     const message =
       typeof body.error === 'string' ? body.error : (body.error?.message ?? body.message)
     if (message) return message
@@ -340,6 +345,13 @@ async function createVouchers(
     currencyDecimals(params.currency),
     params.currency,
   )
+
+  // The backstop on what was actually built, before the request leaves the
+  // device. `issueAndDeliver` has already refused a terminal; this catches an
+  // owner session whose key is not the stall's (`none`) or a locked wallet (no
+  // warrant). Every recipient refuses both (#159), so minting either would
+  // spend the stall's backing on a coupon the customer cannot take.
+  assertSaleWarranted(warrant)
 
   const response = await signedFetch(
     '/api/v1/portal/vouchers',
@@ -445,7 +457,7 @@ export function fromCreatedItem(item: IssuedVoucher, currency: string): IssuedVo
  * POLL ON `token` PRESENCE, not on `expires_at`: that field stays null for 5-10s
  * after the voucher already reports ISSUED, so it is not a readiness signal.
  */
-async function waitForToken(voucherId: string): Promise<IssuedVoucher> {
+async function waitForToken(voucherId: string, registered: boolean): Promise<IssuedVoucher> {
   let last: IssuedVoucher = { voucher_id: voucherId }
 
   for (let i = 0; i < POLL_ATTEMPTS; i += 1) {
@@ -462,10 +474,73 @@ async function waitForToken(voucherId: string): Promise<IssuedVoucher> {
     await sleep(POLL_INTERVAL_MS)
   }
 
+  const state =
+    `The voucher is still being finished (status ${last.status ?? 'unknown'}, ` +
+    `payment ${last.payment_state ?? 'unknown'}).`
+  // Only promise what will happen. The gateway sends it on by itself only if it knows the
+  // customer, which it does only when the registration above was accepted (MEDIUM-2).
   throw new Error(
-    `The voucher never finished minting (status ${last.status ?? 'unknown'}, ` +
-      `payment ${last.payment_state ?? 'unknown'}). It has NOT been delivered.`,
+    registered
+      ? `${state} If the payment went through, the gateway sends it to the customer by itself ` +
+          `within a few minutes. Do not sell it again.`
+      : `${state} The gateway could not be told who the customer is, so it will not send it on ` +
+          `by itself. Do not sell it again: check the voucher ${voucherId.slice(0, 8)} in a few ` +
+          `minutes and forward it to the customer yourself.`,
   )
+}
+
+/** How long the registration may take before the sale goes on without it (MEDIUM-3). */
+export const REGISTER_TIMEOUT_MS = 5_000
+
+/**
+ * Tell the gateway who this coupon is for, before polling for its token.
+ *
+ * If the gateway crashes mid-sale, it finishes the coupon minutes later, long
+ * after this screen has stopped polling (imani-gateway-customer#168). With the
+ * customer's key registered here it then sends the coupon to them itself, as
+ * the same token DM `deliver` sends, unless this screen forwards it first. If
+ * both happen it is the same token, and the receive dedupes it.
+ *
+ * Best effort, and bounded: a gateway that predates the endpoint answers 404,
+ * and one that never answers is abandoned after REGISTER_TIMEOUT_MS, so the
+ * sale goes on either way. A failure here must never fail or stall the sale.
+ *
+ * Returns whether the gateway accepted it, so the timeout message promises a
+ * server delivery only when there will be one (MEDIUM-2). A failure is
+ * warned with the voucher prefix and the status only: no customer key, no
+ * token.
+ */
+async function registerRecipient(voucherId: string, recipientPubkey: string): Promise<boolean> {
+  const controller = new AbortController()
+  // A plain timer rather than AbortSignal.timeout, so it follows the same clock
+  // as the poll loop (and tests can drive it).
+  const timer = setTimeout(
+    () => controller.abort(new DOMException('registration timed out', 'TimeoutError')),
+    REGISTER_TIMEOUT_MS,
+  )
+  try {
+    const response = await signedFetch(
+      `/api/v1/wallet/vouchers/${voucherId}/recipient`,
+      'PUT',
+      { recipient_pubkey: recipientPubkey },
+      undefined,
+      { signal: controller.signal },
+    )
+    if (response.ok) return true
+    console.warn('[issue] could not register the customer with the gateway', {
+      voucher: voucherId.slice(0, 8),
+      status: response.status,
+    })
+    return false
+  } catch (error) {
+    console.warn('[issue] could not register the customer with the gateway', {
+      voucher: voucherId.slice(0, 8),
+      error: error instanceof Error ? error.name : 'unknown',
+    })
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -616,7 +691,31 @@ export async function issueAndDeliver(
     )
   }
 
+  /**
+   * Whether this actor can sign a warrant the customer's wallet accepts (#159, lifted for
+   * terminals in #160 phase 5). A terminal signs the `terminal` form, only in a FULL session,
+   * and `mayWarrantSale` is exactly `canIssueNow` for a terminal (and true for the owner), so
+   * the check above already is the Sell screen's question; asking it twice was dead code (#196
+   * review). What remains is the one thing `canIssueNow` cannot see: that the till still holds
+   * its credential right now.
+   */
+  if (!holdsWarrantCredential(params.actor)) {
+    throw new UnwarrantedSaleError(
+      'This terminal is locked or has lost its authority. Lock it and open it again, then ' +
+        'retry. Nothing has been issued; do not take payment for this sale.',
+    )
+  }
+
   onStage?.('issuing')
+  // The tier's sales allowance (#407), on the owner's device. Before minting, so a sale refused
+  // here leaves nothing to clean up. The gateway enforces the same limit for every till.
+  if (params.actor.kind === 'owner') {
+    await assertWithinSalesLimit({
+      stallPubkey: issuingStall(params.actor),
+      currency: params.currency,
+      amount: params.faceValueMinor,
+    })
+  }
   // Destructured so everything below keeps working on a plain list. The
   // warrant travels separately because it describes the SALE, not any one
   // coupon, and recordSale needs it to file what the stall actually signed.
@@ -651,7 +750,9 @@ export async function issueAndDeliver(
       // (PENDING) coupons still need polling for their token.
       const minted = isMinted(part)
         ? fromCreatedItem(part, params.currency)
-        : await waitForToken(part.voucher_id)
+        : await registerRecipient(part.voucher_id, params.recipientPubkey).then((registered) =>
+            waitForToken(part.voucher_id, registered),
+          )
       // Nothing to wait for when none was asked for: polling a coupon that never
       // expires spends the whole 15s grace period to confirm a field that is
       // correctly absent, on every sale.
@@ -806,8 +907,18 @@ async function recordSale(
 ): Promise<void> {
   if (delivered.length === 0) return
   try {
-    for (const ready of delivered) {
-      const row = buildIssueTransaction({
+    // What actually reached the customer against what the sale was for (#462).
+    // Filed on every row only when they differ, which is a sale that landed
+    // partly: the mint or delivery failure caught mid-sale, or a gateway split
+    // whose parts do not add up. The reconciliation then says "partly
+    // delivered" from the row itself instead of guessing from missing siblings.
+    const deliveredMinor = delivered.reduce((sum, v) => sum + partValue(v, params, parts), 0)
+    const partial =
+      deliveredMinor !== params.faceValueMinor
+        ? { saleTotalMinor: params.faceValueMinor, deliveredMinor }
+        : {}
+    const rows = delivered.map((ready) =>
+      buildIssueTransaction({
         voucherId: ready.voucher_id,
         // The PART's face value, not the whole sale's. Falling back to the
         // requested total would file each part at the full amount and inflate a
@@ -847,8 +958,19 @@ async function recordSale(
         // reached the customer rather than what was asked for.
         saleVoucherIds: delivered.map((v) => v.voucher_id),
         cashAttestation,
-      })
+        ...partial,
+      }),
+    )
 
+    // A till opens no wallet (spec 2.3), so its rows go to the STALL, sealed by the till's own
+    // key, and the owner's app files them in the stall's books (#160 phase 6, wallet#202). Before
+    // this, `getWallet()` threw here and the sale reached nobody's history.
+    if (params.actor.kind === 'terminal') {
+      await recordTillSale(rows)
+      return
+    }
+
+    for (const row of rows) {
       // The relay copy rides along with the write: `openWallet` wraps
       // `addTransaction` so every row is published, encrypted to this merchant's
       // own key, and the sale survives this device (lib/txRecords.ts). Publishing

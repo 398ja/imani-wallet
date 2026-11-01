@@ -37,7 +37,6 @@ const SELF_ISSUED_PARTS = 8
 const SELF_ISSUED_TOP_UP = '2.00'
 /** Kept from the END: the late receives (T8/T9) are where money goes missing. */
 const CONSOLE_EVIDENCE_LINES = 400
-const PERMISSION_CACHE_MS = 62_000
 const BUNDLE_WINDOW_MS = 13 * 60_000
 const POLL_MS = 10_000
 /** A balance unchanged for this long is taken as final. */
@@ -124,7 +123,7 @@ async function withRetry<T>(label: string, page: Page, attempt: () => Promise<T>
   }
 }
 
-/** A fresh session carries coupon:issue; the onboarding one does not (imani-wallet#114). */
+/** A fresh session, for a merchant whose session lapsed mid-run. */
 async function relogin(context: BrowserContext, page: Page): Promise<void> {
   await context.clearCookies()
   await goto(page, `${BASE}/`)
@@ -383,10 +382,12 @@ async function importCustomer(page: Page, secretKey: Uint8Array): Promise<string
     await goto(page, `${BASE}/onboarding`)
     if (!page.url().includes('onboarding')) break
     await page.getByRole('button', { name: /^Log in$/ }).first().click()
-    await page.locator('input[placeholder^="nsec1"]').fill(nip19.nsecEncode(secretKey))
+    // #325: Log in opens the backup chooser; the key form is the secondary link.
+    await page.getByRole('button', { name: 'Use your backup key instead' }).click()
+    await page.locator('input[aria-label="Backup key"]').fill(nip19.nsecEncode(secretKey))
     await page.locator('input[placeholder="Choose a passphrase"]').fill(PASSPHRASE)
     await page.locator('input[placeholder="Confirm passphrase"]').fill(PASSPHRASE)
-    await page.getByRole('button', { name: /^Add key and unlock$/ }).last().click()
+    await page.getByRole('button', { name: /^Log in$/ }).last().click()
     for (let i = 0; i < 30 && page.url().includes('onboarding'); i++) await page.waitForTimeout(1000)
     if (!page.url().includes('onboarding')) break
   }
@@ -479,10 +480,9 @@ async function registerWallets(browser: Browser): Promise<Wallets> {
   const customerPubkey = getPublicKey(customerKey)
   runContext = { ...runContext, customerHandle, customerPubkey, recipientHandle, recipientPubkey, merchantHandle, merchantPubkey }
 
-  await m.page.waitForTimeout(PERMISSION_CACHE_MS)
-  await relogin(m.context, m.page)
+  // No sleep and no re-login (#114): a stall registered through onboarding can sell at once.
   await goto(m.page, `${BASE}/sell`)
-  record('T3 merchant reaches Sell after re-login (#114 workaround)', m.page.url().includes('/sell'), m.page.url())
+  record('T3 merchant reaches Sell straight after registering (#114)', m.page.url().includes('/sell'), m.page.url())
 
   return {
     merchantContext: m.context,

@@ -65,6 +65,42 @@ export function lockedToPubkey(secret: string): string | null {
   }
 }
 
+/**
+ * Every key that can satisfy a secret's main spending pathway: `data` plus the
+ * NUT-11 `pubkeys` tag. Empty when the secret is not locked.
+ *
+ * imani-wallet#160: a terminal credential is locked to the device key in `data`
+ * and carries the issuing stall in `pubkeys` with `n_sigs = 1`, so the stall
+ * can revoke it by spending it. `lockedToPubkey` reads only `data`, which is
+ * the device; this is what lets the owner's wallet see that it, too, may sign.
+ *
+ * Only honoured with `n_sigs` absent or 1. With a higher threshold one
+ * signature from this wallet cannot satisfy the condition, and signing would
+ * make a spend look authorised when it is not.
+ */
+export function spendingKeys(secret: string): string[] {
+  if (!isLockedSecret(secret)) return []
+  try {
+    const parsed = JSON.parse(secret) as [Nut10Kind, { data?: unknown; tags?: unknown }]
+    const body = parsed[1]
+    const keys: string[] = []
+    if (typeof body?.data === 'string' && body.data.length > 0) keys.push(body.data)
+
+    const tags = Array.isArray(body?.tags) ? (body.tags as unknown[]) : []
+    const row = (name: string) =>
+      tags.find((t): t is unknown[] => Array.isArray(t) && t[0] === name)
+    const nSigs = row('n_sigs')
+    if (nSigs && Number(nSigs[1]) !== 1) return keys
+    const pubkeys = row('pubkeys')
+    if (pubkeys) {
+      for (const k of pubkeys.slice(1)) if (typeof k === 'string' && k.length > 0) keys.push(k)
+    }
+    return keys
+  } catch {
+    return []
+  }
+}
+
 /** The x-only form the mint verifies against. Idempotent, so safe on either shape. */
 export function xOnly(pubkeyHex: string): string {
   const normalised = pubkeyHex.startsWith('0x') ? pubkeyHex.slice(2) : pubkeyHex
@@ -109,9 +145,9 @@ export function buildWitnesses(secrets: readonly string[]): Record<string, strin
   const witnesses: Record<string, string[]> = {}
 
   for (const secret of secrets) {
-    const lock = lockedToPubkey(secret)
-    if (!lock) continue
-    if (xOnly(lock) !== ourKey) continue
+    // `data` or, for a terminal credential, the `pubkeys` co-key (#160): any
+    // key on the main pathway that is ours.
+    if (!spendingKeys(secret).some((key) => xOnly(key) === ourKey)) continue
     witnesses[secret] = [signWitness(secret)]
   }
 

@@ -114,6 +114,11 @@ export function buildVoucherToken(
    * needs a warrant inside the coupon to verify against the coupon's issuer.
    */
   issuerKey: Uint8Array = schnorr.utils.randomSecretKey(),
+  /**
+   * Give each proof a C (a 33-byte stand-in for the mint's signature), as a real token has. Off by
+   * default so existing fixtures are byte-identical; on for a test that must show C never leaves.
+   */
+  withC = false,
 ): BuiltVoucherToken {
   const priv = issuerKey
   const pub = bytesToHex(schnorr.getPublicKey(priv))
@@ -142,13 +147,23 @@ export function buildVoucherToken(
 
   const blobHex = bytesToHex(voucherBlob(voucher))
   const proofs = amounts.map((amount, i) =>
-    bytes(
-      head(5, 2),
-      tstr('a'),
-      uint(amount),
-      tstr('s'),
-      tstr(JSON.stringify(['VOUCHER', blobHex, `wrapper-nonce-${i}`, []])),
-    ),
+    withC
+      ? bytes(
+          head(5, 3),
+          tstr('a'),
+          uint(amount),
+          tstr('s'),
+          tstr(JSON.stringify(['VOUCHER', blobHex, `wrapper-nonce-${i}`, []])),
+          tstr('c'),
+          bytes(head(2, 33), 2, ...new Uint8Array(32).fill(0x40 + i)),
+        )
+      : bytes(
+          head(5, 2),
+          tstr('a'),
+          uint(amount),
+          tstr('s'),
+          tstr(JSON.stringify(['VOUCHER', blobHex, `wrapper-nonce-${i}`, []])),
+        ),
   )
   const entry = bytes(head(5, 1), tstr('p'), head(4, proofs.length), ...proofs)
   const root = bytes(
@@ -165,7 +180,259 @@ export function buildVoucherToken(
   return { token: `cashuB${base64Url(root)}`, voucher }
 }
 
+/**
+ * A plain ecash TokenV4: bearer secrets, no voucher, at whatever mint and unit
+ * the test names.
+ *
+ * The mint gate is about where the PROOFS are, which is a question every token
+ * answers, voucher or not. A rogue mint does not need to forge a coupon to be
+ * credited, so the gate has to be tested on ordinary ecash too.
+ */
+export function buildPlainToken(mintUrl: string, unit = 'sat', amounts: number[] = [8, 2]): string {
+  const proofs = amounts.map((amount, i) =>
+    bytes(
+      head(5, 3),
+      tstr('a'),
+      uint(amount),
+      tstr('s'),
+      tstr(`plain-bearer-secret-${i}`),
+      tstr('c'),
+      // A compressed point's worth of bytes. The gate never reads it.
+      bytes(head(2, 33), ...new Uint8Array(33).fill(2)),
+    ),
+  )
+  const entry = bytes(
+    head(5, 2),
+    tstr('i'),
+    bytes(head(2, 8), ...new Uint8Array(8).fill(1)),
+    tstr('p'),
+    head(4, proofs.length),
+    ...proofs,
+  )
+  const root = bytes(head(5, 3), tstr('m'), tstr(mintUrl), tstr('u'), tstr(unit), tstr('t'), head(4, 1), entry)
+  return `cashuB${base64Url(root)}`
+}
+
+/**
+ * A legacy TokenV3 (`cashuA`, base64url JSON). Its unit is optional and, absent,
+ * means sat, which is the case `withUnit: undefined` builds.
+ */
+export function buildLegacyToken(mintUrl: string, withUnit?: string): string {
+  const json = JSON.stringify({
+    token: [{ mint: mintUrl, proofs: [{ amount: 8, id: '00ad268c4d1f5826', secret: 'legacy-secret', C: '02'.repeat(33) }] }],
+    ...(withUnit === undefined ? {} : { unit: withUnit }),
+  })
+  return `cashuA${base64Url(new TextEncoder().encode(json))}`
+}
+
 /** The JSON envelope the gateway sends, around whatever token you hand it. */
 export function dmEnvelope(token: string, claims: Record<string, unknown> = {}): string {
   return JSON.stringify({ type: 'cashu_token_transfer', token, ...claims })
+}
+
+// ---- locked (P2PK_VOUCHER) tokens, #160 ----
+
+export interface LockedCredentialOptions {
+  /** The issuing stall's secret key. Its x-only pubkey is the issuer and stall. */
+  stallKey: Uint8Array
+  /** The device's x-only public key, the lock in `data`. */
+  devicePubkey: string
+  role?: string
+  /** Extra co-spenders in `pubkeys`. Defaults to the stall, as the gateway mints since #160. */
+  pubkeys?: string[]
+  /** Extra signed NUT-11 tags, such as `refund` or `locktime`. */
+  extraTags?: string[][]
+  voucherId?: string
+  /** Overrides the signed metadata entirely. */
+  metadata?: string
+  /** `P2PK_VOUCHER` unless set, for the unlocked-fallback case. */
+  kind?: 'P2PK_VOUCHER' | 'VOUCHER'
+  /** Applied after signing, to forge a signature mismatch. */
+  tamperMetadata?: string
+  /** The signed `expires_at`, epoch seconds. A fixed instant in 2027 unless set. */
+  expiresAt?: number
+  /** Leaves the `expires_at` tag out altogether: a credential with no expiry. */
+  omitExpiry?: boolean
+  /**
+   * The signed `issuer` tag. The signer's own key unless set: a licence is signed by the gateway
+   * key and names its SELLER here (imani-wallet#197).
+   */
+  issuerId?: string
+  /** Signed `face_value` and `unit`. 1 sat unless set. */
+  faceValue?: number
+  unit?: string
+  memo?: string
+  /** The proof's amount in sats. 1 unless set, as every credential is minted. */
+  proofAmount?: number
+  /** How many copies of the proof the token carries. 1 unless set. */
+  proofCount?: number
+}
+
+/**
+ * A terminal credential exactly as gateway-customer mints one: a one-proof TokenV4 whose
+ * secret is `["P2PK_VOUCHER", {nonce, data: 02‖K, tags}]`, signed by the stall over the
+ * same canonical bytes `lockedCanonicalBytes` rebuilds, with `pubkeys` = [02‖S].
+ */
+export function buildLockedCredentialToken(o: LockedCredentialOptions): string {
+  const stall = bytesToHex(schnorr.getPublicKey(o.stallKey))
+  const metadata =
+    o.metadata ??
+    JSON.stringify({
+      terminal: true,
+      stall_pubkey: stall,
+      role: o.role ?? 'redeem-only',
+      lock_key: o.devicePubkey,
+      name: 'Front counter',
+    })
+  const coKeys = (o.pubkeys ?? [stall]).map((k) => (k.length === 64 ? `02${k}` : k))
+  const data = `02${o.devicePubkey}`
+  const nonce = 'ab'.repeat(32)
+  const tags: string[][] = [
+    ['n_sigs', '1'],
+    ['sigflag', 'SIG_INPUTS'],
+    ...(coKeys.length ? [['pubkeys', ...coKeys]] : []),
+    ['voucher_id', o.voucherId ?? '5f8a487d-6cea-4a7d-b681-9d5d62cc9dd9'],
+    ['issuer', o.issuerId ?? stall],
+    ['unit', o.unit ?? 'sat'],
+    ['face_value', String(o.faceValue ?? 1)],
+    ...(o.omitExpiry ? [] : [['expires_at', String(o.expiresAt ?? 1820071167)]]),
+    ['memo', o.memo ?? 'Imani terminal credential'],
+    ['backing_strategy', 'PROPORTIONAL'],
+    ['issuance_ratio', '1'],
+    ['face_decimals', '0'],
+    ['merchant_metadata', metadata],
+    ...(o.extraTags ?? []),
+  ]
+  const kind = o.kind ?? 'P2PK_VOUCHER'
+  const esc = (v: string) => JSON.stringify(v).slice(1, -1)
+  const NUMERIC = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
+  const rendered = tags
+    .map(
+      ([k, ...vs]) =>
+        `["${esc(k)}"${vs.map((v) => ',' + (NUMERIC.includes(k) ? v : `"${esc(v)}"`)).join('')}]`,
+    )
+    .join(',')
+  const canonical = new TextEncoder().encode(`["${kind}","${data}","${nonce}",[${rendered}]]`)
+  const sig = bytesToHex(schnorr.sign(sha256(canonical), o.stallKey))
+
+  const signedTags = [
+    ...tags.map(([k, ...vs]) =>
+      k === 'merchant_metadata' && o.tamperMetadata ? [k, o.tamperMetadata] : [k, ...vs],
+    ),
+    ['issuer_sig', sig],
+    ['issuer_pubkey', stall],
+  ]
+  const secret = JSON.stringify([kind, { nonce, data, tags: signedTags }])
+
+  const proof = bytes(
+    head(5, 4),
+    tstr('a'),
+    uint(o.proofAmount ?? 1),
+    tstr('s'),
+    tstr(secret),
+    tstr('c'),
+    tstr('02' + 'c'.repeat(64)),
+    tstr('i'),
+    tstr('00ad268c4d1f5826'),
+  )
+  const entry = bytes(
+    head(5, 2),
+    tstr('i'),
+    tstr('00ad268c4d1f5826'),
+    tstr('p'),
+    head(4, o.proofCount ?? 1),
+    ...Array.from({ length: o.proofCount ?? 1 }, () => proof),
+  )
+  const root = bytes(
+    head(5, 3),
+    tstr('m'),
+    tstr('http://mint.test'),
+    tstr('u'),
+    tstr('sat'),
+    tstr('t'),
+    head(4, 1),
+    entry,
+  )
+  return `cashuB${base64Url(root)}`
+}
+
+/**
+ * A licence exactly as gateway-customer mints one since #226 / the #197 review: a one-proof
+ * `P2PK_VOUCHER` locked to the buyer (`data` = 02‖lock_key, no co-key), signed by the gateway key
+ * (`signerKey`), naming the SELLER as `issuer` (`sellerId`, the signer unless set).
+ */
+export function buildLicenceToken(o: {
+  metadata: string
+  lockKey: string
+  expiresAt?: number
+  faceValue?: number
+  unit?: string
+  signerKey?: Uint8Array
+  sellerId?: string
+  voucherId?: string
+}): { token: string; issuerPublicKey: string } {
+  const signerKey = o.signerKey ?? schnorr.utils.randomSecretKey()
+  const token = buildLockedCredentialToken({
+    stallKey: signerKey,
+    devicePubkey: o.lockKey,
+    pubkeys: [],
+    metadata: o.metadata,
+    expiresAt: o.expiresAt,
+    issuerId: o.sellerId,
+    faceValue: o.faceValue,
+    unit: o.unit,
+    memo: 'Imani subscription (annual)',
+    voucherId: o.voucherId,
+  })
+  return { token, issuerPublicKey: bytesToHex(schnorr.getPublicKey(signerKey)) }
+}
+
+/**
+ * `buildVoucherToken`'s shape for a LICENCE, minted as gateway-customer mints one (P2PK, one
+ * proof, locked to the metadata's `lock_key`). The wallet and the server refuse a plain VOUCHER
+ * licence (review of imani-wallet#197), so every licence fixture goes through here.
+ */
+export function buildLicenceVoucherToken(
+  overrides: Pick<Partial<SignedVoucherFields>, 'merchantMetadata' | 'faceValue' | 'unit' | 'expiresAt' | 'voucherId'>,
+  signerKey: Uint8Array = schnorr.utils.randomSecretKey(),
+): { token: string; voucher: { issuerPublicKey: string } } {
+  const meta = JSON.parse(overrides.merchantMetadata ?? '{}') as { lock_key?: string }
+  const built = buildLicenceToken({
+    metadata: overrides.merchantMetadata ?? '{}',
+    lockKey: meta.lock_key ?? 'b'.repeat(64),
+    expiresAt: overrides.expiresAt,
+    faceValue: overrides.faceValue,
+    unit: overrides.unit,
+    voucherId: overrides.voucherId,
+    signerKey,
+  })
+  return { token: built.token, voucher: { issuerPublicKey: built.issuerPublicKey } }
+}
+
+/**
+ * A terminal credential the stall attested at enrolment (#160 decision 5), signed into its
+ * metadata as gateway-customer 5b-2 mints it, with the credential's expiry equal to `T`.
+ *
+ * `attestWith` signs the attestation with another key (a forgery); `until` attests a different
+ * `T` from the credential's expiry (`expiresAt`), to make one the credential outlives.
+ */
+export function buildAttestedCredentialToken(
+  o: LockedCredentialOptions & { attestWith?: Uint8Array; until?: number; name?: string },
+): string {
+  const stall = bytesToHex(schnorr.getPublicKey(o.stallKey))
+  const role = o.role ?? 'issue-and-redeem'
+  const expiresAt = o.expiresAt ?? 1820071167
+  const until = o.until ?? expiresAt
+  const nonce = 'c4'.repeat(32)
+  const preimage = ['imani-terminal-attestation', '1', stall, o.devicePubkey, role, String(until), nonce].join('\u001f')
+  const sig = bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(preimage)), o.attestWith ?? o.stallKey))
+  const metadata = JSON.stringify({
+    terminal: true,
+    stall_pubkey: stall,
+    role,
+    lock_key: o.devicePubkey,
+    name: o.name ?? 'Front counter',
+    owner_attestation: { v: '1', expires_at: String(until), nonce, sig },
+  })
+  return buildLockedCredentialToken({ ...o, role, metadata, expiresAt })
 }

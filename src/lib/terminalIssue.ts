@@ -1,5 +1,9 @@
+import type { OwnerAttestation } from './ownerAttestation'
+import { secp256k1 } from '@noble/curves/secp256k1.js'
+
 import { grantFor, type TerminalRole } from './terminalRole'
 import { mayEnrol, type EnrolDecision } from './terminalAllowance'
+import { MAX_WAITING } from './terminalRoster'
 import type { LicenceStatus } from './licenceStatus'
 import type { TerminalCredential } from './actor'
 
@@ -43,14 +47,50 @@ export interface EnrolmentRequest {
   terminalPubkey: string
 }
 
+/**
+ * The longest terminal name, in UTF-16 code units (the unit of an HTML `maxLength`).
+ *
+ * The name is signed into the credential's `merchant_metadata`, so it rides in every warrant the
+ * till builds, and the portal refuses a warrant over 4,096 units (`IssuanceWarrantGate`). An
+ * uncapped name of about 2,600 characters made every sale from that till refused as malformed
+ * (review rw1). 64 is far more than "Front counter" needs and far inside the warrant limit.
+ */
+export const TERMINAL_NAME_MAX_CHARS = 64
+
+/** The trimmed name cut to `TERMINAL_NAME_MAX_CHARS` units, never splitting a surrogate pair. */
+export function clampTerminalName(name: string): string {
+  const trimmed = name.trim()
+  if (trimmed.length <= TERMINAL_NAME_MAX_CHARS) return trimmed
+  let end = TERMINAL_NAME_MAX_CHARS
+  const last = trimmed.charCodeAt(end - 1)
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1
+  return trimmed.slice(0, end).trimEnd()
+}
+
 export const ENROLMENT_REFUSAL = {
   NO_NAME: 'no-name',
   NO_ROLE: 'no-role',
   NO_TERMINAL: 'no-terminal',
+  /**
+   * 64 hex characters that are not an x-only point on secp256k1 (#160 phase 0).
+   *
+   * Nobody holds the private half of such a "key", and the gateway's lock code
+   * falls back to issuing an UNLOCKED voucher when handed one: a bearer
+   * authority to the stall that anyone holding the token could use.
+   */
+  NOT_A_KEY: 'not-a-key',
   /** The stall's own device cannot be enrolled as one of its own terminals. */
   SELF: 'self',
   /** No subscription, and the free allowance is used. */
   NOT_ALLOWED: 'not-allowed',
+  /** Two terminals already wait for their device (decision 4 on #160). */
+  TOO_MANY_WAITING: 'too-many-waiting',
+  /**
+   * This device key already has a live credential on the roster (#160 review,
+   * BLOCKER). Minting another would replace its row and drop the only way to
+   * revoke the first.
+   */
+  ALREADY_LIVE: 'already-live',
   OFFLINE: 'offline',
 } as const
 
@@ -62,13 +102,45 @@ export type EnrolmentCheck =
 
 const PUBKEY = /^[0-9a-f]{64}$/
 
+/**
+ * Whether `hex` is an x-only public key somebody could actually hold.
+ *
+ * Lifted from `scripts/mint-terminal-credential.mjs`, which already refused
+ * these for the same reason: an off-curve key is nobody's key, and the gateway
+ * quietly issues an unlocked voucher for one. Prefixing `02` is how BIP-340
+ * reads an x-only key as a point.
+ */
+export function isOnCurve(hex: string): boolean {
+  if (!PUBKEY.test(hex)) return false
+  try {
+    secp256k1.Point.fromHex('02' + hex)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export interface EnrolmentContext {
   /** The owner's stall. Taken from the session, never from the form. */
   stallPubkey: string
   /** What the licence check currently believes. */
   licence: LicenceStatus
-  /** Terminals already enrolled, excluding the owner's own device. */
+  /**
+   * Terminals in service, excluding the owner's own device. Waiting rows are
+   * not counted: they do not use up the free terminal (decision 4 on #160).
+   */
   enrolledCount: number
+  /**
+   * Terminals still waiting for their device. At most `MAX_WAITING`.
+   *
+   * A hint only: this phone's roster cannot see another phone or tab. The
+   * gateway enforces the same limit when the credential is minted (409
+   * `TERMINAL_PENDING_LIMIT`, gateway-customer#187), so this check exists to
+   * say so before the owner fills in the form.
+   */
+  waitingCount?: number
+  /** Whether the scanned key already holds a live credential on this roster. */
+  alreadyLive?: boolean
   /** Whether the device can reach the network. Enrolment needs it. */
   online: boolean
 }
@@ -115,6 +187,19 @@ export function checkEnrolment(
     }
   }
 
+  // Checked here, before minting, not discovered afterwards in a token that
+  // turned out to be unlocked. The words are the owner's: they scanned a code,
+  // they did not choose a curve point.
+  if (!isOnCurve(request.terminalPubkey.toLowerCase())) {
+    return {
+      ready: false,
+      reason: ENROLMENT_REFUSAL.NOT_A_KEY,
+      message:
+        'That is not a terminal code. Scan the code on the terminal again, or start setup ' +
+        'on that device once more.',
+    }
+  }
+
   // The owner's own device is terminal 1 and is counted, not converted. Letting
   // it enrol itself would hand the stall a credential locked to the stall's own
   // key — a second, weaker authority over the same business, and a migration of
@@ -124,6 +209,31 @@ export function checkEnrolment(
       ready: false,
       reason: ENROLMENT_REFUSAL.SELF,
       message: 'This is your own device. It already trades for your stall and needs no setup.',
+    }
+  }
+
+  // Re-adding a key that is already out would mint a second credential and
+  // replace the row holding the first one's token, leaving it live and
+  // unrevocable (#160 review). The owner cancels or revokes it first.
+  if (context.alreadyLive) {
+    return {
+      ready: false,
+      reason: ENROLMENT_REFUSAL.ALREADY_LIVE,
+      message:
+        'This device is already on your list with a live authority. Cancel or revoke it ' +
+        'there first, then add it again.',
+    }
+  }
+
+  // Decision 4 on #160: waiting rows are free, so they are capped instead. Two
+  // at a time is enough to retry a botched setup, and not enough to stock a
+  // drawer with unconfirmed authorities to the stall.
+  if ((context.waitingCount ?? 0) >= MAX_WAITING) {
+    return {
+      ready: false,
+      reason: ENROLMENT_REFUSAL.TOO_MANY_WAITING,
+      message:
+        'Two terminals are already waiting for their device. Finish or cancel one first.',
     }
   }
 
@@ -164,6 +274,25 @@ export type PreparedCredential = TerminalCredential & {
   role: TerminalRole
   lockedTo: string
   permissions: readonly string[]
+  /** The owner's idle lock, signed into the credential (#160 review). */
+  idleLockMinutes?: number
+  /**
+   * The owner's attestation of this till, signed with the stall key at enrolment (#160 decision
+   * 5). Persisted on the `minting` row, so a resumed mint sends it unchanged.
+   */
+  attestation?: OwnerAttestation
+  /**
+   * The device's enrolment proof header value, `1:<created_at>:<sig>` (inv-terminal-not-merchant):
+   * gateway-customer refuses a new terminal without it. Absent on a renewal, which re-mints to a key
+   * the stall already enrolled.
+   */
+  enrolmentProof?: string
+  /**
+   * On a renewal, the till's CURRENT credential token (rev-option-a R2). gateway-customer signed it,
+   * so it proves this stall enrolled the key before, for a till minted before the gateway kept a
+   * registry row for it. Sent as `X-Imani-Terminal-Renews`; never part of the credential.
+   */
+  renewsToken?: string
 }
 
 /**
@@ -190,7 +319,7 @@ export function prepareEnrolment(
   const stall = context.stallPubkey.toLowerCase()
 
   return {
-    name: request.name.trim(),
+    name: clampTerminalName(request.name),
     stallPubkey: stall,
     role: request.role,
     // Locked to the key the device showed. This is what makes the returned QR

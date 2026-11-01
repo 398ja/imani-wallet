@@ -71,6 +71,8 @@ COPY packages/reports ./node_modules/@imani/reports
 COPY packages/payment-requests ./node_modules/@imani/payment-requests
 COPY packages/licence ./node_modules/@imani/licence
 COPY packages/wallet-storage ./node_modules/@imani/wallet-storage
+# The stall's validity rules, shared with the Sell screen and purchase-issuer (#359).
+COPY packages/merchant-record ./node_modules/@imani/merchant-record
 
 # The tests are not runtime, and more than that: this service's safety argument
 # is that it holds no code path which can sign. The suite necessarily imports
@@ -110,7 +112,9 @@ RUN rm -rf services/wallet-api/__tests__ node_modules/@imani/wallet-core/src/__t
 # printed "FAIL: @imani/reports ..." and then exited 0 anyway, shipping the
 # broken image the guard exists to stop. The mutation is what exposed it —
 # grepping for the FAIL line alone would have called the fake guard green.
-RUN for p in $(find services/wallet-api -name '*.ts' -exec grep -hoE "@imani/[a-z-]+" {} + | sort -u); do \
+# Matches `from '@imani/...'` only, not any mention: a comment naming a package the service does
+# NOT import (`@imani/cashlink-sender`, the caller-side SDK for /v1/links, #366) failed the build.
+RUN for p in $(find services/wallet-api -name '*.ts' -exec grep -hoE "from '@imani/[a-z-]+" {} + | sed "s/^from '//" | sort -u); do \
       test -d "node_modules/$p" \
         || { echo "FAIL: $p imported by wallet-api but not copied into the image"; exit 1; }; \
     done

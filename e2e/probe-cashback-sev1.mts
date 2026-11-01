@@ -19,6 +19,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import { execFileSync } from 'node:child_process'
 import { parseVoucherToken } from '../src/lib/voucherToken'
 import { registerCustomer, registerMerchant, TEST_PASSPHRASE } from './register.mts'
+import { bypassCaptcha } from './captchaBypass.mts'
 
 const BASE = (process.env.E2E_BASE ?? 'http://localhost:5177').replace(/\/+$/, '')
 const VALIDITY_DAYS = Number(process.env.E2E_VALIDITY_DAYS ?? '30')
@@ -178,6 +179,7 @@ async function main(): Promise<number> {
   try {
     const mk = async () => {
       const ctx = await browser.newContext({ locale: 'en-GB', ignoreHTTPSErrors: process.env.E2E_IGNORE_HTTPS_ERRORS === '1' })
+      await bypassCaptcha(ctx)
       return { ctx, page: await ctx.newPage() }
     }
     const till = await mk()
