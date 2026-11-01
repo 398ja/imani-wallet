@@ -27,7 +27,8 @@ vi.mock('../nap', () => ({
   },
 }))
 vi.mock('../relay', () => ({
-  allEvents: async () => [...relayStore],
+  // #428: `allEvents` IS the gateway read now; both stores land in one answer.
+  allEvents: async () => [...relayStore, ...gatewayStore],
   publish: async (e: Event) => (relayStore.push(e), { ok: 1, total: 1, errors: [] }),
 }))
 vi.mock('../gatewayNostr', () => ({ gatewayEvents: async () => [...gatewayStore] }))

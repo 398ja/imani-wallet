@@ -24,45 +24,17 @@ describe('fetchNewestKind0', () => {
     vi.mocked(allEvents).mockReset()
   })
 
-  it('falls back to the relay when the gateway cache has nothing', async () => {
-    // The failure this exists for: the wallet PUBLISHES profiles to the relay
-    // and READS them from the gateway's nostrdb, so a cold or lagging cache
-    // reports no profile for a profile that is sitting on the relay — a blank
-    // avatar after login, and merchants' coupons with no merchant on them.
-    gatewayReturns({ events: [] })
-    vi.mocked(allEvents).mockResolvedValue([
-      { content: '{"name":"Older"}', created_at: 100 },
-      { content: '{"name":"Rosa Green Farm"}', created_at: 900 },
-    ] as never)
-
-    expect(await fetchNewestKind0(PUBKEY)).toEqual({
-      content: '{"name":"Rosa Green Farm"}',
-      createdAt: 900,
-    })
+  // #428: the gateway is the one store read. It merges a live relay query server-side, which is
+  // what keeps a kind-0 published straight to the relay from being hidden by a frozen cache.
+  it('answers from the gateway alone and never asks the relay', async () => {
+    gatewayReturns({ events: [{ content: '{"name":"Older"}', createdAt: 100 }, { content: '{"name":"Rosa Green Farm"}', createdAt: 900 }] })
+    expect(await fetchNewestKind0(PUBKEY)).toEqual({ content: '{"name":"Rosa Green Farm"}', createdAt: 900 })
+    expect(allEvents).not.toHaveBeenCalled()
   })
 
-  it('falls back when the gateway rejects the request outright', async () => {
+  it('returns null, not a rejection, when the gateway refuses', async () => {
     gatewayReturns({}, false)
-    vi.mocked(allEvents).mockResolvedValue([{ content: '{}', created_at: 1 }] as never)
-
-    expect(await fetchNewestKind0(PUBKEY)).not.toBeNull()
-  })
-
-  it('prefers the relay when it holds a newer profile than the cache', async () => {
-    // The failure this exists for: the gateway's relay ingest subscribes to
-    // kind 1059 only, so a profile published to the relay never reaches its
-    // nostrdb. Answering from the cache because it answered at all pins every
-    // merchant to the profile they registered with — upload a logo, see it on
-    // your own profile, and every customer keeps seeing your initials.
-    gatewayReturns({ events: [{ content: '{"name":"Rosa"}', createdAt: 900 }] })
-    vi.mocked(allEvents).mockResolvedValue([
-      { content: '{"name":"Rosa","picture":"http://blossom/logo.webp"}', created_at: 1200 },
-    ] as never)
-
-    expect(await fetchNewestKind0(PUBKEY)).toEqual({
-      content: '{"name":"Rosa","picture":"http://blossom/logo.webp"}',
-      createdAt: 1200,
-    })
+    expect(await fetchNewestKind0(PUBKEY)).toBeNull()
   })
 
   it('keeps the cached profile when the relay only has an older one', async () => {
@@ -187,17 +159,21 @@ describe('merchantBranding', () => {
     vi.mocked(allEvents).mockReset()
   })
 
-  const answers = (events: unknown[]) => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false } as unknown as Response))
-    vi.mocked(allEvents).mockResolvedValue(events as never)
+  const answers = (events: Array<{ content: string; created_at: number }>) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ events: events.map((e) => ({ content: e.content, createdAt: e.created_at })) }),
+    } as unknown as Response)
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
   }
 
   it('caches a shop that was found — one fetch, not one per card', async () => {
-    answers([{ content: '{"name":"Rosa Green Farm"}', created_at: 900 }])
+    const fetched = answers([{ content: '{"name":"Rosa Green Farm"}', created_at: 900 }])
 
     expect((await merchantBranding(PUBKEY)).organizationName).toBe('Rosa Green Farm')
     expect((await merchantBranding(PUBKEY)).organizationName).toBe('Rosa Green Farm')
-    expect(allEvents).toHaveBeenCalledOnce()
+    expect(fetched).toHaveBeenCalledOnce()
   })
 
   it('does NOT cache a lookup that found nothing', async () => {

@@ -68,7 +68,12 @@ export function devicePublisher(signer: RequestSigner): WrapPublisher {
   }
 }
 
-/** Gift wraps for `pubkey` from the gateway cache AND the relay, deduplicated. Never throws. */
+/**
+ * Gift wraps for `pubkey` from the gateway cache AND the relay, deduplicated. Never throws.
+ * Deliberate exception to the #428 gateway-only read rule: `giftWrapsFor` is ONE capped gateway
+ * page over a two-day backdate window, and a wrap beyond that page was seen hidden while the relay
+ * had it (#402). Listed in relayReadRule.test.ts ALLOWED.
+ */
 export async function giftWraps(pubkey: string, sinceSeconds?: number): Promise<Event[]> {
   const fromRelay = (async () => {
     const pool = new SimplePool()

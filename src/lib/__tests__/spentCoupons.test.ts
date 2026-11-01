@@ -73,28 +73,21 @@ describe('reading tombstones', () => {
     expect((await spentTokenIds(PK)).ids.has('t1')).toBe(true)
   })
 
-  it('unions both stores, so either one seeing a spend is enough', async () => {
-    relayEvents.mockResolvedValue([tombstone('only-relay')])
-    gatewayQuery.mockResolvedValue([tombstone('only-gateway')])
+  it('reads one store, the gateway (#428: never the relay directly)', async () => {
+    relayEvents.mockResolvedValue([tombstone('t1'), tombstone('t2')])
 
     const spent = await spentTokenIds(PK)
 
-    // A tombstone is FINAL, so there is no newest-wins rule to get wrong: an id
-    // spent according to one store is spent, and a stale store can only miss
-    // one, never invent one.
-    expect([...spent.ids].sort()).toEqual(['only-gateway', 'only-relay'])
+    expect([...spent.ids].sort()).toEqual(['t1', 't2'])
+    expect(gatewayQuery).not.toHaveBeenCalled()
   })
 
-  it('still answers when one store fails', async () => {
-    relayEvents.mockRejectedValue(new Error('relay unreachable from the browser'))
-    gatewayQuery.mockResolvedValue([tombstone('t1')])
+  it('an answer with no tombstone is known, not unknown', async () => {
+    relayEvents.mockResolvedValue([])
 
     const spent = await spentTokenIds(PK)
 
-    // Settled, not raced: one source failing must not discard the other's
-    // answer. A deployment that does not publish strfry's port is exactly this
-    // case, permanently.
-    expect(spent.ids.has('t1')).toBe(true)
+    expect(spent.ids.size).toBe(0)
     expect(spent.known).toBe(true)
   })
 })
