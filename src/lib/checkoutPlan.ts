@@ -35,10 +35,11 @@ import type { Voucher } from '@imani/voucher-send'
 import type { VoucherRow } from '@imani/wallet-storage'
 import { checkSplittable, minSplitStep, planParts, stallKey } from '@imani/wallet-core'
 
-import { latestLockX, lockableVoucher, lockWindowProblem, type WindowProblem } from './cashlinkLock'
+import { isSelfLocked, latestLockX, lockableVoucher, lockWindowProblem, type WindowProblem } from './cashlinkLock'
 import { toVoucher } from './merchants'
 import { withoutInFlight } from './pay'
 import { canCarve } from './checkoutCarve'
+import { canSplit } from './voucherSplitPlan'
 import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } from './voucherToken'
 
 /** Contract §3: 1 ≤ parts ≤ 20. */
@@ -61,6 +62,11 @@ export interface CheckoutCandidate {
 export interface CheckoutPart extends CheckoutCandidate {
   /** What this part draws, minor units. Equal to `faceValue` except on the one split part. */
   amount: number
+  /**
+   * #402: no subset of this coupon's proofs makes `amount`, so one of its proofs must first be split
+   * (gateway-customer `/vouchers/bearer-split`, `voucherSplit.ts`). Only ever on the one split part.
+   */
+  needsSplit?: boolean
 }
 
 export type CheckoutObstacle =
@@ -97,8 +103,8 @@ function isSplittable(v: Voucher): boolean {
   return (v.face_value ?? 0) > step && checkSplittable(v, step).ok
 }
 
-/** One row as a candidate, or the reason it cannot be one. */
-function candidateOf(row: VoucherRow, x: number, nowS: number): CheckoutCandidate | CheckoutExclusion {
+/** One row as a candidate, or the reason it cannot be one. `payer` is the wallet's own key. */
+function candidateOf(row: VoucherRow, x: number, nowS: number, payer: string): CheckoutCandidate | CheckoutExclusion {
   const status = (row.status ?? '').toLowerCase()
   if (status === 'spent' || status === 'redeemed') return 'not_lockable'
   let proofs: ReturnType<typeof tokenProofs>
@@ -112,8 +118,9 @@ function candidateOf(row: VoucherRow, x: number, nowS: number): CheckoutCandidat
   if (proofs.length === 0 || faceValue <= 0) return 'not_lockable'
   let expiresAt: number | undefined
   for (const proof of proofs) {
-    if (voucherOfSecret(proof.secret)?.lockKey) return 'already_locked'
-    const found = lockableVoucher(proof.secret)
+    // #402: locked to this wallet's own key alone (a split voucher's part) is ours to lock.
+    if (voucherOfSecret(proof.secret)?.lockKey && !isSelfLocked(proof.secret, payer)) return 'already_locked'
+    const found = lockableVoucher(proof.secret, payer)
     if ('problem' in found) return 'not_lockable'
     expiresAt = found.voucher.expiresAt
     if (lockWindowProblem(x, expiresAt, nowS)) return 'expires_too_soon'
@@ -160,6 +167,19 @@ function drawCarvable(candidates: CheckoutCandidate[], amount: number): Checkout
 }
 
 /**
+ * #402: `draw`'s plan when its one uncarvable part can be split (`canSplit`), that part marked
+ * `needsSplit`. Null when the draw fails, or more than one part is stuck, or the stuck one cannot be
+ * split either.
+ */
+function drawSplittable(candidates: CheckoutCandidate[], amount: number): CheckoutPart[] | null {
+  const plan = draw(candidates, amount)
+  if (!plan) return null
+  const stuck = plan.filter((p) => p.amount !== p.faceValue && !canCarve(p.row.token, p.amount))
+  if (stuck.length !== 1 || !canSplit(stuck[0].row.token, stuck[0].amount)) return null
+  return plan.map((p) => (p === stuck[0] ? { ...p, needsSplit: true } : p))
+}
+
+/**
  * The same number of parts, but with a splittable coupon in it, when `planParts`'s own answer has
  * none: leave out one unsplittable part at a time and plan again.
  */
@@ -196,7 +216,7 @@ export function checkoutPlan(req: CheckoutPlanRequest): CheckoutPlan {
       excluded.push({ row, reason: 'in_flight' })
       continue
     }
-    const found = candidateOf(row, req.x, req.nowS)
+    const found = candidateOf(row, req.x, req.nowS, req.payer)
     if (typeof found === 'string') excluded.push({ row, reason: found })
     else usable.push(found)
   }
@@ -211,6 +231,10 @@ export function checkoutPlan(req: CheckoutPlanRequest): CheckoutPlan {
   }
   const plan = drawCarvable(usable, req.amount)
   if (!plan) {
+    // #402: the amount can be drawn, only not carved whole. When the one stuck coupon can be split
+    // into denominations that make its share, offer it: the split runs on Get code.
+    const split = drawSplittable(usable, req.amount)
+    if (split && split.length <= MAX_CHECKOUT_PARTS) return { usable, excluded, plan: split }
     const steps = usable.map((c) => minSplitStep(c.voucher))
     return { usable, excluded, obstacle: { kind: 'not_splittable', available, minimumStep: steps.length ? Math.min(...steps) : undefined } }
   }

@@ -38,6 +38,8 @@ export const cashlinkClaimsKey = (pubkey: string) => `imani-wallet:cashlink-clai
 export const cashlinkMovingKey = (pubkey: string) => `imani-wallet:cashlink-moving:${pubkey}`
 /** #402: the customer's checkout codes; one not yet finished is value only its record can bring back. */
 export const checkoutCodesLedgerKey = (pubkey: string) => `imani-wallet:checkout-codes:${pubkey}`
+/** #402: a voucher split part way (written before its burn). Never expires; the next run finishes it. */
+export const voucherSplitsKey = (pubkey: string) => `imani-wallet:voucher-splits:${pubkey}`
 
 /** pay.ts's own window: a send unanswered after this is never going to answer (#127). */
 export const PENDING_SEND_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
@@ -114,6 +116,6 @@ export function moneyInFlight(pubkey: string): { sends: number; swaps: number; c
       liveEntries(sendIntentsKey(pubkey), SEND_INTENT_LIFETIME_MS),
     swaps: liveEntries(swapIntentsKey(pubkey), SWAP_INTENT_LIFETIME_MS),
     // #402: an outstanding checkout code counts with the Cashlinks: the same kind of locked value.
-    cashlinks: allEntries(cashlinkClaimsKey(pubkey)) + allEntries(cashlinkMovingKey(pubkey)) + outstandingCodes(checkoutCodesLedgerKey(pubkey)),
+    cashlinks: allEntries(cashlinkClaimsKey(pubkey)) + allEntries(cashlinkMovingKey(pubkey)) + outstandingCodes(checkoutCodesLedgerKey(pubkey)) + allEntries(voucherSplitsKey(pubkey)),
   }
 }
