@@ -1239,6 +1239,7 @@ class GatewayAPI {
    */
   async receive(token, options = {}) {
     const extraHeaders = {};
+    const body = { token };
 
     // Add idempotency key if provided
     if (options.idempotencyKey) {
@@ -1263,9 +1264,7 @@ class GatewayAPI {
     // byte-identical to what it was before locked coupons existed.
     try {
       const witnesses = globalThis.__imaniWitnessHeaderForToken?.(token);
-      if (witnesses) {
-        extraHeaders['X-Cashu-Witnesses'] = witnesses;
-      }
+      placeWitnesses(witnesses, extraHeaders, body);
     } catch {
       // Never fail a receive because signing failed. An unsigned locked proof
       // is refused by the MINT, with a reason naming the real problem; an
@@ -1273,7 +1272,9 @@ class GatewayAPI {
       // needed a witness.
     }
 
-    return this.requestWithHeaders('POST', '/api/v1/wallet/receive', { token }, extraHeaders);
+    // The same object is signed (NIP-98 payload hash) and sent: requestWithHeaders
+    // serialises it once and uses that string for both.
+    return this.requestWithHeaders('POST', '/api/v1/wallet/receive', body, extraHeaders);
   }
 
   /**
@@ -1370,8 +1371,10 @@ class GatewayAPI {
     }
 
     if (!response.ok) {
-      const errorData = data.error || data;
-      const errorMessage = errorData.message || errorData.error || 'API request failed';
+      const errorData = (data && typeof data === 'object') ? (data.error || data) : {};
+      const errorMessage = (typeof errorData === 'object' && (errorData.message || errorData.error))
+        || (typeof errorData === 'string' && errorData)
+        || describeNonJsonFailure(response.status, response.statusText, data);
       const error = new Error(errorMessage);
       error.status = response.status;
       // Backend's ErrorResponse uses `error.code`. The 009-prevent-self-sends
@@ -3244,6 +3247,53 @@ function generateIdempotencyKey(tokenFingerprint = null) {
 function generateReceiveIdempotencyKey(tokenFingerprint) {
   if (typeof tokenFingerprint !== 'string' || tokenFingerprint === '') return null;
   return `rcv_${tokenFingerprint}`;
+}
+
+/**
+ * Largest X-Cashu-Witnesses header still sent as a header (staging 2026-10-31).
+ *
+ * Each NUT-11 witness is about 1.6 KB, so a 7-proof voucher made a 12 KB header and nginx (8 KB
+ * default) refused the receive with an HTML 400. Under this size the header works on every
+ * gateway, old or new; over it the witnesses go in the body `witnesses` field, which an upgraded
+ * gateway reads (imani-gateway-customer feat/witnesses-in-body). An old gateway ignores the body
+ * field, but it could not have received that header either, so no gateway is worse off than
+ * before, and no flag or deploy ordering is needed.
+ */
+const WITNESS_HEADER_MAX_BYTES = 6 * 1024;
+
+/**
+ * Puts a witness JSON string (secret -> [sig hex]) in the header when small, else in the body as
+ * the parsed object. Null/empty does nothing, so a bearer request is unchanged.
+ */
+function placeWitnesses(witnesses, headers, body) {
+  if (!witnesses) return;
+  const bytes = typeof TextEncoder !== 'undefined'
+    ? new TextEncoder().encode(witnesses).length
+    : witnesses.length;
+  if (bytes < WITNESS_HEADER_MAX_BYTES) {
+    headers['X-Cashu-Witnesses'] = witnesses;
+  } else {
+    body.witnesses = JSON.parse(witnesses);
+  }
+}
+
+/**
+ * A readable message for a failure whose body was not JSON, typically nginx's HTML page for
+ * 400 "Request Header Or Cookie Too Large", 413 or 431, which used to surface as the useless
+ * "API request failed".
+ */
+function describeNonJsonFailure(status, statusText, text) {
+  const raw = typeof text === 'string' ? text : '';
+  const title = /<title>([^<]*)<\/title>/i.exec(raw)?.[1]?.trim()
+    || /<h1>([^<]*)<\/h1>/i.exec(raw)?.[1]?.trim();
+  const plain = !title && raw && !/<[a-z!]/i.test(raw) ? raw.trim().slice(0, 200) : '';
+  const known = {
+    400: 'Bad request',
+    413: 'Request too large',
+    431: 'Request headers too large',
+  };
+  const detail = title || plain || statusText || known[status] || 'Request failed';
+  return `HTTP ${status}: ${detail}`;
 }
 
 /**
