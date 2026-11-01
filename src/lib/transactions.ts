@@ -81,6 +81,15 @@ export interface WalletTransaction {
    */
   saleVoucherIds?: readonly string[]
   /**
+   * Written only when a sale landed PARTLY (#462): the total the sale was for,
+   * and how much of it reached the customer, both in minor units. Lets a
+   * reconciliation say "partly delivered" from the row itself rather than
+   * inferring it from missing siblings. Absent on every complete sale and on
+   * every row written before #462.
+   */
+  saleTotalMinor?: number
+  deliveredMinor?: number
+  /**
    * The customer's signed assertion that they paid for this sale, if they gave
    * one. See `cashAttestation.ts`; always optional, and its absence is never a
    * fault.
@@ -216,6 +225,10 @@ function lockedOf(r: Record<string, unknown>): LockedGiftRecord | undefined {
   return asLockedGiftRecord(r.lockedGift)
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
@@ -288,6 +301,8 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // recovered".
     issuanceWarrant: str(r.issuanceWarrant) ?? str(r.issuance_warrant),
     cashAttestation: str(r.cashAttestation) ?? str(r.cash_attestation),
+    saleTotalMinor: finiteNumber(r.saleTotalMinor) ?? finiteNumber(r.sale_total_minor),
+    deliveredMinor: finiteNumber(r.deliveredMinor) ?? finiteNumber(r.delivered_minor),
     saleVoucherIds: Array.isArray(r.saleVoucherIds)
       ? (r.saleVoucherIds as string[]).filter((id): id is string => typeof id === 'string')
       : Array.isArray(r.sale_voucher_ids)
@@ -614,6 +629,9 @@ export function buildIssueTransaction(input: {
    * because there is no third party to ask.
    */
   cashAttestation?: string
+  /** See `WalletTransaction.saleTotalMinor`. Pass both only for a partly delivered sale. */
+  saleTotalMinor?: number
+  deliveredMinor?: number
 }): TransactionRow {
   return {
     id: `issued:${input.voucherId}`,
@@ -642,6 +660,11 @@ export function buildIssueTransaction(input: {
       : {}),
     ...(input.merchantId ? { merchantId: input.merchantId } : {}),
     ...(input.cashAttestation ? { cashAttestation: input.cashAttestation } : {}),
+    ...(input.saleTotalMinor !== undefined &&
+    input.deliveredMinor !== undefined &&
+    input.deliveredMinor !== input.saleTotalMinor
+      ? { saleTotalMinor: input.saleTotalMinor, deliveredMinor: input.deliveredMinor }
+      : {}),
   } as unknown as TransactionRow
 }
 

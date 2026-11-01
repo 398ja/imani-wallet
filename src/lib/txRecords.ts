@@ -86,6 +86,9 @@ export type HistoryContent = Nip60HistoryContent & {
   issuance_warrant?: string
   sale_voucher_ids?: readonly string[]
   cash_attestation?: string
+  /** See `WalletTransaction.saleTotalMinor` (#462). Only on a partly delivered sale. */
+  sale_total_minor?: number
+  delivered_minor?: number
   /** See `WalletTransaction.exactValue`. Restored so the ceiling survives a wipe. */
   exact_value?: number
   /**
@@ -235,6 +238,8 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     issuance_warrant: tx.issuanceWarrant,
     sale_voucher_ids: tx.saleVoucherIds,
     cash_attestation: tx.cashAttestation,
+    sale_total_minor: tx.saleTotalMinor,
+    delivered_minor: tx.deliveredMinor,
     exact_value: tx.exactValue,
     transfer_id: tx.transferId,
     transfer_signature: tx.transferSignature,
@@ -286,6 +291,8 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     issuanceWarrant: content.issuance_warrant,
     saleVoucherIds: content.sale_voucher_ids,
     cashAttestation: content.cash_attestation,
+    saleTotalMinor: content.sale_total_minor,
+    deliveredMinor: content.delivered_minor,
     exactValue: content.exact_value,
     transferId: content.transfer_id,
     transferSignature: content.transfer_signature,
