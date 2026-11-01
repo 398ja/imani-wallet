@@ -90,10 +90,28 @@ describe('planning a split', () => {
     expect(carveProofs(plan.remainder!, plan.carveAmount)).not.toBeNull()
   })
 
-  it('refuses where the amount is not a whole number of sats (ratio 0.75: 5 c is 6.67 sats)', async () => {
-    const proofs = [w.mint.issue(W.bearerSecret({ nonce: 'cnnnnnnn', issuanceRatio: 0.75, faceValue: 100_000 }, 'c0'), 64)]
+  it('refuses where no sat count rounds to the amount (ratio 3: 1 sat is 3 c, 5 c cannot be made)', async () => {
+    const proofs = [w.mint.issue(W.bearerSecret({ nonce: 'cnnnnnnn', issuanceRatio: 3, faceValue: 100_000 }, 'c0'), 64)]
     expect(canSplit(W.tokenOf(proofs), 5)).toBe(false)
     expect(canSplit(W.tokenOf(proofs), 6)).toBe(true)
+  })
+
+  it('splits a coupon issued at a real day rate (staging: 1 sat = 0.0694 c), valued as the store rounds it', async () => {
+    // bart's €10 coupon on staging: 8192+4096+2048+64+8+4+1 sats at ratio 0.06938…; no power of two
+    // of sats is a whole cent, so the first version refused every amount (2026-11-01).
+    const ratio = 0.06938180808991883
+    const amounts = [8192, 4096, 2048, 64, 8, 4, 1]
+    const proofs = amounts.map((a, n) => w.mint.issue(W.bearerSecret({ nonce: 'rnnnnnnn', issuanceRatio: ratio, faceValue: 1000 }, `r${n}`), a))
+    const token = W.tokenOf(proofs)
+    for (const amount of [337, 125, 199, 500, 1]) {
+      const plan = planSplit(token, amount)
+      expect(plan, `€${amount / 100}`).not.toBeNull()
+      const needSats = plan!.sats.slice(0, plan!.needCount).reduce((n, s) => n + s, 0)
+      // What the code store will credit the part: round(sats × ratio), plus whatever is carved whole.
+      expect(Math.round(needSats * ratio) + plan!.carveAmount).toBe(amount)
+      expect(plan!.sats.reduce((n, s) => n + s, 0)).toBe(plan!.proof.amount)
+      expect(plan!.sats.length).toBeLessThanOrEqual(20)
+    }
   })
 
   it('refuses a proof without its amount proof (the route would refuse it after the burn)', async () => {
