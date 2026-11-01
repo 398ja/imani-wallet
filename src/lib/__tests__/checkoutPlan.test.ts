@@ -147,3 +147,32 @@ describe('maxExpiryFor', () => {
     expect(maxExpiryFor([{ expiresAt: NOW + DAY }], NOW)).toBeNull()
   })
 })
+
+describe('checkoutPlan: a split when carving is the only obstacle (#402)', () => {
+  it('offers the amount with the one coupon to split marked, and still refuses when no split can make it', async () => {
+    const W = await import('./cashlinkWorld')
+    const w = W.world(NOW)
+    // One 1024-sat proof at ratio 1 with its DLEQ: no subset makes 337, a split does.
+    const token = W.tokenOf([w.mint.issue(W.bearerSecret({ nonce: 'splitnnn', issuanceRatio: 1, faceValue: 100_000, expiresAt: NOW + 90 * DAY }, 's0'), 1024)])
+    const r = { token_id: 'split-row', voucher_id: 'v', token, amount: 1024, token_amount: 1024, face_value: 1024, face_unit: 'GBP', issuer_id: W.STALL, status: 'active', created_at: '', updated_at: '' } as VoucherRow
+    const out = checkoutPlan({ rows: [r], payer: PAYER, stallId: W.STALL, unit: 'GBP', amount: 337, x: X, nowS: NOW })
+    expect(out.obstacle).toBeUndefined()
+    expect(out.plan).toHaveLength(1)
+    expect(out.plan![0]).toMatchObject({ amount: 337, needsSplit: true })
+    // A whole coupon needs no split.
+    expect(checkoutPlan({ rows: [r], payer: PAYER, stallId: W.STALL, unit: 'GBP', amount: 1024, x: X, nowS: NOW }).plan![0].needsSplit).toBeUndefined()
+  })
+
+  it('a coupon locked to my own key is usable; one locked to another key is not', async () => {
+    const W = await import('./cashlinkWorld')
+    const { splitPartProposal } = await import('../cashlinkLock')
+    const w = W.world(NOW)
+    const bearer = W.bearerSecret({ nonce: 'selfnnnn', issuanceRatio: 1, faceValue: 100_000, expiresAt: NOW + 90 * DAY }, 'k0')
+    const mine = W.signLocked(splitPartProposal(bearer, PAYER, 64, 'n1'))
+    const theirs = W.signLocked(splitPartProposal(bearer, 'aa'.repeat(32), 64, 'n2'))
+    const rowOf = (secret: string, id: string) => ({ token_id: id, voucher_id: 'v', token: W.tokenOf([w.mint.issue(secret, 64)]), amount: 64, token_amount: 64, face_value: 64, face_unit: 'GBP', issuer_id: W.STALL, status: 'active', created_at: '', updated_at: '' }) as VoucherRow
+    const out = checkoutPlan({ rows: [rowOf(mine, 'm'), rowOf(theirs, 't')], payer: PAYER, stallId: W.STALL, unit: 'GBP', amount: 64, x: X, nowS: NOW })
+    expect(out.usable.map((c) => c.row.token_id)).toEqual(['m'])
+    expect(out.excluded).toEqual([expect.objectContaining({ reason: 'already_locked' })])
+  })
+})

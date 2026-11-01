@@ -28,6 +28,7 @@ import {
   CASHLINK_LOCK_TAG,
   CASHLINK_RESIGN_TAG,
   cashlinkDigest,
+  bearerSplitDigest,
   isOpenAfterLocktime,
   readLinkLock,
   secretHash,
@@ -373,6 +374,8 @@ export class FakeGateway implements CashlinkGateway {
       return forced
     }
     if (path.endsWith('/vouchers/cashlink/lock')) return this.routes ? this.lock(body as LockBody) : { status: 404, body: null }
+    if (path.endsWith('/vouchers/bearer-split/check')) return this.routes && this.splitRoute ? this.bearerSplit(body as SplitBody, true) : { status: 404, body: null }
+    if (path.endsWith('/vouchers/bearer-split')) return this.routes && this.splitRoute ? this.bearerSplit(body as SplitBody, false) : { status: 404, body: null }
     if (path.endsWith('/vouchers/checkout/unlock')) return this.routes && this.unlockRoute ? this.unlock(body as LockBody, signedBy) : { status: 404, body: null }
     if (path.endsWith('/vouchers/cashlink/resign')) return this.routes ? this.resign(body as LockBody) : { status: 404, body: null }
     if (path.endsWith('/cashlink/refunds') && method === 'POST') return this.deposit(body as DepositBody, signedBy)
@@ -384,14 +387,17 @@ export class FakeGateway implements CashlinkGateway {
     const lock = readLinkLock(b.proposed_secret)
     if (isOpenAfterLocktime(b.proposed_secret)) return refused(422, 'LOCKTIME_WITHOUT_REFUND')
     if (!lock) return refused(422, 'NOT_A_LINK_LOCK')
-    const ok = schnorr.verify(hexToBytes(b.authorization), cashlinkDigest(CASHLINK_LOCK_TAG, b.predecessor_secret, b.proposed_secret), hexToBytes(lock.refundPub))
+    // #402, gateway-customer feat/bearer-split: a predecessor locked to K alone is authorised by K, and
+    // SPENT is enough (only K could spend it).
+    const selfKey = returnedKey(b.predecessor_secret)
+    const ok = schnorr.verify(hexToBytes(b.authorization), cashlinkDigest(CASHLINK_LOCK_TAG, b.predecessor_secret, b.proposed_secret), hexToBytes(selfKey ?? lock.refundPub))
     if (!ok) return refused(422, 'NOT_AUTHORISED')
     if (!b.predecessor_proof?.dleq) return refused(422, 'PREDECESSOR_AMOUNT_UNPROVEN')
     const prior = this.locks.get(b.predecessor_secret)
     if (prior) return prior.proposed === b.proposed_secret ? { status: 200, body: { signed_secret: prior.signed } } : refused(422, 'PREDECESSOR_ALREADY_CLAIMED')
     const witness = this.mint.witnessOf(b.predecessor_secret)
     if (witness === undefined && !this.mint.spent.has(hashToCurve(utf8(b.predecessor_secret)).toHex(true))) return refused(409, 'PREDECESSOR_NOT_SPENT')
-    if (!witnessBy(witness, lock.refundPub, sigAllMessage(b.predecessor_secret, b.predecessor_proof.C, b.burn_outputs))) return refused(422, 'SPEND_NOT_ATTRIBUTABLE')
+    if (!selfKey && !witnessBy(witness, lock.refundPub, sigAllMessage(b.predecessor_secret, b.predecessor_proof.C, b.burn_outputs))) return refused(422, 'SPEND_NOT_ATTRIBUTABLE')
     let signed = signLocked(b.proposed_secret)
     if (this.tamperLock) signed = this.tamperLock(signed)
     this.locks.set(b.predecessor_secret, { proposed: b.proposed_secret, signed })
@@ -426,6 +432,43 @@ export class FakeGateway implements CashlinkGateway {
   }
 
   callerIsIssuer?: (issuer: string) => boolean
+  /** #402: gateway-customer feat/bearer-split. Off to model a gateway without it. */
+  splitRoute = true
+  splits = new Map<string, { key: string; signed: string[] }>()
+  /** The answer the next real split call gives, once, after doing nothing (a lost-response model is `loseNextSplit`). */
+  splitAnswers: GatewayAnswer[] = []
+  /** Sign the next split but lose the response (the wallet sees a 503). */
+  loseNextSplit = false
+
+  /** gateway-customer `VoucherBearerSplitService`, rules 1-11, enough for the wallet's tests. */
+  private bearerSplit(b: SplitBody, dry: boolean): GatewayAnswer {
+    if (!b?.predecessor_secret?.startsWith('["VOUCHER"')) return refused(422, 'NOT_A_BEARER_VOUCHER')
+    if (!Array.isArray(b.parts) || b.parts.length < 2) return refused(422, 'TOO_FEW_PARTS')
+    if (b.parts.length > 20) return refused(422, 'TOO_MANY_PARTS')
+    const keys = b.parts.map((p) => returnedKey(p))
+    if (keys.some((k) => !k || k !== keys[0])) return refused(422, 'WRONG_PART')
+    const K = keys[0]!
+    if (!safeVerify(b.authorization, bearerSplitDigest(b.predecessor_secret, b.parts, b.burn_outputs ?? []), K)) return refused(422, 'NOT_AUTHORISED_BY_HOLDER')
+    const key = JSON.stringify([b.parts, b.burn_outputs])
+    const prior = this.splits.get(b.predecessor_secret)
+    if (!dry && prior) return prior.key === key ? { status: 200, body: { signed_parts: prior.signed } } : refused(422, 'PREDECESSOR_ALREADY_CLAIMED')
+    const bound = b.parts.reduce((n, p) => n + Number((JSON.parse(p)[1].tags as string[][]).find((t) => t[0] === 'max_sats')?.[1] ?? 'NaN'), 0)
+    if (!(bound <= (b.predecessor_proof?.amount ?? 0))) return refused(422, 'SAT_BOUND_EXCEEDED')
+    if (!b.predecessor_proof?.dleq) return refused(422, 'PREDECESSOR_AMOUNT_UNPROVEN')
+    if (dry) return { status: 204, body: null }
+    const forced = this.splitAnswers.shift()
+    if (forced) return forced
+    const witness = this.mint.witnessOf(b.predecessor_secret)
+    if (witness === undefined) return refused(409, 'PREDECESSOR_NOT_SPENT')
+    if (!witnessBy(witness, K, sigAllMessage(b.predecessor_secret, b.predecessor_proof.C, b.burn_outputs))) return refused(422, 'BURN_NOT_BOUND')
+    const signed = b.parts.map((p) => signLocked(p))
+    this.splits.set(b.predecessor_secret, { key, signed })
+    if (this.loseNextSplit) {
+      this.loseNextSplit = false
+      return { status: 503, body: null }
+    }
+    return { status: 200, body: { signed_parts: signed } }
+  }
   /** #402: gateway-customer feat/402-checkout-settle. Off to model a gateway without it. */
   unlockRoute = true
   unlocks = new Map<string, { proposed: string; signed: string }>()
@@ -500,6 +543,14 @@ interface LockBody {
   authorization: string
   predecessor_proof: { amount: number; id: string; C: string; dleq?: { e: string; s: string; r: string } }
   burn_outputs: Array<{ amount: number; B_: string }>
+}
+
+interface SplitBody {
+  predecessor_secret: string
+  predecessor_proof: { amount: number; id: string; C: string; dleq?: { e: string; s: string; r: string } }
+  parts: string[]
+  burn_outputs: Array<{ amount: number; B_: string }>
+  authorization: string
 }
 
 interface DepositBody {

@@ -48,6 +48,8 @@
  *   swapped back to sats.
  */
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha2.js'
 import { hashToCurve, pointFromHex } from '@cashu/crypto/modules/common'
 import { verifyDLEQProof } from '@cashu/crypto/modules/client/NUT12'
 import { nip17 } from 'nostr-tools'
@@ -63,6 +65,7 @@ import {
   derivedOutputs,
   isTheLockAskedFor,
   isTheSuccessorAskedFor,
+  isSelfLocked,
   linkLockProposal,
   lockWindowProblem,
   lockableVoucher,
@@ -313,6 +316,11 @@ export interface ArmContext {
    * (gateway-customer accepts the refund key there) and is what `deliver` is handed.
    */
   lockPub?: string
+  /**
+   * #402: the wallet's own key K. A gift proof locked to K alone (a bearer split's part) is then
+   * lockable: its burn is witnessed by K (NUT-11 SIG_INPUTS) and the lock is authorised by K.
+   */
+  selfSecret?: Uint8Array
 }
 
 /** The relay is on when a deliberately empty deposit is refused for its shape (422), not 503/404. */
@@ -443,7 +451,7 @@ async function preflight(
   const { ports } = ctx
   const nowS = Math.floor(ports.now() / 1000)
   for (const { proof } of proofs) {
-    const found = lockableVoucher(proof.secret)
+    const found = lockableVoucher(proof.secret, selfPubOf(ctx))
     if ('problem' in found) return { kind: 'unarmed', why: 'not_lockable' }
     if (lockWindowProblem(ctx.x, found.voucher.expiresAt, nowS)) return { kind: 'unarmed', why: 'window' }
     // The lock route proves the burnt proof's amount by its DLEQ (#141): without one it would
@@ -473,6 +481,7 @@ async function preflight(
 }
 
 function lockBody(ctx: ArmContext, proof: TokenProof, linkPub: string, refundPub: string, burnOutputs: BlindedOutput[]) {
+  const self = selfLockedBy(ctx, proof)
   const proposed = linkLockProposal({
     giftSecret: proof.secret,
     linkPub,
@@ -480,11 +489,13 @@ function lockBody(ctx: ArmContext, proof: TokenProof, linkPub: string, refundPub
     x: ctx.x,
     maxSats: proof.amount,
     nonce: derivedNonce(ctx.refundSecret, 'lock', proof.secret),
+    ...(self ? { selfPub: xOnlyPub(self) } : {}),
   })
   return {
     predecessor_secret: proof.secret,
     proposed_secret: proposed,
-    authorization: cashlinkAuthorization(ctx.refundSecret, CASHLINK_LOCK_TAG, proof.secret, proposed),
+    // A bearer gift: by R, whose witness the burn carries. One locked to K: by K, the only key that can burn it.
+    authorization: cashlinkAuthorization(self ?? ctx.refundSecret, CASHLINK_LOCK_TAG, proof.secret, proposed),
     predecessor_proof: proofBody(proof),
     burn_outputs: burnOutputsBody(burnOutputs),
   }
@@ -505,14 +516,19 @@ async function lockOne(ctx: ArmContext, mintUrl: string, proof: TokenProof, burn
   const [giftState] = await ports.mint.states(mintUrl, [proof.secret])
   let burnt: UnblindedProof[]
   if (giftState === 'UNSPENT') {
-    let witness = sigAllWitness(ctx.refundSecret, proof.secret, proof.C, burnOuts)
+    const burnWitness = (outs: BlindedOutput[]) => {
+      const self = selfLockedBy(ctx, proof)
+      // Locked to K: the mint checks K over the secret (SIG_INPUTS). Bearer: R over the swap, recorded.
+      return self ? inputWitness(self, proof.secret) : sigAllWitness(ctx.refundSecret, proof.secret, proof.C, outs)
+    }
+    let witness = burnWitness(burnOuts)
     let done = await swapOrRestore(ports.mint, mintUrl, [{ ...proof, witness }], burnOuts)
     if (done.kind === 'refused' && done.answer.kind === 'inactive') {
       // The keyset recorded before the burn was archived since (a resumed run, or a rotation in
       // between): nothing was signed. The same B_ in the active keyset (rev-wallet377 M2), so a
       // later restore still finds them; the witness covers amounts and B_ only.
       burnOuts = derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, await ports.mint.activeKeysetId(mintUrl))
-      witness = sigAllWitness(ctx.refundSecret, proof.secret, proof.C, burnOuts)
+      witness = burnWitness(burnOuts)
       done = await swapOrRestore(ports.mint, mintUrl, [{ ...proof, witness }], burnOuts)
     }
     if (done.kind === 'gone') return { kind: 'gone' }
@@ -576,6 +592,19 @@ async function lockOne(ctx: ArmContext, mintUrl: string, proof: TokenProof, burn
   }
   // 422 after the burn: the coupon cannot be re-formed, so its value is kept as sats. Never lost.
   return { kind: 'sats', proofs: burnt }
+}
+
+/** #402: the wallet's own key, x-only, when the context carries it. */
+const selfPubOf = (ctx: ArmContext): string | undefined => (ctx.selfSecret ? xOnlyPub(ctx.selfSecret) : undefined)
+
+/** #402: the wallet's own key when this proof is locked to it alone, else undefined (a bearer gift). */
+function selfLockedBy(ctx: ArmContext, proof: TokenProof): Uint8Array | undefined {
+  return ctx.selfSecret && isSelfLocked(proof.secret, xOnlyPub(ctx.selfSecret)) ? ctx.selfSecret : undefined
+}
+
+/** NUT-11 SIG_INPUTS witness: K over `sha256(secret)`. */
+function inputWitness(key: Uint8Array, secret: string): string {
+  return JSON.stringify({ signatures: [bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(secret)), key))] })
 }
 
 /** The pre-signed refund swap for one locked proof, exactly as deposited and as this wallet would post it. */

@@ -22,10 +22,14 @@ export async function onCheckoutNoticeDm(pubkey: string, content: string, sealer
 
 let running: Promise<number> | null = null
 
-/** One pass, never two at once. Never throws. */
+/** One pass, never two at once. Never throws. A split a page left part way (#402) is finished first. */
 export function reconcileCheckoutCodesNow(pubkey: string): Promise<number> {
   if (!checkoutCodesEnabled()) return Promise.resolve(0)
-  running ??= reconcileCheckoutCodes(appCheckoutPorts(), pubkey)
+  running ??= (async () => {
+    const ports = appCheckoutPorts()
+    await import('./voucherSplit').then((m) => m.finishVoucherSplits(ports, pubkey)).catch(() => 0)
+    return reconcileCheckoutCodes(ports, pubkey)
+  })()
     .catch(() => 0)
     .finally(() => {
       running = null
