@@ -237,6 +237,9 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
       if (out.kind === 'issued' || out.kind === 'pending') navigate(`/online/code/${out.record.id}`)
       else if (splitting) setError('Your voucher was split, but no code could be made. Both parts are in your wallet.')
       else setError(out.kind === 'refused' ? 'These vouchers cannot be used online right now. Nothing has changed.' : 'No code could be made. Your vouchers come back on their own when the expiry passes.')
+      // #402: the split's change is locked to this wallet's own key; make it an ordinary coupon again
+      // now, so the next send can draw on it. The catch-up sweep finishes it if this is cut short.
+      if (splitting) void import('../lib/selfLockedCouponsApp').then((m) => m.unlockSelfLockedCouponsNow(pubkey)).catch(() => 0)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Nothing has changed.')
     } finally {
