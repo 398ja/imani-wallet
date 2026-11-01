@@ -11,8 +11,9 @@ import { formatFace, parseAmountToMinor } from '../lib/format'
 import { checkoutPlan, maxExpiryFor, type CheckoutExclusion, type CheckoutPlan } from '../lib/checkoutPlan'
 import { compact, display } from '../lib/checkoutCode'
 import { loadCheckoutCodes, type CheckoutCodeRecord } from '../lib/checkoutCodeRecords'
-import { cancelCheckoutCode, startCheckoutCode } from '../lib/checkoutCodeFlow'
+import { cancelCheckoutCode, startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
 import { appCheckoutPorts } from '../lib/checkoutCodePorts'
+import { splitVoucher } from '../lib/voucherSplit'
 import type { OnlineShop } from '../lib/onlineShop'
 import type { VoucherRow } from '@imani/wallet-storage'
 
@@ -40,6 +41,7 @@ export interface UseOnlineDeps {
   cancel: typeof cancelCheckoutCode
   codes: (pubkey: string) => CheckoutCodeRecord[]
   ports: typeof appCheckoutPorts
+  split: typeof splitVoucher
 }
 
 const realDeps: UseOnlineDeps = {
@@ -50,6 +52,7 @@ const realDeps: UseOnlineDeps = {
   cancel: cancelCheckoutCode,
   codes: loadCheckoutCodes,
   ports: appCheckoutPorts,
+  split: splitVoucher,
 }
 
 const DAY_S = 86_400
@@ -136,7 +139,7 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
   const [loaded, setLoaded] = useState<{ rows: VoucherRow[]; shop: OnlineShop | null; nowS: number } | null>(null)
   const [amountText, setAmountText] = useState('')
   const [days, setDays] = useState<number>(7)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<false | 'splitting' | 'making'>(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -193,13 +196,35 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
             ? 'Pick a shorter expiry.'
             : null
 
+  const splitting = plan.plan?.find((p) => p.needsSplit)
+
+  /** The split part replaced by the coupons the split made, or a sentence saying what happened. */
+  const runSplit = async (ports: ReturnType<typeof deps.ports>): Promise<CheckoutPlanPart[] | string> => {
+    if (!splitting) return []
+    const out = await deps.split(ports, pubkey, { tokenId: splitting.row.token_id, token: splitting.row.token, amount: splitting.amount })
+    if (out.kind === 'split') return out.parts
+    if (out.kind === 'refused') return 'Your voucher could not be split right now. Nothing has changed.'
+    if (out.kind === 'kept_as_sats') return 'Your voucher could not be split. Its value is still in your wallet, now as sats.'
+    return 'Your voucher is being split. It is safe, and it finishes the next time Imani opens. Try again in a moment.'
+  }
+
   const onGet = async () => {
     if (!plan.plan) return
-    setBusy(true)
+    setBusy(splitting ? 'splitting' : 'making')
     setError(null)
     try {
+      const ports = deps.ports()
+      const made = await runSplit(ports)
+      if (typeof made === 'string') {
+        setError(made)
+        return
+      }
+      setBusy('making')
+      const parts: CheckoutPlanPart[] = plan.plan.flatMap((p) =>
+        p.needsSplit ? made : [{ tokenId: p.row.token_id, token: p.row.token, amount: p.amount, faceValue: p.faceValue }],
+      )
       const out = await deps.start({
-        ports: deps.ports(),
+        ports,
         pubkey,
         stall,
         shop,
@@ -207,9 +232,10 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
         decimals,
         amount,
         x,
-        parts: plan.plan.map((p) => ({ tokenId: p.row.token_id, token: p.row.token, amount: p.amount, faceValue: p.faceValue })),
+        parts,
       })
       if (out.kind === 'issued' || out.kind === 'pending') navigate(`/online/code/${out.record.id}`)
+      else if (splitting) setError('Your voucher was split, but no code could be made. Both parts are in your wallet.')
       else setError(out.kind === 'refused' ? 'These vouchers cannot be used online right now. Nothing has changed.' : 'No code could be made. Your vouchers come back on their own when the expiry passes.')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong. Nothing has changed.')
@@ -252,6 +278,9 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
             {obstacleText}
           </p>
         )}
+        {amount > 0 && splitting && (
+          <p className="-mt-3 text-sm text-mono-600 dark:text-mono-400">Imani will split a voucher to make this amount.</p>
+        )}
 
         <div>
           <p className="mb-2 text-sm font-medium text-mono-600 dark:text-mono-400">Code expires in</p>
@@ -279,8 +308,8 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
         </div>
 
         {error && <Alert>{error}</Alert>}
-        <Button size="lg" className="w-full" disabled={!plan.plan || busy || !offered.includes(days as 1 | 7 | 30)} onClick={() => void onGet()}>
-          {busy ? 'Making your code…' : 'Get code'}
+        <Button size="lg" className="w-full" disabled={!plan.plan || busy !== false || !offered.includes(days as 1 | 7 | 30)} onClick={() => void onGet()}>
+          {busy === 'splitting' ? 'Splitting your voucher…' : busy ? 'Making your code…' : 'Get code'}
         </Button>
         {busy && (
           <p className="text-center text-xs text-mono-400" role="status" aria-live="polite">

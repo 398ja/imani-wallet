@@ -50,8 +50,16 @@ beforeEach(() => {
     }),
     codes: () => codes,
     ports: () => ({}) as never,
+    split: vi.fn(async () => ({ kind: 'refused' as const, why: 'unused' })),
   }
 })
+
+/** #402: one 1024-sat proof at ratio 1 (1 sat = 1 p): no subset of it makes 3.37, a split does. */
+function splittableRow(): VoucherRow {
+  const w = W.world()
+  const token = W.tokenOf([w.mint.issue(W.bearerSecret({ issuerId: W.STALL, nonce: 'splitnnn', issuanceRatio: 1, faceValue: 100_000 }, 's0'), 1024)])
+  return { token_id: 'row-split', token, voucher_id: 's', issuer_id: W.STALL, face_value: 1024, face_unit: 'GBP', face_decimals: 2, token_amount: 1024, status: 'active', created_at: '' } as unknown as VoucherRow
+}
 afterEach(cleanup)
 
 const at = (path: string) =>
@@ -90,6 +98,66 @@ describe('Use online', () => {
     fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '5.00' } })
     expect(await screen.findByText(/can be used at shop\.example/)).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Get code' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('#402: an amount only a split can make is offered, says so, splits on Get code, then makes the code', async () => {
+    deps.rows = async () => [splittableRow()]
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    deps.split = vi.fn(async () => {
+      await gate
+      return { kind: 'split' as const, parts: [{ tokenId: 'part-337', token: 'cashuBpart', amount: 337, faceValue: 337 }] }
+    })
+    at(`/online?stall=${W.STALL}`)
+    await screen.findByText('Usable at shop.example')
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '3.37' } })
+    expect(await screen.findByText('Imani will split a voucher to make this amount.')).toBeTruthy()
+    expect(screen.queryByText(/cannot make exactly this amount/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Get code' }))
+    expect(await screen.findByRole('button', { name: 'Splitting your voucher…' })).toBeTruthy()
+    expect(deps.start).not.toHaveBeenCalled()
+    release()
+    await waitFor(() => expect(deps.start).toHaveBeenCalled())
+    expect((deps.split as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ tokenId: 'row-split', token: expect.any(String), amount: 337 })
+    const req = (deps.start as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(req.amount).toBe(337)
+    expect(req.parts).toEqual([{ tokenId: 'part-337', token: 'cashuBpart', amount: 337, faceValue: 337 }])
+  })
+
+  it.each([
+    [{ kind: 'refused', why: 'split_route_unavailable' }, 'Your voucher could not be split right now. Nothing has changed.'],
+    [{ kind: 'kept_as_sats', why: 'SAT_BOUND_EXCEEDED' }, 'Your voucher could not be split. Its value is still in your wallet, now as sats.'],
+    [{ kind: 'pending', why: 'the mint is down' }, 'Your voucher is being split. It is safe, and it finishes the next time Imani opens. Try again in a moment.'],
+  ])('#402: a split that does not finish says what moved in plain words (%o)', async (outcome, words) => {
+    deps.rows = async () => [splittableRow()]
+    deps.split = vi.fn(async () => outcome as never)
+    at(`/online?stall=${W.STALL}`)
+    await screen.findByText('Usable at shop.example')
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '3.37' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Get code' }))
+    expect(await screen.findByText(words)).toBeTruthy()
+    expect(deps.start).not.toHaveBeenCalled()
+  })
+
+  it('#402: split, but no code: says both parts are in the wallet', async () => {
+    deps.rows = async () => [splittableRow()]
+    deps.split = vi.fn(async () => ({ kind: 'split' as const, parts: [{ tokenId: 'p', token: 't', amount: 337, faceValue: 337 }] }))
+    deps.start = vi.fn(async (req) => ({ kind: 'refused' as const, why: 'x', record: record({ amount: req.amount }) }))
+    at(`/online?stall=${W.STALL}`)
+    await screen.findByText('Usable at shop.example')
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '3.37' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Get code' }))
+    expect(await screen.findByText('Your voucher was split, but no code could be made. Both parts are in your wallet.')).toBeTruthy()
+  })
+
+  it('a carvable amount does not split', async () => {
+    at(`/online?stall=${W.STALL}`)
+    await screen.findByText('Usable at shop.example')
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '0.08' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Get code' }))
+    await waitFor(() => expect(deps.start).toHaveBeenCalled())
+    expect(screen.queryByText(/will split a voucher/)).toBeNull()
+    expect(deps.split).not.toHaveBeenCalled()
   })
 
   it('the code screen: display form, Only works at, Copy, Cancel', async () => {
