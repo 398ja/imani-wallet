@@ -43,7 +43,7 @@
  */
 
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure'
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils'
 import { sha256 } from '@noble/hashes/sha256'
 
 /** The header the gateway reads a terminal credential from. */
@@ -74,14 +74,6 @@ export const DELIVER_PATH = '/api/v1/dm/tokens/send'
  */
 export const ISSUE_TIMEOUT_MS = 30_000
 
-/**
- * How long a coupon bought by card stays spendable.
- *
- * A year, matching the gateway's default for merchant issuance and `imani-woo`.
- * Long enough that a gift bought at Christmas is still good the next one.
- */
-export const DEFAULT_EXPIRES_IN_DAYS = 365
-
 /** One stall's authority to be issued for, held on its behalf. */
 export interface StallCredential {
   /** The stall this issues as. */
@@ -95,6 +87,19 @@ export interface StallCredential {
    * gateway checks a NIP-98 signature from the key the credential names.
    */
   lockKeyHex: string
+  /**
+   * The stall's signed delegation of `coupon:issue` to `lockKeyHex`'s public
+   * key, as kind-30078 event JSON (imani-wallet#152). Without it this service
+   * cannot sign a warrant the till accepts, so it mints nothing.
+   * See `delegatedWarrant.ts`.
+   */
+  delegation?: string
+  /**
+   * Set, in memory only, when the gateway will never accept this credential and the stall must
+   * re-enrol it (imani-wallet#296: confirm answered 410 EXPIRED). A sale fails fast with this as
+   * its reason instead of minting into a 403 that reads as "burnt or replaced". Never sealed.
+   */
+  unusable?: string
 }
 
 export interface IssuePlan {
@@ -102,6 +107,7 @@ export interface IssuePlan {
   faceUnit: string
   faceDecimals: number
   memo: string
+  /** The stall's term in days (#312). 0 is never-expires: `expires_in_days` is then omitted. */
   expiresInDays: number
   /**
    * Sent as `Idempotency-Key` (imani-wallet#96). The same purchase always
@@ -112,43 +118,24 @@ export interface IssuePlan {
   idempotencyKey?: string
   /**
    * The issuance warrant JSON, carried verbatim into the coupon's signed
-   * bytes. See `processorWarrant`.
+   * bytes. See `delegatedWarrant.ts`.
    */
   issuanceWarrant?: string
+  /**
+   * #410 G14 (contract §1): mint the voucher already LOCKED to `recipientPubkey` with refund =
+   * `refundPubkey` and locktime `locktime` (unix s). Keys are x-only hex. Absent, a plain coupon.
+   */
+  linkLock?: { recipientPubkey: string; refundPubkey: string; locktime: number }
 }
 
 /**
- * A `processor` issuance warrant for a card purchase (imani-wallet#96).
- *
- * A claim, not a proof: this service reads the processor, so it could assert
- * a charge that does not exist. What it buys is falsifiability outside the
- * trust boundary: the stall reads `ref` on its own Stripe dashboard and a
- * forged coupon resolves to "no such charge" at reconciliation. The wallet
- * shows it as "paid by card" (`issuedVoucher.paymentRail`).
- *
- * The nonce is DERIVED from the purchase, not random, so every attempt at
- * one purchase sends a byte-identical body under the same idempotency key.
+ * The key a purchase mints under: the PAYMENT INTENT, not the webhook event (imani-wallet#274,
+ * card audit U8). Two events for one payment, or a reconciler re-drive, are one payment and must
+ * mint under one key. gc#232 replays the recorded voucher for the warrant nonce (also from the
+ * pi_) after the 24 h idempotency window, so this key is no longer the only guard.
  */
-export function processorWarrant(input: {
-  eventId: string
-  saleTotalMinor: number
-  faceDecimals: number
-  unit: string
-  reference: string | null
-}): string {
-  return JSON.stringify({
-    form: 'processor',
-    sale_total: input.saleTotalMinor,
-    face_decimals: input.faceDecimals,
-    unit: input.unit,
-    nonce: bytesToHex(sha256(new TextEncoder().encode(`imani-purchase-warrant-v1:${input.eventId}`))).slice(0, 32),
-    ...(input.reference ? { ref: input.reference } : {}),
-  })
-}
-
-/** The key a purchase mints under. One purchase, one key, forever. */
-export function purchaseIdempotencyKey(eventId: string): string {
-  return `purchase:${eventId}`
+export function purchaseIdempotencyKey(paymentIntent: string): string {
+  return `purchase:pi:${paymentIntent}`
 }
 
 export interface IssuedCoupon {
@@ -168,12 +155,19 @@ export class IssuanceFailed extends Error {
    * an unreadable body). False for a definite refusal (4xx).
    */
   readonly ambiguous: boolean
+  /**
+   * gc answered 409 UNRECORDED (gc#230/#232): this warrant nonce was spent by a run that never
+   * recorded its voucher. Whether a coupon exists is unknown, so this is NEVER retried: the row
+   * is parked `gateway_unrecorded` for a person (imani-wallet#274).
+   */
+  readonly unrecorded: boolean
 
-  constructor(message: string, retryable: boolean, ambiguous = retryable) {
+  constructor(message: string, retryable: boolean, ambiguous = retryable, unrecorded = false) {
     super(message)
     this.name = 'IssuanceFailed'
     this.retryable = retryable
     this.ambiguous = ambiguous
+    this.unrecorded = unrecorded
   }
 }
 
@@ -197,6 +191,10 @@ export function authorization(
         ['u', url],
         ['method', method.toUpperCase()],
         ['payload', bytesToHex(sha256(new TextEncoder().encode(body)))],
+        // A random nonce so two requests signed in the same second are two events (#296). Without
+        // it a retry inside one second re-sent the identical event, and the gateway refused it as
+        // an event-id replay (401). NIP-98 allows extra tags; the filter ignores this one.
+        ['nonce', bytesToHex(randomBytes(16))],
       ],
       content: '',
     },
@@ -233,8 +231,16 @@ export function issueBody(plan: IssuePlan): string {
      */
     backing_strategy: 'PROPORTIONAL',
     memo: plan.memo,
-    expires_in_days: plan.expiresInDays,
+    // 0 is the stall's "never expires" (`NEVER_EXPIRES`): omitted, as the wallet's `issue.ts`
+    // omits `expiry_days`, rather than sent as a zero-day coupon (#312).
+    ...(plan.expiresInDays > 0 ? { expires_in_days: plan.expiresInDays } : {}),
     ...(plan.issuanceWarrant ? { issuance_warrant: plan.issuanceWarrant } : {}),
+    ...(plan.linkLock
+      ? {
+          recipient_pubkey: plan.linkLock.recipientPubkey,
+          link_lock: { refund_pubkey: plan.linkLock.refundPubkey, locktime: plan.linkLock.locktime },
+        }
+      : {}),
   })
 }
 
@@ -275,6 +281,10 @@ export async function issueAsStall(
   }
 
   const raw = await response.text()
+
+  if (isUnrecorded(response.status, raw)) {
+    throw new IssuanceFailed(explain(response.status, raw), false, true, true)
+  }
 
   if (response.status !== 200 && response.status !== 201) {
     // A 4xx (429 included) is a refusal: nothing was minted. A 5xx may have
@@ -322,12 +332,34 @@ function explain(status: number, raw: string): string {
     return 'the gateway did not accept this credential’s signature'
   }
   if (status === 403) {
-    return 'the stall no longer authorises this issuer (credential burnt or replaced)'
+    // Also what an UNCONFIRMED credential gets (gc `issuer_not_permitted`), e.g. one that expired
+    // before it was confirmed (#296). Confirming at enrolment and startup makes that rare, and an
+    // expired one is caught before the mint with its own reason (`confirmation.ts`).
+    return (
+      'the stall no longer authorises this issuer (credential burnt, replaced, or never ' +
+      'confirmed; check imani_purchase_issuer_credentials and re-enrol if expired)'
+    )
   }
   const detail = raw.trim().slice(0, 200)
   return detail === ''
     ? `the gateway refused with status ${status}`
     : `the gateway refused with status ${status}: ${detail}`
+}
+
+/**
+ * gc refused this payment's mint in a way every later retry gets too, and an earlier attempt may
+ * have minted (review of #279). Parked `gateway_unrecorded`, never retried:
+ *  - 409 `UNRECORDED`: the warrant nonce's first use never recorded its voucher (gc#232). The
+ *    same test also matches the idempotency store's `IDEMPOTENCY_PREVIOUS_ATTEMPT_UNRECORDED`.
+ *  - 409 `WARRANT_ALREADY_USED`: the pi_ nonce was spent by a request with DIFFERENT bytes. A
+ *    retry's body changes when the stall renews its delegation between attempts (the delegation
+ *    rides inside the warrant). Before this it was retryable, so the row looped forever.
+ *  - 422 `IDEMPOTENCY_KEY_REUSED`: the same case inside gc's 24 h key window.
+ */
+function isUnrecorded(status: number, raw: string): boolean {
+  if (status === 409) return /UNRECORDED|WARRANT_ALREADY_USED/.test(raw)
+  if (status === 422) return /IDEMPOTENCY_KEY_REUSED/.test(raw)
+  return false
 }
 
 /** A burnt credential will never succeed; a 500 might. */

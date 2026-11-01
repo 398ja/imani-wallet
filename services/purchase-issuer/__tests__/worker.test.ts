@@ -7,6 +7,7 @@ import { CredentialVault, type CredentialStore } from '../vault'
 import { runPass, type WorkerDeps } from '../worker'
 import type { PurchasesApi, OwedPurchase } from '../purchasesApi'
 import type { Ports } from '../discharge'
+import { delegatedCredential, ninetyDayTerm } from './stallFixture'
 
 const KEY = 'a'.repeat(64)
 const LOCK = '11'.repeat(32)
@@ -128,11 +129,9 @@ function deps(over: Partial<WorkerDeps> = {}): WorkerDeps & { api: PurchasesApi 
     reportFailure: vi.fn().mockResolvedValue(undefined),
   } as unknown as PurchasesApi
   const ports: Ports = {
-    credentialFor: async () => ({
-      stallPubkey: 'b'.repeat(64),
-      credentialId: 'c1',
-      lockKeyHex: LOCK,
-    }),
+    // A real stall's delegation: since #152 nothing mints without one.
+    validityFor: ninetyDayTerm,
+    credentialFor: async () => delegatedCredential({ credentialId: 'c1' }),
     tokenFor: async () => '',
     now: () => Date.now(),
     sleep: async () => {},
@@ -154,7 +153,7 @@ describe('worker pass', () => {
   it('discharges what it issued', async () => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, { event_id: 'ev1' })))
+      .mockResolvedValueOnce(reply(200, { event_id: 'ev1', fulfilment_recorded: true })))
     const d = deps()
 
     const result = await runPass(d)
@@ -183,7 +182,7 @@ describe('worker pass', () => {
     // give two coupons for one payment, so this reports and moves on.
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, {})))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true })))
     const d = deps()
     ;(d.api.discharge as ReturnType<typeof vi.fn>).mockResolvedValue('refused')
 
@@ -225,7 +224,7 @@ describe('worker pass', () => {
     // 5000 and receiving a hundredth of it.
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, {}))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
     const d = deps()
     ;(d.api.owed as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -242,7 +241,7 @@ describe('worker pass', () => {
   it('mints a two-decimal currency at its own scale', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(reply(201, { voucher_id: 'v1', token: 't', issuer_id: 'i1' }))
-      .mockResolvedValueOnce(reply(200, {}))
+      .mockResolvedValueOnce(reply(200, { fulfilment_recorded: true }))
     vi.stubGlobal('fetch', fetchMock)
 
     await runPass(deps())
@@ -261,5 +260,39 @@ describe('worker pass', () => {
 
     expect(result.skipped).toBe(1)
     expect(d.api.reportFailure).not.toHaveBeenCalled()
+  })
+})
+
+describe('#312: a sale the stall\u2019s term cannot back', () => {
+  // The backstop: the term changed to never-expires between checkout and mint. Nothing is minted
+  // and the row is parked NEEDS_ATTENTION (`issue_blocked`) for an operator to refund, not BLOCKED.
+  it('parks the row for a person, with the reason, and mints nothing', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const d = deps()
+    const attention = vi.fn().mockResolvedValue('parked')
+    ;(d.api as unknown as { attention: typeof attention }).attention = attention
+    d.ports.validityFor = async () => ({ kind: 'days', days: 0, source: 'record' })
+    const result = await runPass(d)
+    expect(result.blocked).toBe(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(attention).toHaveBeenCalledWith(
+      'evt_1',
+      'issue_blocked',
+      expect.objectContaining({ detail: expect.stringMatching(/^validity_never_expires/) }),
+    )
+    expect(d.api.reportFailure).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  // A payment-adapter that cannot park it: the permanent failure, so a person still sees it.
+  it('falls back to a permanent failure when it cannot park', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const d = deps()
+    ;(d.api as unknown as { attention: () => Promise<string> }).attention = async () => 'unsupported'
+    d.ports.validityFor = async () => ({ kind: 'days', days: 0, source: 'record' })
+    await runPass(d)
+    expect(d.api.reportFailure).toHaveBeenCalledWith('evt_1', expect.stringMatching(/^validity_never_expires/), true, undefined, expect.anything())
+    vi.unstubAllGlobals()
   })
 })

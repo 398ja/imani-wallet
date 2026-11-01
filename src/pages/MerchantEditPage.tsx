@@ -1,9 +1,12 @@
 import { useState } from 'react'
+import { StepUpDialog } from '../components/ui/StepUpDialog'
+import { stepUp } from '../lib/reauth'
 
 import { Button, Screen, BackLink, PageHeader, Alert, Switch, Panel } from '../components/ui'
 import { MerchantFieldset } from '../components/MerchantFieldset'
 import { getSigner } from '../lib/nap'
 import { publish } from '../lib/relay'
+import { userMessage } from '../lib/userMessage'
 import {
   buildMerchantEvent,
   DEFAULT_VALIDITY_DAYS,
@@ -53,8 +56,20 @@ export function MerchantEditPage({
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  // #434: closing the stall needs the passphrase. Reopening does not.
+  const [confirmClose, setConfirmClose] = useState(false)
+  const closing = existing && merchant.active && !fields.active
+
   const save = async () => {
     if (!merchantFieldsValid(fields)) return
+    if (closing && !confirmClose) {
+      setConfirmClose(true)
+      return
+    }
+    await commit()
+  }
+
+  const commit = async () => {
     setBusy(true)
     setError(null)
     setStatus(null)
@@ -89,14 +104,15 @@ export function MerchantEditPage({
       saveMerchant(published)
       onSaved(published)
 
-      const { ok, total } = await publish(signed)
+      // No server counts in the copy (#324), same as the profile editor.
+      const { ok } = await publish(signed)
       setStatus(
         ok === 0
-          ? 'Saved on this device, but no relay accepted it. Customers may not see the change yet.'
-          : `Saved and published to ${ok}/${total} relay${total === 1 ? '' : 's'}.`,
+          ? 'Saved on this device, but not sent yet. Customers may not see the change for a while.'
+          : 'Saved.',
       )
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }
@@ -116,7 +132,7 @@ export function MerchantEditPage({
         <div className="mb-4">
           <Switch
             label="Open for business"
-            hint="Turn this off to hide Sell and Redeem. Your vouchers and history stay."
+            hint="Turn this off to pause selling and redeeming here and on your terminals. Your menus, vouchers and history stay."
             checked={fields.active}
             disabled={busy}
             onChange={(active) => setFields({ ...fields, active })}
@@ -124,17 +140,34 @@ export function MerchantEditPage({
         </div>
       )}
 
-      {/* Closing the stall makes the wallet look like a customer's again, which
-          is a big enough change to say out loud before they hit Save. */}
+      {/* #434: what closing does, said before Save. The wallet stays a merchant wallet. */}
       {existing && !fields.active && (
         <div className="mb-4">
           <Panel>
             <p className="text-sm text-mono-500">
-              Once you save, your home screen goes back to Pay and Receive. Come back here to open
-              again — this page stays where it is.
+              {merchant.active
+                ? "Once you save, Sell, Redeem and Cashback are paused on this device and all your terminals, and customers can't pay you or buy your vouchers by card. Everything else stays. You'll be asked for your passphrase."
+                : 'Your stall is closed. Turn the switch on and save to open again.'}
             </p>
           </Panel>
         </div>
+      )}
+
+      {confirmClose && (
+        <StepUpDialog
+          title="Confirm it's you to close your stall"
+          body="Closing your stall pauses selling and redeeming on this device and all your terminals, and customers won't be able to pay you. Enter your passphrase to complete this. Your stall stays open until you do."
+          confirmLabel="Close stall"
+          onCancel={() => {
+            setConfirmClose(false)
+            setFields({ ...fields, active: true })
+          }}
+          onConfirm={async (passphrase) => {
+            await stepUp(passphrase)
+            setConfirmClose(false)
+            await commit()
+          }}
+        />
       )}
 
       {/* 'create' for a customer opening a stall, 'edit' once it exists. */}

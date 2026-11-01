@@ -55,7 +55,7 @@ signed face.
   devices before either has restored the other's rows. The mint still refuses
   every double-spent proof.
 - The claimed and outstanding figures are **this device's** figures. The voucher
-  record screen says so under the claimed bar, and `docs/merchants.md` says so
+  record screen says so under the claimed bar, and `imani-docs/wallet/merchants.md` says so
   where it describes that screen.
 - Claims that were never filed (#95) weaken the ceiling further. The paths that
   wrote a redemption without a claim are closed or pinned (`claimPaths.test.ts`,

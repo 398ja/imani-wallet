@@ -8,22 +8,95 @@ import {
 import type { CryptoAdapter, GiftWrapEvent, UnwrappedDm, TokenMetadata } from '@imani/dm-poll'
 
 import { checkIssuer } from './issuerAllowlist'
+import { checkMintAndUnit } from './trustedMint'
 import { getSigner } from './nap'
-import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
-import { asChunk, looksLikeChunk, offerChunk } from './dmChunks'
+import { isTillSaleMessage } from './tillSales'
+import { buildValidationRecord } from './voucherValidationRecord'
+import { terminalCredentialFromToken } from './notMoney'
+import { asChunk, looksLikeChunk, offerChunkFrom } from './dmChunks'
+import { isOpenAfterLocktime, readLinkLock } from './cashlinkLock'
+import { parseGiftSent } from './lockedGifts'
+import { parseSubscriptionStatus, SUBSCRIPTION_STATUS_DM_TYPE } from './subscriptionStatus'
+import { parseSpendSource } from './spendSource'
 import {
   heldWrapDecision,
   holdTransferSignatureWrap,
   parseTransferSignature,
   sealAuthorOf,
+  TRANSFER_SIGNATURE_TYPE,
 } from './transferSignature'
 import {
-  creditableFaceValue,
   parseVoucherToken,
+  tokenProofs,
   verifyVoucher,
   type ParsedVoucherToken,
   type VoucherValidation,
 } from './voucherToken'
+
+/**
+ * The licence seller this build pins, as `licenceStatus.licenceSellerPubkey` reads it. Read here
+ * rather than imported: licenceStatus pulls in the wallet store statically, and this module is on
+ * the DM path, which loads its heavier modules lazily.
+ */
+function pinnedLicenceSeller(): string {
+  return ((import.meta.env.VITE_LICENCE_SELLER_PUBKEY as string | undefined) ?? '').trim().toLowerCase()
+}
+
+/** Whether a token's proofs are link-locked (#410 G14), read without trusting anything yet. */
+function isLinkLockedToken(token: string): boolean {
+  try {
+    const proofs = tokenProofs(token)
+    return proofs.length > 0 && proofs.some((p) => readLinkLock(p.secret) !== null || isOpenAfterLocktime(p.secret))
+  } catch {
+    return false
+  }
+}
+
+/** `subscriptionStatus.SUBSCRIPTION_STATUS_DM_TYPE`: the seller on a subscription's renewal (#407). */
+function isSubscriptionStatusMessage(content: string): boolean {
+  return parseSubscriptionStatus(content) !== null
+}
+
+/** `terminalDelivery.ENROLLED_DM_TYPE`, matched here without loading the delivery module. */
+function isEnrolledMessage(content: string): boolean {
+  try {
+    return (JSON.parse(content) as { type?: unknown })?.type === 'imani-terminal-enrolled/1'
+  } catch {
+    return false
+  }
+}
+
+/** `terminalDelivery.CREDENTIAL_DM_TYPE` (a renewal is one too, with `renews`). */
+function isCredentialMessage(content: string): boolean {
+  try {
+    return (JSON.parse(content) as { type?: unknown })?.type === 'imani-terminal-credential/1'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * One of the app's OWN non-payment messages: a terminal credential, renewal, renew request, sale
+ * record or enrolled notice (`imani-terminal-*`), or a transfer signature. None of them is a
+ * payment, and the text regex must not be let loose on one.
+ *
+ * A deny-list of types this app writes, not "any type but a token transfer" (review of #236): a
+ * DM with no token is marked PROCESSED by dm-poll and never offered again, so a real coupon in
+ * JSON of a type this build does not know would be lost for good. Before #236 the regex redeemed
+ * it, and it still does. A credential is refused in every envelope by `extractToken` itself.
+ */
+function typedAppMessage(content: string): boolean {
+  try {
+    const parsed = JSON.parse(content) as { type?: unknown } | null
+    const type = parsed && typeof parsed === 'object' ? parsed.type : undefined
+    return (
+      typeof type === 'string' &&
+      (type.startsWith('imani-terminal-') || type === TRANSFER_SIGNATURE_TYPE || type === SUBSCRIPTION_STATUS_DM_TYPE)
+    )
+  } catch {
+    return false
+  }
+}
 
 /**
  * The JSON payload the gateway actually sends.
@@ -79,6 +152,8 @@ interface TokenTransferPayload {
   bundle_total?: number | null
   bundle_part_index?: number | null
   bundle_part_count?: number | null
+  /** #402: where an online shop spent this coupon (`spendSource.ts`). Declared by the shop. */
+  source?: unknown
 }
 
 /**
@@ -101,6 +176,7 @@ function ride(payload: TokenTransferPayload) {
     // declaration degrades to today's per-part behaviour rather than to a
     // "0 of NaN" on screen.
     ...(payload.bundle_id ? declaredBundle(payload) : {}),
+    ...(parseSpendSource(payload.source) ? { spendSource: parseSpendSource(payload.source) } : {}),
   }
 }
 
@@ -190,8 +266,45 @@ function verifiedVoucherFrom(token: string | undefined):
     return REJECTED
   }
 
-  const { faceValue, cappedAtFaceValue } = creditableFaceValue(parsed)
-  if (cappedAtFaceValue) {
+  // Where the value actually is. Neither check above says anything about it:
+  // the signature covers the voucher's terms and names no mint, so a copy of a
+  // genuine coupon backed by proofs at a mint nobody has heard of passes both.
+  //
+  // Placed here for the same reason as the issuer check, and it is the same kind
+  // of statement: a fact about the coupon that holds identically for a customer
+  // receiving one and a stall taking one back. It is also a precondition of the
+  // wallet swapping its own receives, because from that point the mint URL is
+  // not a field we record but the address we send money to. See
+  // `imani-docs/wallet/explanation/the-wallet-swaps-its-own-receives.md`.
+  const backing = checkMintAndUnit(parsed)
+  // Only a foreign UNIT is refused here. A REJECTED voucher makes `extractToken`
+  // return null, and dm-poll marks a wrap with no token PROCESSED, so it is never
+  // offered again. That is right for a unit, which no configuration can change,
+  // and wrong for anything about the MINT: a list that has not loaded, a
+  // deployment that names no mint, or a mint the two services' settings disagree
+  // on would each have dropped genuine coupons for good (imani-wallet#133 review,
+  // HIGH-2). Those are answered at redemption instead, where the adapter's
+  // `checkBacking` defers or HOLDS the delivery: nothing is swapped, nothing is
+  // consumed, and the coupon is shown as waiting to be verified.
+  if (backing === 'wrong-unit') {
+    console.warn(
+      '[dmCrypto] rejecting voucher whose proofs are not in sat:',
+      parsed.voucher.voucherId,
+      backing,
+      parsed.mintUrl,
+      parsed.unit,
+    )
+    return REJECTED
+  }
+
+  // The record itself is built where cashback builds its own (#156), so the two
+  // receive paths cannot drift in what they write. Only the gates above are
+  // this path's.
+  const { faceValue, record, warrantRefusal } = buildValidationRecord(parsed, {
+    signatureValid,
+    legacyCanonical,
+  })
+  if (record.cappedAtFaceValue) {
     // Reached when tokenAmount * ratio exceeds what was issued, which on a
     // legacy voucher is what a rewritten ratio looks like.
     console.warn(
@@ -200,22 +313,7 @@ function verifiedVoucherFrom(token: string | undefined):
     )
   }
 
-  // Checked against the CREDITABLE value, not the signed face value. A warrant
-  // bounds what this coupon may be worth now, and `faceValue` is what we are
-  // about to credit - verifying against the signed face would let a clamped or
-  // split coupon pass a check its actual credit never faced.
-  const warrant = parseIssuanceWarrant(parsed.voucher.issuanceWarrant)
-  const warrantVerdict = verifyIssuanceWarrant(warrant, parsed.voucher.issuerId, {
-    faceValueMinor: faceValue,
-    // The coupon's OWN unit and decimals, from its signed tags. Passing the
-    // warrant's back to itself would let a warrant for XAF 2500 authorise a
-    // EUR 2500 coupon worth a hundred times more - the signature verifies and
-    // the ceiling passes, because both compare bare numbers.
-    unit: parsed.voucher.unit,
-    faceDecimals: parsed.voucher.faceDecimals,
-  })
-
-  if (warrantVerdict.verdict === 'failed') {
+  if (warrantRefusal !== undefined) {
     // Recorded, not refused. Refusing an unwarranted or badly-warranted coupon
     // is a policy decision nobody has taken, and taking it here would break
     // every coupon issued before this shipped. The merchant is shown the state
@@ -223,26 +321,11 @@ function verifiedVoucherFrom(token: string | undefined):
     console.warn(
       '[dmCrypto] issuance warrant refused for voucher:',
       parsed.voucher.voucherId,
-      warrantVerdict.reason,
+      warrantRefusal,
     )
   }
 
-  return {
-    parsed,
-    validation: {
-      faceValue,
-      record: {
-        signatureValid,
-        legacyCanonical,
-        signedFaceValue: parsed.voucher.faceValue,
-        cappedAtFaceValue,
-        warrant: warrantVerdict.verdict,
-        ...(warrant.state === 'present'
-          ? { warrantedSaleTotal: warrant.saleTotalMinor }
-          : {}),
-      },
-    },
-  }
+  return { parsed, validation: { faceValue, record } }
 }
 
 function asPayload(content: string): TokenTransferPayload | null {
@@ -342,25 +425,65 @@ export function createDmCryptoAdapter(): CryptoAdapter {
          */
         const chunk = asChunk(rumor.content)
         if (chunk) {
-          const whole = await offerChunk(chunk)
-          if (!whole) {
-            console.log('[dmCrypto] holding chunk', {
-              transfer: chunk.transfer_id.slice(0, 8),
-              index: chunk.chunk_index,
-              of: chunk.chunk_total,
-            })
-            return null
-          }
-          console.log('[dmCrypto] reassembled a chunked coupon', {
+          const offer = await offerChunkFrom(chunk, event.id)
+          const tag = {
             transfer: chunk.transfer_id.slice(0, 8),
-            chunks: chunk.chunk_total,
-            bytes: whole.length,
-          })
-          return {
-            eventId: event.id,
-            senderPubkey: rumor.pubkey,
-            content: whole,
-            createdAt: rumor.created_at,
+            index: chunk.chunk_index,
+            of: chunk.chunk_total,
+          }
+          switch (offer.kind) {
+            case 'complete': {
+              console.log(
+                offer.redelivery
+                  ? '[dmCrypto] offering a reassembled coupon again (its last attempt did not finish)'
+                  : '[dmCrypto] reassembled a chunked coupon',
+                { transfer: tag.transfer, chunks: chunk.chunk_total, bytes: offer.payload.length },
+              )
+              // #410 G14: a gift minted locked can be big enough to arrive in pieces. Reassembled,
+              // it is still a locked gift: filed, never redeemed. Returned with EMPTY content, so
+              // dm-poll marks this completing event processed, which is what confirms the transfer
+              // (`confirmChunkDeliveries`) and releases its stragglers. A failed filing returns null
+              // and the pieces are offered again.
+              const reassembled = asPayload(offer.payload)
+              if (reassembled && isLinkLockedToken(reassembled.token)) {
+                try {
+                  const filed = await (await import('./lockedGiftsApp')).fileIncomingLockedGift(reassembled.token)
+                  if (filed === 'filed') return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+                } catch {
+                  return null
+                }
+              }
+              return {
+                eventId: event.id,
+                senderPubkey: rumor.pubkey,
+                content: offer.payload,
+                createdAt: rumor.created_at,
+              }
+            }
+            case 'done':
+              // A straggler from a transfer whose coupon is durably handled
+              // (#204: only ever recorded once the completing event is
+              // processed). An empty non-token DM, so dm-poll marks it
+              // processed and stops re-reading it.
+              console.log('[dmCrypto] chunk of a transfer already received; releasing it', tag)
+              return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+            case 'pending':
+            case 'in_delivery':
+              // HELD, not failed and not processed: the wrap stays on the relay
+              // and is offered again. `in_delivery` is a sibling of a coupon
+              // being redeemed right now, or waiting on a retry; consuming it
+              // would be the #204 tombstone by another route.
+              console.log(
+                offer.kind === 'pending'
+                  ? '[dmCrypto] holding chunk until its siblings arrive'
+                  : '[dmCrypto] holding chunk while its coupon is redeemed',
+                tag,
+              )
+              return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at, hold: true }
+            case 'refused':
+              // Did not verify. Null, so dm-poll records a retryable failure
+              // and the relay's copies can be tried again.
+              return null
           }
         }
 
@@ -412,6 +535,96 @@ export function createDmCryptoAdapter(): CryptoAdapter {
          * payload's own identity `sig`, and what binds it to the COUPON is the
          * sender check in `transferSignature.queueIfPaired`.
          */
+        /**
+         * A till's sale record (#160 phase 6, wallet#202). It carries no token: dm-poll marks it
+         * processed as a non-token DM, which is fine, because filing it is the collector's job and
+         * the collector reads the inbox itself, from its own cursor, verifying every row against
+         * this stall's attestation. This only makes the sale show up now rather than at next login.
+         */
+        if (isTillSaleMessage(rumor.content)) {
+          const stall = getSigner().pubkey
+          void import('./tillSalesNet').then((m) => m.collectTillSalesForOwner(stall)).catch(() => 0)
+        }
+        /**
+         * A till saying it holds its credential (#160 phase 6, found by the local gate). Read only
+         * by the Terminals screen's poll before, so an owner on any other screen, or on a restored
+         * phone, kept the till Waiting. The collector verifies the notice against the roster.
+         */
+        if (isEnrolledMessage(rumor.content)) {
+          const stall = getSigner().pubkey
+          void import('./terminalDeliveryNet').then((m) => m.collectEnrolled(stall)).catch(() => 0)
+        }
+
+        /**
+         * A terminal credential or renewal that reached THIS wallet (#160 owner report). It is
+         * never redeemed (`extractToken` returns null for it); it is announced as what it is,
+         * "Terminal setup request from <stall>", from its signed metadata. A personal wallet
+         * only gets one when its key was enrolled as a till, which is the wrong path.
+         */
+        if (isCredentialMessage(rumor.content)) {
+          const me = getSigner().pubkey
+          // AWAITED (#393): once this unwrap returns, dm-poll marks the wrap processed. Fired and
+          // forgotten, a reload in between aborted the chunk load and the bell row was never written.
+          await import('./notMoneyNotice').then((m) => m.announceTerminalDm(rumor.content, me)).catch(() => false)
+        }
+
+        /**
+         * #410 G14: a gift minted already locked. Neither kind is redeemed here (the locked token
+         * is not this wallet's money until it is claimed, nor the buyer's before `x`); each is filed
+         * as a gift row and the sweep acts on it. A filing that fails returns null, so the wrap is
+         * offered again; once filed, an empty non-token DM marks it processed.
+         */
+        const giftSent = parseGiftSent(rumor.content)
+        if (giftSent) {
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          try {
+            await (await import('./lockedGiftsApp')).fileGiftSent(giftSent, sealAuthor)
+          } catch {
+            return null
+          }
+          return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+        }
+        const lockedPayload = asPayload(rumor.content)
+        if (lockedPayload && isLinkLockedToken(lockedPayload.token)) {
+          try {
+            const filed = await (await import('./lockedGiftsApp')).fileIncomingLockedGift(lockedPayload.token)
+            if (filed === 'filed') return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+          } catch {
+            return null
+          }
+        }
+
+        /**
+         * The seller saying a subscription was cancelled in Stripe, or un-cancelled (#407). Display
+         * only (it never grants or refuses), but still only believed from the PINNED seller, and
+         * the seller is read from the verified SEAL: `rumor.pubkey` is whatever the sender wrote.
+         * Awaited for the same reason as above: it must be stored before the wrap is marked done.
+         */
+        if (isSubscriptionStatusMessage(rumor.content)) {
+          const seller = pinnedLicenceSeller()
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          if (seller && sealAuthor === seller && rumor.pubkey === seller) {
+            const me = getSigner().pubkey
+            await import('./subscriptionStatusStore').then((m) => m.rememberSubscriptionStatus(me, rumor.content)).catch(() => false)
+          } else {
+            console.warn('[dmCrypto] subscription status not sealed by the pinned licence seller: ignored')
+          }
+        }
+
+        /**
+         * #402: the code store telling the customer what became of a checkout code. Believed only
+         * from the store's own key, read from the verified SEAL (checked against `/info` inside).
+         * Awaited: a `change`/`cancelled` carries coupons, so a notice not yet handled stays
+         * unprocessed (null) and is offered again.
+         */
+        if (rumor.content.includes('imani-checkout-code/1')) {
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          const me = getSigner().pubkey
+          const outcome = await import('./checkoutCodesApp').then((m) => m.onCheckoutNoticeDm(me, rumor.content, sealAuthor)).catch(() => 'retry' as const)
+          if (outcome === 'retry') return null
+          if (outcome) return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+        }
+
         const transferSignature = parseTransferSignature(rumor.content)
         if (transferSignature) {
           const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
@@ -519,7 +732,18 @@ export function createDmCryptoAdapter(): CryptoAdapter {
      */
     extractToken(content: string): string | null {
       const payload = asPayload(content)
-      if (!payload) return extractTokenFromText(content)
+      if (!payload) {
+        // An app message of another type (a terminal credential, a renewal, a till's renew
+        // request, a sale record, an enrolled notice) is never a payment. dm-poll's text regex
+        // would otherwise find the `cashuB…` credential token inside one and swap it at the mint:
+        // the 1 sat in a personal wallet's balance when its npub was enrolled as a till (#160).
+        if (typedAppMessage(content)) return null
+        const found = extractTokenFromText(content)
+        // Nor from a legacy text DM or untyped JSON: a credential is authority, never value.
+        return found && terminalCredentialFromToken(found) ? null : found
+      }
+      // A terminal credential is authority, not value, whatever envelope it arrives in.
+      if (terminalCredentialFromToken(payload.token)) return null
       return verifiedVoucherFrom(payload.token) === REJECTED ? null : payload.token
     },
 
@@ -567,6 +791,7 @@ export function toLegacyMetadata(
     expires_at: m.expiresAt,
     request_id: m.requestId,
     bundle_id: m.bundleId,
+    spend_source: m.spendSource,
     // The PAYLOAD's sender outranks the ENVELOPE's signer.
     //
     // The gateway signs every gift wrap it relays with its own key, so

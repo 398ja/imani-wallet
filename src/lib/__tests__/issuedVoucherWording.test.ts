@@ -15,8 +15,17 @@ import {
   describeRail,
   describeWarrant,
   describeAttestation,
+  describeCashbackKind,
+  describeCashbackClaim,
+  describeUnderstatedSale,
+  describeUnderstatedLine,
   type EvidenceLine,
 } from '../issuedVoucherWording'
+import { formatFace } from '../format'
+
+const DATE = (ms: number) => `day ${ms}`
+const claimLine = (status: string | undefined, expired = false, claimedAt?: number) =>
+  describeCashbackClaim({ status, expired, claimedAt }, DATE)
 
 /** Every line the three describers can produce, for the rules that hold across all of them. */
 const EVERY_LINE: EvidenceLine[] = [
@@ -32,6 +41,16 @@ const EVERY_LINE: EvidenceLine[] = [
   describeAttestation({ verdict: 'attested' }),
   describeAttestation({ verdict: 'none' }),
   describeAttestation({ verdict: 'invalid', reason: 'names a different stall' }),
+  describeCashbackKind(),
+  claimLine('Claimed', false, 1),
+  claimLine('Claimed'),
+  claimLine('Unclaimed'),
+  claimLine(undefined),
+  claimLine(undefined, true),
+  claimLine('Expired', true),
+  claimLine('Revoked'),
+  claimLine('ManualAttention'),
+  claimLine('SomethingNew'),
 ]
 
 describe('every line of evidence', () => {
@@ -62,11 +81,22 @@ describe('only a mismatch is an alarm', () => {
   })
 
   it('does NOT alarm on a sale that simply carries no signature', () => {
-    // Every sale made before warrants shipped, and every sale made on a
-    // terminal, whose key is not the stall's. Colouring these red would bury
+    // Every sale made before warrants shipped, and every sale from a till the
+    // stall has not attested. Colouring these red would bury
     // the one row that actually disagrees with itself.
     expect(describeWarrant({ verdict: 'absent' }).tone).toBe('neutral')
     expect(describeWarrant({ verdict: 'unwarranted' }).tone).toBe('neutral')
+  })
+
+  // The terminal wording was true while a till's key could not stand for the stall. Since owner
+  // attestation (#160 decision 5) an attested till's sales read `verified`, so the copy must no
+  // longer say that every terminal sale is unsigned.
+  it('no longer says every terminal sale is unsigned', () => {
+    expect(describeRail({ kind: 'unknown' }).detail).not.toMatch(/terminal/)
+    const unwarranted = describeWarrant({ verdict: 'unwarranted' }).detail ?? ''
+    expect(unwarranted).not.toMatch(/That is what a terminal issues/)
+    expect(unwarranted).not.toMatch(/a terminal’s key is not the stall’s/)
+    expect(unwarranted).toMatch(/till you have not set up again/)
   })
 
   it('does NOT alarm on a sale with no customer receipt', () => {
@@ -122,5 +152,79 @@ describe('the payment rail', () => {
     const line = describeRail({ kind: 'counter' })
     expect(line.label).toBe('At the counter')
     expect(`${line.label} ${line.detail}`.toLowerCase()).not.toMatch(/\bcash\b/)
+  })
+})
+
+describe('a cashback claim', () => {
+  it('reads claimed, with its date, only when the portal said Claimed', () => {
+    const line = claimLine('Claimed', false, 42)
+    expect(line.label).toBe('Claimed on day 42')
+    expect(line.tone).toBe('confirmed')
+  })
+
+  it('drops the date rather than printing "Claimed on " when it does not format', () => {
+    expect(describeCashbackClaim({ status: 'Claimed', claimedAt: 1, expired: false }, () => '').label).toBe(
+      'Claimed',
+    )
+  })
+
+  it.each([
+    ['no status', undefined, false],
+    ['no status, past expiry', undefined, true],
+    ['Unclaimed', 'Unclaimed', false],
+    ['Expired', 'Expired', true],
+    ['Revoked', 'Revoked', false],
+    ['ManualAttention', 'ManualAttention', false],
+    ['a status this build does not know', 'SomethingNew', false],
+  ])('never reads %s as claimed (absence is never approval)', (_name, status, expired) => {
+    const line = claimLine(status, expired)
+    expect(line.tone).not.toBe('confirmed')
+    expect(line.label).not.toMatch(/^Claimed/)
+  })
+
+  it('does not say "unclaimed" past expiry when the portal never answered', () => {
+    // Nothing asks about a code past its expiry and only final answers are
+    // stored, so a claim made just before expiry may not have reached here.
+    const line = claimLine(undefined, true)
+    expect(line.label).toBe('No claim on record')
+    expect(`${line.label} ${line.detail}`).not.toMatch(/unclaimed|did not claim/i)
+  })
+
+  it('says unclaimed past expiry when the portal itself said Expired', () => {
+    expect(claimLine('Expired', true).label).toBe('Expired unclaimed')
+  })
+
+  it('never borrows the Sell receipt wording', () => {
+    for (const line of [describeCashbackKind(), claimLine(undefined), claimLine('Claimed', false, 1)]) {
+      expect(line.label).not.toBe('Not collected')
+      expect(line.label).not.toBe('At the counter')
+    }
+  })
+})
+
+
+describe('a sale delivered short of its signature (#462)', () => {
+  const eur = (minor: number) => formatFace(minor, { unit: 'EUR', decimals: 2 })
+
+  it('states the figures, never a signature failure', () => {
+    const line = describeUnderstatedSale(
+      { signedMinor: 100_000, deliveredMinor: 20_000, partlyDelivered: true },
+      eur,
+    )
+    expect(line.tone).not.toBe('alarming')
+    expect(line.label).toBe('Partly delivered')
+    expect(line.detail).toContain('sale signed')
+    expect(line.detail).toContain('missing')
+    expect(line.detail).not.toMatch(/does not match/i)
+  })
+
+  it('gives the panel one line with the count', () => {
+    const text = describeUnderstatedLine(
+      { understatedSignedMinor: 100_000, understatedMinor: 20_000, counts: { understated: 1 } },
+      eur,
+    )
+    expect(text).toBe(
+      `${eur(100_000)} sale signed, ${eur(20_000)} delivered: ${eur(80_000)} missing, 1 sale to look at.`,
+    )
   })
 })

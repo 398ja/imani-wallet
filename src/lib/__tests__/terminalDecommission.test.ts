@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -25,6 +25,15 @@ vi.mock('../logout', () => ({
     return true
   },
   LOGOUT_WARNING: 'the customer wording',
+}))
+
+const backup = vi.hoisted(() => ({ ok: true }))
+vi.mock('../voucherRecords', () => ({
+  confirmBackups: vi.fn(async () =>
+    backup.ok
+      ? { ok: true, confirmed: 0, fingerprint: '' }
+      : { ok: false, reason: 'unconfirmed', unconfirmed: [{ token_id: 't' }], fingerprint: 'x' },
+  ),
 }))
 
 const { decommissionTerminal, DECOMMISSION_COPY, DECOMMISSION_REFUSAL } = await import(
@@ -63,9 +72,107 @@ const api = (over = {}) => ({
   ...over,
 })
 
+// The build names the key that signs terminal credentials, as every deploy must now: a terminal
+// credential whose signer is not on VITE_VOUCHER_ISSUER_PUBKEYS is refused (#160 review, IW-15).
 beforeEach(() => {
+  vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', parseVoucherToken(TOKEN).voucher.issuerPublicKey)
   localStorage.clear()
   erased.length = 0
+  backup.ok = true
+})
+afterEach(() => vi.unstubAllEnvs())
+
+describe('vouchers not confirmed as backed up (owner rule 2026-10-18, review of #326)', () => {
+  it('refuses BEFORE revoking: nothing revoked, nothing erased', async () => {
+    enrol()
+    backup.ok = false
+    const mint = api()
+
+    const out = await decommissionTerminal(mint, PUBKEY, () => {})
+
+    expect(out).toMatchObject({ done: false, reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED })
+    expect(mint.receive).not.toHaveBeenCalled()
+    expect(mint.validateToken).not.toHaveBeenCalled()
+    expect(erased).toEqual([])
+    expect(localStorage.getItem(ENROLMENT_KEY)).toContain(TOKEN)
+  })
+
+  it('a send still in flight refuses too, before revoking (second check of #326)', async () => {
+    enrol()
+    localStorage.setItem(`imani-wallet:pending-sends:${PUBKEY}`, JSON.stringify([{ sendId: 's', at: Date.now() }]))
+    const mint = api()
+
+    const out = await decommissionTerminal(mint, PUBKEY, () => {})
+
+    expect(out).toMatchObject({ done: false, reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED })
+    expect(mint.receive).not.toHaveBeenCalled()
+    expect(erased).toEqual([])
+  })
+
+  it('a Cashlink whose value is moving refuses too, before revoking (rev-wallet377)', async () => {
+    enrol()
+    localStorage.setItem(`imani-wallet:cashlink-moving:${PUBKEY}`, JSON.stringify(['sent:t0']))
+    const mint = api()
+
+    const out = await decommissionTerminal(mint, PUBKEY, () => {})
+
+    expect(out).toMatchObject({ done: false, reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED })
+    expect(mint.receive).not.toHaveBeenCalled()
+    expect(erased).toEqual([])
+  })
+
+  it('an interrupted swap refuses too, before revoking (third check of #326)', async () => {
+    enrol()
+    localStorage.setItem(`imani-wallet:swap-intents:${PUBKEY}`, JSON.stringify([{ swapId: 'w', at: Date.now() }]))
+    const mint = api()
+
+    const out = await decommissionTerminal(mint, PUBKEY, () => {})
+
+    expect(out).toMatchObject({ done: false, reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED })
+    expect(mint.receive).not.toHaveBeenCalled()
+    expect(erased).toEqual([])
+  })
+})
+
+describe('the cashback stash (#335 item 3)', () => {
+  it('an unconfirmed stash refuses BEFORE revoking, with the backup words, not "could not hand back"', async () => {
+    enrol()
+    const mint = api()
+    const checkStash = vi.fn(async () => ({ ok: false as const, reason: 'unconfirmed' as const, count: 1, fingerprint: 'x' }))
+
+    const out = await decommissionTerminal(mint, PUBKEY, () => {}, undefined, checkStash)
+
+    expect(checkStash).toHaveBeenCalledWith(PUBKEY)
+    expect(out).toMatchObject({
+      done: false,
+      reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED,
+      message: DECOMMISSION_COPY.vouchersUnconfirmed,
+    })
+    expect(mint.receive).not.toHaveBeenCalled()
+    expect(mint.validateToken).not.toHaveBeenCalled()
+    expect(erased).toEqual([])
+  })
+
+  it('a stash check that throws refuses too, before revoking', async () => {
+    enrol()
+    const mint = api()
+    const out = await decommissionTerminal(mint, PUBKEY, () => {}, undefined, async () => {
+      throw new Error('boom')
+    })
+    expect(out).toMatchObject({ done: false, reason: DECOMMISSION_REFUSAL.VOUCHERS_UNCONFIRMED })
+    expect(mint.receive).not.toHaveBeenCalled()
+  })
+
+  it('a confirmed stash goes on to revoke', async () => {
+    enrol()
+    const mint = api()
+    const out = await decommissionTerminal(mint, PUBKEY, () => {}, undefined, async () => ({
+      ok: true as const,
+      count: 0,
+      fingerprint: '',
+    }))
+    expect(out.done).toBe(true)
+  })
 })
 
 describe('the order', () => {

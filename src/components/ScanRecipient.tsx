@@ -22,6 +22,7 @@ export function ScanRecipient({
   /** This wallet's own pubkey. Given, sending to yourself is refused. */
   selfPubkey,
   manualLabel = 'Or enter their handle',
+  onText,
 }: {
   /**
    * The second argument is the NIP-05 the person was reached THROUGH, when they
@@ -33,6 +34,12 @@ export function ScanRecipient({
   onFound: (pubkey: string, handle?: string) => void
   selfPubkey?: string
   manualLabel?: string
+  /**
+   * Sees the raw scanned or typed text first. Return true to consume it, so it is not
+   * resolved as an account (the terminal setup code, #160). Its own error copy is the
+   * caller's to show.
+   */
+  onText?: (text: string) => boolean
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string | null>(null)
@@ -59,6 +66,10 @@ export function ScanRecipient({
 
     const accept = async (text: string) => {
       if (resolving) return
+      if (onText) {
+        onText(text)
+        return
+      }
       resolving = true
       try {
         const found = await resolveRecipient(text)
@@ -117,6 +128,10 @@ export function ScanRecipient({
 
   const submitManual = async () => {
     setError(null)
+    if (onText) {
+      onText(manual.trim())
+      return
+    }
     setLooking(true)
     const found = await resolveRecipient(manual)
     setLooking(false)

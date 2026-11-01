@@ -5,8 +5,10 @@ import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
 import type { NapSession } from '@imani/nap-client-web'
 
-import { createSession, resetSession } from './lib/nap'
-import { openWallet, onWalletChanged } from './lib/wallet'
+import { createSession, getSigner, resetSession } from './lib/nap'
+import { openWallet, onWalletChanged, onWalletOpenStatus, retryOpenWallet, setBeforeWalletRelease, walletOpenStatus, type WalletOpenStatus } from './lib/wallet'
+import { releaseWalletForOtherTab } from './lib/walletHandover'
+import { RestoringVouchers, WalletOpening } from './components/WalletOpening'
 import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
 import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
@@ -16,30 +18,44 @@ import { reconcilePendingSends } from './lib/pay'
 import { reconcileRequests } from './lib/vreq'
 import { sweepBurnable } from './lib/burn'
 import { reconcileClaims } from './lib/claimReconcile'
+import { sweepInterruptedReceives } from './lib/receiveSweep'
+import { saveRecoveredSwapBack } from './lib/swapBack'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
+import { collectTillSalesForOwner } from './lib/tillSalesNet'
+import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
+import { startOnlineShopSync } from './lib/onlineShopPublisher'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
-import { logout as runLogout } from './lib/logout'
+import { restoreCashbackStash } from './lib/cashbackStash'
+import { useLogout } from './lib/useLogout'
+import { LogoutBlockedDialog } from './components/LogoutBlocked'
 import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
 import { handleLabel } from './lib/format'
 import { reauthenticate } from './lib/reauth'
 import { useSessionReauth } from './lib/useSessionReauth'
 import { ReauthDialog } from './components/ui/ReauthDialog'
+import { HeldCouponsNotice } from './components/ui/HeldCouponsNotice'
 import {
   canTrade,
+  canRunStall,
   loadMerchant,
   refreshMerchant,
   type MerchantProfile,
 } from './lib/merchant'
 import { clearPendingBackup, peekPendingBackup } from './lib/onboardingHandoff'
 import { forgetResume, recover, remember } from './lib/resume'
+import { catchUpMerchantGrant } from './lib/merchantGrantCatchUp'
 import { Centered, Fatal } from './components/ui'
 import { Header } from './components/ui/Header'
 import { LoginPage } from './pages/LoginPage'
-import { OnboardingPage } from './pages/OnboardingPage'
+import { OnboardingPage, RestoreRedirect } from './pages/OnboardingPage'
+import { TerminalSetupPage } from './pages/TerminalSetupPage'
+import { TerminalApp } from './pages/TerminalApp'
+import { isTerminalDevice } from './lib/terminalEnrol'
 import { WelcomePage } from './pages/WelcomePage'
 import { MerchantsPage } from './pages/MerchantsPage'
 import { MerchantHomePage } from './pages/MerchantHomePage'
+import { OpenStallOnly } from './components/StallClosed'
 import {
   MerchantTransactionsPage,
   IssuedCouponsPage,
@@ -54,18 +70,31 @@ import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
 import { RedeemPage } from './pages/RedeemPage'
 import { MerchantPage } from './pages/MerchantPage'
-import { ClaimLandingPage } from './pages/ClaimLandingPage'
+import { ClaimLandingPage, ResumeParkedClaim } from './pages/ClaimLandingPage'
+import { takeAfterLogin } from './lib/afterLogin'
+import { refreshOwnBadge, setVerificationOwner } from './lib/verificationReader'
+import { SUBSCRIPTION_STATUS_EVENT } from './lib/subscriptionStatusStore'
+import { GiftLandingPage } from './pages/GiftLandingPage'
+import { GiftReturnPage } from './pages/GiftReturnPage'
+import { finishPendingCashlinkClaims, reconcileGiftLinks, restoreScan } from './lib/giftLinks'
+import { runCashlinkExpiryNoticesAfterReconcile } from './lib/cashlinkExpiryNotice'
 import { BuyPage } from './pages/BuyPage'
+import { BuyCancelledPage, BuyDonePage } from './pages/BuyReturnPages'
 import { PublicProfilePage } from './pages/PublicProfilePage'
-import { peekPendingClaim } from './lib/pendingClaim'
-import { CouponsPage, TransactionsPage } from './pages/RecordListPages'
+import { CouponsPage, ExpiringCouponsPage, TransactionsPage } from './pages/RecordListPages'
+import { useExpiryReminders } from './hooks/useExpiryReminders'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
 import { PayPage } from './pages/PayPage'
+import { UseOnlinePage } from './pages/UseOnlinePage'
+import { checkoutCodesEnabled } from './lib/checkoutCodePorts'
 import { SendPage } from './pages/SendPage'
+import { SendLinkPage } from './pages/SendLinkPage'
 import { ReceivePage } from './pages/ReceivePage'
-import { CashbackRedeemPage } from './pages/CashbackRedeemPage'
+import { CashbackCodeRetiredPage } from './pages/CashbackCodeRetiredPage'
 import { ProfilePage } from './pages/ProfilePage'
+import { FinishProfilePrompt } from './components/FinishProfilePrompt'
+import { claimProfileWith } from './lib/profileGate'
 import { SettingsPage } from './pages/SettingsPage'
 import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
@@ -74,7 +103,25 @@ import { TerminalEnrolPage } from './pages/TerminalEnrolPage'
 import { useTerminalIdentity } from './lib/useTerminalIdentity'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
-import { BackupPage, RestorePage } from './pages/BackupPages'
+import { BackupPage } from './pages/BackupPages'
+import { fulfilmentOf, registerRequestTerms } from './lib/terminalTill'
+import { listenForLogout } from './lib/logoutTabs'
+
+/**
+ * The stall's own till asks gateway-core too (#300), through the same check a terminal uses, so
+ * a coupon receive that stalls cannot hold it on "Waiting for payment" after core counted the
+ * payment. Signed with the session's signer when it runs. Built once, so the Redeem screen's
+ * watch is not restarted on every render.
+ */
+const OWNER_FULFILMENT = fulfilmentOf()
+const OWNER_REGISTER = registerRequestTerms()
+
+// Another tab's logout (or a newer version) asks for the store: stop the
+// writers and let a receive in flight land, then let go (lib/walletHandover).
+// For the life of the document, not of AuthedApp (review of #353): the store
+// and the poller outlive an unmount (a lapsed session shows the passphrase
+// dialog with AuthedApp gone), and a release then must still drain first.
+setBeforeWalletRelease(() => releaseWalletForOtherTab())
 
 /**
  * Everything behind the NAP session gate.
@@ -90,6 +137,16 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   const { permissions } = useNapSession()
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<Error | null>(null)
+  // Why the store is not open yet, or that another tab took it (#352). Seeded
+  // from the module so a remount does not flash back to "opening".
+  const [openStatus, setOpenStatus] = useState<WalletOpenStatus>(() => walletOpenStatus())
+  // Bumped by the waiting screen's Try again, which re-runs the open below.
+  const [openAttempt, setOpenAttempt] = useState(0)
+  // The coupons coming back from their backup after login: said quietly, on
+  // the home screen, so an empty list is not mistaken for an empty wallet.
+  const [restoring, setRestoring] = useState(false)
+
+  useEffect(() => onWalletOpenStatus(setOpenStatus), [])
   const [profile, setProfile] = useState<Profile>(() => loadProfile(pubkey) ?? emptyProfile(pubkey))
   // Null is a real answer, not "not loaded yet": it means this key has published
   // no merchant record, which is what makes an account a customer. Seeded from
@@ -104,7 +161,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
 
   useEffect(() => {
     let live = true
-    openWallet(pubkey).then(
+    ;(openAttempt === 0 ? openWallet : retryOpenWallet)(pubkey).then(
       () => {
         if (!live) return
         setReady(true)
@@ -154,6 +211,17 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // ways is still one line in the bell.
         startPaymentReceipts(pubkey)
 
+        // Every change to the terminal list is published, debounced, to the owner's other
+        // devices (#160 phase 6). Stopped on logout.
+        startRosterSync(pubkey)
+        // And the stall's profile follows it: a shop turning In service is advertised from any
+        // screen, not only while Terminals is open (#402).
+        startOnlineShopSync(pubkey)
+
+        // This account's own avatar reads the licences it holds as well as the public attestation
+        // (#418), so its badge is right the moment a plan arrives, before the service publishes.
+        setVerificationOwner(pubkey)
+
         // Finish any send this wallet stopped waiting for. The 20s poll in
         // pay.ts is not a verdict — a saga can complete minutes later — and
         // until this ran, one that did left the customer holding a coupon whose
@@ -193,7 +261,14 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // customer screen — the shop list is built from what the wallet holds,
         // so until they are back the app reads "No coupons yet" no matter how
         // much history has been restored behind it.
+        // The cashback stash logout backed up (#331): merged back, banked by the
+        // redeem screen's replay as before. Never throws.
+        void restoreCashbackStash(pubkey).then((n) => {
+          if (n > 0) console.info(`[app] restored ${n} pending cashback token(s)`)
+        })
+        setRestoring(true)
         void restoreVouchers(pubkey)
+          .finally(() => live && setRestoring(false))
           .then((coupons) => {
             if (coupons > 0) console.info(`[app] restored ${coupons} coupon(s) from the relay`)
             // After the restore, so a coupon that came back from the relay is
@@ -217,6 +292,18 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // publish lost the race with a closing tab.
             return backfillTx(pubkey)
           })
+          // A till's sales, sent to this stall as sealed sale records (#160 phase 6, wallet#202).
+          // After the history restore, so a sale already filed on another of the owner's devices
+          // comes back as that row and is not written again. Never throws.
+          // The owner's terminal list, from the relay (#160 phase 6, F4): logout wipes it from
+          // this device, and it is the only place the stall's revocation handles live. Merged
+          // into local, then checked against the mint. Before till sales, so a sale is
+          // attributed by name. Never throws.
+          .then(() => syncRosterNow(pubkey))
+          .then(() => collectTillSalesForOwner(pubkey))
+          .then((tillSales) => {
+            if (tillSales > 0) console.info(`[app] filed ${tillSales} till sale(s)`)
+          })
           // Last, once both the coupons and the history are back: re-files
           // redemptions written without their claim (pre-#90 rows) against
           // the issuance, so claimed/outstanding and the ceiling see them
@@ -225,6 +312,62 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           .then(({ filed, unreadable }) => {
             if (filed > 0) console.info(`[app] re-filed ${filed} redemption(s) against their issuance`)
             if (unreadable > 0) console.info(`[app] ${unreadable} redemption(s) could not be matched: coupon not on this device`)
+          })
+          // Then finish any receive whose swap went through while the page was
+          // dying. The proofs exist at the mint and are spendable only by this
+          // wallet; without this they are money nobody can reach (#123).
+          //
+          // Runs LAST and never rejects, so a mint that is down delays nobody's
+          // balance and the rest of start-up is unaffected.
+          //
+          // The save is deliberately a REFUSAL for now, and that is the honest
+          // wiring rather than a placeholder. Nothing creates these intents yet:
+          // `receiveTokenByOwnSwap` exists and no call site uses it, so the
+          // pending list is always empty and this never runs. Supplying a save
+          // that quietly dropped the proofs would be a landmine for whoever
+          // switches the receive on, because it would look wired and lose money
+          // the first time it fired. Throwing logs the amount at ERROR instead.
+          //
+          // The one exception is "Swap back to sats" (cashu-mint#540): it tags its coupon row with
+          // the swap id before swapping, so a recovered swap back goes back onto that row.
+          .then(() =>
+            sweepInterruptedReceives(pubkey, async (swap) => {
+              if (await saveRecoveredSwapBack(swap)) return
+              throw new Error(
+                `no save is wired for recovered receives yet (swap ${swap.swapId}); ` +
+                  'wire one before switching the wallet-side receive on',
+              )
+            }),
+          )
+          .then((recovered) => {
+            if (recovered > 0) {
+              console.info(`[app] recovered ${recovered} interrupted receive(s) from the mint`)
+            }
+          })
+          // Gift links (claim links phase 4, spec 3.3). After the history restore, so a link sent
+          // from another device is known by its row. The restore scan adopts any outstanding link
+          // this device's history does not know (a lost phone), then every outstanding link is
+          // checked by NUT-07: spent is claimed, and past its expiry it is taken back. Never throws.
+          .then(() => restoreScan(pubkey))
+          // #295 phase 4: a Cashlink this wallet started to claim and did not finish (the page
+          // died after the burn) is finished first, from the factors it wrote down. Never throws.
+          .then(async (adopted) => {
+            const done = await finishPendingCashlinkClaims(pubkey)
+            if (done > 0) console.info(`[app] finished ${done} Cashlink claim(s)`)
+            return adopted
+          })
+          .then((adopted) => {
+            if (adopted > 0) console.info(`[app] found ${adopted} outstanding gift link(s)`)
+            return reconcileGiftLinks()
+          })
+          .then(({ claimed, reclaimed }) => {
+            if (claimed + reclaimed > 0) console.info(`[app] gift links: ${claimed} claimed, ${reclaimed} taken back`)
+            // #295 phase 0: tell the sender about each Cashlink that expired, once. After the
+            // reconcile, so a link it just took back says so instead of "open Imani".
+            return runCashlinkExpiryNoticesAfterReconcile(pubkey)
+          })
+          .catch(() => {
+            // Never blocks start-up; logged inside.
           })
       },
       (e) => live && setError(e as Error),
@@ -247,8 +390,28 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       // sign with the previous account's session and file the next account's
       // claims into the wrong inbox.
       stopPaymentReceipts()
+      setVerificationOwner(undefined)
     }
-  }, [pubkey])
+  }, [pubkey, openAttempt])
+
+  // A licence is a voucher, so it arrives as a wallet write: re-read this account's own badge then,
+  // and when the subscription service says a plan changed. Debounced, because a restore writes
+  // hundreds of rows and each would otherwise re-verify every licence held.
+  useEffect(() => {
+    if (!ready) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const later = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(refreshOwnBadge, 1500)
+    }
+    const off = onWalletChanged(later)
+    window.addEventListener(SUBSCRIPTION_STATUS_EVENT, later)
+    return () => {
+      if (timer) clearTimeout(timer)
+      off()
+      window.removeEventListener(SUBSCRIPTION_STATUS_EVENT, later)
+    }
+  }, [ready])
 
 
   /**
@@ -259,7 +422,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
    * the lapse notice that terminals ticket 07 built — until this line existed
    * those were correct code no user could reach.
    */
-  const terminal = useTerminalIdentity()
+  // `pubkey` is the key that unlocked this session: the device's own key on a
+  // terminal. Passed in so the credential's lock is compared with the key this
+  // device actually holds, not with the record being checked (#160, G9).
+  const terminal = useTerminalIdentity({ devicePubkey: pubkey })
 
   // Every arriving coupon is a candidate payment for an open request, and the
   // merchant is rarely on the screen that shows it — the till, the home screen
@@ -271,6 +437,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
     if (!ready) return
     return onWalletChanged(() => void reconcileRequests(pubkey).catch(() => {}))
   }, [ready, pubkey])
+
+  // #265: "voucher about to expire" bell entries, filed while the wallet is open. Local only.
+  useExpiryReminders(pubkey, ready)
 
   // Reconcile the local copy with the relay, as bottin does on every login.
   // Never throws — an unreachable relay leaves the stored profile in place.
@@ -294,12 +463,26 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
     }
   }, [pubkey])
 
-  const onLogout = useCallback(() => {
-    void runLogout(pubkey).then((done) => done && onLoggedOut())
-  }, [pubkey, onLoggedOut])
+  // A logout in another tab pauses this one first, and this tab answers it
+  // only once nothing here is mid receive or mid send (#335, lib/logoutTabs.ts).
+  useEffect(() => listenForLogout(pubkey), [pubkey])
 
+  // Refused, with a dialog, until every held voucher is read back from its
+  // backup (owner rule 2026-10-18; lib/logout.ts `attemptLogout`).
+  const logoutFlow = useLogout(pubkey, onLoggedOut)
+  const onLogout = logoutFlow.logout
+
+  // Released first (review of #353): once this tab has let go of the store, the
+  // open refuses, and that refusal is not a fault to show as one.
+  if (openStatus === 'released') {
+    return <WalletOpening status={openStatus} onRetry={() => setOpenAttempt((n) => n + 1)} />
+  }
   if (error) return <Fatal title="Could not open the wallet" detail={error.message} />
-  if (!ready) return <Centered>Opening wallet…</Centered>
+  // Not a dead screen any more (#352): it spins, says why it waits, and offers
+  // Try again; once another tab has taken the store, it asks for a reload.
+  if (!ready) {
+    return <WalletOpening status={openStatus} onRetry={() => setOpenAttempt((n) => n + 1)} />
+  }
 
   // The backup screen takes over the whole app rather than sitting on a route:
   // it is the only chance to save a key that cannot be recovered, so it must not
@@ -320,10 +503,19 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   // The session's authority AND a stall to sell from — see `canTrade`. A `const`
   // so TypeScript narrows `merchant` for the screens behind it.
   const trading = canTrade(permissions, merchant)
+  // #434: the ROLE, open or closed. A closed stall keeps the merchant home, header and every
+  // trading route; the screens grey their actions out and say why instead of disappearing.
+  const stallOwner = canRunStall(permissions, merchant)
 
   return (
     <>
-      <Header profile={profile} merchant={trading} terminal={terminal.actor !== null} onLogout={onLogout} />
+      <Header profile={profile} merchant={stallOwner} terminal={terminal.actor !== null} onLogout={onLogout} />
+      {/* Coupons the trusted-mint gate is holding, so a wait is never mistaken for a loss (#133). */}
+      <HeldCouponsNotice pubkey={pubkey} className="mt-2" />
+      {/* #352: the wallet opens first and the vouchers fill in as they come back. */}
+      {restoring && <RestoringVouchers />}
+      {/* #332, #339: a quiet, dismissible link for an account with no handle, on Home only. Never a gate. */}
+      <FinishProfilePrompt profile={profile} />
       <Routes>
         {/*
           The role split. A merchant gets a different home and the two money
@@ -341,33 +533,39 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             /*
               Someone who arrived holding a claim link came for a voucher, not
               for an empty wallet. If one is still parked after onboarding,
-              finish that first — peeked rather than taken, so the claim is
-              still there for the screen that spends it.
+              finish that first. Decided inside `ResumeParkedClaim` on every
+              visit to `/`, not here: this element is built when AuthedApp
+              renders, which is not on navigation.
             */
-            peekPendingClaim() ? (
-              <Navigate to="/c" replace />
-            ) : trading ? (
-              <MerchantHomePage
-                actor={terminal.actor ?? undefined}
-                session={terminal.session}
-                refusal={terminal.refusal}
-              />
-            ) : (
-              <MerchantsPage />
-            )
+            <ResumeParkedClaim pubkey={pubkey}>
+              <ResumeAfterLogin>
+              {stallOwner ? (
+                <MerchantHomePage
+                  actor={terminal.actor ?? undefined}
+                  session={terminal.session}
+                  refusal={terminal.refusal}
+                  closed={!merchant.active}
+                />
+              ) : (
+                <MerchantsPage pubkey={pubkey} />
+              )}
+              </ResumeAfterLogin>
+            </ResumeParkedClaim>
           }
         />
-        {trading && (
+        {stallOwner && (
           <>
             <Route
               path="/sell"
               element={
-                <SellPage
-                  pubkey={pubkey}
-                  merchant={merchant}
-                  actor={terminal.actor ?? undefined}
-                  session={terminal.session}
-                />
+                <OpenStallOnly merchant={merchant}>
+                  <SellPage
+                    pubkey={pubkey}
+                    merchant={merchant}
+                    actor={terminal.actor ?? undefined}
+                    session={terminal.session}
+                  />
+                </OpenStallOnly>
               }
             />
             {/* Under /sell because it is the other half of the same job —
@@ -376,17 +574,27 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             <Route
               path="/sell/cashback"
               element={
-                <CashbackIssuePage merchant={merchant} actor={terminal.actor ?? undefined} />
+                <OpenStallOnly merchant={merchant}>
+                  <CashbackIssuePage
+                    merchant={merchant}
+                    actor={terminal.actor ?? undefined}
+                    session={terminal.session}
+                  />
+                </OpenStallOnly>
               }
             />
             <Route
               path="/redeem"
               element={
-                <RedeemPage
-                  pubkey={pubkey}
-                  merchant={merchant}
-                  actor={terminal.actor ?? undefined}
-                />
+                <OpenStallOnly merchant={merchant}>
+                  <RedeemPage
+                    pubkey={pubkey}
+                    merchant={merchant}
+                    actor={terminal.actor ?? undefined}
+                    fulfilment={OWNER_FULFILMENT}
+                    register={OWNER_REGISTER}
+                  />
+                </OpenStallOnly>
               }
             />
             {/*
@@ -406,7 +614,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             {terminal.actor === null && (
               <>
                 <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
-                <Route path="/merchant/coupons" element={<IssuedCouponsPage />} />
+                <Route path="/merchant/coupons" element={<IssuedCouponsPage stallPubkey={pubkey} />} />
                 {/* The full list behind the dashboard's capped "Expiring soon". */}
                 <Route path="/merchant/expiring" element={<ExpiringVouchersPage />} />
                 {/* `pubkey` is the STALL's own key, which the detail screen
@@ -427,32 +635,62 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           </>
         )}
         <Route path="/scan" element={<ScanPage />} />
+        {/* A terminal setup code scanned, or a setup link opened, on a device that holds a
+            personal wallet (#160 owner report). A terminal is a fresh identity on its own
+            device, so this explains rather than sets anything up. */}
+        <Route path="/terminal/setup" element={<WalletHolderIsNotATerminal />} />
         <Route path="/pay" element={<PayPage pubkey={pubkey} />} />
+        {/* #402: checkout codes, dark until VITE_CHECKOUT_CODES=on. */}
+        {checkoutCodesEnabled() && <Route path="/online" element={<UseOnlinePage pubkey={pubkey} />} />}
+        {checkoutCodesEnabled() && <Route path="/online/code/:id" element={<UseOnlinePage pubkey={pubkey} />} />}
         <Route path="/send" element={<SendPage pubkey={pubkey} />} />
+        <Route path="/send/link" element={<SendLinkPage pubkey={pubkey} />} />
         <Route path="/receive" element={<ReceivePage profile={profile} />} />
-        <Route path="/receive/cashback" element={<CashbackRedeemPage />} />
+        <Route path="/receive/cashback" element={<CashbackCodeRetiredPage />} />
         {/* A claim link handed over by the hosted page. Present in BOTH trees:
             here it redeems, and in `PublicRoutes` it parks the claim and sends
             the customer to onboarding first. */}
-        <Route path="/c/:ref" element={<ClaimLandingPage authed />} />
+        <Route path="/c/:ref" element={<ClaimLandingPage authed pubkey={pubkey} onSwitchAccount={onLogout} />} />
         {/* Where a parked claim is picked up after onboarding. `Entry` sends a
             new wallet here rather than to the home screen when one is waiting,
             so the last step of "install the app to get your voucher" is not
             left to the customer to work out. */}
-        <Route path="/c" element={<ClaimLandingPage authed />} />
+        <Route path="/c" element={<ClaimLandingPage authed pubkey={pubkey} onSwitchAccount={onLogout} />} />
+        {/* A gift link (claim links phase 4): in BOTH trees, as `/c`. */}
+        <Route path="/g" element={<GiftLandingPage authed pubkey={pubkey} onSwitchAccount={onLogout} />} />
+        <Route path="/gift-return" element={<GiftReturnPage authed />} />
         {/* Buying a stall's coupon by card. In BOTH trees: a shopper who
             already holds coupons is topping up, and a stranger who scanned a
             QR is the reason the hosted page exists. */}
+        {/* Stripe's return pages for a buyer (#267). Static paths, declared
+            beside /buy/:pubkey; React Router ranks them above the param. */}
+        <Route path="/buy/done" element={<BuyDonePage />} />
+        <Route path="/buy/cancelled" element={<BuyCancelledPage />} />
         <Route path="/buy/:pubkey" element={<BuyPage buyerPubkey={pubkey} />} />
-        <Route path="/merchants/:pubkey" element={<MerchantPage />} />
+        <Route path="/merchants/:pubkey" element={<MerchantPage viewerPubkey={pubkey} />} />
         <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
+        <Route path="/coupons/expiring" element={<ExpiringCouponsPage pubkey={pubkey} />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
         <Route path="/coupon/:tokenId" element={<CouponPage />} />
         <Route
           path="/transaction/:id"
           element={<TransactionPage pubkey={pubkey} trading={trading} />}
         />
-        <Route path="/profile" element={<ProfilePage profile={profile} merchant={merchant} />} />
+        <Route
+          path="/profile"
+          element={
+            <ProfilePage
+              profile={profile}
+              merchant={merchant}
+              // #332: the logged-in key finishes its own profile. The same
+              // idempotent claim as login's Finish your profile (#327), signed
+              // by the session's signer; the card updates from state, no reload.
+              onFinishProfile={async (handle, terms) =>
+                setProfile(await claimProfileWith(getSigner(), handle, profile, terms))
+              }
+            />
+          }
+        />
         {/* Somebody ELSE's profile. `/profile` with no key is still your own —
             the two are one route family on purpose, because "whose profile am I
             looking at" is the only difference between them.
@@ -535,7 +773,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // REACHABILITY (a customer has no stall to run terminals for), same
             // predicate as the row that leads here.
             merchant !== null ? (
-              <SubscriptionPage pubkey={pubkey} />
+              <SubscriptionPage pubkey={pubkey} currency={merchant.issuanceCurrency} />
             ) : (
               <Navigate to="/settings" replace />
             )
@@ -586,6 +824,14 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      {logoutFlow.blocked && (
+        <LogoutBlockedDialog
+          outcome={logoutFlow.blocked}
+          busy={logoutFlow.checking}
+          onRetry={logoutFlow.logout}
+          onClose={logoutFlow.dismiss}
+        />
+      )}
     </>
   )
 }
@@ -638,21 +884,32 @@ function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () =
   const greeting =
     knownProfile?.displayName ??
     (knownProfile?.nip05 ? handleLabel(knownProfile.nip05) : undefined)
+  // The same refusal as the header's logout. Here the key is LOCKED, so a
+  // wallet holding vouchers is refused until it is unlocked: no backup can be
+  // read back or made without the key (review of #326).
+  const dialogLogout = useLogout(known, onLoggedOut)
 
   const dialog = expired ? (
-    <ReauthDialog
-      name={greeting}
-      onSubmit={async (passphrase) => {
-        await reauthenticate(passphrase)
-        dismiss()
-      }}
-      onLogout={() => {
-        // `runLogout` confirms first — it erases the key and every trace of the
-        // account from this browser, and it reloads the document on success, so
-        // nothing after this needs to tidy up.
-        if (known) void runLogout(known).then((done) => done && onLoggedOut())
-      }}
-    />
+    <>
+      <ReauthDialog
+        name={greeting}
+        onSubmit={async (passphrase) => {
+          await reauthenticate(passphrase)
+          dismiss()
+        }}
+        // `attemptLogout` checks the backups, then confirms; it erases the key
+        // and every trace of the account, and reloads the document on success.
+        onLogout={dialogLogout.logout}
+      />
+      {dialogLogout.blocked && (
+        <LogoutBlockedDialog
+          outcome={dialogLogout.blocked}
+          busy={dialogLogout.checking}
+          onRetry={dialogLogout.logout}
+          onClose={dialogLogout.dismiss}
+        />
+      )}
+    </>
   ) : null
 
   // The dialog renders OVER the app rather than instead of it. That is the whole
@@ -689,18 +946,39 @@ function Gate({ session, onLoggedOut }: { session: NapSession; onLoggedOut: () =
  * `POST /api/v1/nip05` claims a handle for a raw pubkey, so the wallet no longer
  * has to send people elsewhere to get an identity.
  */
+/**
+ * Back to the purchase a visitor left for login (#280).
+ *
+ * Login lands on `/` (every public path falls through to it once a session
+ * exists), so this is where the detour ends. Read once per mount and removed
+ * as it is read: a stale entry must not hijack a later visit to home.
+ */
+function ResumeAfterLogin({ children }: { children: React.ReactNode }) {
+  const [next] = useState(() => takeAfterLogin())
+  return next ? <Navigate to={next} replace /> : <>{children}</>
+}
+
 function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<void> }) {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage onUnlock={onUnlock} />} />
       <Route path="/onboarding" element={<OnboardingPage onUnlock={onUnlock} />} />
-      <Route path="/restore" element={<RestorePage onUnlock={onUnlock} />} />
+      {/* #160 phase 2: a fresh device becomes a terminal. Public, because the
+          device has no key and no session yet. `completeEnrolment` refuses on a
+          device that already holds one, so this cannot overwrite a wallet. */}
+      <Route path="/terminal/setup" element={<TerminalSetupGate />} />
+      {/* Restoring IS logging in now (#325): the onboarding "Log in" step opens
+          a Google Drive backup or a backup file. Old links, bookmarks and the
+          advice people were given still say /restore, so it lands there. */}
+      <Route path="/restore" element={<RestoreRedirect />} />
       {/* A bearer claim link, which is opened by people who have no wallet yet
           BY DESIGN. It cannot fall through to `Entry` with everything else:
           losing the ref and the key here used to mean losing the voucher. The
           page parks the claim and resumes it after onboarding, and nothing is
           spent until a wallet exists to hold it. */}
       <Route path="/c/:ref" element={<ClaimLandingPage authed={false} />} />
+      <Route path="/g" element={<GiftLandingPage authed={false} />} />
+      <Route path="/gift-return" element={<GiftReturnPage authed={false} />} />
       {/* A stall's profile, which is a PUBLIC thing: the kind-30078 record and
           the kind-0 profile are both plaintext and readable over an
           unauthenticated relay query, and the whole point of a QR on a stall
@@ -725,6 +1003,8 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
           where React Router never reached it and a stranger tapping Buy landed
           on /onboarding. A duplicate path in the wrong <Routes> is dead code
           that looks live. */}
+      <Route path="/buy/done" element={<BuyDonePage />} />
+      <Route path="/buy/cancelled" element={<BuyCancelledPage />} />
       <Route path="/buy/:pubkey" element={<BuyPage />} />
       {/* Anything else, including deep links into the authed app, lands on the
           entry screen; the deep link is not preserved because every authed route
@@ -734,6 +1014,47 @@ function PublicRoutes({ onUnlock }: { onUnlock: (privkeyHex: string) => Promise<
   )
 }
 
+/**
+ * `/terminal/setup`, only on a device with no key (spec 2.2 step 2).
+ *
+ * One account per device. A device holding a key is sent to log in, where the person can log
+ * out (and see the backup warning) before setting it up as a terminal.
+ */
+function TerminalSetupGate() {
+  const [hasKey, setHasKey] = useState<boolean | null>(null)
+  useEffect(() => {
+    import('./lib/nap').then(({ hasStoredKey }) =>
+      hasStoredKey().then(setHasKey, () => setHasKey(false)),
+    )
+  }, [])
+  if (hasKey === null) return <Centered>Checking…</Centered>
+  if (hasKey) return <WalletHolderIsNotATerminal />
+  return <TerminalSetupPage />
+}
+
+/** What the owner's operator meant to do, and why this device cannot (#160 owner report). */
+const PERSONAL_WALLET_NOT_A_TERMINAL =
+  'This device already has a personal wallet. A terminal needs its own device with no account, ' +
+  'or log out here first (keep your backup).'
+
+function WalletHolderIsNotATerminal() {
+  return (
+    <Centered>
+      <div className="max-w-sm space-y-3 text-center" role="alert">
+        <p className="text-lg font-semibold text-mono-900 dark:text-mono-50">This is a personal wallet</p>
+        <p>{PERSONAL_WALLET_NOT_A_TERMINAL}</p>
+        <p className="text-sm">
+          On the terminal&apos;s own device, choose &quot;Set this device up as a terminal&quot; and
+          scan the owner&apos;s setup code from that screen.
+        </p>
+      </div>
+    </Centered>
+  )
+}
+
+/** Entry's answer for a device enrolled as a terminal (#160). Not a route. */
+const TERMINAL_TARGET = 'terminal'
+
 /** Unlock if this browser holds a key, otherwise sign up. */
 function Entry() {
   const [target, setTarget] = useState<string | null>(null)
@@ -742,13 +1063,18 @@ function Entry() {
     // hasStoredKey is async (IndexedDB), so this cannot be decided in a render.
     import('./lib/nap').then(({ hasStoredKey }) =>
       hasStoredKey().then(
-        (has) => setTarget(has ? '/login' : '/onboarding'),
+        // Any terminal record, token or not (#160 review, LOW): a terminal key must never reach
+        // /login, where it would open a NAP session as a customer (spec 2.3).
+        (has) => setTarget(has ? (isTerminalDevice() ? TERMINAL_TARGET : '/login') : '/onboarding'),
         () => setTarget('/onboarding'),
       ),
     )
   }, [])
 
   if (!target) return <Centered>Checking…</Centered>
+  // #160: a terminal is not a customer, so it must not reach /login, where its
+  // key would open a NAP session as one (spec 2.3). It unlocks its till instead.
+  if (target === TERMINAL_TARGET) return <Navigate to="/terminal/unlock" replace />
   return <Navigate to={target} replace />
 }
 
@@ -787,6 +1113,10 @@ export default function App() {
       // for why this is not simply sessionStorage.
       const pubkey = next.getSession()?.pubkey
       if (pubkey) void remember(pubkey, privkeyHex)
+      // A merchant whose login beat the gateway's ingest of their stall record would
+      // otherwise render a customer home until the next reload (#114). A no-op unless
+      // the local record is active and the login answer lacks coupon:issue.
+      await catchUpMerchantGrant(next)
       setSession(next)
     },
     [callbacks],
@@ -857,6 +1187,9 @@ export default function App() {
     }
   }, [callbacks])
 
+  // Read once per page load. Enrolment, removal and decommissioning all reload the document.
+  const [terminalDevice] = useState(() => isTerminalDevice())
+
   if (resuming && !session) {
     return (
       <Shell>
@@ -867,7 +1200,12 @@ export default function App() {
 
   return (
     <Shell>
-      {session ? (
+      {!session && terminalDevice ? (
+        // #160 phase 3: an enrolled terminal runs the till, never the customer app. No NAP
+        // session is opened for it (spec 2.3), so this sits beside the session branch rather
+        // than inside it, and owns every route while the device is a terminal.
+        <TerminalApp />
+      ) : session ? (
         // identityChange is required, not optional: omitting it makes every
         // account switch surface as session_expired, which callers retry — and
         // a silent retry across an identity change is the privilege transfer

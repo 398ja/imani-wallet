@@ -7,6 +7,7 @@
 import type { Voucher } from '../types/voucher';
 import type { TokenMetadata } from '../types/dm';
 import type { Nip60WalletAdapter } from './Nip60WalletAdapter';
+import type { RefusalReason } from '../errors';
 
 /**
  * Options for token redemption
@@ -38,9 +39,57 @@ export interface RedemptionOptions {
 }
 
 /**
+ * What `checkBacking` says about where a token's value is.
+ *
+ * - `accept`: the proofs are at a mint the wallet trusts, in its unit.
+ * - `refuse`: the token can never be credited here, whatever the configuration:
+ *   its proofs are in a unit the wallet cannot read, or it cannot be read at all.
+ *   Terminal. Nothing is swapped and the delivery is consumed.
+ * - `hold`: the wallet will not credit this token NOW, but a configuration change
+ *   could change that: its mint is not on the trusted list, or no trusted mint is
+ *   known at all (imani-wallet#133 review). Nothing is swapped, the delivery is
+ *   NOT consumed, nothing is marked received, and `redemption:held` is emitted so
+ *   the wallet can show the coupon as waiting. A later poll offers it again.
+ *   Deliberately not a refusal: a mismatch between two services' mint settings
+ *   used to refuse, and so drop, every coupon it touched.
+ * - `defer`: the wallet cannot tell yet (its trusted-mint list has not loaded).
+ *   Nothing is swapped and the delivery is NOT consumed, so a later poll retries it.
+ */
+export type BackingVerdict =
+  | { readonly outcome: 'accept' }
+  | {
+      readonly outcome: 'refuse';
+      readonly reason: Extract<RefusalReason, 'wrong-unit' | 'undecodable'>;
+      readonly detail: string;
+    }
+  | { readonly outcome: 'hold'; readonly reason: HoldReason; readonly detail: string }
+  | { readonly outcome: 'defer'; readonly detail: string };
+
+/** Why a token was held rather than credited. Each one is a different thing to tell a user. */
+export type HoldReason =
+  /** The token's mint is not one the wallet trusts. A config change may add it. */
+  | 'untrusted-mint'
+  /** The wallet knows no trusted mint from any source, so it can verify nothing. */
+  | 'no-trusted-mint';
+
+/**
  * Adapter for token redemption operations
  */
 export interface RedemptionAdapter {
+  /**
+   * Is this token's value at a mint the wallet trusts, in a unit it understands?
+   *
+   * REQUIRED, and asked by dm-poll itself before every `redeem`, so no redemption
+   * path can skip it. It replaces an optional `getMintUrl` hook that nothing ever
+   * called, which left the mint and unit of a received token unchecked: a copy of
+   * a genuine signed voucher backed by proofs at a rogue mint was swapped and
+   * credited like the real thing (imani-wallet#131).
+   *
+   * Must not perform the swap and should not throw; an exception is treated as
+   * `defer`, never as `accept`.
+   */
+  checkBacking(token: string): BackingVerdict;
+
   /**
    * Redeem a Cashu token
    *
@@ -58,14 +107,6 @@ export interface RedemptionAdapter {
    * @returns true if token appears valid and redeemable
    */
   canRedeem?(token: string): Promise<boolean>;
-
-  /**
-   * Get mint URL from token
-   *
-   * @param token - Cashu token string
-   * @returns Mint URL if extractable
-   */
-  getMintUrl?(token: string): string | null;
 }
 
 /**
@@ -74,5 +115,5 @@ export interface RedemptionAdapter {
 export function isRedemptionAdapter(obj: unknown): obj is RedemptionAdapter {
   if (!obj || typeof obj !== 'object') return false;
   const adapter = obj as RedemptionAdapter;
-  return typeof adapter.redeem === 'function';
+  return typeof adapter.redeem === 'function' && typeof adapter.checkBacking === 'function';
 }

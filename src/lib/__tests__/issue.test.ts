@@ -20,6 +20,12 @@ describe('toEpochSeconds', () => {
     expect(toEpochSeconds('2026-08-13T00:00:00Z')).toBe(Math.floor(Date.parse('2026-08-13T00:00:00Z') / 1000))
   })
 
+  it('parses a numeric string in seconds or milliseconds (#157)', () => {
+    // Was Date.parse'd to NaN and dropped, so the DM carried no expiry.
+    expect(toEpochSeconds('1760000000')).toBe(1_760_000_000)
+    expect(toEpochSeconds('1760000000000')).toBe(1_760_000_000)
+  })
+
   it('returns undefined for nothing, so the field is omitted rather than sent as 0', () => {
     expect(toEpochSeconds(null)).toBeUndefined()
     expect(toEpochSeconds(undefined)).toBeUndefined()

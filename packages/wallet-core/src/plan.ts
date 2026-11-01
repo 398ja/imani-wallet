@@ -30,6 +30,7 @@ import type { Voucher } from '@imani/voucher-send'
 
 import { planParts, selectVouchers, splitObstacle, checkSplittable, minSplitStep } from './spend'
 import { stallKey } from './holding'
+import { toEpochMs } from './expiry'
 
 /** Why an amount cannot be met. */
 export type ObstacleKind =
@@ -246,19 +247,15 @@ function obstacleFor(eligible: Voucher[], amount: number, available: number): Pl
 }
 
 /**
- * Expiry in epoch milliseconds.
+ * Expiry in epoch milliseconds, or undefined for "no expiry" and "unreadable".
  *
- * Duplicated from `spend.ts`'s private `expiryMs` rather than exported from it,
- * because that function answers "how should this SORT" and returns
- * MAX_SAFE_INTEGER for no expiry. Here the question is "has it lapsed", where
- * "no expiry" must be undefined rather than a date far in the future. Same
- * parsing, different question.
+ * Through the shared parser (#157). This was a third copy of the old one, which
+ * read a numeric-string expiry as NaN, so the API's `planSpend` could plan a
+ * coupon that had already lapsed. An unreadable value is still undefined here
+ * (not filtered as lapsed): refusing a coupon nobody can date would strand it.
  */
 function expiryOf(coupon: Voucher): number | undefined {
-  const raw = coupon.expires_at as number | string | undefined
-  if (raw === undefined || raw === null || raw === '' || raw === 0) return undefined
-  const ms = typeof raw === 'number' ? (raw < 1e11 ? raw * 1000 : raw) : Date.parse(raw)
-  return Number.isFinite(ms) ? ms : undefined
+  return toEpochMs(coupon.expires_at)
 }
 
 /** Re-exported so a caller can ask whether one coupon covers an amount. */

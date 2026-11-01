@@ -261,11 +261,11 @@ describe('processor warrants are recorded, never verified', () => {
 })
 
 describe('delegated warrants refuse rather than half-check', () => {
+  // Verifying delegated needs two steps: the delegate's signature, THEN that
+  // the stall delegated to that key. A delegated warrant with a signature and
+  // no delegation proves nothing about the stall, so it is refused outright.
+  // The full set of delegated cases lives in `delegatedWarrant.test.ts`.
   it('is not accepted on a signature check alone', () => {
-    // Verifying delegated needs two steps: the signature against the
-    // credential's lock key, THEN that the credential was minted by issuerId.
-    // Doing only the first accepts a credential the attacker minted for
-    // themselves, so an unimplemented check must refuse.
     const w = parseIssuanceWarrant(warrantJson({ form: 'delegated' }))
     expect(verifyIssuanceWarrant(w, STALL_PUB, coupon(SALE_TOTAL)).verdict).toBe('failed')
   })

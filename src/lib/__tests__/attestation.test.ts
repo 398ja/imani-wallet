@@ -241,8 +241,14 @@ describe('what the published event does and does not carry', () => {
     const identityPub = Buffer.from(schnorr.getPublicKey(hexToBytes(MERCHANT_A))).toString('hex')
     expect(wire).not.toContain(identityPub)
     expect(wire).not.toContain(MERCHANT_A)
-    // The amount must not be recoverable by reading.
-    expect(wire).not.toContain('2500')
+    // The amount must not be recoverable by reading. Checked field by field, not as a substring of
+    // the whole event: the id, signature, nullifier and commitment are random hex, and one in a few
+    // hundred runs contains "2500" by chance, which failed this test on a correct event.
+    const content = JSON.parse(ev.content) as Record<string, unknown>
+    const readableValues = [...Object.values(content), ...ev.tags.flat()].map(String)
+    expect(readableValues).not.toContain('2500')
+    expect(Object.keys(content)).not.toContain('faceValue')
+    expect(Object.keys(content)).not.toContain('amount')
     // The token itself must never be republished — it is bearer value.
     expect(wire).not.toContain('cashuAsecret')
   })

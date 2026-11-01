@@ -12,6 +12,12 @@ import { useNavigate } from 'react-router-dom'
 import { QrCode, ScanLine } from 'lucide-react'
 
 import { Button, Screen, Panel, Pass } from '../components/ui'
+import { StallExpiryCue } from '../components/ui/ExpiryBadge'
+import { ExpiryBanner } from '../components/ui/ExpiryBanner'
+import { expiredCount, soonestExpiring } from '../lib/couponExpiry'
+import { runExpiryReminders } from '../lib/expiryReminders'
+import { useExpiryClock } from '../hooks/useExpiryReminders'
+import type { VoucherRow } from '@imani/wallet-storage'
 import { listTransactions, listVouchers, onWalletChanged } from '../lib/wallet'
 import { toMerchants, walletTotals, withPastMerchants, type Merchant } from '../lib/merchants'
 import { toTransaction } from '../lib/transactions'
@@ -314,23 +320,34 @@ function SwipeDeck({ children, label }: { children: ReactNode[]; label: string }
  * Home: what this customer holds in total, the merchants it came from, and the
  * two things they can do with it.
  */
-export function MerchantsPage() {
+export function MerchantsPage({ pubkey = '' }: { pubkey?: string }) {
   const navigate = useNavigate()
   const [merchants, setMerchants] = useState<Merchant[] | null>(null)
+  // The stored rows too (#265): the deck's expiry cue, the banner and the expired note read them.
+  const [rows, setRows] = useState<VoucherRow[]>([])
   const [branding, setBranding] = useState<Record<string, MerchantBranding>>({})
+  // Badges, the banner and the expired note are functions of the clock (#265).
+  const clock = useExpiryClock()
+  useEffect(() => {
+    if (pubkey && clock > 0) runExpiryReminders(pubkey, rows)
+  }, [clock, pubkey, rows])
 
   useEffect(() => {
     // Coupons AND history: a merchant you have spent everything with still belongs
     // on this list, because it is the only route to the record of what you spent.
     const load = async () => {
       const [rows, txs] = await Promise.all([listVouchers(), listTransactions()])
+      setRows(rows)
+      // Home is the first screen an opened wallet shows, so the reminder pass runs here too
+      // (#265). Deduped by id, so the app-level hook and this never file one twice.
+      if (pubkey) runExpiryReminders(pubkey, rows)
       setMerchants(withPastMerchants(toMerchants(rows), txs.map(toTransaction)))
     }
     load()
     // WalletStorage broadcasts on every write, including coupons arriving by DM
     // while this screen is open, so the list stays live without polling.
     return onWalletChanged(load)
-  }, [])
+  }, [pubkey])
 
   useEffect(() => {
     if (!merchants?.length) return
@@ -371,6 +388,7 @@ export function MerchantsPage() {
   // second unit gets its own line rather than being folded into the first.
   const totals = merchants ? walletTotals(merchants) : []
   const [primary, ...rest] = totals
+  const expired = expiredCount(rows)
 
   return (
     <Screen>
@@ -387,7 +405,17 @@ export function MerchantsPage() {
             + {formatFace(total.minor, total)}
           </p>
         ))}
+        {/* #265: an expired coupon leaves the balance, as it always did, but no longer silently. */}
+        {expired > 0 && (
+          <p className="mt-1 text-xs text-mono-500">
+            {expired === 1
+              ? '1 expired voucher is not counted.'
+              : `${expired} expired vouchers are not counted.`}
+          </p>
+        )}
       </Panel>
+
+      {pubkey && <ExpiryBanner pubkey={pubkey} rows={rows} />}
 
       <div className="mb-6 grid grid-cols-2 gap-3">
         <Button size="lg" onClick={() => navigate('/scan')}>
@@ -426,6 +454,7 @@ export function MerchantsPage() {
               <p className="mt-2 text-center text-sm text-mono-500">
                 {merchant.voucherCount} voucher{merchant.voucherCount === 1 ? '' : 's'}
               </p>
+              <StallExpiryCue soonest={soonestExpiring(rows, merchant.pubkey)} />
             </div>
           ))}
         </SwipeDeck>

@@ -7,8 +7,9 @@
  * interesting decisions stay in the module that has tests for them.
  */
 
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { randomBytes } from 'node:crypto'
 
 import { authorization, IssuanceFailed, ISSUE_PATH, type StallCredential } from './issuer'
 import type { CredentialStore } from './vault'
@@ -42,22 +43,42 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   async read(): Promise<never[]> {
+    let raw: string
     try {
-      const raw = await readFile(this.path, 'utf8')
-      const decoded: unknown = JSON.parse(raw)
-      return (Array.isArray(decoded) ? decoded : []) as never[]
-    } catch {
+      raw = await readFile(this.path, 'utf8')
+    } catch (error) {
       // A missing file is the ORDINARY state of a fresh deployment: no stall
-      // has enrolled yet. Indistinguishable here from a corrupt one, and both
-      // land where the design already sends a stall with no credential, which
-      // is issuing by hand.
-      return [] as never[]
+      // has enrolled yet.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [] as never[]
+      throw error
+    }
+    // A file that is there but is not a JSON array is NOT "no stalls" (review of #302). Read as
+    // empty, it wiped every stall from a running service the moment the file was hand-edited or
+    // copied in non-atomically (#290 reloads on change), and the next enrolment then wrote that
+    // empty list back over everyone. Thrown, so the vault keeps what it holds and refuses to write.
+    const decoded: unknown = JSON.parse(raw)
+    if (!Array.isArray(decoded)) throw new Error('the credential store is not a JSON array')
+    return decoded as never[]
+  }
+
+  /**
+   * mtime, size and inode (imani-wallet#290). `write` renames a new file into place, so every
+   * write changes the inode even within one mtime tick. A missing file is its own version.
+   */
+  async version(): Promise<string> {
+    try {
+      const s = await stat(this.path, { bigint: true })
+      return `${s.ino}:${s.size}:${s.mtimeNs}`
+    } catch {
+      return 'absent'
     }
   }
 
   async write(records: readonly unknown[]): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true })
-    const temporary = `${this.path}.tmp`
+    // Unique per write (review of #302): a fixed `.tmp` name let two writers (two enrolments at
+    // once, or this service and the operator script) rename each other's file away (ENOENT).
+    const temporary = `${this.path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
     await writeFile(temporary, JSON.stringify(records, null, 2), {
       // 0600. These are sealed, but the sealing key sits in the environment of
       // this same process, so a world-readable file plus a leaked environment
@@ -121,4 +142,80 @@ export async function tokenFor(
   // '' means "still minting", which the caller polls through. It is NOT an
   // error: a coupon mid-mint is the expected state for the first second or so.
   return typeof record.token === 'string' ? record.token : ''
+}
+
+/** Where a terminal credential is put in service (gateway-customer#187, V27). */
+export const CONFIRM_PATH = (voucherId: string) =>
+  `/api/v1/wallet/terminal-credentials/${encodeURIComponent(voucherId)}/confirm`
+
+/**
+ * Put a stall credential in service at the gateway (imani-wallet#160 round 2).
+ *
+ * Since gateway-customer V27, every terminal credential minted after the migration must be
+ * confirmed by its device or its stall before it may issue. The credentials this service
+ * holds are terminal credentials it presents in `X-Imani-Terminal-Credential`, so an
+ * unconfirmed one is refused on every sale. This confirms as the device (the lock key).
+ *
+ * 204 means in service; it is idempotent, so a credential already confirmed (or minted before
+ * V27) is fine to confirm again. Returns false on any other answer, and never throws: issuance
+ * itself then fails loudly and the debt stays owed.
+ */
+export async function confirmCredential(
+  gatewayUrl: string,
+  credential: StallCredential,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  return (await confirmStanding(gatewayUrl, credential, fetchImpl)) === 'confirmed'
+}
+
+/**
+ * What the gateway said to a confirm (imani-wallet#296).
+ *
+ *  - `confirmed`: 200/204, in service.
+ *  - `expired`: 410. The credential sat unconfirmed past the gateway's 24 h window and can never be
+ *    confirmed now. The stall must re-enrol this issuer; nothing retried here can fix it.
+ *  - `unconfirmed`: anything else (network, 5xx, 401). Worth trying again later.
+ */
+export type ConfirmStanding = 'confirmed' | 'expired' | 'unconfirmed'
+
+/**
+ * How long one confirm may take (review of #299). Without a bound, a gateway that accepts the
+ * connection and never answers held the startup confirm, and so the first pass, forever.
+ */
+export const CONFIRM_TIMEOUT_MS = 10_000
+
+export async function confirmStanding(
+  gatewayUrl: string,
+  credential: StallCredential,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ConfirmStanding> {
+  const url = `${gatewayUrl.replace(/\/$/, '')}${CONFIRM_PATH(credential.credentialId)}`
+  // The same request the wallet sends: an empty JSON object, signed in the `payload` tag. The
+  // gateway reads nothing from it. An empty body signed as sha256('') passes the filter too, but
+  // one shape for every caller of this endpoint is one shape to test (imani-wallet 0.14.2).
+  const body = '{}'
+  try {
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        // Signed afresh on every call: `authorization` adds a random nonce, so a retry is never a
+        // replay of an earlier event (#296).
+        Authorization: authorization('POST', url, body, credential.lockKeyHex),
+        'Content-Type': 'application/json',
+      },
+      body,
+      signal: AbortSignal.timeout(CONFIRM_TIMEOUT_MS),
+    })
+    if (response.status === 204 || response.status === 200) return 'confirmed'
+    console.warn(
+      JSON.stringify({
+        event: 'credential_confirm_refused',
+        stall: credential.stallPubkey.slice(0, 16),
+        status: response.status,
+      }),
+    )
+    return response.status === 410 ? 'expired' : 'unconfirmed'
+  } catch {
+    return 'unconfirmed'
+  }
 }

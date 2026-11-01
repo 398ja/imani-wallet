@@ -38,18 +38,46 @@ vi.mock('../nip98', () => ({
   },
 }))
 
+/** Every time the owner's wallet is asked for: a till has none (#160 phase 6, wallet#202). */
+const walletAsked = vi.hoisted(() => ({ count: 0 }))
 vi.mock('../wallet', () => ({
-  getWallet: () => ({ addTransaction: async () => {} }),
+  getWallet: () => {
+    walletAsked.count += 1
+    return { addTransaction: async () => {} }
+  },
   notifyWalletChanged: () => {},
 }))
 
 vi.mock('../relay', () => ({ INTERNAL_RELAY_URL: 'ws://relay.test' }))
+
+/**
+ * An unlocked wallet holding the STALL's key, so an owner's sale signs a
+ * `merchant` warrant. Without one the warrant is absent, and since #159 Sell
+ * refuses a sale every recipient would refuse (`assertSaleWarranted`).
+ * Only `signer.pubkey === stall` is checked before signing, and nothing here
+ * verifies the signature. `null` stands for a locked wallet.
+ */
+const signerState = vi.hoisted(() => ({ pubkey: 'a'.repeat(64) as string | null }))
+
+vi.mock('../nap', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../nap')>()),
+  getSigner: () => {
+    if (signerState.pubkey === null) throw new Error('No signer — the wallet has not been unlocked.')
+    return {
+      pubkey: signerState.pubkey,
+      withPrivkey: <T,>(borrow: (key: Uint8Array) => T): T => borrow(new Uint8Array(32).fill(7)),
+    }
+  },
+}))
 
 const { issueAndDeliver } = await import('../issue')
 const { ownerActor, terminalActor } = await import('../actor')
 const { NEVER_EXPIRES } = await import('../merchant')
 const { TERMINAL_ROLES, grantFor } = await import('../terminalRole')
 const { openSession, SESSION_KIND } = await import('../terminalSession')
+const { UnwarrantedSaleError } = await import('../warrantSigner')
+const { setRequestCredential } = await import('../terminalRequestCredential')
+const { setTillSaleSink } = await import('../tillSales')
 
 /**
  * A live, full-authority session.
@@ -75,6 +103,8 @@ const params = {
 beforeEach(() => {
   calls.length = 0
   bodies.length = 0
+  signerState.pubkey = STALL
+  setRequestCredential(null)
 })
 
 describe('a terminal that may not sell', () => {
@@ -127,28 +157,11 @@ describe('what the coupon is stamped with', () => {
    * and then stamped the terminal's own key would pass every unit test in
    * actor.test.ts and still hand customers coupons from an issuer that stops
    * existing at the next re-enrolment.
+   *
+   * The terminal case of that criterion is not reachable while terminal sales
+   * are refused (#159); see the last describe in this file. It returns with
+   * the `delegated` warrant form.
    */
-  it('carries the STALL when a terminal issued it, never the terminal key', async () => {
-    const till = terminalActor(
-      {
-        stallPubkey: STALL,
-        role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
-        lockedTo: DEVICE,
-        permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
-      },
-      DEVICE,
-    )!
-
-    await issueAndDeliver({ ...params, actor: till, session: live(till) })
-
-    const dm = bodies.find((b) => 'issuer_id' in b)
-    expect(dm).toBeDefined()
-    expect(dm!.issuer_id).toBe(STALL)
-    expect(dm!.sender_pubkey).toBe(STALL)
-    // The disposable key must appear nowhere on the coupon.
-    expect(JSON.stringify(dm)).not.toContain(DEVICE)
-  })
-
   it('carries the stall when the owner issued it', async () => {
     await issueAndDeliver({ ...params, actor: ownerActor(STALL)! })
 
@@ -215,8 +228,9 @@ describe('an owner issuing on their own device', () => {
  * mint has left a voucher nobody can deliver.
  */
 describe('a request made around the UI is refused, not merely hidden', () => {
-  const till = () =>
-    terminalActor(
+  // A till the stall attested at enrolment (#160 decision 5), which login marks `attested`.
+  const till = () => ({
+    ...terminalActor(
       {
         stallPubkey: STALL,
         role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
@@ -224,7 +238,9 @@ describe('a request made around the UI is refused, not merely hidden', () => {
         permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
       },
       DEVICE,
-    )!
+    )!,
+    attested: true,
+  })
 
   it('refuses a terminal whose trading day has rolled over', async () => {
     const actor = till()
@@ -286,19 +302,24 @@ describe('a request made around the UI is refused, not merely hidden', () => {
   })
 })
 
-describe('the customer’s copy carries no terminal information', () => {
-  /**
-   * Terminals ticket 09's third criterion, asserted on the artefact a customer
-   * ACTUALLY receives rather than on the function that builds it.
-   *
-   * The stall's record and the customer's coupon are built a few lines apart
-   * in the same function. Adding attribution to the wrong one is a one-word
-   * mistake, and nothing about the resulting coupon would look wrong — the
-   * customer would simply be told how the stall is staffed. So this reads the
-   * delivered payload and asserts the terminal's key appears nowhere in it.
-   */
-  it('does not leak the terminal key into the delivered coupon', async () => {
-    const till = terminalActor(
+/**
+ * Issue #159: a terminal's coupon could only carry a signed `none` warrant,
+ * and every wallet receiving a coupon by DM refuses that before the mint swap
+ * (`refuseIfUnwarranted`) — the customer's included. The terminal still
+ * reported "It is in their wallet now" while the customer's wallet showed
+ * "Coupon not authorised".
+ *
+ * So a terminal sale is refused before anything leaves the device, and so is
+ * any sale whose warrant would not be a signed `merchant` one. The stamping
+ * and privacy properties a terminal sale used to be tested for here (issuer is
+ * the stall, the terminal key appears nowhere on the coupon) come back with
+ * the `delegated` warrant form; until then there is no terminal coupon to
+ * inspect, and `calls` being empty is the stronger statement.
+ */
+describe('a sale the customer’s wallet would refuse is never made (#159)', () => {
+  // A till the stall attested at enrolment (#160 decision 5), which login marks `attested`.
+  const till = () => ({
+    ...terminalActor(
       {
         stallPubkey: STALL,
         role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
@@ -306,36 +327,122 @@ describe('the customer’s copy carries no terminal information', () => {
         permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
       },
       DEVICE,
-    )!
-
-    await issueAndDeliver({ ...params, actor: till, session: live(till) })
-
-    // Every body that left the device, not just the DM: a terminal key in the
-    // issuance request would reach the gateway too.
-    const everything = JSON.stringify(bodies)
-    expect(everything).not.toContain(DEVICE)
-    expect(everything).not.toMatch(/terminal/i)
+    )!,
+    attested: true,
   })
 
-  it('still carries the stall, so the customer knows who honours it', async () => {
-    // The privacy rule is "nothing about how the stall is staffed", not
-    // "nothing about the stall" — a coupon with no issuer is unredeemable.
-    // Issued here rather than relying on the test above, which `beforeEach`
-    // clears: a test that only passes after its neighbour is a test that will
-    // fail the day someone reorders the file.
-    const till = terminalActor(
-      {
-        stallPubkey: STALL,
-        role: TERMINAL_ROLES.ISSUE_AND_REDEEM,
-        lockedTo: DEVICE,
-        permissions: grantFor(TERMINAL_ROLES.ISSUE_AND_REDEEM, STALL),
-      },
-      DEVICE,
-    )!
+  it('refuses a full till holding no credential, before anything is minted', async () => {
+    // A FULL selling till may sell (#160 phase 5), but only with the credential it unlocked with
+    // in hand: without it the warrant could only be a signed `none`, which every wallet refuses.
+    const actor = till()
+    signerState.pubkey = DEVICE
 
-    await issueAndDeliver({ ...params, actor: till, session: live(till) })
+    const run = issueAndDeliver({ ...params, actor, session: live(actor) })
 
-    const dm = bodies.find((b) => 'issuer_id' in b)
-    expect(dm?.issuer_id).toBe(STALL)
+    await expect(run).rejects.toBeInstanceOf(UnwarrantedSaleError)
+    expect(calls).toEqual([])
+    expect(bodies).toEqual([])
+  })
+
+  it('never reports a stage, so the screen never shows progress or success', async () => {
+    const actor = till()
+    signerState.pubkey = DEVICE
+    const stages: string[] = []
+
+    await issueAndDeliver({ ...params, actor, session: live(actor) }, (s) => stages.push(s)).catch(
+      () => {},
+    )
+
+    expect(stages).toEqual([])
+  })
+
+  it('sends a full till’s sale with a terminal warrant, under its own key K (#160 phase 5)', async () => {
+    const actor = till()
+    signerState.pubkey = DEVICE
+    setRequestCredential({ voucherId: 'cred-1', stallPubkey: STALL, secret: '["P2PK_VOUCHER",{}]' })
+
+    await issueAndDeliver({ ...params, actor, session: live(actor) })
+
+    const mint = bodies.find((b) => 'face_value_minor' in b)
+    const warrant = JSON.parse(String(mint!.issuance_warrant))
+    // The spec's wire form, with the credential's secret and never its proof.
+    expect(Object.keys(warrant)).toEqual([
+      'form', 'sale_total', 'face_decimals', 'unit', 'nonce', 'signature', 'credential',
+    ])
+    expect(warrant.form).toBe('terminal')
+    expect(warrant.credential).toBe('["P2PK_VOUCHER",{}]')
+  })
+
+  // wallet#202: a till opens no wallet, so its sale row went to `getWallet()`, which threw and
+  // was swallowed. Now the row goes to the stall as a sealed sale record, and the wallet is never
+  // asked for.
+  it('sends a till sale record to its stall and never touches a wallet (#160 phase 6)', async () => {
+    const actor = till()
+    signerState.pubkey = DEVICE
+    setRequestCredential({ voucherId: 'cred-1', stallPubkey: STALL, secret: '["P2PK_VOUCHER",{}]' })
+    const sent: Array<Record<string, unknown>[]> = []
+    setTillSaleSink(async (rows) => (sent.push(rows as unknown as Record<string, unknown>[]), true))
+    walletAsked.count = 0
+    try {
+      await issueAndDeliver({ ...params, actor, session: live(actor) })
+    } finally {
+      setTillSaleSink(null)
+    }
+
+    expect(walletAsked.count).toBe(0)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toHaveLength(1)
+    expect(sent[0][0]).toMatchObject({ id: 'issued:v1', type: 'issued', terminalPubkey: DEVICE, merchantId: STALL })
+    expect(JSON.parse(String(sent[0][0].issuanceWarrant)).form).toBe('terminal')
+  })
+
+  it("files the owner's own sale in the owner's wallet, as before", async () => {
+    const sent: unknown[] = []
+    setTillSaleSink(async (rows) => (sent.push(rows), true))
+    walletAsked.count = 0
+    try {
+      await issueAndDeliver({ ...params, actor: ownerActor(STALL)! })
+    } finally {
+      setTillSaleSink(null)
+    }
+    expect(sent).toEqual([])
+    expect(walletAsked.count).toBeGreaterThan(0)
+  })
+
+  it('refuses a REDUCED till before anything is minted, even with its credential', async () => {
+    // A REDUCED session never heard from the mint, so the credential may already be revoked.
+    const actor = till()
+    signerState.pubkey = DEVICE
+    setRequestCredential({ voucherId: 'cred-1', stallPubkey: STALL, secret: 's' })
+
+    const run = issueAndDeliver({ ...params, actor, session: openSession(actor, SESSION_KIND.REDUCED) })
+
+    await expect(run).rejects.toThrow(/until it reaches the network/)
+    expect(calls).toEqual([])
+  })
+
+  it('refuses an owner session whose key is not the stall, which could only sign `none`', async () => {
+    signerState.pubkey = 'f'.repeat(64)
+
+    const run = issueAndDeliver({ ...params, actor: ownerActor(STALL)! })
+
+    await expect(run).rejects.toBeInstanceOf(UnwarrantedSaleError)
+    expect(calls).toEqual([])
+  })
+
+  it('refuses an owner whose wallet is locked, which could sign no warrant at all', async () => {
+    signerState.pubkey = null
+
+    const run = issueAndDeliver({ ...params, actor: ownerActor(STALL)! })
+
+    await expect(run).rejects.toThrow(/locked/)
+    expect(calls).toEqual([])
+  })
+
+  it('sends the owner’s sale with a signed merchant warrant', async () => {
+    await issueAndDeliver({ ...params, actor: ownerActor(STALL)! })
+
+    const mint = bodies.find((b) => 'face_value_minor' in b)
+    expect(JSON.parse(String(mint!.issuance_warrant)).form).toBe('merchant')
   })
 })

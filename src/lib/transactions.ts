@@ -1,6 +1,9 @@
 import type { TransactionRow } from '@imani/wallet-storage'
 import type { VoucherValidation } from './voucherToken'
 import { displayDecimals } from './format'
+import { asLockedGiftRecord, lockedGiftMemo, type LockedGiftRecord } from './lockedGiftRecord'
+import { asCheckoutCodeSnapshot, type CheckoutCodeSnapshot } from './checkoutCodeHistory'
+import { parseSpendSource, type SpendSource } from './spendSource'
 
 /**
  * A transaction, in the shape the screens actually need.
@@ -51,6 +54,8 @@ export interface WalletTransaction {
    * `describeHandler` reads the absence as "your device".
    */
   terminalPubkey?: string
+  /** A gift link this `sent` row went to (claim links phase 4). */
+  link?: GiftLinkRecord
   /**
    * What was actually checked about this coupon when it arrived.
    *
@@ -63,7 +68,7 @@ export interface WalletTransaction {
    * The warrant this stall signed when issuing, verbatim, on `issued` rows.
    *
    * The merchant's own copy of what they authorised. See
-   * `docs/cash-warrant-reconciliation.md` for why storing it turns "trust my
+   * `imani-docs/wallet/cash-warrant-reconciliation.md` for why storing it turns "trust my
    * ledger" into "verify my ledger", and for the limit that remains: it proves
    * the stall meant to issue this value, never that cash arrived.
    */
@@ -75,6 +80,15 @@ export interface WalletTransaction {
    * See `buildIssueTransaction` for what it does and does not establish.
    */
   saleVoucherIds?: readonly string[]
+  /**
+   * Written only when a sale landed PARTLY (#462): the total the sale was for,
+   * and how much of it reached the customer, both in minor units. Lets a
+   * reconciliation say "partly delivered" from the row itself rather than
+   * inferring it from missing siblings. Absent on every complete sale and on
+   * every row written before #462.
+   */
+  saleTotalMinor?: number
+  deliveredMinor?: number
   /**
    * The customer's signed assertion that they paid for this sale, if they gave
    * one. See `cashAttestation.ts`; always optional, and its absence is never a
@@ -114,6 +128,12 @@ export interface WalletTransaction {
    */
   exactValue?: number
   memo?: string
+  /**
+   * A minted-locked gift on a `gift_sent` / `gift_pending` row (#410 G14). When present, `memo`
+   * is read from it, never from the stored text: the stored memo is a copy that a restore of an
+   * older backup can leave behind.
+   */
+  lockedGift?: LockedGiftRecord
   bundleId?: string
   /**
    * The NUT-18V payment request this settles, when it settles one.
@@ -139,7 +159,7 @@ export interface WalletTransaction {
    * a merchant can find out whether the customer ever typed the code in.
    */
   cashbackId?: string
-  /** The six-character code that was read out at the counter. */
+  /** The code that was read out at the counter: `CB-XXXXX-XXXXX`, or `CB-XXXX-YY` if issued before gateway-portal 0.4.0. */
   claimCode?: string
   /**
    * Last redemption status read back from the gateway: `Unclaimed`, `Claimed`,
@@ -169,6 +189,10 @@ export interface WalletTransaction {
    * the kind-7378 receipt this wallet published. Never shown; kept for audit.
    */
   transferSignature?: string
+  /** A checkout code's snapshot on its `checkout_code` row (#402). See `checkoutCodeHistory.ts`. */
+  checkoutCode?: CheckoutCodeSnapshot
+  /** #402 traceability: where an online shop spent this incoming coupon. See `spendSource.ts`. */
+  spendSource?: SpendSource
 }
 
 /**
@@ -197,6 +221,14 @@ function isValidation(value: unknown): value is VoucherValidation {
   )
 }
 
+function lockedOf(r: Record<string, unknown>): LockedGiftRecord | undefined {
+  return asLockedGiftRecord(r.lockedGift)
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
@@ -216,7 +248,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // merchant is. 'sent' is the customer's own version of the same thing —
     // a voucher passed to someone else. Anything else is incoming.
     direction:
-      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback'
+      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback' || type === 'gift_sent' || type === 'checkout_code'
         ? 'out'
         : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
@@ -252,7 +284,8 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     attestationAt: r.attestationAt === undefined ? undefined : toEpochMs(r.attestationAt),
     exactValue:
       typeof r.exactValue === 'number' && Number.isFinite(r.exactValue) ? r.exactValue : undefined,
-    memo: str(r.memo),
+    memo: lockedOf(r) ? lockedGiftMemo(lockedOf(r)!) : str(r.memo),
+    ...(lockedOf(r) ? { lockedGift: lockedOf(r) } : {}),
     recipientName: str(r.recipientName),
     bundleId: str(r.bundleId) ?? str(r.bundle_id),
     paymentId: str(r.paymentId) ?? str(r.requestId) ?? str(r.request_id),
@@ -268,6 +301,8 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // recovered".
     issuanceWarrant: str(r.issuanceWarrant) ?? str(r.issuance_warrant),
     cashAttestation: str(r.cashAttestation) ?? str(r.cash_attestation),
+    saleTotalMinor: finiteNumber(r.saleTotalMinor) ?? finiteNumber(r.sale_total_minor),
+    deliveredMinor: finiteNumber(r.deliveredMinor) ?? finiteNumber(r.delivered_minor),
     saleVoucherIds: Array.isArray(r.saleVoucherIds)
       ? (r.saleVoucherIds as string[]).filter((id): id is string => typeof id === 'string')
       : Array.isArray(r.sale_voucher_ids)
@@ -281,7 +316,163 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // Either spelling, as for the issuance evidence above.
     transferId: str(r.transferId) ?? str(r.transfer_id),
     transferSignature: str(r.transferSignature) ?? str(r.transfer_signature),
+    // Which till handled it (terminals ticket 09). Read back since #160 phase 6: it was written
+    // on the stall's rows and never read, so even a local row lost its till on the way to a
+    // screen. Either spelling, as for the evidence above.
+    terminalPubkey: str(r.terminalPubkey) ?? str(r.terminal_pubkey),
+    link: asGiftLinkRecord(r.link),
+    ...(asCheckoutCodeSnapshot(r.checkoutCode) ? { checkoutCode: asCheckoutCodeSnapshot(r.checkoutCode) } : {}),
+    ...(parseSpendSource(r.spendSource ?? r.spend_source) ? { spendSource: parseSpendSource(r.spendSource ?? r.spend_source) } : {}),
   }
+}
+
+/** Where a gift link stands (spec 4.2 step 6). */
+export type GiftLinkStatus = 'outstanding' | 'claimed' | 'reclaimed' | 'expired'
+
+/**
+ * The gift link a `sent` row went to (claim links phase 4, spec 3.3).
+ *
+ * `k` is the link SECRET. It is a bearer secret on the sender's own device, the same class of thing
+ * as the coupon it replaced (spec 3.3 allows it), so the sender can show the link again and take it
+ * back. It is never logged and never leaves this device except inside the sender's own
+ * NIP-44-encrypted history record. `i` is the derivation index, absent for a random secret (an
+ * account whose key this wallet cannot read).
+ */
+export interface GiftLinkRecord {
+  k: string
+  i?: number
+  /** The link's expiry, unix seconds. */
+  x: number
+  status: GiftLinkStatus
+  /** When it was claimed or taken back, ms. */
+  closedAt?: number
+  /**
+   * When the "Your Cashlink expired" bell entry was filed for it, ms (#295 phase 4). On the record,
+   * not only on this device, so a restored or second device does not tell the sender twice.
+   */
+  noticedAt?: number
+  /**
+   * Whether the link comes back on its own (#295 phase 4). Absent on links made before it existed
+   * and on links that were never armed: those come back the old way, when this wallet next runs.
+   */
+  arm?: GiftLinkArm
+  /**
+   * #379: when this wallet confirmed a `claimed` link really was claimed by someone else (the mint
+   * says its gift is spent, and not into this wallet's own outputs), ms. A `claimed` record without
+   * it was written by an older build, which could read its own burn as a claim, and is checked again.
+   */
+  verifiedAt?: number
+}
+
+/**
+ * A Cashlink's return state (#295 phase 4).
+ *
+ * - `arming`: the gift is being locked to its link; a run that finds this finishes the job.
+ * - `armed`: locked, and the take-back is signed and waiting at the voucher service. It comes back
+ *   at its expiry without this wallet running.
+ * - `not_armed`: nothing waits at the voucher service (it was off, refused, or unreachable). The
+ *   gift may still be locked; this wallet takes it back itself when it next runs.
+ * - `returning`: it has left the link and is on its way back as a voucher; the next run finishes it.
+ *
+ * `ks` is the keyset the take-back's outputs were made in (while `arming`, the burn's). Not shown.
+ * The refund key itself is never stored: it is derived from this wallet's key and the link's index,
+ * which is why only a link with an index (an account whose key this wallet can read) is armed.
+ */
+export interface GiftLinkArm {
+  s: 'arming' | 'armed' | 'not_armed' | 'returning'
+  ks?: string
+}
+
+const ARM_STATES: readonly GiftLinkArm['s'][] = ['arming', 'armed', 'not_armed', 'returning']
+
+/** A NUT-02 keyset id: v1 (`00` + 14 hex) or v2 (`01` + 64 hex). */
+const KEYSET_ID = /^(?:[0-9a-f]{16}|[0-9a-f]{66})$/i
+
+function asArm(value: unknown): GiftLinkArm | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { s, ks } = value as Record<string, unknown>
+  if (typeof s !== 'string' || !ARM_STATES.includes(s as GiftLinkArm['s'])) return undefined
+  return {
+    s: s as GiftLinkArm['s'],
+    // #379: a v1 keyset id (16 hex) or a v2 one (66 hex, as staging's mint has). Dropping a v2 id
+    // made every resumed arm read as a fresh one, whose pre-check found our own burnt gift SPENT
+    // and closed the link as "claimed".
+    ...(typeof ks === 'string' && KEYSET_ID.test(ks) ? { ks } : {}),
+  }
+}
+
+/** The words for a link's status in History (spec 4.2 step 6). */
+export function giftStatusLabel(link: Pick<GiftLinkRecord, 'status' | 'x' | 'arm'>, nowMs = Date.now()): string {
+  if (link.status === 'claimed') return 'Claimed'
+  // "Taken back" means the mint swap is confirmed and the voucher is back in this wallet. Only
+  // `reclaimed` says that: it is written after the swap and the re-form, never before.
+  if (link.status === 'reclaimed') return 'Taken back'
+  // #295 phase 4: the take-back has STARTED. `returning` is written by `onReturning`, before the
+  // swap is sent to the mint, so the value may still be on the link (#396: Q4 showed "Taken back"
+  // with every proof UNSPENT). Say it is coming back, never that it is back.
+  if (link.status === 'outstanding' && link.arm?.s === 'returning') return 'Coming back'
+  if (link.status === 'expired' || nowMs / 1000 >= link.x) return 'Expired'
+  return 'Waiting to be claimed'
+}
+
+const LINK_STATUSES: readonly GiftLinkStatus[] = ['outstanding', 'claimed', 'reclaimed', 'expired']
+
+/** A stored link record, or undefined for anything malformed (never trusted as-is). */
+export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { k, i, x, status, closedAt, noticedAt, arm, verifiedAt } = value as Record<string, unknown>
+  if (typeof k !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(k)) return undefined
+  if (typeof x !== 'number' || !Number.isFinite(x)) return undefined
+  if (typeof status !== 'string' || !LINK_STATUSES.includes(status as GiftLinkStatus)) return undefined
+  const parsedArm = asArm(arm)
+  return {
+    k,
+    x,
+    status: status as GiftLinkStatus,
+    ...(typeof i === 'number' && Number.isSafeInteger(i) && i >= 0 ? { i } : {}),
+    ...(typeof closedAt === 'number' && Number.isFinite(closedAt) ? { closedAt } : {}),
+    ...(typeof noticedAt === 'number' && Number.isFinite(noticedAt) ? { noticedAt } : {}),
+    ...(parsedArm ? { arm: parsedArm } : {}),
+    ...(typeof verifiedAt === 'number' && Number.isFinite(verifiedAt) ? { verifiedAt } : {}),
+  }
+}
+
+/**
+ * #379: a Cashlink an older build closed as "claimed" while it was being locked (an `arm` on any of
+ * its rows, the claim never confirmed). Its gift may still be locked to the link, unspent, and only
+ * this wallet's return key can bring it back after the expiry. The next run checks it again; until
+ * then logout stays off. By link key, over every row of each link.
+ */
+export function unconfirmedClaimLinks(links: ReadonlyArray<Pick<GiftLinkRecord, 'k' | 'status' | 'arm' | 'verifiedAt'>>): Set<string> {
+  const armed = new Set(links.filter((l) => l.arm !== undefined).map((l) => l.k))
+  return new Set(links.filter((l) => armed.has(l.k) && isUnverifiedClaim(l)).map((l) => l.k))
+}
+
+/** A `claimed` record the mint was never asked about (see `verifiedAt`). */
+export function isUnverifiedClaim(link: Pick<GiftLinkRecord, 'status' | 'verifiedAt'>): boolean {
+  return link.status === 'claimed' && link.verifiedAt === undefined
+}
+
+/**
+ * #379, logout's check: the links whose value only this wallet can still bring back, from the stored
+ * `sent` rows. An unconfirmed "claimed" (above), one being locked or on its way back, and one locked
+ * to its link with nothing at the voucher service to return it (`not_armed`) once it has expired.
+ * Never throws on a bad row.
+ */
+export function strandedCashlinks(rows: readonly unknown[], nowMs = Date.now()): number {
+  const links: GiftLinkRecord[] = []
+  for (const row of rows) {
+    const r = row as Record<string, unknown> | null
+    if (!r || r.type !== 'sent') continue
+    const link = asGiftLinkRecord(r.link)
+    if (link) links.push(link)
+  }
+  const stranded = unconfirmedClaimLinks(links)
+  for (const l of links) {
+    if (l.status !== 'outstanding' || !l.arm) continue
+    if (l.arm.s === 'arming' || l.arm.s === 'returning' || (l.arm.s === 'not_armed' && nowMs / 1000 >= l.x)) stranded.add(l.k)
+  }
+  return stranded.size
 }
 
 /**
@@ -438,6 +629,9 @@ export function buildIssueTransaction(input: {
    * because there is no third party to ask.
    */
   cashAttestation?: string
+  /** See `WalletTransaction.saleTotalMinor`. Pass both only for a partly delivered sale. */
+  saleTotalMinor?: number
+  deliveredMinor?: number
 }): TransactionRow {
   return {
     id: `issued:${input.voucherId}`,
@@ -466,6 +660,11 @@ export function buildIssueTransaction(input: {
       : {}),
     ...(input.merchantId ? { merchantId: input.merchantId } : {}),
     ...(input.cashAttestation ? { cashAttestation: input.cashAttestation } : {}),
+    ...(input.saleTotalMinor !== undefined &&
+    input.deliveredMinor !== undefined &&
+    input.deliveredMinor !== input.saleTotalMinor
+      ? { saleTotalMinor: input.saleTotalMinor, deliveredMinor: input.deliveredMinor }
+      : {}),
   } as unknown as TransactionRow
 }
 
@@ -514,6 +713,8 @@ export function buildSentTransaction(input: {
    * sender's transfer signature (#91) can be rebuilt; see `transferId` above.
    */
   transferId?: string
+  /** Set on a send to a gift link (claim links phase 4); see `GiftLinkRecord`. */
+  link?: GiftLinkRecord
   at: number
 }): TransactionRow {
   return {
@@ -533,6 +734,7 @@ export function buildSentTransaction(input: {
     tokenId: input.tokenId,
     bundleId: input.bundleId,
     ...(input.transferId ? { transferId: input.transferId } : {}),
+    ...(input.link ? { link: input.link } : {}),
     memo: input.memo || 'Voucher sent',
   } as unknown as TransactionRow
 }
@@ -558,6 +760,11 @@ export function buildSentTransaction(input: {
 export function buildCashbackTransaction(input: {
   cashbackId: string
   claimCode: string
+  /**
+   * The voucher the code unlocks, from the portal's generate response. What
+   * puts the cashback on the Vouchers list and links it to its detail screen.
+   */
+  voucherId?: string
   amount: number
   unit: string
   decimals: number
@@ -577,6 +784,8 @@ export function buildCashbackTransaction(input: {
   issuanceWarrant?: string
   /** The stall this was issued for, so an audit has something to check against. */
   merchantId?: string
+  /** The till that issued it, when it was not the stall's own device (#160 phase 6). */
+  terminalPubkey?: string
 }): TransactionRow {
   return {
     id: `cashback:${input.cashbackId}`,
@@ -589,7 +798,8 @@ export function buildCashbackTransaction(input: {
     decimals: input.decimals,
     cashbackId: input.cashbackId,
     claimCode: input.claimCode,
-    memo: input.memo || 'Cashback issued',
+    ...(input.voucherId ? { voucherId: input.voucherId } : {}),
+    memo: input.memo || 'Cashlink issued',
     expiresAt: input.expiresAt,
     // Deliberately no status. The gateway has just minted it, so `Unclaimed` is
     // what it would say — but writing that here would make an unfetched row
@@ -597,6 +807,7 @@ export function buildCashbackTransaction(input: {
     // to tell "not checked" from "not claimed".
     ...(input.issuanceWarrant ? { issuanceWarrant: input.issuanceWarrant } : {}),
     ...(input.merchantId ? { merchantId: input.merchantId } : {}),
+    ...(input.terminalPubkey ? { terminalPubkey: input.terminalPubkey } : {}),
   } as unknown as TransactionRow
 }
 
@@ -621,16 +832,35 @@ export function otherParty(
   pubkey?: string,
 ): { pubkey: string; label: string } | undefined {
   const ownStall = pubkey !== undefined && tx.merchantId === pubkey
+  // A gift link's counterparty is the link key, which names nobody: the Link section says who it is.
+  if (tx.link && !ownStall) return undefined
   const who = ownStall || tx.type === 'sent' ? tx.counterparty : (tx.merchantId ?? tx.counterparty)
   if (!who) return undefined
   // Only one kind of person is ever across the counter from your own stall.
   return { pubkey: who, label: ownStall ? 'Customer' : tx.direction === 'in' ? 'From' : 'To' }
 }
 
+/**
+ * A row that put a voucher into the world: a Sell coupon or a cashback code.
+ *
+ * The ONE test for "this stall issued that voucher" (#144). Every reader that
+ * matches redemptions to issuance goes through it: the claimed figure, the
+ * redemption ceiling, the row repair and the claim sweep. When only `issued`
+ * counted, a cashback's redemptions were filed against nothing, so its
+ * ceiling under-counted split parts and a till could take more than its face.
+ */
+export function isVoucherIssuance(row: Pick<WalletTransaction, 'type'>): boolean {
+  return row.type === 'issued' || row.type === 'cashback'
+}
+
 /** Human label for the row type. */
 export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'payment') return 'Paid'
   if (tx.type === 'sent') return 'Sent'
-  if (tx.type === 'cashback') return 'Cashback'
+  if (tx.type === 'cashback') return 'Cashlink'
+  // #410 G14: a gift minted locked. Neither row is balance: the memo says where it stands.
+  if (tx.type === 'gift_sent') return 'Gift sent'
+  if (tx.type === 'gift_pending') return 'Gift'
+  if (tx.type === 'checkout_code') return 'Checkout code'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }

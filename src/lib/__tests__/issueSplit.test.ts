@@ -140,6 +140,21 @@ vi.mock('../wallet', () => ({
 
 vi.mock('../relay', () => ({ INTERNAL_RELAY_URL: 'ws://relay.test' }))
 
+/**
+ * An unlocked wallet holding the STALL's key, so an owner's sale signs a
+ * `merchant` warrant. Without one the warrant is absent, and since #159 Sell
+ * refuses a sale every recipient would refuse (`assertSaleWarranted`).
+ * The pubkey is the test's STALL; only `signer.pubkey === stall` is checked
+ * before signing, and nothing here verifies the signature.
+ */
+vi.mock('../nap', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../nap')>()),
+  getSigner: () => ({
+    pubkey: 'a'.repeat(64),
+    withPrivkey: <T,>(borrow: (key: Uint8Array) => T): T => borrow(new Uint8Array(32).fill(7)),
+  }),
+}))
+
 const { issueAndDeliver } = await import('../issue')
 const { ownerActor } = await import('../actor')
 
@@ -243,7 +258,10 @@ describe('a sale the gateway split into several coupons', () => {
 
     const result = await issueAndDeliver(params)
 
+    // Only the quote-backed part is registered for gateway delivery (gateway-customer#168) and
+    // then polled; a part that came back minted is neither.
     expect(calls.filter((c) => c.startsWith('/api/v1/wallet/vouchers/'))).toEqual([
+      '/api/v1/wallet/vouchers/v2/recipient',
       '/api/v1/wallet/vouchers/v2',
     ])
     expect(result.vouchers.map((v) => v.token)).toEqual(PARTS.map((id) => `cashu-${id}`))

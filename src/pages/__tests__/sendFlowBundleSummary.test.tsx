@@ -49,14 +49,20 @@ vi.mock('../../lib/wallet', async (importOriginal) => ({
 }))
 
 let result = { id: 'x', requested: 100, delivered: 100, parts: 2 } as Record<string, unknown>
+/** When set, the send ends by throwing this instead of resolving `result`. */
+let failure: Error | undefined
 vi.mock('../../lib/pay', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/pay')>()),
-  sendVouchers: () => Promise.resolve(result),
+  sendVouchers: () => (failure ? Promise.reject(failure) : Promise.resolve(result)),
 }))
 
 import { SendPage } from '../SendPage'
+import { SendOutcomeUnknownError } from '../../lib/pay'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  failure = undefined
+})
 
 async function send() {
   render(
@@ -89,5 +95,42 @@ describe('the sender sees one payment in several coupons', () => {
     result = { id: 'x', requested: 100, delivered: 50, parts: 2, shortfall: 'mint down' }
     await send()
     await waitFor(() => expect(screen.getByText(/2 vouchers went before the rest stopped\./)).toBeTruthy())
+  })
+
+  // #125: a part the gateway accepted but could not confirm may already have arrived, so the
+  // screen says it is still going through and never tells the sender to send it again.
+  it('never offers to resend a part that is still going through', async () => {
+    result = { id: 'x', requested: 100, delivered: 50, inFlight: 50, parts: 2, shortfall: 'still going through' }
+    await send()
+    await waitFor(() => expect(screen.getByText(/Do not send it again/)).toBeTruthy())
+    expect(screen.queryByText(/send\s+the difference again/)).toBeNull()
+  })
+
+  // #125 review: the parts after an unconfirmed one were never tried, and the sender is told so.
+  it('says what was never sent after a part that is still going through', async () => {
+    result = { id: 'x', requested: 100, delivered: 40, inFlight: 40, parts: 2, shortfall: 'still going through' }
+    await send()
+    await waitFor(() => expect(screen.getByText(/The last .*0\.20 was not sent/)).toBeTruthy())
+  })
+
+  // #128: a send whose outcome is unknown may already have arrived, so the button that would send
+  // it again is locked and says why; only a real failure leaves it free to retry.
+  it('locks the pay button after a send whose outcome is unknown', async () => {
+    failure = new SendOutcomeUnknownError('This send is still going through at the gateway. It has NOT failed.', 'as_1')
+    await send()
+    const locked = await screen.findByRole('button', { name: 'Still going through' })
+    expect((locked as HTMLButtonElement).disabled).toBe(true)
+    // Back would clear the lock, so it is locked too; Done leaves without paying.
+    expect((screen.getByRole('button', { name: 'Back' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Done' })).toBeTruthy()
+    expect(screen.getByText(/has NOT failed/)).toBeTruthy()
+  })
+
+  // A send that really failed moved nothing, so trying again is safe and the button stays live.
+  it('leaves the pay button live after a send that failed', async () => {
+    failure = new Error('mint refused the split')
+    await send()
+    await screen.findByText('mint refused the split')
+    expect((screen.getByRole('button', { name: 'Pay' }) as HTMLButtonElement).disabled).toBe(false)
   })
 })

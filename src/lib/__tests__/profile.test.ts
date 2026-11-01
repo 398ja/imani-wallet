@@ -32,10 +32,11 @@ describe('emptyProfile', () => {
 })
 
 describe('profileName', () => {
-  it('prefers the display name, then the handle, then a short npub', () => {
+  it('prefers the display name, then the handle, then plain words, never the npub (#324)', () => {
     expect(profileName(base({ displayName: 'Alice', nip05: 'alice@imani.local' }))).toBe('Alice')
     expect(profileName(base({ nip05: 'alice@imani.local' }))).toBe('@alice')
-    expect(profileName(base())).toBe('npub1gu50m…')
+    expect(profileName(base())).toBe('Your account')
+    expect(profileName(base())).not.toMatch(/npub/)
   })
 
   it('always returns something — Avatar derives initials from it', () => {
@@ -225,5 +226,39 @@ describe('refreshProfile', () => {
     vi.mocked(fetchNewestKind0).mockRejectedValue(new Error('offline'))
 
     expect((await refreshProfile(PUBKEY)).displayName).toBe('Alice')
+  })
+
+  // #160 round 4, "B names the stall": on a fresh device the only copy of the stall's name came
+  // from the store that missed fetchNewestKind0's 150 ms window, and refreshProfile passed no
+  // onLater, so the late answer was dropped and the setup screen said "no public name" for good.
+  it('hands a name that arrives after the first answer to onLater, and stores it', async () => {
+    let late: ((e: { content: string; createdAt: number }) => void) | undefined
+    vi.mocked(fetchNewestKind0).mockImplementation(async (_pk, onLater) => {
+      late = onLater
+      return null
+    })
+    const seen: string[] = []
+
+    const first = await refreshProfile(PUBKEY, (p) => seen.push(p.displayName ?? ''))
+    late?.({ content: content({ name: 'Test Stall' }), createdAt: 1000 })
+
+    expect(first.displayName).toBeFalsy()
+    expect(seen).toEqual(['Test Stall'])
+    expect((await import('../profile')).loadProfile(PUBKEY)?.displayName).toBe('Test Stall')
+  })
+
+  it('does not let a late but OLDER answer undo a newer stored name', async () => {
+    saveProfile({ ...emptyProfile(PUBKEY), displayName: 'New name', eventAt: 2000 })
+    let late: ((e: { content: string; createdAt: number }) => void) | undefined
+    vi.mocked(fetchNewestKind0).mockImplementation(async (_pk, onLater) => {
+      late = onLater
+      return null
+    })
+    const seen: string[] = []
+
+    await refreshProfile(PUBKEY, (p) => seen.push(p.displayName ?? ''))
+    late?.({ content: content({ name: 'Old name' }), createdAt: 1000 })
+
+    expect(seen).toEqual(['New name'])
   })
 })

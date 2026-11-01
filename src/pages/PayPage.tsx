@@ -4,11 +4,23 @@ import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { getDecimals } from '@imani/money'
 
 import { listVouchers } from '../lib/wallet'
-import { toMerchants, type Merchant } from '../lib/merchants'
+import { holdingForUnit, issuerKey, toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
-import { payRequest, splitObstacle, type SendResult } from '../lib/pay'
+import {
+  passedOver,
+  payRequest,
+  SendOutcomeUnknownError,
+  splitObstacle,
+  withoutInFlight,
+  withoutTombstoned,
+  type SendResult,
+} from '../lib/pay'
 import type { NUT18VRequest } from '../lib/nap'
+import { passedOverNote } from '../lib/passedOverWording'
+import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
+import { RequestAlreadyPaidError } from '../lib/settledSends'
+import { SwapBackOffer } from '../components/SwapBackOffer'
 import {
   Button,
   Centered,
@@ -19,12 +31,19 @@ import {
   BackLink,
   Panel,
 } from '../components/ui'
+import { userMessage } from '../lib/userMessage'
+import { useStallStatus } from '../hooks/useStallStatus'
+import { closedMessage, mayTradeWith } from '../lib/merchantStatus'
 
 type Status =
   | { step: 'review' }
   | { step: 'paying' }
   | { step: 'done'; result: SendResult }
-  | { step: 'failed'; message: string }
+  | { step: 'failed'; message: string; swapBackTokenId?: string }
+  /** The gateway took the payment and its outcome is unknown: Pay stays locked (#128). */
+  | { step: 'unconfirmed'; message: string }
+  /** #461: this wallet already paid the request. Pay stays locked: a second tap would pay twice. */
+  | { step: 'alreadyPaid'; message: string }
 
 /**
  * Confirmation for a scanned voucher payment request, then the payment itself.
@@ -51,31 +70,46 @@ export function PayPage({ pubkey }: { pubkey: string }) {
     try {
       return { ok: true, request: nut.parse(raw) }
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : 'Unreadable payment request.' }
+      return { ok: false, error: userMessage(e, 'Unreadable payment request.') }
     }
   }, [raw])
 
   useEffect(() => {
-    listVouchers().then((rows) => {
-      setMerchants(toMerchants(rows))
-      setLoadedAt(Date.now())
-    })
-  }, [])
+    listVouchers()
+      .then(async (rows) => {
+        // What can be spent, not all that is held: a coupon behind an unconfirmed send is out (#128),
+        // and so is one this wallet has tombstoned, the same filter payRequest spends through
+        // (#169 review). Otherwise the passed-over note can name a coupon already spent elsewhere.
+        const unsent = withoutInFlight(rows, pubkey)
+        try {
+          return await withoutTombstoned(unsent, pubkey)
+        } catch (error) {
+          console.warn('[pay] could not check tombstones; showing the holding unchanged', error)
+          return unsent
+        }
+      })
+      .then((rows) => {
+        setMerchants(toMerchants(rows))
+        setLoadedAt(Date.now())
+      })
+  }, [pubkey])
 
   // Before the early returns, and so before `merchant` exists — hooks cannot be
   // called conditionally. It is the same fetch the merchant pages make, cached per
   // pubkey, so asking here costs nothing extra.
   const issuer = useIdentity(parsed.ok ? parsed.request.issuerId : undefined)
+  // #434: is the stall taking payments? Polled while this screen is up; fail closed.
+  const stall = useStallStatus(parsed.ok ? parsed.request.issuerId : undefined)
 
   if (!parsed.ok) return <Fatal title="Cannot read this request" detail={parsed.error} />
   const request = parsed.request
 
   if (merchants === null) return <Centered>Checking your vouchers…</Centered>
 
-  const merchant = merchants.find(
-    (f) => f.pubkey.toLowerCase() === request.issuerId.toLowerCase(),
-  )
-  const group = merchant?.groups.find((g) => g.unit.toUpperCase() === request.unit.toUpperCase())
+  const merchant = merchants.find((f) => issuerKey(f.pubkey) === issuerKey(request.issuerId))
+  // Every group in the unit, not the first: coupons from several sales (different
+  // issuance ratios) are separate groups but one balance (#460).
+  const group = merchant ? holdingForUnit(merchant, request.unit) : undefined
   const available = group?.totalFaceValue ?? 0
   // How to read `request.amount`, which is MINOR UNITS.
   //
@@ -109,7 +143,18 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // what is payable — a coupon divisible on one and not the other would let the
   // user tap Pay only to be refused.
   const obstacle = group ? splitObstacle(group.vouchers, request.amount) : null
-  const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle
+  // #157: name a sooner-expiring voucher this payment leaves, and why, so the
+  // soonest-first rule does not look ignored. Whole holding, not just `group`.
+  const allVouchers = merchants.flatMap((m) => m.groups.flatMap((g) => g.vouchers))
+  const passedNote = passedOverNote(
+    passedOver(allVouchers, request.amount, { issuer: request.issuerId, unit: request.unit }),
+  )
+  const stallOpen = mayTradeWith(stall.status === 'loading' ? 'unknown' : stall.status)
+  const stallNote =
+    stall.status === 'loading'
+      ? 'Checking this merchant is open…'
+      : closedMessage(stall.status === 'customer' ? 'unknown' : stall.status, issuer?.name ?? merchant?.name)
+  const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle && stallOpen
 
   if (status.step === 'done') {
     // A payment drawn across several coupons can land in pieces, and what landed
@@ -117,6 +162,10 @@ export function PayPage({ pubkey }: { pubkey: string }) {
     // reports: showing the asking price would send the customer away believing
     // the sale is settled when the merchant is still short.
     const partial = status.result.delivered < status.result.requested
+    // See SendPage: an unconfirmed part may already have arrived, so it is never offered again (#125).
+    const inFlight = status.result.inFlight ?? 0
+    // The parts after an unconfirmed one were never tried: that money did not move.
+    const notPaid = status.result.requested - status.result.delivered - inFlight
     return (
       <div className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center gap-3 p-5 text-center">
         {partial ? (
@@ -125,7 +174,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           <CheckCircle2 className="h-12 w-12 text-green-600" />
         )}
         <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
-          {partial ? 'Partly paid' : 'Paid'}
+          {inFlight > 0 ? 'Still going through' : partial ? 'Partly paid' : 'Paid'}
         </h1>
         <p className="text-sm text-mono-500">
           {formatFace(status.result.delivered, denom)}
@@ -133,7 +182,17 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           {/* In the sentence, not a second line: see SendPage (#94). */}
           {!partial && status.result.parts > 1 ? ` as ${status.result.parts} vouchers` : ''}
         </p>
-        {partial && (
+        {partial && inFlight > 0 && (
+          <Alert>
+            {formatFace(inFlight, denom)} more is still going through and may already have
+            arrived. Do not pay it again — check your history in a moment.
+            {notPaid > 0
+              ? ` The last ${formatFace(notPaid, denom)} was not paid and those vouchers are untouched.`
+              : ''}
+            {status.result.shortfall ? ` (${status.result.shortfall})` : ''}
+          </Alert>
+        )}
+        {partial && inFlight === 0 && (
           <Alert>
             {status.result.parts > 1 ? `${status.result.parts} vouchers went before the rest stopped. ` : ''}
             The rest was not paid and your remaining vouchers are untouched — the
@@ -189,6 +248,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       </Panel>
 
       {expired && <Alert>This payment request has expired.</Alert>}
+      {!expired && !stallOpen && stallNote && status.step !== 'failed' && <Alert>{stallNote}</Alert>}
       {!expired && !merchant && (
         <Alert>You have no vouchers from this merchant.</Alert>
       )}
@@ -202,26 +262,58 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           cannot be divided below one sat's worth of face value. Surfaced here
           so the obstacle is visible before the tap, not thrown afterwards. */}
       {!expired && group && shortfall <= 0 && obstacle && <Alert>{obstacle}</Alert>}
-      {status.step === 'failed' && <Alert>{status.message}</Alert>}
+      {!expired && payable && passedNote && (
+        <p className="mb-2 text-sm text-mono-500">{passedNote}</p>
+      )}
+      {(status.step === 'failed' || status.step === 'unconfirmed' || status.step === 'alreadyPaid') && (
+        <Alert>{status.message}</Alert>
+      )}
+      {status.step === 'failed' && status.swapBackTokenId && (
+        <SwapBackOffer tokenId={status.swapBackTokenId} pubkey={pubkey} />
+      )}
 
       <Button
         size="lg"
         className="mt-4 w-full"
-        disabled={!payable || status.step === 'paying'}
+        disabled={
+          !payable || status.step === 'paying' || status.step === 'unconfirmed' || status.step === 'alreadyPaid'
+        }
         onClick={async () => {
           setStatus({ step: 'paying' })
           try {
+            // #434: ask again right before money moves. A stall that closed since the last poll
+            // must not be paid, and nothing has left the wallet yet.
+            const now = await stall.recheck()
+            if (!mayTradeWith(now.status)) {
+              setStatus({
+                step: 'failed',
+                message: closedMessage(now.status === 'customer' ? 'unknown' : now.status, issuer?.name ?? merchant?.name) ?? 'Payment failed.',
+              })
+              return
+            }
             const result = await payRequest({ request, raw, merchant: merchant!, payer: pubkey })
             setStatus({ step: 'done', result })
           } catch (e) {
+            if (e instanceof RequestAlreadyPaidError) {
+              setStatus({ step: 'alreadyPaid', message: e.message })
+              return
+            }
             setStatus({
-              step: 'failed',
-              message: e instanceof Error ? e.message : 'Payment failed.',
+              step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
+              message: userMessage(e, 'Payment failed.'),
+              // cashu-mint#540: terminal, not retried; the holder is offered the coupon's sats.
+              swapBackTokenId: e instanceof VoucherFullyRedeemedError ? e.tokenId : undefined,
             })
           }
         }}
       >
-        {status.step === 'paying' ? 'Paying…' : 'Pay'}
+        {status.step === 'paying'
+          ? 'Paying…'
+          : status.step === 'unconfirmed'
+            ? 'Still going through'
+            : status.step === 'alreadyPaid'
+              ? 'Already paid'
+              : 'Pay'}
       </Button>
     </Screen>
   )

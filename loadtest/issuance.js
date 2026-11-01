@@ -3,7 +3,7 @@
 //   node loadtest/signer.mjs &
 //   node loadtest/pool.mjs --size 50
 //   GATEWAY_URL=http://localhost:28082 PORTAL_URL=http://localhost:28084 \
-//     EDGE_SECRET=dev-edge-secret-local-only \
+//     EDGE_SECRET=dev-edge-secret-local-only-32-plus-chars \
 //     k6 run loadtest/issuance.js
 //
 // Issuance goes first because it produces the coupons that sending, splitting

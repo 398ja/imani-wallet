@@ -29,6 +29,20 @@ vi.mock('../arrivalToast', () => ({
 // the whole suite before a single test runs.
 // Third toast module on this path, and mocked for the same reason as the two
 // beside it: `sonner` touches the DOM at import and this suite runs headless.
+// sonner touches the DOM at import; the held-coupon toast is its own module for that reason (#133 review).
+vi.mock('../heldToast', () => ({ announceHeld: () => {} }))
+// The non-money notices (#160 owner report): captured, as the money toast is above.
+const notices: Array<Record<string, unknown>> = []
+vi.mock('../notMoneyNotice', () => ({
+  licenceNotice: (voucherId: string, licence: { tier?: string }, opts?: { renewal?: boolean }) => ({
+    id: `licence:${voucherId}`,
+    type: 'licence_received',
+    title: `Imani ${licence.tier ?? ''} plan ${opts?.renewal ? 'renewed' : 'activated'}`,
+    body: '',
+    url: '/settings/subscription',
+  }),
+  showNotice: (n: Record<string, unknown>) => void notices.push(n),
+}))
 vi.mock('../refusalToast', () => ({ announceRefusal: vi.fn() }))
 vi.mock('../queuedToast', () => ({
   announceQueued: () => {},
@@ -75,7 +89,10 @@ const notifyWalletChanged = vi.fn()
 vi.mock('../wallet', () => ({
   getWallet: () => ({}),
   notifyWalletChanged: () => notifyWalletChanged(),
+  listVouchers: async () => heldRows,
 }))
+/** What the store holds when a licence arrives: another licence of the same subscription is a renewal. */
+let heldRows: Array<{ token: string; token_id?: string }> = []
 
 /**
  * The settlement receipt, captured at the boundary.
@@ -121,6 +138,7 @@ vi.stubGlobal('document', { addEventListener: () => {}, removeEventListener: () 
 vi.stubGlobal('window', { addEventListener: () => {}, removeEventListener: () => {} })
 
 const { startDmPoll, stopDmPoll } = await import('../dmPoll')
+const { buildLicenceVoucherToken } = await import('./voucherFixtures')
 
 const VOUCHER = {
   voucher_id: 'v-4-xaf',
@@ -133,6 +151,7 @@ const VOUCHER = {
 beforeEach(() => {
   stopDmPoll()
   announced.length = 0
+  notices.length = 0
   declarations.length = 0
   attested.length = 0
   receipts.length = 0
@@ -414,5 +433,44 @@ describe('who the settlement receipt is addressed to', () => {
     })
 
     expect(receipts[0]!.senderPubkeyHex).toBe(STALL)
+  })
+})
+
+describe('a licence arriving through dm-poll (#160 owner report)', () => {
+  // A renewal is a NEW voucher: its own signed voucher id.
+  const licenceToken = (expiresAt: number) =>
+    buildLicenceVoucherToken({
+      merchantMetadata: JSON.stringify({ subscription_id: 'sub_1', features: ['terminals'], lock_key: 'f'.repeat(64), tier: 'basic' }),
+      faceValue: 4000,
+      unit: 'GBP',
+      expiresAt: 2_000_000_000 + expiresAt,
+      voucherId: `v-licence-${expiresAt}`,
+    }).token
+
+  it('is announced by the plan it is, never as a payment and never by a key', async () => {
+    heldRows = []
+    const token = licenceToken(1)
+    redeem.mockResolvedValue({ ...VOUCHER, voucher_id: 'v-licence' })
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem(token, { metadata: {} })
+
+    await vi.waitFor(() => expect(notices).toHaveLength(1))
+    expect(announced).toEqual([])
+    expect(notices[0]).toMatchObject({ type: 'licence_received', url: '/settings/subscription', title: 'Imani basic plan activated' })
+    expect(String(notices[0]!.title)).not.toMatch(/npub|[0-9a-f]{16}/)
+  })
+
+  it('says "renewed" when the wallet already held this subscription', async () => {
+    heldRows = [{ token: licenceToken(2), token_id: 'held-1' }]
+    const token = licenceToken(3)
+    redeem.mockResolvedValue({ ...VOUCHER, voucher_id: 'v-licence-2' })
+    startDmPoll('f'.repeat(64))
+
+    await captured.redemptionAdapter!.redeem(token, { metadata: {} })
+
+    await vi.waitFor(() => expect(notices).toHaveLength(1))
+    expect(notices[0]!.title).toBe('Imani basic plan renewed')
+    heldRows = []
   })
 })

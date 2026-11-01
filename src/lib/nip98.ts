@@ -2,6 +2,7 @@ import { bytesToHex, randomBytes } from '@noble/hashes/utils'
 import { sha256 } from '@noble/hashes/sha256'
 
 import { getSigner } from './nap'
+import { requestCredential, TERMINAL_CREDENTIAL_HEADER } from './terminalRequestCredential'
 
 /**
  * NIP-98 HTTP authentication headers.
@@ -142,11 +143,21 @@ export async function signedFetch(
   method: string,
   payload?: unknown,
   signer?: RequestSigner,
-  /** Passed to `fetch`, so a caller that gives up can cancel the request. */
-  options: { signal?: AbortSignal } = {},
+  /**
+   * `signal` is passed to `fetch`, so a caller that gives up can cancel the request.
+   * `headers` are extra, unsigned request headers such as `Idempotency-Key`. They
+   * cannot replace `Authorization` or `Content-Type`.
+   */
+  options: { signal?: AbortSignal; headers?: Record<string, string> } = {},
 ): Promise<Response> {
   const body = payload === undefined ? undefined : JSON.stringify(payload)
+  // An unlocked till names its credential on every request, so the portal can tell what this
+  // key may do for which stall (#160 phase 5). Absent everywhere else, and only for the
+  // installed signer: a request signed by some other key must not borrow the till's name.
+  const credential = signer === undefined ? requestCredential() : null
   const headers: Record<string, string> = {
+    ...(options.headers ?? {}),
+    ...(credential ? { [TERMINAL_CREDENTIAL_HEADER]: credential.voucherId } : {}),
     Authorization: await nip98Header(path, method, body, signer ?? getSigner()),
   }
   if (body !== undefined) headers['Content-Type'] = 'application/json'

@@ -30,9 +30,20 @@ RUN npm install --no-package-lock --omit=dev \
       @noble/curves@2.0.1 \
       @noble/hashes@1.8.0 \
       nostr-tools@2.24.1 \
+      @cashu/crypto@0.3.4 \
       tsx@4.19.2
 
 COPY services/purchase-issuer ./services/purchase-issuer
+
+# The gift path (imani-wallet#410 G14/G15) reads tokens and link locks with the WALLET's own readers,
+# never a second parser of somebody's money, and sends through the shared mailer's client. Copied
+# at their ORIGINAL paths so the relative imports resolve unchanged, as wallet-api does. These files
+# only, not `src/lib`, which is full of wallet code that can sign. `@cashu/crypto` (above) is the
+# blinding and hash-to-curve those readers use, pinned to package-lock's 0.3.4. Note cashlinkLock.ts
+# also holds the WALLET's refund signer (one `schnorr.sign`); purchase-issuer imports only its two
+# readers (`readLinkLock`, `assertNotOpenAfterLocktime`) and holds no key that signer would take.
+COPY src/lib/voucherToken.ts src/lib/cashlinkLock.ts src/lib/walletSwap.ts ./src/lib/
+COPY services/imani-mailer/client.ts services/imani-mailer/mailer.ts ./services/imani-mailer/
 
 # The shared currency table, mounted where a bare Node resolver will find it.
 #
@@ -43,6 +54,9 @@ COPY services/purchase-issuer ./services/purchase-issuer
 # npm-installed because the package points `exports` at source and ships no
 # dist, which is this repo's convention; tsx compiles it on load.
 COPY packages/money ./node_modules/@imani/money
+# The stall's merchant-record rules (imani-wallet#312): the validity a card coupon is minted for
+# must be read exactly as the wallet's Sell screen reads it. Source-pointing, like licence.
+COPY packages/merchant-record ./node_modules/@imani/merchant-record
 
 # ...except `@imani/money` is the ONE package that does not follow that
 # convention. `wallet-core` and the rest point `exports` at `./src/index.ts`,
@@ -64,6 +78,7 @@ RUN node -e "const p='node_modules/@imani/money/package.json',j=require('./'+p);
 # entrypoint never loads them — but "absent" is a property of the image and
 # "inert" is a property of today's entrypoint.
 RUN rm -rf services/purchase-issuer/__tests__ node_modules/@imani/money/src/__tests__ \
+      node_modules/@imani/merchant-record/src/__tests__ \
       node_modules/@imani/money/tests
 
 # Derive the requirement from the source instead of trusting the COPY above to
@@ -91,13 +106,20 @@ RUN for p in $(find services/purchase-issuer -name '*.ts' -exec grep -hoE "@iman
         || exit 1; \
     done
 
-# This service reaches NOWHERE outside its own tree, unlike its siblings, which
-# copy in `src/lib` files. Asserted rather than assumed: a relative import
-# climbing out of the service directory would resolve under vitest and fail at
-# require time in the container, which is the same class of bug the guards above
-# exist for. Verified by planting one: red.
-RUN ! find services/purchase-issuer -name '*.ts' -exec grep -lE "from '\.\./\.\./" {} + \
-      || (echo "FAIL: purchase-issuer reached outside its own tree" && exit 1)
+# Every relative import that climbs out of the service tree must be IN the image, derived from the
+# source rather than trusted: one added without a COPY fails the BUILD, not the container's first
+# gift. (This guard used to forbid such imports outright; #410 needs three, copied above.)
+RUN node -e " \
+      const fs=require('fs'),path=require('path'); let bad=0; \
+      const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(d,e.name)):e.name.endsWith('.ts')?[path.join(d,e.name)]:[]); \
+      for (const f of walk('services/purchase-issuer')) for (const m of fs.readFileSync(f,'utf8').matchAll(/from '(\.\.\/[^']+)'/g)) { \
+        const t=path.normalize(path.join(path.dirname(f),m[1])); \
+        if (!fs.existsSync(t) && !fs.existsSync(t+'.ts')) { console.error('FAIL: '+t+' imported by '+f+' but not copied into the image'); bad=1 } } \
+      process.exit(bad)"
+
+# And the copied wallet files must load in the image as the service loads them (a missing package
+# fails here, not at the first sale).
+RUN npx tsx -e "Promise.all([import('./src/lib/voucherToken.ts'), import('./src/lib/cashlinkLock.ts'), import('./services/imani-mailer/client.ts')]).then(ms => { if (ms.some(m => Object.keys(m).length === 0)) { console.error('FAIL: a copied module exports nothing'); process.exit(1) } }).catch(e => { console.error('FAIL: a copied module does not load:', e.message); process.exit(1) })"
 
 # Where sealed credentials live. A VOLUME, because losing this file loses every
 # stall's issuing credential and each one can only be replaced by that stall
