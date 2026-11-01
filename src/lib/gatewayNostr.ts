@@ -134,24 +134,51 @@ export async function gatewayEvents(
   dTag?: string,
 ): Promise<Event[]> {
   try {
-    const response = await fetch(`${GATEWAY}/api/v1/nostr/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        kinds: [kind],
-        authors: [pubkey],
-        ...(dTag ? { tags: { '#d': [dTag] } } : {}),
-        limit: 500,
-      }),
+    return await gatewayQuery({
+      kinds: [kind],
+      authors: [pubkey],
+      ...(dTag ? { tags: { '#d': [dTag] } } : {}),
+      limit: 500,
     })
-    if (!response.ok) return []
-
-    const body = (await response.json()) as { events?: GatewayEvent[] }
-    return (body.events ?? []).map(toEvent).filter((e): e is Event => e !== null)
   } catch {
     return []
   }
+}
+
+/** The gateway did not answer a read (unreachable, timed out, or not a 2xx). */
+export class GatewayUnreachableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'GatewayUnreachableError'
+  }
+}
+
+/**
+ * One `POST /api/v1/nostr/query`, THROWING `GatewayUnreachableError` when the gateway did not
+ * answer, so a caller can tell "unreachable" from "no events". Bounded by
+ * `GATEWAY_PAGE_TIMEOUT_MS`. Events are NOT signature-checked here; `relay.ts` does that.
+ */
+export async function gatewayQuery(filter: Record<string, unknown>): Promise<Event[]> {
+  let response: Response
+  try {
+    response = await fetch(`${GATEWAY}/api/v1/nostr/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      signal: AbortSignal.timeout(GATEWAY_PAGE_TIMEOUT_MS),
+      body: JSON.stringify(filter),
+    })
+  } catch (error) {
+    throw new GatewayUnreachableError(error instanceof Error ? error.message : String(error))
+  }
+  if (!response.ok) throw new GatewayUnreachableError(`nostr/query answered ${response.status}`)
+  let body: { events?: GatewayEvent[] }
+  try {
+    body = (await response.json()) as { events?: GatewayEvent[] }
+  } catch (error) {
+    throw new GatewayUnreachableError(error instanceof Error ? error.message : String(error))
+  }
+  return (body.events ?? []).map(toEvent).filter((e): e is Event => e !== null)
 }
 
 /** The gateway's page size for `gatewayAllEvents`; it also caps lower reads at 500 upstream. */
@@ -184,21 +211,12 @@ export async function gatewayAllEvents(pubkey: string, kind: number): Promise<Ev
   for (let page = 0; page < GATEWAY_MAX_PAGES; page++) {
     let batch: Event[]
     try {
-      const response = await fetch(`${GATEWAY}/api/v1/nostr/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        signal: AbortSignal.timeout(GATEWAY_PAGE_TIMEOUT_MS),
-        body: JSON.stringify({
-          kinds: [kind],
-          authors: [pubkey],
-          limit: GATEWAY_PAGE_LIMIT,
-          ...(until === undefined ? {} : { until }),
-        }),
+      batch = await gatewayQuery({
+        kinds: [kind],
+        authors: [pubkey],
+        limit: GATEWAY_PAGE_LIMIT,
+        ...(until === undefined ? {} : { until }),
       })
-      if (!response.ok) break
-      const body = (await response.json()) as { events?: GatewayEvent[] }
-      batch = (body.events ?? []).map(toEvent).filter((e): e is Event => e !== null)
     } catch {
       break
     }

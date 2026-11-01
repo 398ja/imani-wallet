@@ -2,7 +2,6 @@ import type { Event, EventTemplate } from 'nostr-tools'
 
 import { getSigner } from './nap'
 import { allEvents, publish } from './relay'
-import { gatewayEvents } from './gatewayNostr'
 import { mirrorToGateway } from './transferSignature'
 import { buildRecordEvents, isChunkEvent, reassembleRecords, recordIdOf, type Sealer } from './chunkedRecord'
 import { onRosterChanged } from './terminalRoster'
@@ -32,20 +31,9 @@ function selfSealer(): Sealer {
 
 /** The newest roster plaintext this stall published, or null. Throws only when nothing answered. */
 export async function fetchRosterPlaintext(stallPubkey: string): Promise<string | null> {
-  let reached = false
-  const [relayed, cached] = await Promise.all([
-    allEvents(stallPubkey, ROSTER_KIND).then(
-      (e) => ((reached = true), e),
-      () => [] as Event[],
-    ),
-    gatewayEvents(stallPubkey, ROSTER_KIND).then((e) => {
-      // The gateway answers [] on any failure, so only a non-empty answer proves it was reached.
-      if (e.length > 0) reached = true
-      return e
-    }),
-  ])
-  if (!reached) throw new Error('neither the relay nor the gateway answered')
-  const mine = [...relayed, ...cached].filter(
+  // #428: one read, through the cache. Throws when the gateway did not answer.
+  const events: Event[] = await allEvents(stallPubkey, ROSTER_KIND)
+  const mine = events.filter(
     (e) => e.pubkey === stallPubkey && (recordIdOf(e) === ROSTER_D_TAG),
   )
   const unique = [...new Map(mine.map((e) => [e.id, e])).values()]
