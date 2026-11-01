@@ -232,6 +232,33 @@ describe('issuance evidence survives the relay round trip', () => {
     expect((restored as { issuanceWarrant?: string }).issuanceWarrant).toBeUndefined()
     expect((restored as { cashAttestation?: string }).cashAttestation).toBeUndefined()
   })
+
+  it('carries a partly delivered sale\'s expected and delivered totals (#462)', () => {
+    const partial = buildIssueTransaction({
+      voucherId: 'v-partial',
+      amount: 20_000,
+      unit: 'EUR',
+      decimals: 2,
+      recipientPubkey: 'cc'.repeat(32),
+      at: 1786891362412,
+      issuanceWarrant: WARRANT,
+      saleTotalMinor: 100_000,
+      deliveredMinor: 20_000,
+    })
+    const restored = toTransaction(toRow(partial.id, toContent(toTransaction(partial))))
+    expect(restored.saleTotalMinor).toBe(100_000)
+    expect(restored.deliveredMinor).toBe(20_000)
+
+    // A complete sale files neither, and an old row restores without them.
+    const whole = buildIssueTransaction({
+      voucherId: 'v-whole', amount: 500, unit: 'EUR', decimals: 2, at: 1,
+      recipientPubkey: 'cc'.repeat(32),
+      saleTotalMinor: 500, deliveredMinor: 500,
+    })
+    expect(toTransaction(whole).saleTotalMinor).toBeUndefined()
+    expect(toTransaction(toRow(issued.id, toContent(toTransaction(issued)))).deliveredMinor)
+      .toBeUndefined()
+  })
 })
 
 describe('till attribution survives the relay round trip (#160 phase 6, F2)', () => {

@@ -78,7 +78,7 @@ describe("a day's takings, re-checked", () => {
 
     expect(totals.authorisedMinor).toBe(3500)
     expect(totals.unwarrantedMinor).toBe(500)
-    expect(totals.counts).toEqual({ authorised: 2, unwarranted: 1, mismatch: 0 })
+    expect(totals.counts).toEqual({ authorised: 2, unwarranted: 1, mismatch: 0, understated: 0 })
   })
 
   it('ignores rows that are not issuances', () => {
@@ -100,7 +100,12 @@ describe('tampering is what this is for', () => {
 
     const [result] = reconcileIssuances([tampered], STALL)
 
-    expect(result.verdict).toBe('mismatch')
+    // Still caught, as `understated` (#462): the row no longer sums to its
+    // signed sale, and the 1600 gap is what the merchant is shown. Edited
+    // history and a partly delivered sale have the same shape, so neither is
+    // worded as a forged signature.
+    expect(result.verdict).toBe('understated')
+    expect(result.sale).toMatchObject({ signedMinor: 2500, deliveredMinor: 900 })
   })
 
   it('a row whose CURRENCY was edited no longer reconciles', () => {
@@ -222,7 +227,20 @@ describe('finding the sale a returned coupon came from', () => {
     const short = [part('v-a', 834), part('v-b', 833)]
     const verdicts = reconcileIssuances(short, STALL).map((r) => r.verdict)
 
-    expect(verdicts).toEqual(['mismatch', 'mismatch'])
+    // Understated, not mismatch (#462): the signatures hold, and calling it
+    // a mismatch read as forgery for what is usually a partial delivery.
+    expect(verdicts).toEqual(['understated', 'understated'])
+  })
+
+  it('reports an overstated split sale as overstated, counted with mismatches', () => {
+    const over = [part('v-a', 1500), part('v-b', 1500)]
+    const result = reconcileIssuances(over, STALL)
+    expect(result.map((r) => r.verdict)).toEqual(['overstated', 'overstated'])
+    expect(result[0].reason).toMatch(/overstated/)
+    const totals = totalReconciliation(result)
+    expect(totals.mismatchedMinor).toBe(3000)
+    expect(totals.counts.mismatch).toBe(2)
+    expect(totals.counts.understated).toBe(0)
   })
 
   it('accepts a split sale whose rows DO sum to the warrant', () => {
@@ -378,7 +396,7 @@ describe('cashback is reconciled too', () => {
     const tampered = cashback(2500)
     ;(tampered as { amount: number }).amount = 900
 
-    expect(reconcileIssuances([tampered], STALL)[0].verdict).toBe('mismatch')
+    expect(reconcileIssuances([tampered], STALL)[0].verdict).toBe('understated')
   })
 
   it('reports an unwarranted cashback rather than ignoring it', () => {
@@ -408,5 +426,61 @@ describe('cashback is reconciled too', () => {
 
     expect(totals.authorisedMinor).toBe(3500)
     expect(totals.counts.authorised).toBe(2)
+  })
+})
+
+
+describe('a sale signed for more than was delivered (#462)', () => {
+  // The issue's case: a EUR 1000.00 warrant, one EUR 200.00 part delivered.
+  const shortRow = (over: Partial<WalletTransaction> = {}): WalletTransaction =>
+    ({
+      id: 'issued:v-short',
+      type: 'issued',
+      direction: 'out',
+      at: 0,
+      amount: 20_000,
+      unit: 'EUR',
+      decimals: 2,
+      voucherId: 'v-short',
+      issuanceWarrant: warrantFor(100_000, 'EUR', 2),
+      ...over,
+    }) as unknown as WalletTransaction
+
+  it('is understated with the missing amount, not a mismatch', () => {
+    const [item] = reconcileIssuances([shortRow()], STALL)
+    expect(item.verdict).toBe('understated')
+    expect(item.reason).toBeUndefined()
+    expect(item.sale).toMatchObject({ signedMinor: 100_000, deliveredMinor: 20_000, partlyDelivered: false })
+  })
+
+  it('reads the row\'s own partial-delivery record when it has one', () => {
+    const [item] = reconcileIssuances(
+      [shortRow({ saleTotalMinor: 100_000, deliveredMinor: 20_000 })],
+      STALL,
+    )
+    expect(item.sale?.partlyDelivered).toBe(true)
+  })
+
+  it('totals every row exactly once and counts the sale once', () => {
+    const second = shortRow({ id: 'issued:v-short2', voucherId: 'v-short2' })
+    const rows = [shortRow(), second, issued(500, {}, 'EUR', 2), issued(300, { issuanceWarrant: undefined, id: 'u' }, 'EUR', 2)]
+    const totals = totalReconciliation(reconcileIssuances(rows, STALL))
+    expect(totals.authorisedMinor).toBe(500)
+    expect(totals.unwarrantedMinor).toBe(300)
+    expect(totals.mismatchedMinor).toBe(0)
+    expect(totals.understatedMinor).toBe(40_000)
+    expect(totals.understatedSignedMinor).toBe(100_000)
+    expect(totals.missingMinor).toBe(60_000)
+    expect(totals.counts).toEqual({ authorised: 1, unwarranted: 1, mismatch: 0, understated: 1 })
+    const sum =
+      totals.authorisedMinor + totals.unwarrantedMinor + totals.mismatchedMinor + totals.understatedMinor
+    expect(sum).toBe(rows.reduce((t, r) => t + r.amount, 0))
+  })
+
+  it('needs attention in the summary', () => {
+    const [line] = summariseReconciliation([shortRow()], STALL)
+    expect(line.needsAttention).toBe(true)
+    expect(line.missingMinor).toBe(80_000)
+    expect(line.counts.mismatch).toBe(0)
   })
 })
