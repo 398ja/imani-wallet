@@ -141,7 +141,10 @@ export function appCheckoutPorts(): CheckoutPorts & SplitPorts {
       if (!carved) throw new Error('this amount cannot be taken from that coupon')
       // The rest stays a coupon of its own. The part is held by the code record already (the whole
       // source row is held while the code is outstanding), so nothing can spend either twice.
-      if (carved.rest) await replaceVoucherToken(getWallet(), tokenId, carved.rest)
+      // Its face is restated to the rest token's own credit (what the store would credit it for), so
+      // the balance never keeps showing what the code took (staging 2026-11-01: 5.19 shown, 5.10
+      // usable online, the 9 c being the carved part).
+      if (carved.rest) await replaceVoucherToken(getWallet(), tokenId, carved.rest, creditableFaceValue(parseVoucherToken(carved.rest)).faceValue)
       else await getWallet().removeVoucher(tokenId)
       notifyWalletChanged()
       return carved.part

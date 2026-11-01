@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.46.3] - 2026-11-01
+
+### Fixed
+- The balance showed more than the shop could take (5.19 vs 5.10 for one stall) after a checkout code
+  carved whole proofs off a coupon (#402): the row left behind kept the coupon's whole face value. The
+  carve now restates the row to what its token is credited for, and rows a past carve overstated are
+  restated on the next catch-up (only down, and never within one minor unit of rounding).
+
 ## [0.46.2] - 2026-11-01
 
 ### Fixed
