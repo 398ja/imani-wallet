@@ -1,0 +1,15 @@
+{
+  /* The server-side SDKs (#366 @imani/cashlink-sender).
+
+     Their own project rather than part of tsconfig.services.json: an SDK runs the APP's engine
+     (src/lib/cashlinkFlow, giftLink, wallet ...), so its import graph is the browser app's, with the
+     app's package aliases (aliased to their TypeScript sources) and the app's relaxed flags for
+     those sources. Under the services project those same files failed `tsc -b`, and with it the
+     wallet image build, on code that typechecks clean in the app. */
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.sdk.tsbuildinfo",
+    "types": ["node", "vite/client", "vitest/globals"]
+  },
+  "include": ["sdk", "src/types"]
+}

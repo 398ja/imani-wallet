@@ -4,9 +4,11 @@ import { getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 
 import { Avatar, Button, Input, Alert, Centered } from '../components/ui'
+import { ParkedClaimBanner } from '../components/ParkedClaimBanner'
 import { keyStore, hasStoredKey } from '../lib/nap'
 import { handleLabel } from '../lib/format'
 import { loadProfile, profileName, refreshProfile, type Profile } from '../lib/profile'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Unlock a key this browser already holds.
@@ -57,7 +59,7 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
       // on another device should be current here before the header renders.
       void refreshProfile(getPublicKey(hexToBytes(hex)))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }
@@ -85,6 +87,9 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
           )}
         </div>
       </div>
+
+      {/* A claim link parked on the way here (claim links phase 3, spec 4.4 and 5.2). */}
+      <ParkedClaimBanner mode="unlock" />
 
       <div className="space-y-3">
         <Input
@@ -116,9 +121,6 @@ export function LoginPage({ onUnlock }: { onUnlock: (privkeyHex: string) => Prom
       <div className="flex justify-center gap-4 text-sm text-mono-500">
         <Link to="/onboarding" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
           Use a different account
-        </Link>
-        <Link to="/restore" className="pressable underline hover:text-mono-900 dark:hover:text-mono-50">
-          Restore from backup
         </Link>
       </div>
     </div>

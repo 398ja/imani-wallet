@@ -1,9 +1,10 @@
 import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 
 import { checkIssuer } from './issuerAllowlist'
+import { checkMintAndUnit } from './trustedMint'
 import { boundedClaim, type MerchantClaim } from './merchantClaim'
 import { redeemLockName } from './redemptionLedger'
-import { toTransaction, type WalletTransaction } from './transactions'
+import { isVoucherIssuance, toTransaction, type WalletTransaction } from './transactions'
 import { publishTx } from './txRecords'
 import { creditableFaceValue, exactFaceValue, parseVoucherToken, verifyVoucher } from './voucherToken'
 import { getWallet, listTransactions, listVouchers, notifyWalletChanged } from './wallet'
@@ -40,6 +41,9 @@ import { withWebLock } from './webLock'
  *
  *  - The stored voucher's issuer signature verifies, and its key is not
  *    refused by a configured issuer allowlist (`checkIssuer`).
+ *  - Its proofs are at a mint this build trusts, in sat (`checkMintAndUnit`).
+ *    The signature covers no mint, so without this a genuine signed coupon
+ *    backed by some other mint's proofs credits exactly like the real one.
  *  - It names THIS stall as issuer: a claim is a coupon coming home.
  *  - `boundedClaim`: only against a local `issued` row of the same id and
  *    unit, and never for more than that issuance has left. This is the gate
@@ -83,7 +87,7 @@ export async function reconcileClaims(stallPubkey: string): Promise<ReconcileRes
     // off the stored row by id.
     const rawById = new Map(raw.map((r) => [String((r as { id?: unknown }).id ?? ''), r as unknown as Record<string, unknown>]))
     const rows = raw.map(toTransaction)
-    const issuedIds = new Set(rows.filter((tx) => tx.type === 'issued' && tx.voucherId).map((tx) => tx.voucherId))
+    const issuedIds = new Set(rows.filter((tx) => isVoucherIssuance(tx) && tx.voucherId).map((tx) => tx.voucherId))
     if (issuedIds.size === 0) return result
 
     const candidates = rows
@@ -159,6 +163,13 @@ export function candidateClaim(
   const v = parsed.voucher
   if (!verifyVoucher(v).signatureValid) return undefined
   if (checkIssuer(parsed) === 'unknown-issuer') return undefined
+  // The issuer signature covers the voucher's terms and no mint at all, so a
+  // copy backed by another mint's proofs verifies just as well as the real
+  // coupon. Only a positively trusted mint is claimed. Every other verdict,
+  // `not-ready` and `no-trusted-mint` included (#133 review), is skipped. Safe
+  // because this is a SWEEP: a row skipped now is a candidate again on the next
+  // pass, so the only cost is a later reconciliation rather than a lost claim.
+  if (checkMintAndUnit(parsed) !== 'trusted') return undefined
   if (!v.issuerId || v.issuerId.toLowerCase() !== stallPubkey.toLowerCase()) return undefined
   if (!v.voucherId || !v.unit) return undefined
 

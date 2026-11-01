@@ -39,6 +39,7 @@ export const imaniAliases = {
   '@imani/gateway-client': src('gateway-client'),
   '@imani/dm-poll': src('dm-poll'),
   '@imani/licence': src('licence'),
+  '@imani/merchant-record': src('merchant-record'),
   '@imani/redemption': src('redemption'),
   '@imani/reports': src('reports'),
   '@imani/payment-requests': src('payment-requests'),

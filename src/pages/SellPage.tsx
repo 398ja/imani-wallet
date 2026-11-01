@@ -16,11 +16,14 @@ import { ScanRecipient } from '../components/ScanRecipient'
 import type { Actor } from '../lib/actor'
 import type { TerminalSession } from '../lib/terminalSession'
 import { issueAndDeliver, type IssueStage } from '../lib/issue'
+import { TERMINAL_SALE_UNSUPPORTED, mayWarrantSale } from '../lib/warrantSigner'
 import { identityLabel, useIdentity } from '../lib/identity'
 import { currencyDecimals, formatDate, formatFace, parseAmountToMinor } from '../lib/format'
 import { ValidityPicker } from '../components/ValidityPicker'
 import { useCashbackAvailable } from '../lib/cashback'
 import type { MerchantProfile } from '../lib/merchant'
+import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Sell: issue a coupon to a customer standing in front of you.
@@ -34,16 +37,16 @@ import type { MerchantProfile } from '../lib/merchant'
  * it show up in the customer's wallet without them doing anything — and what
  * requires them to have a wallet at all.
  *
- * For the customer who does not, `/sell/cashback` issues a bearer code instead.
+ * For the customer who does not, `/sell/cashback` creates a Cashlink (a bearer link and QR) instead.
  * It is the deliberate opposite trade: no recipient, no delivery, and whoever
  * repeats the code back gets the money.
  */
 
 const STAGE_LABEL: Record<IssueStage, string> = {
   issuing: 'Issuing the voucher…',
-  // Named for what is actually happening: the coupon exists but has no Cashu
-  // token yet, because its Lightning backing is still settling.
-  minting: 'Waiting for the voucher to be backed…',
+  // The coupon exists but has no Cashu token yet: this is the mint step, which
+  // for a quote-backed coupon includes waiting for its Lightning backing to settle.
+  minting: 'Minting the voucher…',
   delivering: 'Delivering to the customer…',
 }
 
@@ -70,6 +73,28 @@ export function SellPage({
 }) {
   const navigate = useNavigate()
   const [customer, setCustomer] = useState<string | null>(null)
+
+  /*
+    A terminal cannot sign a warrant the customer's wallet accepts, so a sale
+    here would take the customer's money for a coupon their wallet refuses
+    (#159). Stopped on arrival, before a customer is scanned or an amount is
+    typed, so staff learn it before taking payment rather than after.
+    `issueAndDeliver` refuses the same request made around this screen.
+  */
+  if (actor && !mayWarrantSale(actor, session ?? null)) {
+    return (
+      <Screen>
+        <BackLink to="/" label="Back" />
+        <PageHeader title="Sell" />
+        <Alert>{TERMINAL_SALE_UNSUPPORTED}</Alert>
+        <div className="mt-4">
+          <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
+            Back
+          </Button>
+        </div>
+      </Screen>
+    )
+  }
 
   return (
     <Screen>
@@ -114,7 +139,7 @@ function CashbackLink() {
         to="/sell/cashback"
         className="pressable mt-1 inline-block text-sm font-medium text-mono-900 underline-offset-4 hover:underline dark:text-mono-50"
       >
-        Give cashback instead
+        Create a Cashlink instead
       </Link>
     </div>
   )
@@ -179,7 +204,7 @@ function IssueForm({
           faceValueMinor: minor,
           currency: merchant.issuanceCurrency,
           expiryDays: validity,
-          memo: memo.trim() || undefined,
+          memo: clampNote(memo.trim() || undefined),
           recipientPubkey: customer,
           // The ACTOR, not a key. On the owner's own device the stall IS the
           // session pubkey — a positive claim rather than the fallback
@@ -209,7 +234,7 @@ function IssueForm({
       setSent(deliveredValue)
       setShortfall(deliveredValue !== minor ? minor - deliveredValue : 0)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setStage(null)
     }
@@ -310,6 +335,8 @@ function IssueForm({
           label="Note (optional)"
           placeholder="£5 welcome voucher"
           value={memo}
+          // Capped (note.ts): a till's sale row must fit one relay event (review sh6).
+          maxLength={NOTE_MAX_CHARS}
           onChange={(e) => setMemo(e.target.value)}
           disabled={busy}
         />

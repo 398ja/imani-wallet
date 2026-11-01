@@ -55,12 +55,25 @@ export const publicUrl = (claimRef: string) => `${portal(PUBLIC_PATH)}/${encodeU
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/**
+ * The longest warrant the portal takes (`CashbackDtos.MAX_WARRANT_LENGTH`).
+ * Refused here too, so a caller hears it from this service in its own words
+ * rather than as the portal's 400 after a signed round trip.
+ */
+const MAX_WARRANT_LENGTH = 4096
+
 export interface GenerateInput {
   amountMinor: number
   unit: string
   memo?: string
   idempotencyKey: string
   expiryDays?: number
+  /**
+   * The stall's warrant, signed by the caller. This service holds no stall key
+   * (ADR 0001), so it can only carry one. Dropping it here would mint a coupon
+   * the issuing stall's own till refuses (#144).
+   */
+  issuanceWarrant?: string
 }
 
 export function parseGenerateRequest(body: unknown): Parsed<GenerateInput> {
@@ -113,9 +126,26 @@ export function parseGenerateRequest(body: unknown): Parsed<GenerateInput> {
     return fail('expiryDays', 'expected a whole number of days greater than zero')
   }
 
+  // Kept as the exact string the caller sent. It is signed JSON, and parsing
+  // and re-serialising it could reorder keys and break the signature.
+  const issuanceWarrant = b.issuanceWarrant
+  if (issuanceWarrant !== undefined && typeof issuanceWarrant !== 'string') {
+    return fail('issuanceWarrant', 'expected the warrant as a JSON string, exactly as signed')
+  }
+  if (typeof issuanceWarrant === 'string' && issuanceWarrant.length > MAX_WARRANT_LENGTH) {
+    return fail('issuanceWarrant', `expected at most ${MAX_WARRANT_LENGTH} characters`)
+  }
+
   return {
     ok: true,
-    value: { amountMinor, unit, memo: memo || undefined, idempotencyKey, expiryDays },
+    value: {
+      amountMinor,
+      unit,
+      memo: memo || undefined,
+      idempotencyKey,
+      expiryDays,
+      ...(issuanceWarrant ? { issuanceWarrant } : {}),
+    },
   }
 }
 
@@ -135,6 +165,7 @@ export function generateBody(input: GenerateInput): string {
   }
   if (input.memo !== undefined) body.memo = input.memo
   if (input.expiryDays !== undefined) body.expiryDays = input.expiryDays
+  if (input.issuanceWarrant !== undefined) body.issuanceWarrant = input.issuanceWarrant
   return JSON.stringify(body)
 }
 

@@ -1,3 +1,4 @@
+import type { LicenceLimits } from '@imani/licence'
 import type { SignedVoucherFields } from './voucherToken'
 
 /**
@@ -32,6 +33,10 @@ import type { SignedVoucherFields } from './voucherToken'
 export const LICENCE_FEATURES = {
   /** Enrol and run terminals beyond the free one. The spec's whole subject. */
   TERMINALS: 'terminals',
+  /** The wallet API for automations (#407, Pro). */
+  API: 'api',
+  /** Online shop checkout codes (#402, #407 Pro). */
+  ECOMMERCE: 'ecommerce',
 } as const
 
 export type LicenceFeature = (typeof LICENCE_FEATURES)[keyof typeof LICENCE_FEATURES]
@@ -128,6 +133,22 @@ export interface LicenceTerms {
    * voucher records what was paid.
    */
   paidCurrency: string
+  /** The tier sold (`basic`, `pro`), or `custom` for a hand grant (#407). */
+  tier?: string
+  /** Unix SECONDS the licence starts. Set on an early renewal so it opens when the old one ends. */
+  validFrom?: number
+  /**
+   * Limits this licence signs for itself (#407 §2). Omitted on a bought tier, which takes the
+   * catalog's numbers; set on a hand grant ("raise this stall to 200").
+   */
+  limits?: LicenceLimits
+  /** `subscription` (bought) or `custom` (issued by hand). */
+  grantKind?: 'subscription' | 'custom'
+  /**
+   * A hand grant's verification badge (#418 Q3). Only a grant writes one: a bought tier's badge is
+   * the catalog's, so re-mapping a tier to a badge never needs every licence re-issued.
+   */
+  badge?: 'bronze' | 'silver' | 'gold'
 }
 
 /**
@@ -141,7 +162,9 @@ export interface LicenceTerms {
  * importantly, matching `LicenceMetadata` in `licences.ts` exactly.
  */
 export function licenceMetadataJson(terms: LicenceTerms): string {
-  const features = terms.features ?? [LICENCE_FEATURES.TERMINALS]
+  // A hand grant that names its own limits confers no feature unless it says so. Defaulting it to
+  // `terminals` would quietly hand a "raise to 200" stall a paid feature it was not given.
+  const features = terms.features ?? (terms.limits ? [] : [LICENCE_FEATURES.TERMINALS])
 
   if (!terms.lockKey) {
     // Refused here rather than minted and refused later. A licence with no lock
@@ -153,9 +176,9 @@ export function licenceMetadataJson(terms: LicenceTerms): string {
   if (!terms.subscriptionId) {
     throw new Error('a licence must carry a subscription id')
   }
-  if (features.length === 0) {
-    // `licences.ts` needs both an id AND a feature to recognise a licence at
-    // all, so an empty grant is not a weak licence, it is an invisible one: the
+  if (features.length === 0 && !terms.limits) {
+    // `licences.ts` needs an id AND a grant (a feature, or since #407 a limit) to recognise a
+    // licence at all, so an empty grant is not a weak licence, it is an invisible one: the
     // wallet would treat it as an ordinary coupon and offer it for spending.
     throw new Error('a licence must confer at least one feature')
   }
@@ -170,7 +193,26 @@ export function licenceMetadataJson(terms: LicenceTerms): string {
     ...(terms.pilot ? { pilot: true } : {}),
     paid_amount_minor: terms.paidAmountMinor,
     paid_currency: terms.paidCurrency,
+    // #407. Each written only when set, so a licence sold the old way keeps its exact bytes.
+    ...(terms.tier ? { tier: terms.tier } : {}),
+    ...(terms.validFrom !== undefined ? { valid_from: terms.validFrom } : {}),
+    ...(terms.limits ? { limits: limitsJson(terms.limits) } : {}),
+    ...(terms.grantKind ? { grant_kind: terms.grantKind } : {}),
+    ...(terms.badge ? { badge: terms.badge } : {}),
   })
+}
+
+/** Limits in the signed wire shape `@imani/licence` reads back. Keys in a fixed order. */
+function limitsJson(limits: LicenceLimits): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (limits.sales === null) out.sales = null
+  else if (limits.sales) {
+    const amounts: Record<string, number> = {}
+    for (const c of Object.keys(limits.sales.amounts).sort()) amounts[c] = limits.sales.amounts[c]
+    out.sales = { period: limits.sales.period, amounts }
+  }
+  if (limits.terminals !== undefined) out.terminals = limits.terminals
+  return out
 }
 
 /** What the seller sends to the issuance API for one licence. */

@@ -13,7 +13,7 @@
 set -uo pipefail
 
 SERVICES=(
-  imani-gateway-db bottin-db imani-vault-db imani-payment-db
+  app-db mint-db
   bottin-api nostr-relay phoenixd-mock blossom
   imani-vault-jpa payment-adapter imani-mint-rest
   gateway-core gateway-customer gateway-portal

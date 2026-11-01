@@ -5,7 +5,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 import {
   asChunk,
+  confirmChunkDeliveries,
+  deliveredChunkTransfers,
   offerChunk,
+  offerChunkFrom,
   resetChunkAssembly,
   pendingChunkTransfers,
   type ChunkEnvelope,
@@ -120,6 +123,7 @@ async function makeChunks(
 const BIG_TOKEN = `cashuB${'x'.repeat(39000)}`
 
 beforeEach(() => {
+  localStorage.clear()
   resetChunkAssembly()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -412,5 +416,113 @@ describe('refusing a transfer that does not verify', () => {
     // still on the relay, so a later redelivery starts the assembly again.
     await offerChunk({ ...chunks[0], transfer_id: 'other' }, t0 + 11 * 60 * 1000)
     expect(pendingChunkTransfers()).toBe(1)
+  })
+})
+
+/**
+ * #204: a transfer is remembered as completed only once its coupon is safe.
+ *
+ * Decoding is not that moment. Until dm-poll marks the completing event
+ * processed (after the save, or a refusal it will not retry), the transfer is
+ * DELIVERED: its completing event gets the coupon again, and its siblings are
+ * held rather than tombstoned.
+ */
+describe('completion waits for the coupon to be safe (#204)', () => {
+  it('hands the coupon to its completing event again until dm-poll confirms it', async () => {
+    const payload = payloadFor(BIG_TOKEN)
+    const chunks = await makeChunks(payload, 2)
+
+    expect((await offerChunkFrom(chunks[0], 'wrap-a')).kind).toBe('pending')
+    expect(await offerChunkFrom(chunks[1], 'wrap-b')).toEqual({ kind: 'complete', payload, redelivery: false })
+
+    // The redemption did not finish (a failed save, a deferral). dm-poll offers
+    // the completing event again, and it must still yield the coupon.
+    expect(await offerChunkFrom(chunks[1], 'wrap-b')).toEqual({ kind: 'complete', payload, redelivery: true })
+    // Its sibling is HELD while that happens: never consumed, never re-assembled.
+    expect((await offerChunkFrom(chunks[0], 'wrap-a')).kind).toBe('in_delivery')
+    expect(pendingChunkTransfers()).toBe(0)
+    expect(deliveredChunkTransfers()).toBe(1)
+
+    // Saved: dm-poll marks wrap-b processed. Only now is the transfer done.
+    expect(confirmChunkDeliveries(['wrap-b'])).toBe(1)
+    expect((await offerChunkFrom(chunks[0], 'wrap-a')).kind).toBe('done')
+    expect(deliveredChunkTransfers()).toBe(0)
+  })
+
+  it('ignores a processed-set write that does not include the completing event', async () => {
+    const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)
+    await offerChunkFrom(chunks[0], 'wrap-a')
+    await offerChunkFrom(chunks[1], 'wrap-b')
+
+    expect(confirmChunkDeliveries(['some-other-wrap', 'wrap-a'])).toBe(0)
+    expect((await offerChunkFrom(chunks[1], 'wrap-b')).kind).toBe('complete')
+  })
+
+  it('reassembles afresh once a delivery nobody retries has aged out', async () => {
+    const payload = payloadFor(BIG_TOKEN)
+    const chunks = await makeChunks(payload, 2)
+    const t0 = 1_000_000
+    await offerChunkFrom(chunks[0], 'wrap-a', t0)
+    await offerChunkFrom(chunks[1], 'wrap-b', t0)
+
+    // Siblings alone do not keep it alive.
+    await offerChunkFrom(chunks[0], 'wrap-a', t0 + 9 * 60 * 1000)
+    const later = t0 + 11 * 60 * 1000
+    expect((await offerChunkFrom(chunks[0], 'wrap-a', later)).kind).toBe('pending')
+    expect(await offerChunkFrom(chunks[1], 'wrap-b', later)).toEqual({ kind: 'complete', payload, redelivery: false })
+  })
+
+  it('persists the completed record at once, so it never trails its tombstone', async () => {
+    const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)
+    await offerChunkFrom(chunks[0], 'wrap-a')
+    await offerChunkFrom(chunks[1], 'wrap-b')
+    expect(localStorage.getItem('imani-wallet:dm-chunks:completed:v2')).toBeNull()
+
+    confirmChunkDeliveries(['wrap-b'])
+
+    // Synchronously: the processed-set write that triggered this is deferred,
+    // and must not be able to land first.
+    expect(JSON.parse(localStorage.getItem('imani-wallet:dm-chunks:completed:v2')!)[0][0]).toBe(
+      chunks[0].transfer_id,
+    )
+  })
+})
+
+/**
+ * Devices that ran the old rule hold tombstones written at DECODE time. Some
+ * cover coupons that were never saved, the gate's case. Not trusted, not
+ * dropped: a legacy transfer is assembled again, which recovers a stranded
+ * coupon, and one that cannot be (its completing piece was processed, so it
+ * was received) is released after one pending TTL.
+ */
+describe('tombstones written by an earlier build (#204)', () => {
+  const LEGACY = 'imani-wallet:dm-chunks:completed'
+
+  it('recovers a transfer the old rule tombstoned before its coupon was saved', async () => {
+    const payload = payloadFor(BIG_TOKEN)
+    const chunks = await makeChunks(payload, 2)
+    localStorage.setItem(LEGACY, JSON.stringify([[chunks[0].transfer_id, Date.now()]]))
+    vi.resetModules()
+    const reloaded = await import('../dmChunks')
+
+    expect((await reloaded.offerChunkFrom(chunks[0], 'wrap-a')).kind).toBe('pending')
+    expect(await reloaded.offerChunkFrom(chunks[1], 'wrap-b')).toEqual({
+      kind: 'complete',
+      payload,
+      redelivery: false,
+    })
+  })
+
+  it('releases the stragglers of a legacy transfer that was really received', async () => {
+    const chunks = await makeChunks(payloadFor(BIG_TOKEN), 2)
+    localStorage.setItem(LEGACY, JSON.stringify([[chunks[0].transfer_id, Date.now()]]))
+    vi.resetModules()
+    const reloaded = await import('../dmChunks')
+    const t0 = Date.now()
+
+    // Only the straggler comes back: its completing sibling is processed.
+    expect((await reloaded.offerChunkFrom(chunks[0], 'wrap-a', t0)).kind).toBe('pending')
+    expect((await reloaded.offerChunkFrom(chunks[0], 'wrap-a', t0 + 11 * 60 * 1000)).kind).toBe('done')
+    expect(reloaded.pendingChunkTransfers()).toBe(0)
   })
 })

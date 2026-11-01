@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest'
 
 import { FileCredentialStore, tokenFor } from '../adapters'
 import { ConfigError, readConfig } from '../config'
-import { depsFor } from '../server'
+import { depsFor, portsFor } from '../server'
 import { CredentialVault } from '../vault'
 
 const KEY = 'a'.repeat(64)
@@ -192,10 +192,14 @@ describe('the credential file', () => {
     expect(await new FileCredentialStore(await tempPath()).read()).toEqual([])
   })
 
-  it('reads a corrupt file as no credentials rather than crashing', async () => {
+  // Review of #302: a corrupt file is NOT "no credentials". Read as [], it wiped every stall from a
+  // running service (#290 follows the file), and the next enrolment wrote [one record] over them
+  // all. It throws: the vault keeps its cache, and `put` refuses (`vaultSafety.test.ts`). At boot
+  // the pass fails and says so on /health, and nothing mints, as before.
+  it('refuses a corrupt file rather than reading it as no credentials', async () => {
     const path = await tempPath()
     await writeFile(path, 'not json at all')
-    expect(await new FileCredentialStore(path).read()).toEqual([])
+    await expect(new FileCredentialStore(path).read()).rejects.toThrow()
   })
 
   it('creates the directory it was pointed at', async () => {
@@ -379,5 +383,56 @@ describe('wiring', () => {
     const before = deps.ports.now()
     await deps.ports.sleep(5)
     expect(deps.ports.now()).toBeGreaterThanOrEqual(before)
+  })
+})
+
+describe('#160 round 2: credentials are put in service before they sell', () => {
+  // Since gateway-customer V27 a terminal credential that nobody confirmed is
+  // refused for every sale. This service holds terminal credentials, so it
+  // confirms each one (as its device) the first time it reads it, and only
+  // once the gateway has said yes.
+  it('confirms a credential once, before its first use', async () => {
+    const path = await tempPath()
+    await new CredentialVault(KEY, new FileCredentialStore(path)).put({
+      stallPubkey: 'b'.repeat(64),
+      credentialId: 'cred-9',
+      lockKeyHex: LOCK,
+    })
+    const calls: string[] = []
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${url}`)
+      return new Response(null, { status: 204 })
+    }) as unknown as typeof fetch
+    const ports = portsFor(readConfig(env({ PURCHASE_CREDENTIALS_PATH: path })), fetchImpl)
+
+    await ports.credentialFor('b'.repeat(64))
+    await ports.credentialFor('b'.repeat(64))
+
+    expect(calls).toEqual([
+      'POST http://gateway:8082/api/v1/wallet/terminal-credentials/cred-9/confirm',
+    ])
+  })
+
+  // A refused or failed confirm is tried again on the next read, rather than
+  // being remembered as done.
+  it('tries again while the gateway has not confirmed', async () => {
+    const path = await tempPath()
+    await new CredentialVault(KEY, new FileCredentialStore(path)).put({
+      stallPubkey: 'b'.repeat(64),
+      credentialId: 'cred-9',
+      lockKeyHex: LOCK,
+    })
+    let n = 0
+    const fetchImpl = (async () => {
+      n += 1
+      return new Response(null, { status: n === 1 ? 503 : 204 })
+    }) as unknown as typeof fetch
+    const ports = portsFor(readConfig(env({ PURCHASE_CREDENTIALS_PATH: path })), fetchImpl)
+
+    await ports.credentialFor('b'.repeat(64))
+    await ports.credentialFor('b'.repeat(64))
+    await ports.credentialFor('b'.repeat(64))
+
+    expect(n).toBe(2)
   })
 })

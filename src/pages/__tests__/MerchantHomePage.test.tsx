@@ -9,6 +9,7 @@ import { MerchantHomePage } from '../MerchantHomePage'
 import { TERMINAL_ROLES, grantFor, type TerminalRole } from '../../lib/terminalRole'
 import { SESSION_KIND, canIssueNow, canRedeemNow, openSession } from '../../lib/terminalSession'
 import type { OwnerActor, TerminalActor } from '../../lib/actor'
+import { mayWarrantSale } from '../../lib/warrantSigner'
 
 /**
  * The till, as each kind of device sees it.
@@ -32,6 +33,8 @@ function terminal(role: TerminalRole = TERMINAL_ROLES.ISSUE_AND_REDEEM): Termina
     role,
     terminalPubkey: DEVICE,
     permissions: grantFor(role, STALL),
+    // Attested by the stall at enrolment (#160 decision 5), as login reads a current till.
+    attested: true,
   }
 }
 
@@ -65,13 +68,16 @@ describe('a stall on its own device sees no change', () => {
 })
 
 describe('a terminal shows only what its role permits', () => {
-  it('gives a full till both buttons', () => {
+  it('gives a full till both Sell and Redeem (#160 phase 5)', () => {
+    // A selling till in a FULL session signs the `terminal` warrant form, which the customer's
+    // wallet verifies, so Sell is offered again.
     show({
       actor: terminal(),
       session: openSession(terminal(), SESSION_KIND.FULL, Date.now()),
     })
     expect(sell()).toBeTruthy()
     expect(redeem()).toBeTruthy()
+    expect(screen.queryByText(/not available yet/)).toBeNull()
   })
 
   it('gives a redemption-only terminal no Sell', () => {
@@ -167,8 +173,9 @@ describe('the screen and the enforcement point never disagree', () => {
         show({ actor, session })
         const offered = sell() !== null
 
-        // The enforcement point's own answer, asked directly.
-        const allowed = canIssueNow(actor, session)
+        // The enforcement point's own answer, asked directly: `issueAndDeliver`
+        // asks both of these (#159).
+        const allowed = canIssueNow(actor, session) && mayWarrantSale(actor, session)
 
         expect(offered, `${role} on a ${label} session`).toBe(allowed)
       }
@@ -259,5 +266,28 @@ describe('a refused terminal is not mistaken for the owner', () => {
     show({ refusal: null })
     expect(sell()).toBeTruthy()
     expect(redeem()).toBeTruthy()
+  })
+})
+
+describe('a stall closed for business (#434)', () => {
+  it('owner: stays a merchant home, Sell and Redeem disabled, with a way to reopen', () => {
+    render(
+      <MemoryRouter>
+        <MerchantHomePage closed />
+      </MemoryRouter>,
+    )
+    expect((screen.getByRole('button', { name: /Sell/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /Redeem/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('link', { name: 'Open again in Settings' }).getAttribute('href')).toBe('/settings/merchant')
+  })
+
+  it('open: nothing changes', () => {
+    render(
+      <MemoryRouter>
+        <MerchantHomePage />
+      </MemoryRouter>,
+    )
+    expect((screen.getByRole('button', { name: /Sell/ }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByText('Closed for business')).toBeNull()
   })
 })

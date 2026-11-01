@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Check, ChevronRight } from 'lucide-react'
-import type { Voucher } from '@imani/voucher-send'
 
 import {
   Button,
@@ -15,9 +14,14 @@ import {
   IdentityInline,
 } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
+import { SendByLinkOption } from './SendLinkPage'
+import { SwapBackOffer } from '../components/SwapBackOffer'
+import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
 import { listVouchers } from '../lib/wallet'
 import { merchantStatus, type MerchantStatus } from '../lib/merchant'
-import { toMerchants, type Merchant } from '../lib/merchants'
+import { useStallStatus } from '../hooks/useStallStatus'
+import { closedMessage, mayTradeWith } from '../lib/merchantStatus'
+import { toMerchants, unitHoldings, type Merchant, type UnitHolding } from '../lib/merchants'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import {
   humanName,
@@ -26,7 +30,14 @@ import {
   useMerchantHandle,
   useMerchantLabel,
 } from '../lib/identity'
-import { sendVouchers, splitObstacle, type SendResult } from '../lib/pay'
+import {
+  SendOutcomeUnknownError,
+  sendVouchers,
+  splitObstacle,
+  withoutInFlight,
+  type SendResult,
+} from '../lib/pay'
+import { userMessage } from '../lib/userMessage'
 
 /**
  * Send a voucher to someone — a friend, or a merchant redeeming it.
@@ -55,39 +66,20 @@ import { sendVouchers, splitObstacle, type SendResult } from '../lib/pay'
  * distinction about backing that nobody buying a coffee has any use for, so
  * groups sharing a unit are merged back together here.
  */
-type SendOption = {
-  merchant: Merchant
-  unit: string
-  decimals: number
-  totalFaceValue: number
-  vouchers: Voucher[]
-}
+type SendOption = UnitHolding
 
-function sendOptions(merchants: Merchant[]): SendOption[] {
-  const byUnit = new Map<string, SendOption>()
-  for (const merchant of merchants) {
-    for (const group of merchant.groups) {
-      const key = `${merchant.pubkey}|${group.unit.toUpperCase()}`
-      const found = byUnit.get(key)
-      if (found) {
-        found.totalFaceValue += group.totalFaceValue
-        found.vouchers.push(...group.vouchers)
-      } else {
-        byUnit.set(key, {
-          merchant,
-          unit: group.unit,
-          decimals: group.decimals,
-          totalFaceValue: group.totalFaceValue,
-          vouchers: [...group.vouchers],
-        })
-      }
-    }
-  }
-  // Most valuable first — the same order the home deck puts merchants in.
-  return [...byUnit.values()].sort((a, b) => b.totalFaceValue - a.totalFaceValue)
-}
+// Most valuable first, the same order the home deck puts merchants in.
+const sendOptions = unitHoldings
 
-type Status = { step: 'idle' } | { step: 'sending' } | { step: 'failed'; message: string }
+/**
+ * `unconfirmed`: the gateway took the send and the wallet could not learn how it ended. It may
+ * already have arrived, so the button stays locked: pressing it again could pay twice (#128).
+ */
+type Status =
+  | { step: 'idle' }
+  | { step: 'sending' }
+  | { step: 'failed'; message: string; swapBackTokenId?: string }
+  | { step: 'unconfirmed'; message: string }
 
 export function SendPage({ pubkey }: { pubkey: string }) {
   const navigate = useNavigate()
@@ -114,8 +106,9 @@ export function SendPage({ pubkey }: { pubkey: string }) {
   const [sent, setSent] = useState<SendResult | null>(null)
 
   useEffect(() => {
-    listVouchers().then((rows) => setMerchants(toMerchants(rows)))
-  }, [])
+    // What can be spent, not all that is held: a coupon behind an unconfirmed send is out (#128).
+    listVouchers().then((rows) => setMerchants(toMerchants(withoutInFlight(rows, pubkey))))
+  }, [pubkey])
 
   // Before the early returns — hooks cannot be called conditionally. The same
   // cached lookup every other screen makes, so asking here costs nothing extra.
@@ -153,6 +146,16 @@ export function SendPage({ pubkey }: { pubkey: string }) {
       live = false
     }
   }, [recipient])
+
+  /*
+    #434: paying a stall (the recipient is a merchant) needs that stall to be open. Asked only
+    for a merchant recipient: a send to a person never depends on anyone's opening hours.
+  */
+  const stallRecipient =
+    recipient !== null && merchantAnswer?.pubkey === recipient && merchantAnswer.status === 'merchant'
+      ? recipient
+      : null
+  const stall = useStallStatus(stallRecipient)
 
   if (merchants === null) return <Centered>Checking your vouchers…</Centered>
 
@@ -231,6 +234,13 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     recipient === null
       ? undefined
       : merchants.find((m) => m.pubkey.toLowerCase() === recipient.toLowerCase())
+  // #434: closed, unknown or still checking all hold the payment back, with the reason.
+  const stallBlocked = stallRecipient !== null && stall.status !== 'open'
+  const stallNote = !stallBlocked
+    ? null
+    : stall.status === 'loading'
+      ? 'Checking this merchant is open…'
+      : closedMessage(stall.status === 'customer' ? 'unknown' : stall.status, recipientIdentity?.name ?? asMerchant?.name)
   /*
     The recipient in prose — "Send to …", "… reached X."
 
@@ -257,9 +267,16 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     // showing the full amount here would send the customer away believing money
     // arrived that never did.
     const partial = sent.delivered < sent.requested
+    // A part the gateway accepted but could not confirm may already have arrived: the screen
+    // says so, and never suggests sending it again (#125).
+    const inFlight = sent.inFlight ?? 0
+    // The parts after an unconfirmed one were never tried: that money did not move.
+    const notSent = sent.requested - sent.delivered - inFlight
     return (
       <Screen>
-        <PageHeader title={partial ? 'Partly sent' : asMerchant ? 'Paid' : 'Sent'} />
+        <PageHeader
+          title={inFlight > 0 ? 'Still going through' : partial ? 'Partly sent' : asMerchant ? 'Paid' : 'Sent'}
+        />
         <Panel>
           <div className="flex flex-col items-center py-4 text-center">
             <div
@@ -290,12 +307,23 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         </Panel>
         {partial && (
           <div className="mt-3">
-            <Alert>
-              {sent.parts > 1 ? `${sent.parts} vouchers went before the rest stopped. ` : ''}
-              The rest was not sent and your remaining vouchers are untouched — send
-              the difference again if you still mean to.
-              {sent.shortfall ? ` (${sent.shortfall})` : ''}
-            </Alert>
+            {inFlight > 0 ? (
+              <Alert>
+                {formatFace(inFlight, chosen)} more is still going through and may already have
+                arrived. Do not send it again — check your history in a moment.
+                {notSent > 0
+                  ? ` The last ${formatFace(notSent, chosen)} was not sent and those vouchers are untouched.`
+                  : ''}
+                {sent.shortfall ? ` (${sent.shortfall})` : ''}
+              </Alert>
+            ) : (
+              <Alert>
+                {sent.parts > 1 ? `${sent.parts} vouchers went before the rest stopped. ` : ''}
+                The rest was not sent and your remaining vouchers are untouched — send
+                the difference again if you still mean to.
+                {sent.shortfall ? ` (${sent.shortfall})` : ''}
+              </Alert>
+            )}
           </div>
         )}
         <Button size="lg" className="mt-4 w-full" onClick={() => navigate('/')}>
@@ -318,6 +346,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           }}
           selfPubkey={pubkey}
         />
+        <SendByLinkOption from={from} unit={from ? chosen?.unit : undefined} />
       </Screen>
     )
   }
@@ -337,7 +366,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               key={key(option)}
               type="button"
               onClick={() => setPicked(key(option))}
-              className="flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
+              className="pressable flex w-full items-center justify-between rounded-2xl bg-white p-4 text-left dark:bg-mono-900"
             >
               <div className="min-w-0">
                 <MerchantName merchant={option.merchant} />
@@ -346,7 +375,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                   {option.vouchers.length === 1 ? '1 voucher' : `${option.vouchers.length} vouchers`}
                 </p>
               </div>
-              <ChevronRight className="h-5 w-5 text-mono-400" />
+              <ChevronRight className="h-5 w-5 text-mono-400" aria-hidden />
             </button>
           ))}
         </div>
@@ -402,16 +431,28 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           Once sent, this cannot be undone from here.
         </p>
 
-        {status.step === 'failed' && <Alert>{status.message}</Alert>}
+        {(status.step === 'failed' || status.step === 'unconfirmed') && <Alert>{status.message}</Alert>}
+        {status.step === 'failed' && status.swapBackTokenId && (
+          <SwapBackOffer tokenId={status.swapBackTokenId} pubkey={pubkey} />
+        )}
+        {stallBlocked && status.step !== 'failed' && stallNote && <Alert>{stallNote}</Alert>}
 
         <div className="space-y-2">
           <Button
             size="lg"
             className="w-full"
-            disabled={status.step === 'sending'}
+            disabled={status.step === 'sending' || status.step === 'unconfirmed' || stallBlocked}
             onClick={async () => {
               setStatus({ step: 'sending' })
               try {
+                // #434: a stall recipient is asked again right before money moves.
+                if (stallRecipient) {
+                  const now = await stall.recheck()
+                  if (!mayTradeWith(now.status)) {
+                    setStatus({ step: 'failed', message: closedMessage(now.status === 'customer' ? 'unknown' : now.status, recipientIdentity?.name ?? asMerchant?.name) ?? 'Send failed.' })
+                    return
+                  }
+                }
                 const result = await sendVouchers({
                   payer: pubkey,
                   recipient: {
@@ -430,18 +471,26 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                 setStatus({ step: 'idle' })
               } catch (e) {
                 setStatus({
-                  step: 'failed',
-                  message: e instanceof Error ? e.message : 'Send failed.',
+                  step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
+                  message: userMessage(e, 'Send failed.'),
+                  swapBackTokenId: e instanceof VoucherFullyRedeemedError ? e.tokenId : undefined,
                 })
               }
             }}
           >
-            {status.step === 'sending' ? 'Sending…' : asMerchant ? 'Pay' : 'Send'}
+            {status.step === 'sending'
+              ? 'Sending…'
+              : status.step === 'unconfirmed'
+                ? 'Still going through'
+                : asMerchant
+                  ? 'Pay'
+                  : 'Send'}
           </Button>
           <Button
             variant="ghost"
             className="w-full"
-            disabled={status.step === 'sending'}
+            // Back would clear the lock: after an unknown outcome the way out is Done, not Back.
+            disabled={status.step === 'sending' || status.step === 'unconfirmed'}
             onClick={() => {
               setConfirming(false)
               setStatus({ step: 'idle' })
@@ -449,6 +498,11 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           >
             Back
           </Button>
+          {status.step === 'unconfirmed' && (
+            <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
+              Done
+            </Button>
+          )}
         </div>
 
         {status.step === 'sending' && (
@@ -510,7 +564,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               {' · '}
               <button
                 type="button"
-                className="underline"
+                className="pressable -my-3 inline-block py-3 underline"
                 onClick={() => {
                   setPicked(null)
                   setAmount('')
@@ -533,11 +587,12 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         {/* Holding enough is not the same as being able to send it: a voucher
             cannot be divided below one sat's worth of face value. */}
         {!short && obstacle && <Alert>{obstacle}</Alert>}
+        {stallBlocked && stallNote && <Alert>{stallNote}</Alert>}
 
         <Button
           size="lg"
           className="w-full"
-          disabled={minor === null || minor <= 0 || short || !!obstacle}
+          disabled={minor === null || minor <= 0 || short || !!obstacle || stallBlocked}
           onClick={() => setConfirming(true)}
         >
           Continue

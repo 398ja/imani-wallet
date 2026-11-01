@@ -665,10 +665,9 @@ class GatewayAPI {
     if (path.startsWith('/api/v1/dm/')) {
       return true;
     }
-    // Atomic send/purchase require NIP-98 for ALL methods (ownership verification).
-    // /api/v1/atomic/* covers atomic-purchase aliases and the voucher-inspect endpoint.
+    // Atomic send and /api/v1/atomic/* (voucher inspect, fulfilment) require NIP-98 for ALL
+    // methods (ownership verification). The atomic purchase is removed from gateway-core.
     if (path.startsWith('/api/v1/atomic-send')
-            || path.startsWith('/api/v1/atomic-purchase')
             || path.startsWith('/api/v1/atomic/')) {
       return true;
     }
@@ -737,7 +736,6 @@ class GatewayAPI {
            path.startsWith('/api/v1/identities/') ||
            path.startsWith('/api/v1/nip05') ||
            path.startsWith('/api/v1/atomic-send') ||
-           path.startsWith('/api/v1/atomic-purchase') ||
            path.startsWith('/api/v1/cash/');
   }
 
@@ -1206,11 +1204,30 @@ class GatewayAPI {
     return this.request('GET', '/api/v1/wallet/balance');
   }
 
-  async send(amount, fromVoucherId) {
-    return this.request('POST', '/api/v1/wallet/send', {
+  /**
+   * POST /api/v1/wallet/send (imani-wallet#179).
+   *
+   * Pass the SAME `idempotencyKey` on every retry of one send (generate it once per user send
+   * intent and store it with the pending send), so a retry after a lost answer is replayed by
+   * the gateway instead of sending again. A new send gets a new key.
+   *
+   * Note: imani-gateway-customer refuses this route to every external caller (403, its #221); the
+   * wallet's real send path is `initiateAtomicSend` (POST /api/v1/atomic-send, see src/lib/pay.ts
+   * and src/lib/sendIntent.ts), which follows the same rule.
+   *
+   * @param {number} amount
+   * @param {string} fromVoucherId
+   * @param {string} [idempotencyKey]
+   */
+  async send(amount, fromVoucherId, idempotencyKey = null) {
+    const headers = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+    return this.requestWithHeaders('POST', '/api/v1/wallet/send', {
       amount,
       from_voucher_id: fromVoucherId
-    });
+    }, headers);
   }
 
   /**
@@ -1222,6 +1239,7 @@ class GatewayAPI {
    */
   async receive(token, options = {}) {
     const extraHeaders = {};
+    const body = { token };
 
     // Add idempotency key if provided
     if (options.idempotencyKey) {
@@ -1246,9 +1264,7 @@ class GatewayAPI {
     // byte-identical to what it was before locked coupons existed.
     try {
       const witnesses = globalThis.__imaniWitnessHeaderForToken?.(token);
-      if (witnesses) {
-        extraHeaders['X-Cashu-Witnesses'] = witnesses;
-      }
+      placeWitnesses(witnesses, extraHeaders, body);
     } catch {
       // Never fail a receive because signing failed. An unsigned locked proof
       // is refused by the MINT, with a reason naming the real problem; an
@@ -1256,7 +1272,9 @@ class GatewayAPI {
       // needed a witness.
     }
 
-    return this.requestWithHeaders('POST', '/api/v1/wallet/receive', { token }, extraHeaders);
+    // The same object is signed (NIP-98 payload hash) and sent: requestWithHeaders
+    // serialises it once and uses that string for both.
+    return this.requestWithHeaders('POST', '/api/v1/wallet/receive', body, extraHeaders);
   }
 
   /**
@@ -1353,8 +1371,10 @@ class GatewayAPI {
     }
 
     if (!response.ok) {
-      const errorData = data.error || data;
-      const errorMessage = errorData.message || errorData.error || 'API request failed';
+      const errorData = (data && typeof data === 'object') ? (data.error || data) : {};
+      const errorMessage = (typeof errorData === 'object' && (errorData.message || errorData.error))
+        || (typeof errorData === 'string' && errorData)
+        || describeNonJsonFailure(response.status, response.statusText, data);
       const error = new Error(errorMessage);
       error.status = response.status;
       // Backend's ErrorResponse uses `error.code`. The 009-prevent-self-sends
@@ -2271,157 +2291,6 @@ class GatewayAPI {
     return this.request('GET', '/api/v1/profiles/payment-methods');
   }
 
-  // ============================================================================
-  // Atomic Purchase API (Escrow-based flow)
-  // ============================================================================
-
-  /**
-   * Create a quote for an atomic voucher purchase.
-   * The quote locks in the exchange rate and merchant details.
-   * @param {Object} params - Quote parameters
-   * @param {string} params.merchantId - Merchant's NIP-05 or pubkey (hex)
-   * @param {number} params.faceValue - Face value in minor units (e.g., cents)
-   * @param {string} params.faceUnit - Currency code (e.g., 'EUR', 'KES')
-   * @param {string} params.paymentMethod - Payment method ('balance' or 'lightning')
-   * @returns {Object} - { quoteId, merchantId, faceValue, faceUnit, amountSats, paymentMethod, expiresAt }
-   */
-  async createAtomicQuote(params) {
-    const body = {
-      merchant_id: params.merchantId,
-      face_value: params.faceValue,
-      face_unit: params.faceUnit,
-      payment_method: params.paymentMethod,
-      backing_strategy: params.backingStrategy || 'PROPORTIONAL'
-    };
-    if (params.voucherValidityDays != null) {
-      body.voucher_validity_days = params.voucherValidityDays;
-    }
-    return this.request('POST', '/api/v1/atomic-purchase/quote', body);
-  }
-
-  /**
-   * Initiate an atomic voucher purchase with escrow protection.
-   * This starts the saga: escrow hold → mint voucher → release payment → deliver.
-   * @param {Object} params - Initiation parameters
-   * @param {string} params.quoteId - Quote ID from createAtomicQuote
-   * @param {string} params.customerPubkey - Customer's Nostr pubkey (hex)
-   * @param {string} [params.customerLnbitsAdminKey] - Customer's LNbits admin key for balance transfer (optional)
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status, escrow, progress, canCancel, expiresAt }
-   */
-  async initiateAtomicPurchase(params, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    const body = {
-      quote_id: params.quoteId,
-      customer_pubkey: params.customerPubkey
-    };
-    // Include LNbits admin key if provided (for actual balance transfer)
-    if (params.customerLnbitsAdminKey) {
-      body.customer_lnbits_admin_key = params.customerLnbitsAdminKey;
-    }
-    return this.requestWithHeaders('POST', '/api/v1/atomic-purchase', body, headers);
-  }
-
-  /**
-   * Get the status of an atomic purchase.
-   * Returns full progress information including current saga step.
-   * @param {string} purchaseId - Purchase ID from initiateAtomicPurchase
-   * @returns {Object} - { purchaseId, status, quote, merchant, escrow, progress, voucher, refund, canCancel, canClaim }
-   */
-  async getAtomicPurchaseStatus(purchaseId) {
-    return this.requestWithHeaders('GET', `/api/v1/atomic-purchase/${purchaseId}`);
-  }
-
-  /**
-   * Confirm escrow payment (for Lightning flow).
-   * Called after customer pays the escrow invoice.
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status, progress }
-   */
-  async confirmAtomicEscrow(purchaseId, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/escrow-confirm`, {}, headers);
-  }
-
-  /**
-   * Cancel an atomic purchase (before escrow is held).
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status: 'CANCELLED' }
-   */
-  async cancelAtomicPurchase(purchaseId, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/cancel`, {}, headers);
-  }
-
-  /**
-   * Request a refund for an atomic purchase.
-   * Only available if purchase is in a refundable state.
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} [reason] - Optional reason for refund
-   * @param {string} [customerLud16] - Customer's Lightning address for refund
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status, refund }
-   */
-  async refundAtomicPurchase(purchaseId, reason = null, customerLud16 = null, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    const body = {};
-    if (reason) body.reason = reason;
-    if (customerLud16) body.customer_lud16 = customerLud16;
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/refund`, body, headers);
-  }
-
-  /**
-   * Claim a voucher that failed automatic delivery.
-   * Available when purchase is in DELIVERY_PENDING state.
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} customerPubkey - Customer's Nostr pubkey (for authorization)
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status: 'DELIVERED', voucher }
-   */
-  async claimAtomicVoucher(purchaseId, customerPubkey, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/claim`, {
-      customer_pubkey: customerPubkey
-    }, headers);
-  }
-
-  /**
-   * Claim a refund for a purchase in REFUND_READY state.
-   * Used when auto-refund via lud16 wasn't possible.
-   * @param {string} purchaseId - Purchase ID
-   * @param {string} [customerLnbitsAdminKey] - Customer's LNbits admin key for receiving refund
-   * @param {string} [idempotencyKey] - Idempotency key for retry safety
-   * @returns {Object} - { purchaseId, status: 'REFUNDED', refund }
-   */
-  async claimAtomicRefund(purchaseId, customerLnbitsAdminKey = null, idempotencyKey = null) {
-    const headers = {};
-    if (idempotencyKey) {
-      headers['Idempotency-Key'] = idempotencyKey;
-    }
-    const body = {};
-    if (customerLnbitsAdminKey) {
-      body.customer_lnbits_admin_key = customerLnbitsAdminKey;
-    }
-    return this.requestWithHeaders('POST', `/api/v1/atomic-purchase/${purchaseId}/claim-refund`, body, headers);
-  }
-
   // ==================== ATOMIC SEND OPERATIONS ====================
 
   /**
@@ -3306,19 +3175,6 @@ class GatewayAPI {
   }
 
   /**
-   * Subscribe to real-time atomic purchase status updates via SSE with NIP-98 auth.
-   * @param {string} purchaseId - Purchase ID
-   * @param {function} onUpdate - Callback for status updates
-   * @param {function} [onError] - Callback for errors
-   * @returns {{ close: function }} Controller with close() method
-   */
-  subscribeAtomicPurchaseEvents(purchaseId, onUpdate, onError = null) {
-    const url = `${this.baseUrl}/api/v1/atomic-purchase/${purchaseId}/events`;
-    return this._subscribeSSE(url, onUpdate, onError,
-      ['COMPLETED', 'REFUNDED', 'CANCELLED', 'FAILED', 'EXPIRED']);
-  }
-
-  /**
    * Subscribe to real-time atomic send status updates via SSE with NIP-98 auth.
    * @param {string} sendId - Send ID
    * @param {function} onUpdate - Callback for status updates
@@ -3391,6 +3247,53 @@ function generateIdempotencyKey(tokenFingerprint = null) {
 function generateReceiveIdempotencyKey(tokenFingerprint) {
   if (typeof tokenFingerprint !== 'string' || tokenFingerprint === '') return null;
   return `rcv_${tokenFingerprint}`;
+}
+
+/**
+ * Largest X-Cashu-Witnesses header still sent as a header (staging 2026-10-31).
+ *
+ * Each NUT-11 witness is about 1.6 KB, so a 7-proof voucher made a 12 KB header and nginx (8 KB
+ * default) refused the receive with an HTML 400. Under this size the header works on every
+ * gateway, old or new; over it the witnesses go in the body `witnesses` field, which an upgraded
+ * gateway reads (imani-gateway-customer feat/witnesses-in-body). An old gateway ignores the body
+ * field, but it could not have received that header either, so no gateway is worse off than
+ * before, and no flag or deploy ordering is needed.
+ */
+const WITNESS_HEADER_MAX_BYTES = 6 * 1024;
+
+/**
+ * Puts a witness JSON string (secret -> [sig hex]) in the header when small, else in the body as
+ * the parsed object. Null/empty does nothing, so a bearer request is unchanged.
+ */
+function placeWitnesses(witnesses, headers, body) {
+  if (!witnesses) return;
+  const bytes = typeof TextEncoder !== 'undefined'
+    ? new TextEncoder().encode(witnesses).length
+    : witnesses.length;
+  if (bytes < WITNESS_HEADER_MAX_BYTES) {
+    headers['X-Cashu-Witnesses'] = witnesses;
+  } else {
+    body.witnesses = JSON.parse(witnesses);
+  }
+}
+
+/**
+ * A readable message for a failure whose body was not JSON, typically nginx's HTML page for
+ * 400 "Request Header Or Cookie Too Large", 413 or 431, which used to surface as the useless
+ * "API request failed".
+ */
+function describeNonJsonFailure(status, statusText, text) {
+  const raw = typeof text === 'string' ? text : '';
+  const title = /<title>([^<]*)<\/title>/i.exec(raw)?.[1]?.trim()
+    || /<h1>([^<]*)<\/h1>/i.exec(raw)?.[1]?.trim();
+  const plain = !title && raw && !/<[a-z!]/i.test(raw) ? raw.trim().slice(0, 200) : '';
+  const known = {
+    400: 'Bad request',
+    413: 'Request too large',
+    431: 'Request headers too large',
+  };
+  const detail = title || plain || statusText || known[status] || 'Request failed';
+  return `HTTP ${status}: ${detail}`;
 }
 
 /**

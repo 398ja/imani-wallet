@@ -1,0 +1,177 @@
+import { useEffect, useId, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { CreditCard, Ticket, Wallet } from 'lucide-react'
+
+import { Button } from './ui'
+import { useStallStatus } from '../hooks/useStallStatus'
+import { useValidVouchers } from '../hooks/useValidVouchers'
+import { merchantActions, payPath, type ActionState, type CardSalesReadiness } from '../lib/merchantActions'
+import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
+import { rememberAfterLogin } from '../lib/afterLogin'
+
+/**
+ * Buy and Pay at one stall (#280), shared by `/merchants/:pubkey` and `/profile/:pubkey`.
+ *
+ * One component because the two pages had grown two copies of the Buy button
+ * with two copies of its gate, and a rule that lives twice gets fixed once.
+ *
+ * Both buttons are ALWAYS drawn and disabled when unavailable, with the reason
+ * underneath. Hiding Buy for a stall without Stripe (the old behaviour) left a
+ * shopper unsure whether they had found the right screen at all; a disabled
+ * button with a sentence says what the stall can and cannot do.
+ */
+export function MerchantActions({
+  pubkey,
+  acceptsCards,
+  viewerPubkey,
+}: {
+  pubkey: string
+  acceptsCards: boolean
+  /** The signed-in user, or undefined for a visitor with no session. */
+  viewerPubkey?: string
+}) {
+  const navigate = useNavigate()
+  const loggedIn = viewerPubkey !== undefined
+  const valid = useValidVouchers(pubkey, viewerPubkey)
+  // #298: can the purchase issuer actually issue for this stall? Asked only when the stall says
+  // it takes cards. Fails safe: an error or no answer is `not-ready`, never a sale. The answer is
+  // kept WITH the stall it is for, so a stale answer for another stall reads as `checking`.
+  const [answer, setAnswer] = useState<{ stall: string; ready: Exclude<CardSalesReadiness, 'checking'> } | null>(null)
+  useEffect(() => {
+    if (!acceptsCards) return
+    let live = true
+    cardSalesReadiness(pubkey)
+      .catch((): 'not-ready' => 'not-ready')
+      .then((ready) => {
+        if (live) setAnswer({ stall: pubkey, ready })
+      })
+    return () => {
+      live = false
+    }
+  }, [pubkey, acceptsCards])
+  const cardSales: CardSalesReadiness =
+    answer === null || answer.stall !== pubkey ? 'checking' : answer.ready
+
+  // #434: the stall's own open-for-business status, polled while this screen is up.
+  const stall = useStallStatus(pubkey)
+  const { buy, pay } = merchantActions({
+    // Open is checked by `stallOpen`; the portal's sellsByCard narrows cards further once known.
+    acceptsCards: acceptsCards && (stall.status !== 'open' || stall.sellsByCard),
+    cardSales,
+    validVouchers: valid,
+    loggedIn,
+    stallOpen: stall.status,
+  })
+
+  const onBuy = () => {
+    if (loggedIn) {
+      navigate(`/buy/${pubkey}`)
+      return
+    }
+    // Guest card purchase is not supported (BuyPage refuses it), so a visitor
+    // logs in first and is brought straight back to this stall's purchase
+    // instead of a home screen that has forgotten why they came.
+    rememberAfterLogin(`/buy/${pubkey}`)
+    navigate('/login')
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <Action
+        state={buy}
+        label="Buy"
+        accessibleName="Buy a voucher with card"
+        icon={<CreditCard className="mr-2 h-5 w-5" aria-hidden />}
+        onClick={onBuy}
+      />
+      <Action
+        state={pay}
+        label="Pay"
+        accessibleName="Pay with your vouchers"
+        icon={<Wallet className="mr-2 h-5 w-5" aria-hidden />}
+        onClick={() => navigate(payPath(pubkey))}
+        variant="outline"
+      />
+    </div>
+  )
+}
+
+/**
+ * #402: a checkout code for this stall's online shop, on the stall's own page. Always drawn when
+ * the feature is on, and disabled with the reason when the stall has no shop or the viewer has
+ * nothing to put in a code, the same rule as Buy and Pay above.
+ */
+export function CouponCodeAction({
+  pubkey,
+  sellsOnline,
+  viewerPubkey,
+  size = 'md',
+}: {
+  pubkey: string
+  sellsOnline: boolean
+  viewerPubkey?: string
+  size?: 'md' | 'lg'
+}) {
+  const navigate = useNavigate()
+  const valid = useValidVouchers(pubkey, viewerPubkey)
+  const { online } = merchantActions({ acceptsCards: false, validVouchers: valid, loggedIn: viewerPubkey !== undefined, sellsOnline })
+  return (
+    <Action
+      state={online}
+      label="Coupon code"
+      accessibleName="Get a coupon code for this merchant's online shop"
+      icon={<Ticket className="mr-2 h-5 w-5" aria-hidden />}
+      onClick={() => navigate(`/online?stall=${pubkey}`)}
+      variant="outline"
+      size={size}
+    />
+  )
+}
+
+function Action({
+  state,
+  label,
+  accessibleName,
+  icon,
+  onClick,
+  variant = 'primary',
+  size = 'lg',
+}: {
+  state: ActionState
+  label: string
+  accessibleName: string
+  icon: React.ReactNode
+  onClick: () => void
+  variant?: 'primary' | 'outline'
+  size?: 'md' | 'lg'
+}) {
+  const reasonId = useId()
+  return (
+    <div className="flex flex-col gap-1">
+      <Button
+        size={size}
+        // A disabled action drops to the quiet outline, whatever its enabled
+        // variant: a solid primary fill at half opacity still reads as pressable,
+        // and heavier than the disabled Pay beside it.
+        variant={state.enabled ? variant : 'outline'}
+        className="w-full"
+        disabled={!state.enabled}
+        aria-label={accessibleName}
+        // The reason is announced with the button, not only shown in grey
+        // beneath it: a disabled control with no explanation reads as broken.
+        aria-describedby={state.reason ? reasonId : undefined}
+        onClick={onClick}
+      >
+        {icon} {label}
+      </Button>
+      {state.reason && (
+        // mono-600/400 rather than 500: the reason is what makes a disabled
+        // button make sense, and mono-500 on the dark page is about 4.2:1,
+        // under the 4.5:1 small text needs.
+        <p id={reasonId} className="text-center text-xs text-mono-600 dark:text-mono-400">
+          {state.reason}
+        </p>
+      )}
+    </div>
+  )
+}

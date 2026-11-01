@@ -44,6 +44,12 @@ export interface TerminalMetadata {
   lock_key: string
   /** What the owner called it, so the terminal can name itself to its operator. */
   name?: string
+  /**
+   * The owner's idle lock in minutes, `0` for off (decision 2). Signed into the credential since
+   * the #160 review, so a device holder cannot switch the lock off by editing the record on disk.
+   * Absent on credentials minted before that, which fall back to the device record.
+   */
+  idle_lock_minutes?: number
 }
 
 /** What an owner must supply to mint one. */
@@ -53,6 +59,8 @@ export interface TerminalCredentialTerms {
   /** The key scanned off the terminal's screen. */
   lockKey: string
   name?: string
+  /** The owner's idle lock (decision 2). Signed into the credential when given. */
+  idleLockMinutes?: number
 }
 
 /**
@@ -86,6 +94,7 @@ export function terminalMetadataJson(terms: TerminalCredentialTerms): string {
     role: terms.role,
     lock_key: terms.lockKey.toLowerCase(),
     ...(terms.name?.trim() ? { name: terms.name.trim() } : {}),
+    ...(validIdleLock(terms.idleLockMinutes) ? { idle_lock_minutes: terms.idleLockMinutes } : {}),
   }
 
   return JSON.stringify(metadata)
@@ -130,10 +139,16 @@ export function parseTerminalMetadata(raw: unknown): TerminalMetadata | null {
     role,
     lock_key: m.lock_key.toLowerCase(),
     ...(typeof m.name === 'string' && m.name ? { name: m.name } : {}),
+    ...(validIdleLock(m.idle_lock_minutes) ? { idle_lock_minutes: m.idle_lock_minutes } : {}),
   }
 }
 
 const HEX64 = /^[0-9a-f]{64}$/i
+
+/** A whole number of minutes, `0` (off) to a day: the same bounds the credential DM accepts. */
+function validIdleLock(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 24 * 60
+}
 
 /**
  * The credential as this device's actor, if it is genuinely ours.

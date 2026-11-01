@@ -37,15 +37,12 @@
     "noUncheckedSideEffectImports": true,
 
     /* Mirror of vite.config.ts resolve.alias — Vite handles bundling, tsc needs
-       these to typecheck against the same sources. Keep the two in sync. */
+       these to typecheck against the same sources. Keep the two in sync.
+       @imani/nap-* are NOT here: they are npm dependencies (#212) and resolve
+       through node_modules to their published .d.ts. */
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@imani/nap-core": ["../nap/packages/nap-core/src/index.ts"],
-      "@imani/nap-client-http": ["../nap/packages/nap-client-http/src/index.ts"],
-      "@imani/nap-client-web": ["../nap/packages/nap-client-web/src/index.ts"],
-      "@imani/nap-client-nip46": ["../nap/packages/nap-client-nip46/src/index.ts"],
-      "@imani/nap-react": ["../nap/packages/nap-react/src/index.ts"],
       "@imani/wallet-storage": ["./packages/wallet-storage/src/index.ts"],
       "@imani/nostr-vouchers": ["./packages/nostr-vouchers/src/index.ts"],
       "@imani/nostr-transactions": ["./packages/nostr-transactions/src/index.ts"],
@@ -58,6 +55,7 @@
       "@imani/money": ["./packages/money/src/index.ts"],
       "@imani/wallet-core": ["./packages/wallet-core/src/index.ts"],
       "@imani/licence": ["./packages/licence/src/index.ts"],
+      "@imani/merchant-record": ["./packages/merchant-record/src/index.ts"],
       "@imani/redemption": ["./packages/redemption/src/index.ts"],
       "@imani/reports": ["./packages/reports/src/index.ts"],
       "@imani/payment-requests": ["./packages/payment-requests/src/index.ts"],

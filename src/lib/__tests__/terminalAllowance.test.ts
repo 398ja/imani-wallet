@@ -29,11 +29,11 @@ import { parseVoucherToken } from '../voucherToken'
  * that screen will ask.
  */
 
-const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.token'), 'utf8').trim()
+const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.p2pk'), 'utf8').trim()
 const parsed = parseVoucherToken(TOKEN)
 const ISSUER = parsed.voucher.issuerPublicKey
 const EXPIRES_AT = parsed.voucher.expiresAt!
-const CUSTOMER = '4728fd8ad6a2f5c8930f4065347907e22186fba6c73bd04e145dfd780b98e451'
+const CUSTOMER = '114e0944b34f44f005419d987cd9ebcef988877c79a19564be9579daefe249d0'
 const DAY = 86_400
 
 const row: VoucherRow = {
@@ -89,7 +89,7 @@ describe('a stall with no subscription', () => {
       // and a refusal without the second is a dead end.
       expect(decision.message).toContain('free till')
       expect(decision.message).toContain('subscription')
-      expect(decision.message).toContain('get in touch')
+      expect(decision.message).toContain('Settings › Subscription')
     }
   })
 
@@ -275,5 +275,30 @@ describe('a count that makes no sense', () => {
   it('still refuses enrolment on a nonsense count', async () => {
     const status = await noLicence()
     expect(mayEnrol(status, NaN).allowed).toBe(false)
+  })
+})
+
+describe('tiers (#407)', () => {
+  const tiered = (tier: string) => ({
+    decision: { granted: true as const, grant: { features: ['terminals'], expiresAt: 4_000_000_000, pilot: false, tier }, source: 'verified' as const },
+    licence: null,
+    checkedAt: 1_800_000_000,
+    grants: [{ features: ['terminals'], expiresAt: 4_000_000_000, pilot: false, tier }],
+  })
+
+  it('lets a Basic stall enrol up to three, then refuses with the tier limit', () => {
+    expect(mayEnrol(tiered('basic'), 2)).toEqual({ allowed: true })
+    expect(mayEnrol(tiered('basic'), 3)).toMatchObject({ allowed: false, reason: ENROL_REFUSAL.AT_TIER_LIMIT })
+    expect(remainingTerminals(tiered('basic'), 1)).toBe(2)
+  })
+
+  it('never caps a Pro stall', () => {
+    expect(mayEnrol(tiered('pro'), 500)).toEqual({ allowed: true })
+    expect(remainingTerminals(tiered('pro'), 500)).toBe(Infinity)
+  })
+
+  it('keeps the live licence from before tiers unlimited, as it was sold', async () => {
+    const status = await withLicence(EXPIRES_AT - 10 * DAY)
+    expect(mayEnrol(status, 50)).toEqual({ allowed: true })
   })
 })

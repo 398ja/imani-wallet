@@ -56,8 +56,11 @@ const show = (merchant: MerchantProfile | null) =>
 describe('/profile shows where the stall trades', () => {
   it('renders the map for a merchant with a pitch', () => {
     show(withPitch)
-    const frame = screen.getByTitle('Map showing where this stall trades') as HTMLIFrameElement
-    expect(frame.src).toContain('q=51.507400,-0.127800')
+    const map = screen.getByLabelText('Map showing where this stall trades')
+    // OSM tiles (#263), never a Google embed.
+    expect(map.querySelector('img')?.getAttribute('src')).toMatch(/^https:\/\/tile\.openstreetmap\.org\/16\//)
+    expect(map.innerHTML).not.toMatch(/google/i)
+    expect(screen.getByText('Open in Maps').closest('a')?.getAttribute('href')).toContain('mlat=51.507400&mlon=-0.127800')
   })
 
   it('uses the owner-facing wording, not the customer-facing one', () => {
@@ -75,14 +78,14 @@ describe('/profile shows where the stall trades', () => {
     // Not an empty heading over a missing map: a customer has no pitch to show
     // and should not be told about one.
     show(null)
-    expect(screen.queryByTitle(/Map showing/)).toBeNull()
+    expect(screen.queryByLabelText(/Map showing/)).toBeNull()
   })
 
   it('renders nothing for a merchant who trades no fixed pitch', () => {
     // A trader who moves around leaves this blank deliberately. `LocationField`
     // says so: "Leave it blank if you move around."
     show({ pubkey: 'a'.repeat(64) } as unknown as MerchantProfile)
-    expect(screen.queryByTitle(/Map showing/)).toBeNull()
+    expect(screen.queryByLabelText(/Map showing/)).toBeNull()
   })
 
   it('still renders the rest of the profile either way', () => {

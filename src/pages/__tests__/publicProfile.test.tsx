@@ -32,6 +32,12 @@ const STALL = 'a'.repeat(64)
 const CUSTOMER = 'b'.repeat(64)
 const UNREACHABLE = 'c'.repeat(64)
 
+// #434: the stall's open-for-business status is asked of the portal. Open here: these tests
+// are about something else, and an unmocked fetch would (correctly) fail closed.
+vi.mock('../../lib/merchantStatus', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchantStatus')>()),
+  fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
+}))
 vi.mock('../../lib/branding', () => ({
   merchantBranding: (pubkey: string) =>
     Promise.resolve(
@@ -193,19 +199,16 @@ describe('a stall’s public profile', () => {
    * can still take the stall away with them, and every key has one — so the
    * assertion moved to what gets copied rather than whether the control exists.
    */
-  it('falls back to the npub when a stall publishes no handle', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    vi.stubGlobal('navigator', { clipboard: { writeText } })
-
+  it('never shows or shares the npub when a stall has no handle (#324)', async () => {
     draw(UNREACHABLE)
     await waitFor(() => expect(screen.queryByText(/Loading/)).toBeNull())
-    screen.getByLabelText(/^Copy npub1/).click()
 
-    // The FULL npub, not the shortened display form: an ellipsis in the middle
-    // pastes as a string that resolves to nobody.
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^npub1[a-z0-9]{58}$/)),
-    )
+    // Plain words for the name, no key on screen, and no Copy/Show-code
+    // buttons offering a raw key to hand over.
+    expect(screen.getByText('Unknown stall')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/npub1|cccccccc/)
+    expect(screen.queryByLabelText(/^Copy /)).toBeNull()
+    expect(screen.queryByLabelText(/^Show code/)).toBeNull()
   })
 
   /**
@@ -255,6 +258,19 @@ describe('a stall’s public profile', () => {
 
     await waitFor(() => expect(screen.queryByText(/Loading/)).toBeNull())
     expect(screen.queryByText(/personal account/)).toBeNull()
-    expect(screen.queryByRole('button', { name: /Buy a voucher/ })).toBeNull()
+    // #280: drawn but disabled, with the reason, rather than hidden. Still
+    // fails closed: no record means no card offer that can be taken.
+    const buy = screen.getByRole('button', { name: 'Buy a voucher with card' }) as HTMLButtonElement
+    expect(buy.disabled).toBe(true)
+    expect(screen.getByText("Card payments aren't set up for this merchant")).toBeTruthy()
+  })
+
+  /** #280: Pay is drawn too, and a visitor with no wallet cannot use it. */
+  it('shows Pay disabled to a visitor with no session', async () => {
+    draw(STALL)
+
+    const pay = (await screen.findByRole('button', { name: 'Pay with your vouchers' })) as HTMLButtonElement
+    expect(pay.disabled).toBe(true)
+    expect(pay.getAttribute('aria-describedby')).toBeTruthy()
   })
 })

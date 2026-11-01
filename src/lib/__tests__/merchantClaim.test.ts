@@ -35,10 +35,16 @@ vi.mock('../arrivalToast', () => ({
   resumeBundleArrivals: () => {},
   stopBundleArrivals: () => {},
 }))
+// sonner touches the DOM at import; the held-coupon toast is its own module for that reason (#133 review).
+vi.mock('../heldToast', () => ({ announceHeld: () => {} }))
 vi.mock('../refusalToast', () => ({ announceRefusal: () => {} }))
 vi.mock('../unsavedReceipt', () => ({ announceUnsaved: () => {}, resumeUnsavedReceipts: () => {} }))
 vi.mock('../queuedToast', () => ({ announceQueued: () => {}, settleQueued: () => {} }))
-vi.mock('../merchant', () => ({ loadMerchant: () => store.merchant }))
+vi.mock('../merchant', () => ({
+  loadMerchant: () => store.merchant,
+  // Owner rule 2026-10-13: the relay's answer for an account with no local stall record.
+  merchantStatus: async () => 'customer',
+}))
 vi.mock('../attestation', () => ({
   attestRedemption: async () => null,
   nullifierFor: (t: string) => `nullifier-of:${t}`,
@@ -81,7 +87,7 @@ const { _setReceivePacerForTests } = await import('../receivePacer')
 // pinned in receivePacer.test.ts.
 _setReceivePacerForTests({ acquire: async () => {}, reset: () => {} })
 const { installTokenIdFill } = await import('../legacyBridge')
-const { toTransaction, buildIssueTransaction } = await import('../transactions')
+const { toTransaction, buildIssueTransaction, buildCashbackTransaction } = await import('../transactions')
 const { issuedVoucher } = await import('../issuedVoucher')
 const { merchantClaimFor, boundedClaim } = await import('../merchantClaim')
 const { toContent, toRow } = await import('../txRecords')
@@ -128,6 +134,8 @@ const redeem = vi.fn(async (_token: string, opts: { metadata?: Record<string, un
     face_unit: 'XAF',
     face_decimals: 0,
     issuer_id: STALL,
+    // As `buildVoucher` sets it (#145): the redeem this row came from.
+    correlation_id: opts.metadata?.correlation_id,
   }
   await window.walletStorageIntegration!.atomicallyWrite({ vouchers: [voucher], transactions: [] })
   return voucher
@@ -592,10 +600,13 @@ describe('fractional-ratio parts through the till (review of 1a87c4f)', () => {
   it('refuses tiny parts past the genuine value, before the swap', async () => {
     // Face 10 at ratio 0.5: 20 one-sat parts are the whole genuine value. Each
     // rounds to 1 on its own, so per-part rounding would honour 24 of them.
+    // A fresh coupon per presentation: the mint swaps a token once, and the
+    // ledger counts one received token once (#145), so reusing one token here
+    // would test the dedupe rather than the cap.
     store.rows = [issuedFor(10)]
-    const { token, metadata } = presented(1, 0.5, 10)
     let refused = 0
     for (let i = 0; i < 24; i++) {
+      const { token, metadata } = presented(1, 0.5, 10)
       await captured.redemptionAdapter!.redeem(token, { metadata }).catch(() => {
         refused += 1
       })
@@ -605,5 +616,55 @@ describe('fractional-ratio parts through the till (review of 1a87c4f)', () => {
     expect(swaps).toBe(20)
     expect(redemptions().reduce((sum, r) => sum + Number(r.amount), 0)).toBe(10)
     expect(record().claimedMinor).toBe(10)
+  })
+})
+
+describe('a cashback voucher coming home to the stall that issued it (#144)', () => {
+  /** The stall's cashback, 1000 XAF, under the voucher id the portal returned. */
+  const cashback = () =>
+    buildCashbackTransaction({
+      cashbackId: 'cb-1',
+      claimCode: 'CB-ABCDE-FGHIJ',
+      voucherId: VOUCHER_ID,
+      amount: 1000,
+      unit: 'XAF',
+      decimals: 0,
+      at: 1_700_000_000_000,
+    }) as unknown as Record<string, unknown>
+
+  beforeEach(() => {
+    store.rows = [cashback()]
+  })
+
+  /** What was redeemed shows as claimed on the cashback voucher. */
+  it('counts what was redeemed as claimed', async () => {
+    // Act
+    await captured.redemptionAdapter!.redeem('cashuA-cb-part', { metadata: verified(400) })
+
+    // Assert
+    expect(record().row.type).toBe('cashback')
+    expect(record().claimedMinor).toBe(400)
+    expect(record().outstandingMinor).toBe(600)
+  })
+
+  /** A second part that would take the cashback past its face is refused. */
+  it('refuses a second part past the face', async () => {
+    // Arrange
+    await captured.redemptionAdapter!.redeem('cashuA-cb-first', { metadata: verified(700) })
+
+    // Act, Assert
+    await expect(refuseIfOverRedeemed(verified(700))).rejects.toThrow(/already paid out 700 of 1000/)
+  })
+
+  /** boundedClaim files against the cashback row and caps at its face. */
+  it('bounds a claim by the cashback row', () => {
+    // Arrange
+    const rows = store.rows.map((r) => toTransaction(r as unknown as TransactionRow))
+
+    // Act
+    const bounded = boundedClaim({ voucherId: VOUCHER_ID, amount: 1500, unit: 'XAF', decimals: 0 }, rows)
+
+    // Assert
+    expect(bounded?.amount).toBe(1000)
   })
 })

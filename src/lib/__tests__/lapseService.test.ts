@@ -33,11 +33,11 @@ import type { TerminalRecord } from '../terminalRoster'
  * ticket: this is where the design is either kind or punitive.
  */
 
-const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.token'), 'utf8').trim()
+const TOKEN = readFileSync(join(__dirname, 'fixtures/live-licence.p2pk'), 'utf8').trim()
 const parsed = parseVoucherToken(TOKEN)
 const ISSUER = parsed.voucher.issuerPublicKey
 const EXPIRES_AT = parsed.voucher.expiresAt!
-const CUSTOMER = '4728fd8ad6a2f5c8930f4065347907e22186fba6c73bd04e145dfd780b98e451'
+const CUSTOMER = '114e0944b34f44f005419d987cd9ebcef988877c79a19564be9579daefe249d0'
 const DAY = 86_400
 
 const row: VoucherRow = {

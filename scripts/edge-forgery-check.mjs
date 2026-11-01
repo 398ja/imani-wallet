@@ -58,7 +58,7 @@ await shot('forging pubkey + permissions      ', {
   'X-Auth-Pubkey': 'f'.repeat(64), 'X-Auth-Permissions': 'coupon:issue',
 })
 await shot('forging the edge secret too       ', {
-  'X-Auth-Permissions': 'coupon:issue', 'X-Edge-Auth': 'dev-edge-secret-local-only',
+  'X-Auth-Permissions': 'coupon:issue', 'X-Edge-Auth': 'dev-edge-secret-local-only-32-plus-chars',
 })
 
 // The path where Connect's mount and Vite's proxy matcher used to disagree.
@@ -113,7 +113,7 @@ console.log('\n--- merchant-service (401 = refused; honest line must NOT be 401)
 await merchantShot('honest, through the dev edge      ', {})
 await merchantShot('forging a victim pubkey           ', { 'X-Auth-Pubkey': 'a'.repeat(64) })
 await merchantShot('forging pubkey + edge secret      ', {
-  'X-Auth-Pubkey': 'a'.repeat(64), 'X-Edge-Auth': 'dev-edge-secret-local-only',
+  'X-Auth-Pubkey': 'a'.repeat(64), 'X-Edge-Auth': 'dev-edge-secret-local-only-32-plus-chars',
 })
 
 // Straight at the service, no proxy in the way — the SSRF / misrouted-ingress

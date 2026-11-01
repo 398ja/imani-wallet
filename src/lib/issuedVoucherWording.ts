@@ -18,8 +18,9 @@
  *     counter rail nothing else ever can — so the two are never collapsed into
  *     one "verified" line.
  *  3. **Only a mismatch is an alarm.** Unwarranted sales are every sale made
- *     before warrants shipped and every sale made on a terminal, so colouring
- *     them red would bury the one row that disagrees with its own signature.
+ *     before warrants shipped, and every sale from a till the stall has not
+ *     attested, so colouring them red would bury the one row that disagrees
+ *     with its own signature.
  *     `IssuanceReconciliation` already draws that line; this follows it.
  */
 import type { CashAttestationVerdict } from './cashAttestation'
@@ -85,7 +86,7 @@ export function describeRail(rail: PaymentRail): EvidenceLine {
         label: 'Not recorded',
         tone: 'neutral',
         detail:
-          'Nothing on this sale says how it was paid for. That is every sale made before signing was added, and every sale made on a terminal — not a sign that anything went wrong.',
+          'Nothing on this sale says how it was paid for. That is every sale made before signing was added — not a sign that anything went wrong.',
       }
   }
 }
@@ -122,7 +123,7 @@ export function describeWarrant(verdict: WarrantVerdict): EvidenceLine {
         label: 'Issued unsigned',
         tone: 'neutral',
         detail:
-          'The issuer stated that nothing outside the issuing service authorised this. That is what a terminal issues, because a terminal’s key is not the stall’s.',
+          'Nothing outside the issuing service authorised this sale. That is a sale its issuer marked unauthorised, or one from a till you have not set up again since terminals began carrying your signature. Customers’ wallets refuse such coupons.',
       }
     case 'failed':
       return {
@@ -159,4 +160,138 @@ export function describeAttestation(verdict: CashAttestationVerdict): EvidenceLi
         detail: `${verdict.reason}.`,
       }
   }
+}
+
+/**
+ * What a cashback voucher is, in place of the payment rail (#155).
+ *
+ * A cashback is value this stall gave away, not something a customer bought,
+ * so "how it was paid for" and "did the customer sign that they paid" are
+ * questions with no answer here. Asking them anyway read as "Not collected",
+ * which looks like a missing receipt rather than a question that never applied.
+ */
+export function describeCashbackKind(): EvidenceLine {
+  return {
+    label: 'Cashlink from this stall',
+    tone: 'neutral',
+    // Says what the record cannot carry, not that no money moved: whether
+    // anything changed hands at the counter is not something this row saw.
+    detail:
+      'A Cashlink this stall gave out, not a sale made through Sell. It has no payment method on record and can never carry a customer receipt, so neither is shown.',
+  }
+}
+
+/**
+ * Whether the customer has claimed a cashback, as the portal last said.
+ *
+ * Read from the same stored portal status the transaction and the Vouchers list
+ * show. A missing status is never "claimed": absence is not approval. Nor is it
+ * "unclaimed" once the code is past its expiry, because the status is only
+ * stored once the portal gives a final answer and nothing asks about a code
+ * past its expiry. A claim made before then may simply not have reached this
+ * device. `formatDate` is passed in so this module stays free of locale code.
+ */
+export function describeCashbackClaim(
+  reading: { status?: string; claimedAt?: number; expired: boolean },
+  formatDate: (ms: number) => string,
+): EvidenceLine {
+  switch (reading.status) {
+    case 'Claimed': {
+      // '' when the stored time does not parse, which would leave "Claimed on ".
+      const on = reading.claimedAt === undefined ? '' : formatDate(reading.claimedAt)
+      return {
+        label: on ? `Claimed on ${on}` : 'Claimed',
+        tone: 'confirmed',
+        detail: 'The portal records the customer claiming this Cashlink.',
+      }
+    }
+    case 'Expired':
+      return {
+        label: 'Expired unclaimed',
+        tone: 'neutral',
+        detail: 'The portal records that the customer did not claim it before it expired.',
+      }
+    case 'Revoked':
+      return { label: 'Withdrawn', tone: 'neutral', detail: 'Withdrawn before it was claimed.' }
+    case 'ManualAttention':
+      return {
+        label: 'Needs a check',
+        tone: 'alarming',
+        detail: 'The portal flagged this Cashlink for a person to look at.',
+      }
+    case undefined:
+    case 'Unclaimed':
+      return reading.expired
+        ? {
+            label: 'No claim on record',
+            tone: 'neutral',
+            detail:
+              'Past its expiry, and no claim reached this device. The portal may still have one: its transaction asks it.',
+          }
+        : {
+            label: 'Not claimed yet',
+            tone: 'neutral',
+            detail: 'No claim has reached this device yet. The Cashlink is still open.',
+          }
+    default:
+      return {
+        label: 'Status unknown',
+        tone: 'neutral',
+        detail: 'The portal sent a status this version does not know. It is not read as claimed.',
+      }
+  }
+}
+
+/**
+ * A sale whose signature holds but whose coupons add up to less than it (#462).
+ *
+ * This used to borrow the mismatch wording, "does not match its signature",
+ * which reads as forgery. It is not one: every signature verified, and the
+ * usual cause is a split sale that reached the customer only partly. So it says
+ * the figures a merchant has to act on (signed, delivered, missing) and stays
+ * out of the alarm tone, which is kept for a signature that does not hold.
+ * `money` is passed in so this module stays free of locale code.
+ */
+export function describeUnderstatedSale(
+  shortfall: { signedMinor: number; deliveredMinor: number; partlyDelivered: boolean },
+  money: (minor: number) => string,
+): EvidenceLine {
+  const missing = Math.max(0, shortfall.signedMinor - shortfall.deliveredMinor)
+  return {
+    label: shortfall.partlyDelivered ? 'Partly delivered' : 'Sale not all here',
+    tone: 'neutral',
+    detail:
+      `${understatedSummary(shortfall, money)}. The signature on this sale holds. ` +
+      (shortfall.partlyDelivered
+        ? 'This sale stopped part-way, so the customer holds only part of it; worth settling the ' +
+          `${money(missing)} with them.`
+        : 'Usually a sale that stopped part-way, or history restored in pieces; worth checking ' +
+          'against the customer.'),
+  }
+}
+
+/** "€1,000.00 sale signed, €200.00 delivered: €800.00 missing", shared by the panel and the record. */
+export function understatedSummary(
+  shortfall: { signedMinor: number; deliveredMinor: number },
+  money: (minor: number) => string,
+): string {
+  const missing = Math.max(0, shortfall.signedMinor - shortfall.deliveredMinor)
+  return (
+    `${money(shortfall.signedMinor)} sale signed, ${money(shortfall.deliveredMinor)} delivered: ` +
+    `${money(missing)} missing`
+  )
+}
+
+/** The panel's line for a currency's understated sales (#462). */
+export function describeUnderstatedLine(
+  line: { understatedSignedMinor: number; understatedMinor: number; counts: { understated: number } },
+  money: (minor: number) => string,
+): string {
+  const n = line.counts.understated
+  return (
+    `${understatedSummary(
+      { signedMinor: line.understatedSignedMinor, deliveredMinor: line.understatedMinor },
+      money,
+    )}, ${n} sale${n === 1 ? '' : 's'} to look at.`
+  )
 }

@@ -25,6 +25,7 @@ export function IdentityInline({
   size = 'sm',
   fallbackName,
   fallbackHandle,
+  fallbackPicture,
   linkToProfile = true,
 }: {
   pubkey: string
@@ -51,12 +52,18 @@ export function IdentityInline({
    * only name the row will ever have for someone who published no kind-0.
    */
   fallbackHandle?: string
+  /**
+   * A picture known without a fetch. Restore passes the one stored in the
+   * backup, so the account shows its own face with no signal.
+   */
+  fallbackPicture?: string
 }) {
   const { identity: fetched, loading: pending } = useIdentityState(pubkey)
   const identity = {
     ...fetched,
     name: fetched?.name ?? fallbackName,
     nip05: fetched?.nip05 ?? fallbackHandle,
+    picture: fetched?.picture ?? fallbackPicture,
   }
   /*
     Only a lookup with NOTHING to show is a loading state.
@@ -88,8 +95,9 @@ export function IdentityInline({
     name customers through this component, so this is not hypothetical. The page
     refuses a customer too; this just avoids offering the tap.
 
-    Same hook the badge uses, so a row that shows the merchant badge is exactly
-    a row that links, and the two cannot drift apart.
+    The badge no longer comes from this answer: the avatar wears the verification badge a stall
+    earns by subscribing (#418), while a row links to anyone with a live stall record, subscribed
+    or not.
   */
   const merchant = useIsMerchant(pubkey) && linkToProfile
   const Row = merchant ? Link : 'span'

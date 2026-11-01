@@ -33,11 +33,15 @@ vi.mock('../../lib/wallet', () => ({
   },
 }))
 
+// imani-wallet#197: the banner's licence check is also when the server is told.
+const reportLicence = vi.fn<(o: { pubkey: string }) => Promise<string>>(async () => 'reported')
+vi.mock('../../lib/licenceReport', () => ({ reportLicence: (o: { pubkey: string }) => reportLicence(o) }))
+
 import type { LicenceTerms } from '../../lib/licenceIssue'
 
 const { SubscriptionNotice } = await import('../SubscriptionNotice')
 const { licenceIssueParams } = await import('../../lib/licenceIssue')
-const { buildVoucherToken } = await import('../../lib/__tests__/voucherFixtures')
+const { buildLicenceVoucherToken: buildVoucherToken } = await import('../../lib/__tests__/voucherFixtures')
 const { forgetLicenceParses } = await import('../../lib/licences')
 const { forgetVerification } = await import('../../lib/licenceStatus')
 
@@ -97,6 +101,7 @@ function renderNotice() {
 beforeEach(() => {
   rows = []
   walletListeners = []
+  reportLicence.mockClear()
   forgetLicenceParses()
   forgetVerification(CUSTOMER)
 })
@@ -234,5 +239,47 @@ describe('the expiry banner', () => {
 
     await waitFor(() => expect(screen.getByText('Sell')).toBeTruthy())
     expect(screen.queryByText(/subscription ends/i)).toBeNull()
+  })
+})
+
+describe('telling the server (imani-wallet#197)', () => {
+  it('reports the licence to the server when it verifies, and again when a renewal arrives', async () => {
+    const expiresAt = SOLD_AT + YEAR
+    const original = mint(terms(), expiresAt)
+    rows = [original.row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', original.issuerPublicKey)
+    vi.setSystemTime((expiresAt - 30 * DAY) * 1000)
+
+    renderNotice()
+
+    await waitFor(() => expect(reportLicence).toHaveBeenCalledWith({ pubkey: CUSTOMER }))
+    const before = reportLicence.mock.calls.length
+    walletListeners.forEach((l) => l())
+    await waitFor(() => expect(reportLicence.mock.calls.length).toBeGreaterThan(before))
+  })
+
+  it('reports nothing when there is no licence', async () => {
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', 'a'.repeat(64))
+
+    renderNotice()
+
+    await waitFor(() => expect(screen.getByText('Sell')).toBeTruthy())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(reportLicence).not.toHaveBeenCalled()
+  })
+
+  it('a report that throws does not take the banner down', async () => {
+    reportLicence.mockImplementationOnce(async () => {
+      throw new Error('offline')
+    })
+    const expiresAt = SOLD_AT + YEAR
+    const { row, issuerPublicKey } = mint(terms(), expiresAt)
+    rows = [row]
+    vi.stubEnv('VITE_LICENCE_ISSUER_PUBKEY', issuerPublicKey)
+    vi.setSystemTime((expiresAt - 5 * DAY) * 1000)
+
+    renderNotice()
+
+    expect(await screen.findByText(/ends in 5 days/)).toBeTruthy()
   })
 })

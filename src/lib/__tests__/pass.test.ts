@@ -73,12 +73,13 @@ describe('toCouponPass', () => {
     expect(pass.storeCard.auxiliaryFields![0].label).toBe('EXPIRES')
   })
 
-  it('omits the expiry group entirely when there is no expiry', () => {
-    // Absent groups stay undefined rather than empty — PassJson's own rule.
+  it('says "No expiry" when there is none, rather than dropping the line (#419)', () => {
     const pass = toCouponPass(row({ expires_at: undefined }))
 
     expect(pass.expirationDate).toBeUndefined()
-    expect(pass.storeCard.auxiliaryFields).toBeUndefined()
+    expect(pass.storeCard.auxiliaryFields).toEqual([
+      { key: 'expires', label: 'EXPIRES', value: 'No expiry' },
+    ])
   })
 
   it.each([
@@ -166,6 +167,22 @@ describe('toCouponPass', () => {
     expect(pass.voided).toBe(true)
     expect(pass.barcodes).toBeUndefined()
   })
+
+  // #265: an expired coupon's detail page said "Status active" over a live QR code.
+  it('carries no redemption code once past its expiry, and is marked expired (not voided)', () => {
+    const now = Date.UTC(2026, 10, 11)
+    const pass = toCouponPass(row({ expires_at: 1794346639 }), undefined, now)
+    expect(pass.expired).toBe(true)
+    expect(pass.voided).toBe(false)
+    expect(pass.barcodes).toBeUndefined()
+  })
+
+  it('keeps the code on a coupon not yet expired', () => {
+    const now = Date.UTC(2026, 10, 9)
+    const pass = toCouponPass(row({ expires_at: 1794346639 }), undefined, now)
+    expect(pass.expired).toBe(false)
+    expect(pass.barcodes).toHaveLength(1)
+  })
 })
 
 describe('toMerchantPass', () => {
@@ -187,6 +204,14 @@ describe('toMerchantPass', () => {
 
     expect(pass.barcodes).toBeUndefined()
     expect(pass.storeCard.backFields).toBeUndefined()
+  })
+
+  it('carries no shop blurb as its description (#419)', () => {
+    const pass = toMerchantPass(merchantFrom([row()]), {
+      storeDescription: 'Organic veg, Tue & Sat',
+    })
+
+    expect(pass.description).toBe('')
   })
 
   it('is keyed by the shop, not by a voucher', () => {
