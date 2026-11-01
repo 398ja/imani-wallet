@@ -146,8 +146,11 @@ describe('logout keeps the settled-but-unsaved record (#112)', () => {
       value: (k: string) => removed.push(k),
       enumerable: false,
     })
+    // Main's logout also reads and rewrites the parked claim links around the sweep.
+    Object.defineProperty(globalThis.localStorage, 'getItem', { value: () => null, enumerable: false })
+    Object.defineProperty(globalThis.localStorage, 'setItem', { value: () => {}, enumerable: false })
 
-    await logout(pk, yes, reload)
+    await expect(logout(pk, yes, reload)).resolves.toBe(true)
 
     expect(removed.sort()).toEqual([`imani-wallet:notifications:${pk}`, `imani-wallet:receive-ledger:${pk}`])
   })
