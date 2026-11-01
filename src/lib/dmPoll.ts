@@ -1592,6 +1592,8 @@ function catchUp(): void {
   // #402: a split's change is locked to this wallet's own key, and no ordinary send can spend it until
   // it is unlocked (a €1 send failed on it, 2026-11-01). Never throws.
   if (currentPubkey) void import('./selfLockedCouponsApp').then((m) => m.unlockSelfLockedCouponsNow(currentPubkey!)).catch(() => 0)
+  // #402: rows a checkout code's carve left overstated (the balance showing more than the shop can take).
+  void import('./couponFaceRepair').then((m) => m.restateOverstatedRowsNow()).catch(() => 0)
 }
 
 /**
