@@ -10,6 +10,9 @@ import {
   findMerchant,
   withPastMerchants,
   findMerchantWithHistory,
+  holdingForUnit,
+  totalForUnit,
+  unitHoldings,
 } from '../merchants'
 import type { WalletTransaction } from '../transactions'
 import { formatSats } from '../format'
@@ -101,7 +104,6 @@ describe('toMerchants', () => {
     ['null', null],
     ['zero', 0],
     ['empty-string', ''],
-    ['unparseable', 'not a date'],
   ])('treats a %s expiry as "no expiry", not as 1970', (_label, value) => {
     // The gateway populates expires_at asynchronously: for ~5-10s after a
     // voucher already reports ISSUED/CONFIRMED it is still JSON null. Coupons
@@ -112,6 +114,29 @@ describe('toMerchants', () => {
 
     expect(toVoucher(coupon).expires_at).toBeUndefined()
     expect(toMerchants([coupon])).toHaveLength(1)
+  })
+
+  /**
+   * #157: an unreadable expiry is not "no expiry". Erased here, it reached the
+   * spend order as never-expiring and the coupon was spent last. It is kept
+   * raw (wallet-core spends it first) and the coupon stays listed.
+   */
+  it('keeps an unparseable expiry rather than erasing it to "no expiry"', () => {
+    const coupon = row({ expires_at: 'not a date' as unknown as number })
+    expect(toVoucher(coupon).expires_at).toBe('unreadable')
+    expect(toMerchants([coupon])).toHaveLength(1)
+  })
+
+  it('keeps listing a coupon whose corrupt expiry V8 would read as a 2001 date', () => {
+    // new Date('Section 5') is 2001-05-01 in V8. Passed raw, VoucherGrouper
+    // dropped the coupon as expired while couponsFor still counted it.
+    const coupon = row({ expires_at: 'Section 5' as unknown as number })
+    expect(toMerchants([coupon])).toHaveLength(1)
+  })
+
+  it('reads a numeric-string expiry in seconds as a date', () => {
+    const coupon = row({ expires_at: '1798588800' as unknown as number })
+    expect(toVoucher(coupon).expires_at).toBe('2026-12-30T00:00:00.000Z')
   })
 
   it('still excludes a genuinely expired voucher', () => {
@@ -412,5 +437,34 @@ describe('findMerchantWithHistory', () => {
 
   it('is undefined for a shop in neither', () => {
     expect(findMerchantWithHistory([], [], PUBKEY_B)).toBeUndefined()
+  })
+})
+
+describe('holdingForUnit / totalForUnit (#460)', () => {
+  const eur = (face_value: number, token_amount: number) =>
+    row({
+      issuer_id: PUBKEY_A,
+      face_value,
+      face_unit: 'EUR',
+      face_decimals: 2,
+      token_amount,
+      amount: token_amount,
+      backing_strategy: 'PROPORTIONAL',
+    })
+
+  it('sums every group in the unit, across issuance ratios', () => {
+    const [merchant] = toMerchants([eur(500, 500), eur(700, 350)])
+    expect(merchant.groups).toHaveLength(2)
+    expect(totalForUnit(merchant, 'eur')).toBe(1200)
+    expect(holdingForUnit(merchant, 'EUR')?.vouchers).toHaveLength(2)
+    expect(holdingForUnit(merchant, 'SAT')).toBeUndefined()
+    expect(totalForUnit(merchant, 'SAT')).toBe(0)
+  })
+
+  it('unitHoldings gives one option per merchant and unit', () => {
+    const merchants = toMerchants([eur(500, 500), eur(700, 350)])
+    const options = unitHoldings(merchants)
+    expect(options).toHaveLength(1)
+    expect(options[0].totalFaceValue).toBe(1200)
   })
 })

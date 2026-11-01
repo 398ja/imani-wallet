@@ -489,6 +489,9 @@ function _buildReceiveTransactionRow(voucher, metadata = {}) {
         // shipped, and the row it renders from never carried the result.
         // Absent for plain ecash, which has no issuer claim to check.
         validation: metadata.validation || undefined,
+        // #402 traceability: where an online shop spent it (order number, shop), as the shop
+        // declared it on the envelope. Read by the merchant's books; absent for anything else.
+        spendSource: metadata.spend_source || metadata.spendSource || undefined,
         memo: isPayment
             ? (voucher.memo ? `[PAYMENT] ${voucher.memo}` : '[PAYMENT] Payment to merchant')
             : (voucher.memo || 'Received via DM'),
@@ -868,6 +871,27 @@ function _isInFlightConflict(err) {
 }
 
 /**
+ * #314: gateway-customer's NIP-98 filter refused the receive because its auth
+ * event's `created_at` was outside the window (60 s by default): the request
+ * spent over a minute in transit (a slow link, a held or backgrounded tab).
+ * Shape, from imani-security `Nip98AuthFilter`: 401, `error.code` AUTH_002,
+ * message "Auth event timestamp outside acceptable window". AUTH_002 covers
+ * EVERY NIP-98 failure (bad signature, wrong url, replay), so the message is
+ * what names this one, and only this one is cured by signing again.
+ *
+ * The filter runs before the controller, so nothing was received: the same
+ * request with a fresh signature is safe, and it carries the same
+ * Idempotency-Key, so the gateway still sees one receive.
+ */
+function _isStaleNip98Auth(err) {
+    if (!err || err.status !== 401) return false;
+    return /timestamp outside acceptable window/i.test(String(err.message || ''));
+}
+
+/** #314: fresh signatures after a stale-auth refusal, per receive attempt. */
+const STALE_AUTH_RESIGNS = 1;
+
+/**
  * The receive was already SAVED in this wallet (ledger state saved/acked): a
  * redelivery of a coupon we hold. Reported with the old "already redeemed"
  * wording so dm-poll takes its idempotent path (mark received, bundle success)
@@ -875,6 +899,27 @@ function _isInFlightConflict(err) {
  */
 function _alreadyRedeemedHere() {
     return new Error('This token has already been redeemed');
+}
+
+/**
+ * #300: every await between the metadata fetch and api.receive is bounded, so
+ * a request or pacer that never settles cannot hang a redemption. Rejects with
+ * code STEP_TIMEOUT (and logs) when `promise` has not settled in `ms`.
+ */
+function _withStepTimeout(promise, ms, step, fingerprint) {
+    if (!(ms > 0)) return promise;
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            console.warn('[tokenRedemption] #300 redemption step timed out', {
+                step, timeoutMs: ms, fp: _fpTag(fingerprint),
+            });
+            const err = new Error(`${step} did not answer within ${ms} ms`);
+            err.code = 'STEP_TIMEOUT';
+            reject(err);
+        }, ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 const TokenRedemption = {
@@ -893,6 +938,12 @@ const TokenRedemption = {
     // above and is wired in inside `redeem()` alongside the single-flight
     // check.
     _inFlightRedemptions: new Map(),
+
+    // How many redemptions are in flight in this tab, from the fingerprint step
+    // through the save. Logout's drain waits for this to reach 0 (#331).
+    inFlightCount() {
+        return this._inFlightRedemptions.size;
+    },
 
     // Exposed so tests can stub or inspect the claim layer.
     _localClaim: LocalRedemptionClaim,
@@ -914,7 +965,7 @@ const TokenRedemption = {
      * @param {boolean} options.skipDuplicateCheck - Skip local duplicate check (for DM auto-redeem)
      * @param {string} options.source - Spec 039 (T018a) canonical context source. Identifies the
      *   receive surface that originated this call. Recognised values:
-     *     'scan' | 'manual' | 'sse' | 'catchup' | 'cashback' | 'escrow_recovery' | 'dm-poll'
+     *     'scan' | 'manual' | 'sse' | 'catchup' | 'cashback' | 'gift_link' | 'gift_link_reclaim' | 'escrow_recovery' | 'dm-poll'
      *     | 'receive-screen' | 'unknown'
      *   The string is plumbed verbatim onto the `ctx.source` field passed to
      *   `_persistRedeemed`. Downstream tightenings (spec-039 US 1 T030
@@ -1314,7 +1365,8 @@ const TokenRedemption = {
             let apiMetadata = null;
             try {
                 if (typeof api !== 'undefined' && api.getTokenMetadata) {
-                    apiMetadata = await api.getTokenMetadata(token);
+                    apiMetadata = await _withStepTimeout(
+                        api.getTokenMetadata(token), this._stepTimeoutMs, 'getTokenMetadata', fingerprint);
                 }
             } catch (e) {
                 console.log('[tokenRedemption] Could not fetch token metadata:', e.message);
@@ -1359,7 +1411,8 @@ const TokenRedemption = {
                     );
                 }
                 try {
-                    inspectResult = await api.inspectVoucher(token);
+                    inspectResult = await _withStepTimeout(
+                        api.inspectVoucher(token), this._stepTimeoutMs, 'inspectVoucher', fingerprint);
                 } catch (e) {
                     console.warn('[tokenRedemption] inspect-before-save failed (fail-closed):', e?.message);
                     throw new ProvenanceVerificationError(
@@ -1403,7 +1456,8 @@ const TokenRedemption = {
                 if (__needInspect) {
                     try {
                         if (typeof api !== 'undefined' && typeof api.inspectVoucher === 'function') {
-                            inspectResult = await api.inspectVoucher(token);
+                            inspectResult = await _withStepTimeout(
+                                api.inspectVoucher(token), this._stepTimeoutMs, 'inspectVoucher', fingerprint);
                         }
                     } catch (e) {
                         console.warn('[tokenRedemption] inspectVoucher failed, continuing with fallback chain:', e?.message);
@@ -1462,15 +1516,74 @@ const TokenRedemption = {
                     }
                     // Paced per CALL (dmPoll installs the page's pacer here),
                     // so inner retries spend from the same budget as first tries.
-                    await this._receiveGate();
-                    return api.receive(token, { idempotencyKey });
+                    // #300: a gate that never frees a slot used to hang the
+                    // redemption (and, through _inFlightRedemptions, every
+                    // later attempt at this token) for the whole session.
+                    // #301 review: the signal tells the pacer this wait was
+                    // abandoned, so it does not book a slot for a call that
+                    // will never go out (a ghost slot delays every later call).
+                    const gateAbort = typeof AbortController === 'function' ? new AbortController() : null;
+                    try {
+                        await _withStepTimeout(
+                            this._receiveGate(gateAbort ? gateAbort.signal : undefined),
+                            this._receiveGateTimeoutMs, 'receiveGate', fingerprint);
+                    } catch (gateErr) {
+                        if (gateErr && gateErr.code === 'STEP_TIMEOUT') {
+                            if (gateAbort) gateAbort.abort(gateErr);
+                            this._releaseReceiveCall(budgetKey);
+                            const deferred = new Error('Receive pacer did not free a slot in time; a later poll will retry');
+                            deferred.code = 'RECEIVE_DEFERRED';
+                            // Lets dmPoll schedule the retry: in SSE mode nothing
+                            // re-polls on a timer, so "the next poll" could be the
+                            // stream's ten-minute redial.
+                            deferred.deferredBy = 'receive-gate-timeout';
+                            throw deferred;
+                        }
+                        throw gateErr;
+                    }
+                    // #301 review: api.receive is deliberately NOT timed out. A
+                    // receive that reached the gateway may have settled, and a
+                    // retry under the same key comes back as a token-less replay
+                    // ("settled, not saved"), not as the coupon. It is only
+                    // reported, so the next #300-shaped stall names its step.
+                    console.info('[tokenRedemption] receive gate passed', { fp: _fpTag(fingerprint) });
+                    const slow = this._receiveSlowWarnMs > 0 ? setTimeout(() => {
+                        console.warn('[tokenRedemption] #300 api.receive still pending', {
+                            fp: _fpTag(fingerprint), afterMs: this._receiveSlowWarnMs,
+                        });
+                    }, this._receiveSlowWarnMs) : null;
+                    try {
+                        return await api.receive(token, { idempotencyKey });
+                    } finally {
+                        if (slow) clearTimeout(slow);
+                    }
+                };
+                // #314: the NIP-98 header is signed inside api.receive
+                // (api.js requestWithHeaders), per call, AFTER the gate above:
+                // a wait in the pacer never ages the signature. A call that
+                // then sat in transit past gateway-customer's 60 s window is
+                // refused at auth, before anything is received. One more call,
+                // through the same gate and per-token budget, signs afresh and
+                // carries the SAME idempotency key (`idempotencyKey` above is
+                // fixed for this token), so the gateway sees one receive.
+                const receiveSigned = async () => {
+                    for (let resign = 0; ; resign++) {
+                        try {
+                            return await receiveOnce();
+                        } catch (authErr) {
+                            if (!_isStaleNip98Auth(authErr) || resign >= STALE_AUTH_RESIGNS) throw authErr;
+                            console.warn('[tokenRedemption] #314 receive auth expired in transit; signing again', {
+                                fp: _fpTag(fingerprint),
+                            });
+                        }
+                    }
                 };
                 // #110 review D: the gateway's 409 "first call still in flight"
                 // (Retry-After, empty body) is a short wait and a retry under
                 // the same key, not a failure.
                 for (let inFlight = 0; ; inFlight++) {
                     try {
-                        result = await _withReceiveRetry(receiveOnce);
+                        result = await _withReceiveRetry(receiveSigned);
                         break;
                     } catch (e) {
                         if (!_isInFlightConflict(e) || inFlight >= IN_FLIGHT_RETRIES) throw e;
@@ -2149,7 +2262,11 @@ const TokenRedemption = {
             status: 'active',
             created_at: new Date().toISOString(),
             received_via: metadata?.received_via || 'manual',
-            sender_pubkey: metadata?.sender_pubkey || null
+            sender_pubkey: metadata?.sender_pubkey || null,
+            // imani-wallet #145: names the redeem this row came from, so the
+            // wallet's write hook stamps it with THIS redeem's ids when two
+            // redeems are in flight. Dropped by that hook before storage.
+            correlation_id: metadata?.correlation_id || undefined
         };
     },
 
@@ -2183,7 +2300,8 @@ const TokenRedemption = {
             status: 'active',
             created_at: baseVoucher.created_at || receivedAt,
             received_via: baseVoucher.received_via,
-            sender_pubkey: baseVoucher.sender_pubkey
+            sender_pubkey: baseVoucher.sender_pubkey,
+            correlation_id: baseVoucher.correlation_id
         };
     },
 
@@ -2310,7 +2428,7 @@ const TokenRedemption = {
      *   surface. Plumbed verbatim from the `redeem(token, opts)` call site.
      *   Future tightenings (US 1 T030 inspect-before-save) gate on
      *   `ctx.source === 'scan' || 'manual'`. Values: 'scan' | 'manual' |
-     *   'sse' | 'catchup' | 'cashback' | 'escrow_recovery' | 'dm-poll' |
+     *   'sse' | 'catchup' | 'cashback' | 'gift_link' | 'gift_link_reclaim' | 'escrow_recovery' | 'dm-poll' |
      *   'receive-screen' | 'unknown'.
      * @returns {Promise<Object>} The persisted voucher, or a saveError
      *   shape on failure.
@@ -2552,6 +2670,12 @@ const TokenRedemption = {
     _ackGate: async () => {},
     /** Gate every api.receive goes through; dmPoll installs its pacer. */
     _receiveGate: async () => {},
+    // #300: bounds on the awaits before api.receive. The gate's covers a full
+    // pacer window and more; past it the call defers to the next poll.
+    _stepTimeoutMs: 15000,
+    _receiveGateTimeoutMs: 180000,
+    // #301 review: warn (never abort) when api.receive has not answered by then.
+    _receiveSlowWarnMs: 20000,
     // Overridable by tests; the 409 in-flight wait.
     _inFlightSleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     // token fingerprint → timestamps of api.receive calls (review C).
@@ -2570,6 +2694,11 @@ const TokenRedemption = {
             this._receiveCalls.delete(this._receiveCalls.keys().next().value);
         }
         return true;
+    },
+    /** Return a booked call that never went out (#300 gate timeout). */
+    _releaseReceiveCall(key) {
+        const recent = this._receiveCalls.get(key);
+        if (recent && recent.length) recent.pop();
     },
     RECEIVE_CALLS_PER_TOKEN,
     // Last flush start, so catch-ups cannot flush more than once a minute.

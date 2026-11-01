@@ -6,19 +6,26 @@
  */
 import type { Page } from 'playwright'
 
+/** The passphrase every registered test wallet is locked with. */
+export const TEST_PASSPHRASE = 'correct horse battery'
+/** The display name every registered test merchant trades under. */
+export const TEST_STALL_NAME = 'Test Stall'
+
 export async function registerMerchant(p: Page, base: string): Promise<string> {
   const handle = 'till' + Date.now().toString().slice(-7)
   await p.goto(`${base}/onboarding`, { waitUntil: 'networkidle' })
   await p.getByRole('button', { name: /^Register$/i }).first().click()
   await p.waitForTimeout(400)
-  await p.locator('input[placeholder="your-handle"]').fill(handle)
-  await p.locator('input[placeholder="Passphrase"]').fill('correct horse battery')
-  await p.locator('input[placeholder="Confirm passphrase"]').fill('correct horse battery')
+  await p.locator('input[placeholder="your_handle"]').fill(handle)
+  await p.locator('input[placeholder="Passphrase"]').fill(TEST_PASSPHRASE)
+  await p.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
   await p.getByText('I am a merchant').click()
   await p.waitForTimeout(400)
+  // #357: the Terms and Conditions, accepted on the first step.
+  await p.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }).check()
   await p.getByRole('button', { name: 'Continue' }).click()
   await p.waitForTimeout(600)
-  await p.locator('input:visible').first().fill('Test Stall')
+  await p.locator('input:visible').first().fill(TEST_STALL_NAME)
   await p.getByRole('button', { name: 'Continue' }).click()
   await p.waitForTimeout(800)
   await p.getByRole('button', { name: /^food$/i }).click()
@@ -49,11 +56,13 @@ export async function registerCustomer(p: Page, base: string): Promise<string> {
   await p.goto(`${base}/onboarding`, { waitUntil: 'networkidle' })
   await p.getByRole('button', { name: /^Register$/i }).first().click()
   await p.waitForTimeout(400)
-  await p.locator('input[placeholder="your-handle"]').fill(handle)
-  await p.locator('input[placeholder="Passphrase"]').fill('correct horse battery')
-  await p.locator('input[placeholder="Confirm passphrase"]').fill('correct horse battery')
+  await p.locator('input[placeholder="your_handle"]').fill(handle)
+  await p.locator('input[placeholder="Passphrase"]').fill(TEST_PASSPHRASE)
+  await p.locator('input[placeholder="Confirm passphrase"]').fill(TEST_PASSPHRASE)
   // No "I am a merchant": the customer path skips the stall steps entirely
   // and its submit button says "Create account", not "Continue".
+  // #357: the Terms and Conditions, or the button stays disabled.
+  await p.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }).check()
   await p.getByRole('button', { name: /Create account/i }).click()
   await p.waitForTimeout(1500)
 

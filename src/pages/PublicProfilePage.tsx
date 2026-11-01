@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { Banknote, Check, Copy, CreditCard, Info, QrCode, Tag } from 'lucide-react'
+import { useParams } from 'react-router-dom'
+import { Banknote, Check, Copy, Info, QrCode, Tag } from 'lucide-react'
 import QRCode from 'qrcode'
-import { nip19 } from 'nostr-tools'
 
-import { Avatar, BackLink, Button, Centered, RemoteImage, Screen } from '../components/ui'
+import { Avatar, BackLink, Centered, RemoteImage, Screen } from '../components/ui'
 import { LocationMap } from '../components/LocationMap'
+import { CouponCodeAction, MerchantActions } from '../components/MerchantActions'
+import { checkoutCodesEnabled } from '../lib/checkoutCodePorts'
 import { merchantBranding } from '../lib/branding'
-import { handleLabel, shortPubkey } from '../lib/format'
+import { handleLabel, UNKNOWN_STALL } from '../lib/format'
 import { toRecipientPubkey } from '../lib/issue'
 import { fetchMerchantRecord, merchantStatus, type MerchantProfile, type MerchantStatus } from '../lib/merchant'
 import type { MerchantBranding } from '../lib/pass'
@@ -73,7 +74,6 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
   */
   const { pubkey: param = '' } = useParams()
   const [resolved, setResolved] = useState<string | null>()
-  const navigate = useNavigate()
   const [copied, setCopied] = useState(false)
   const [showCode, setShowCode] = useState(false)
 
@@ -202,21 +202,21 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
     return <Centered>This is a personal account, not a stall. There is no public profile to show.</Centered>
   }
 
-  const name = branding.organizationName ?? shortPubkey(pubkey)
-  // Their NIP-05 when they publish one, otherwise the npub. Unverified either
-  // way — see MerchantBranding.nip05 — and the pubkey is what money is
-  // addressed to, so the handle is a label rather than a credential.
-  const handle = branding.nip05 ? handleLabel(branding.nip05) : npubOf(pubkey)
+  const name = branding.organizationName ?? UNKNOWN_STALL
+  // Their handle (#324): never the npub or a fragment of the key. Every stall
+  // has a profile, so a missing handle is one still loading or unreachable,
+  // and the line waits for it instead of printing a key.
+  const handle = branding.nip05 ? handleLabel(branding.nip05) : null
   /*
-    What a shopper actually takes away — the full nip05, or the npub when a
-    stall publishes no handle. NOT `handle` above, which is the DISPLAY form:
-    `handleLabel` strips the domain ("@rosa") and `npubOf` shortens with an
-    ellipsis, and either would paste as a string that resolves to nobody.
+    What a shopper actually takes away: the FULL nip05. NOT `handle` above,
+    which is the DISPLAY form (`handleLabel` strips the domain, "@rosa") and
+    would paste as a string that resolves to nobody.
 
-    Null only when the key itself is malformed, in which case there is nothing
-    to hand over and both buttons stay away.
+    No npub fallback any more (#324): a raw key is not something a shopper can
+    read back or recognise, and the page's own link already carries the key
+    for anyone sharing it. Without a handle, both buttons stay away.
   */
-  const shareHandle = branding.nip05 ?? npubFull(pubkey)
+  const shareHandle = branding.nip05 ?? null
   const about = branding.storeDescription ?? record?.storeDescription
 
   /*
@@ -256,7 +256,7 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
               {name}
             </p>
             {handle && (
-              <p className="truncate text-sm text-mono-500" title={pubkey}>
+              <p className="truncate text-sm text-mono-500">
                 {handle}
               </p>
             )}
@@ -280,10 +280,9 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
               >
                 <QrCode className="h-4 w-4" aria-hidden />
               </button>
-              {/* Copies the FULL nip05 where there is one, not the label beside
-                  it: `handleLabel` strips the domain for display ("@rosa"), and
-                  pasting that resolves to nobody. Falls back to the npub, so the
-                  button is never present with nothing to give. */}
+              {/* Copies the FULL nip05, not the label beside it: `handleLabel`
+                  strips the domain for display ("@rosa"), and pasting that
+                  resolves to nobody. */}
               <button
                 type="button"
                 onClick={() => void copyHandle(shareHandle)}
@@ -309,30 +308,24 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
           opened somebody's profile, and burying it under prose they may not
           read is how a working feature goes unused.
 
-          Gated on `acceptsCards`, exactly as MerchantPage is: the flag is the
-          only channel a stranger has, because imani-merchant is self-scoped and
-          nobody can ask about someone else's charges_enabled. A stall that has
-          not connected Stripe shows no button rather than one that can only
-          fail. */}
-      {acceptsCards && (
-        <Button size="lg" className="mt-6 w-full" onClick={() => navigate(`/buy/${pubkey}`)}>
-          <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Buy a voucher
-        </Button>
-      )}
-
-      {/* Your own profile says so, quietly, where the Buy button would be. A
-          stall owner who opens their own page and finds no purchase control has
-          been told nothing; this is the one case where the absence needs a word,
-          because it is the page they will check to see what shoppers see.
-
-          For every OTHER stall that takes no cards, nothing is said. "This stall
-          does not accept cards" is a sentence about a feature the shopper never
-          saw, and it would be the loudest thing on a page whose job is to
-          introduce somebody. */}
-      {isSelf && (
+          The same `MerchantActions` as MerchantPage (#280), so the two screens
+          cannot disagree about when Buy or Pay is available. Your own profile
+          says so instead, where the buttons would be: it is the page a stall
+          owner checks to see what shoppers see, and Buy/Pay against yourself
+          is not a thing. */}
+      {isSelf ? (
         <p className="mt-6 text-center text-sm text-mono-500">
           This is how your stall looks to a shopper.
         </p>
+      ) : (
+        <div className="mt-6">
+          <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} />
+          {checkoutCodesEnabled() && (
+            <div className="mt-3 grid">
+              <CouponCodeAction pubkey={pubkey} sellsOnline={Boolean(record?.onlineShop)} viewerPubkey={viewerPubkey} />
+            </div>
+          )}
+        </div>
       )}
 
       {/* Leading is looser here than on the single-value rows below, because
@@ -386,27 +379,6 @@ export function PublicProfilePage({ viewerPubkey }: { viewerPubkey?: string }) {
       )}
     </Screen>
   )
-}
-
-/** Their npub, shortened for DISPLAY. Null if the key is malformed. */
-function npubOf(pubkey: string): string | null {
-  const full = npubFull(pubkey)
-  return full === null ? null : shortPubkey(full)
-}
-
-/**
- * Their npub in full, for copying and for the code.
- *
- * Separate from {@link npubOf} because the two must never be confused: that one
- * shortens with an ellipsis for a line of text, and a shortened key scans and
- * pastes as nothing.
- */
-function npubFull(pubkey: string): string | null {
-  try {
-    return nip19.npubEncode(pubkey)
-  } catch {
-    return null
-  }
 }
 
 /**

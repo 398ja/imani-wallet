@@ -8,6 +8,8 @@ import {
   parseCheckInput,
   checkRedemption,
   receiveBody,
+  receiveUrl,
+  RECEIVE_PATH,
   REFUSAL,
 } from '../redeem.js'
 
@@ -64,8 +66,22 @@ describe('verifying a real coupon', () => {
     expect(v.voucher?.issuerId).toBe(MINTED.stall)
   })
 
-  it('reads the signed face value from the token, not from anywhere else', () => {
-    expect(verify().voucher?.signedFaceValue).toBeGreaterThan(0)
+  // The face value comes from the signed token, never the request. Shown on an
+  // unlocked coupon built and signed by the fixture issuer, whose sats count.
+  it('reads the signed face value from the token, not from anywhere else', async () => {
+    const { buildVoucherToken } = await import('../../../src/lib/__tests__/voucherFixtures')
+    const built = buildVoucherToken({ issuanceRatio: 1, faceValue: 1000, expiresAt: undefined }, [400])
+    const v = verifyCoupon({ token: built.token, now: NOW, stallPubkey: built.voucher.issuerId })
+    expect(v.voucher?.signedFaceValue).toBe(400)
+  })
+
+  // The live credential is a pre-#141 LOCKED voucher with no max_sats. Round 3
+  // (imani-gateway-customer#141): it keeps the pre-#141 rule, crediting its
+  // sats bounded by face, rather than 0, which stranded real customer money.
+  it('credits a pre-#141 untagged locked coupon under the legacy rule', () => {
+    const v = verify()
+    expect(v.ok).toBe(true)
+    expect(v.voucher?.signedFaceValue).toBeGreaterThan(0)
   })
 
   it('REFUSES a coupon issued by another stall', () => {
@@ -138,11 +154,19 @@ describe('the ceiling', () => {
     expect(out.ceiling?.allowed).toBe(false)
   })
 
-  it('is not consumed by an outgoing row', () => {
+  it('is not consumed by an outgoing row', async () => {
     // The merchant's own issuance. Counting it would spend the ceiling before
-    // any customer redeemed anything.
-    const face = check().ceiling!.signedFaceValue
-    const out = check({ requested: face, priorRedemptions: [{ amount: face, direction: 'out' }] })
+    // any customer redeemed anything. On a fully funded unlocked coupon, since
+    // the live credential is untagged and locked, so worth nothing (#141).
+    const { buildVoucherToken } = await import('../../../src/lib/__tests__/voucherFixtures')
+    const built = buildVoucherToken({ issuanceRatio: 1, faceValue: 1000, expiresAt: undefined }, [1000])
+    const parsed = parseCheckInput(
+      { token: built.token, requested: 1000, priorRedemptions: [{ amount: 1000, direction: 'out' }] },
+      built.voucher.issuerId,
+      NOW,
+    )
+    if (!parsed.ok) throw new Error(parsed.error.detail)
+    const out = checkRedemption(parsed.value)
     expect(out.ceiling?.allowed).toBe(true)
   })
 
@@ -179,6 +203,37 @@ describe('what to sign to accept a coupon', () => {
     // key order changes the hash, and the gateway refuses the request from a
     // service the caller never addressed directly.
     expect(receiveBody('cashuBabc')).toBe('{"token":"cashuBabc"}')
+  })
+})
+
+/**
+ * cashu-mint#540 phase 2: wallet-api is a courier, so the declared swap (and its 90025 refusal)
+ * belongs to gateway-customer's receive, which the caller signs and calls. Pinned here because a
+ * change that made this service swap, or call the mint, would need a redeemer token it must not
+ * hold, and would move the holder contract somewhere the README does not say.
+ */
+describe('the redemption cap (cashu-mint#540)', () => {
+  const SOURCES = ['redeem.ts', 'server.ts', 'prepare.ts'].map((file) =>
+    readFileSync(join(__dirname, '..', file), 'utf8'),
+  )
+
+  it('routes the accepting swap to gateway-customer, which declares it and answers 90025', () => {
+    expect(RECEIVE_PATH).toBe('/api/v1/wallet/receive')
+    expect(receiveUrl().endsWith(RECEIVE_PATH)).toBe(true)
+  })
+
+  it('holds no redeemer token and never sends the declaration headers', () => {
+    for (const source of SOURCES) {
+      expect(source).not.toMatch(/REDEEMER_TOKEN/)
+      expect(source.toLowerCase()).not.toContain('x-cashu-voucher-redeemer')
+      expect(source.toLowerCase()).not.toContain('x-cashu-voucher-redemption')
+    }
+  })
+
+  it('documents the VOUCHER_FULLY_REDEEMED answer as terminal for integrators', () => {
+    const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8')
+    expect(readme).toContain('VOUCHER_FULLY_REDEEMED')
+    expect(readme).toMatch(/Terminal\. Do not retry/)
   })
 })
 

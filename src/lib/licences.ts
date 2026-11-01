@@ -147,19 +147,33 @@ export interface HeldLicence {
  * destroy the evidence on the customer's own device; it is already excluded from
  * every balance by `spendable`, so keeping it costs nothing but a row.
  */
-export function heldLicences(rows: VoucherRow[]): HeldLicence[] {
+export function heldLicences(
+  rows: VoucherRow[],
+  /**
+   * Applied BEFORE the per-subscription pick, so a licence that would be refused (a stranger's,
+   * naming the victim's own subscription id with a later expiry) cannot hide the genuine one
+   * (review of imani-wallet#197, MEDIUM-3).
+   */
+  accept: (licence: LicenceVoucher) => boolean = () => true,
+): HeldLicence[] {
   const bySubscription = new Map<string, HeldLicence>()
 
   for (const row of rows) {
     const licence = licenceIn(row)
     if (!licence) continue
+    if (!accept(licence)) continue
 
     // Grouped by the SIGNED subscription id, which is the point of it existing:
     // "a customer's renewal keeps the same subscription identity, so a year of
     // renewals is one relationship". `voucher_id` changes on every renewal and
     // `lockKey` changes on a re-issue after key loss, so neither can group.
-    const key = licence.subscriptionId
-    if (!key) continue
+    //
+    // And by `valid_from` (#407): a renewal is delivered BEFORE the current term ends, with a
+    // future start, so for a few days the stall holds two windows of one subscription. Keeping only
+    // the later one would hide the licence in force today. Licences sold before #407 carry no start
+    // and group exactly as before.
+    if (!licence.subscriptionId) continue
+    const key = `${licence.subscriptionId}@${licence.validFrom ?? ''}`
 
     const held = bySubscription.get(key)
     // `>`, not `>=`. Two licences with the SAME expiry are the same entitlement

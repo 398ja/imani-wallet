@@ -13,6 +13,11 @@ import WebSocket from 'ws'
 import { publish } from '../relay'
 
 setWebSocketImplementation(WebSocket)
+// relay.ts imports SimplePool from 'nostr-tools', a different module instance
+// from 'nostr-tools/pool' under vitest, so the setter above does not reach it
+// (the two tests above passed regardless, since a refused port fails either
+// way). A global WebSocket does.
+;(globalThis as { WebSocket?: unknown }).WebSocket ??= WebSocket
 
 /**
  * `publish` must not count a relay it never reached as one that accepted the
@@ -59,4 +64,104 @@ describe('publish', () => {
     expect(result).toMatchObject({ ok: 0, total: 2 })
     expect(result.errors).toHaveLength(2)
   })
+})
+
+/**
+ * A relay that answers `OK false` has refused the event, and its reason must
+ * reach the caller (#203). strfry says `invalid: event too large: 66031` for a
+ * coupon backup over `maxEventSize`, and that refusal went unseen because the
+ * caller ignored the result. Over a real socket, against a relay that refuses
+ * everything, so a nostr-tools change that resolved `OK false` as a string
+ * would fail here rather than in production.
+ */
+describe('publish against a relay that refuses', () => {
+  it('counts an OK false as a failure and carries the relay reason', async () => {
+    const { WebSocketServer } = await import('ws')
+    const server = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((resolve) => server.on('listening', () => resolve()))
+    server.on('connection', (socket) =>
+      socket.on('message', (raw) => {
+        const [type, ev] = JSON.parse(String(raw)) as [string, { id: string }]
+        if (type === 'EVENT') socket.send(JSON.stringify(['OK', ev.id, false, 'invalid: event too large: 66031']))
+      }),
+    )
+    try {
+      const { port } = server.address() as { port: number }
+      const result = await publish(event(), [`ws://127.0.0.1:${port}`])
+      expect(result).toMatchObject({ ok: 0, total: 1 })
+      expect(result.errors).toEqual(['invalid: event too large: 66031'])
+    } finally {
+      server.close()
+    }
+  })
+})
+
+/**
+ * A relay slow to ACCEPT the connection, not one that refuses. Staging 2026-10-31: right after a
+ * terminal enrolment the stall's profile publish hit "connection timed out" every time and nothing
+ * reached strfry. The default 3 s window stays for every other publish; the Terminals page asks
+ * for 8 s (`connectMs`), which a 4 s accept fits.
+ */
+describe('publish against a relay slow to accept', () => {
+  it('gives up at the default 3 s window', async () => {
+    const { createServer: http } = await import('node:http')
+    const server = http()
+    let held: Promise<void> = Promise.resolve()
+    server.on('upgrade', (_req, socket) => {
+      socket.on('error', () => {})
+      // Never upgraded: the client's 3 s connect window passes and it gives up (and closes it).
+      held = new Promise<void>((done) => socket.on('close', () => done()))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const result = await publish(event(), [`ws://127.0.0.1:${port}`])
+      expect(result.ok).toBe(0)
+      expect(result.errors[0]).toMatch(/connection failure/)
+      await Promise.race([held, new Promise((r) => setTimeout(r, 2000))])
+    } finally {
+      server.closeAllConnections?.()
+      server.close()
+    }
+  }, 10_000)
+
+  it('a caller may give the connect a longer window, and is then accepted', async () => {
+    const { WebSocketServer } = await import('ws')
+    const wss = new WebSocketServer({ noServer: true })
+    let upgrades = 0
+    wss.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(String(raw)) as [string, { id: string }]
+        if (msg[0] === 'EVENT') ws.send(JSON.stringify(['OK', msg[1].id, true, '']))
+      })
+    })
+    const { createServer: http } = await import('node:http')
+    const server = http()
+    let closing = false
+    server.on('upgrade', (req, socket, head) => {
+      upgrades += 1
+      socket.on('error', () => {})
+      // The connection is upgraded only after 4 s: past the default 3 s window, inside 8 s.
+      const upgrade = () => (closing ? socket.destroy() : wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req)))
+      if (upgrades === 1) {
+        setTimeout(upgrade, 4000)
+        return
+      }
+      upgrade()
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as { port: number }).port
+    try {
+      const result = await publish(event(), [`ws://127.0.0.1:${port}`], { connectMs: 8000 })
+      expect(result).toMatchObject({ ok: 1, total: 1 })
+      expect(upgrades).toBe(1)
+    } finally {
+      closing = true
+      for (const c of wss.clients) c.terminate()
+      wss.close()
+      server.closeAllConnections?.()
+      server.close()
+    }
+  }, 20_000)
+
 })

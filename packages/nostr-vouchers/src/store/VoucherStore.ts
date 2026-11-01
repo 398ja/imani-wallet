@@ -510,6 +510,13 @@ export class VoucherStore {
 
   /**
    * Check for expired vouchers and emit events
+   *
+   * NOT what the wallet app uses (imani-wallet#265). The app never constructs a VoucherStore, so
+   * this `voucher:expiring` event reaches nobody there. The app's reminder is
+   * `src/lib/expiryReminders.ts` (thresholds 7 d and 1 d, one bell entry per coupon per
+   * threshold, licences and terminal credentials excluded), with the shared rules in
+   * `src/lib/couponExpiry.ts`. Kept because this package is still a dependency of
+   * wallet-storage and voucher-send; do not wire it into the app as a second emitter.
    */
   async checkExpiredVouchers(): Promise<void> {
     const vouchers = await this.getAll();

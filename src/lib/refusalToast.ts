@@ -37,8 +37,12 @@ import type { RefusalReason } from '@imani/dm-poll'
  * plainly rather than hedge.
  */
 
-/** What the stall is told, per reason. Keyed so a new reason must be handled. */
-const MESSAGES: Record<RefusalReason, { title: string; detail: string }> = {
+/**
+ * What the stall is told, per reason. Keyed so a new reason must be handled.
+ * Exported so the line left on the payment (`refusedCoupons.ts`) says the
+ * same thing the toast did.
+ */
+export const REFUSAL_MESSAGES: Record<RefusalReason, { title: string; detail: string }> = {
   /**
    * The likely case, and an innocent one: a customer at the wrong counter.
    *
@@ -67,6 +71,60 @@ const MESSAGES: Record<RefusalReason, { title: string; detail: string }> = {
     title: 'That coupon is already spent',
     detail: 'It has paid out everything it was issued for. Nothing was taken.',
   },
+  'wrong-unit': {
+    title: 'Coupon in a form this wallet cannot take',
+    detail: 'Its value is in a unit this wallet does not handle. Nothing was taken.',
+  },
+  undecodable: {
+    title: 'Coupon could not be read',
+    detail: 'The coupon arrived damaged or in a form this wallet does not understand. Nothing was taken.',
+  },
+  /**
+   * cashu-mint#540: the mint refused it, because this coupon's value has already been redeemed,
+   * most likely through a copy. Worded so staff can explain it and quote the reference, which
+   * the refusal record carries.
+   */
+  'fully-redeemed': {
+    title: 'That coupon has already been redeemed in full',
+    detail:
+      'The mint will not credit it again. Nothing was taken: the customer still holds it and can ' +
+      'swap it back to sats. If they believe this is wrong, they should contact the stall with the ' +
+      'coupon reference.',
+  },
+}
+
+/**
+ * Who is holding the device the coupon was refused on. A stall turns round and explains the
+ * refusal to a customer at its counter; a customer refused a coupon a stall just sold them must
+ * be told what to do about their own payment (#160 spec 4.6.6, 5b-5).
+ */
+export type RefusalAudience = 'stall' | 'customer'
+
+/**
+ * The customer's wording, where it differs from the stall's. Only `unwarranted` does: the other
+ * reasons already speak to whoever holds the coupon.
+ */
+export const CUSTOMER_REFUSAL_MESSAGES: Partial<Record<RefusalReason, { title: string; detail: string }>> = {
+  /**
+   * A coupon the stall it names never signed for, most often one sold on a till the owner has not
+   * set up again since terminals began carrying the stall's signature. Nothing moved: the coupon
+   * was refused before it was taken, so the seller still holds it.
+   */
+  unwarranted: {
+    title: 'Coupon not accepted',
+    detail:
+      'The stall it names did not sign for this coupon, so your wallet did not take it. ' +
+      'Nothing was taken from you by this wallet. If you paid for it, ask the stall to issue ' +
+      'it again from the owner’s phone or from a till they have set up again.',
+  },
+}
+
+/** The words for one refusal, for this audience. */
+export function refusalMessage(
+  reason: RefusalReason,
+  audience: RefusalAudience = 'stall',
+): { title: string; detail: string } | undefined {
+  return (audience === 'customer' ? CUSTOMER_REFUSAL_MESSAGES[reason] : undefined) ?? REFUSAL_MESSAGES[reason]
 }
 
 /**
@@ -83,12 +141,15 @@ const MESSAGES: Record<RefusalReason, { title: string; detail: string }> = {
  * explanation is worse here than silence — the same judgement `checkCoupon`
  * makes when it refuses to turn an unknown into an accusation.
  */
-export function announceRefusal(event: { reason?: RefusalReason } | undefined): void {
+export function announceRefusal(
+  event: { reason?: RefusalReason } | undefined,
+  audience: RefusalAudience = 'stall',
+): void {
   try {
     const reason = event?.reason
     if (!reason) return
 
-    const message = MESSAGES[reason]
+    const message = refusalMessage(reason, audience)
     if (!message) return
 
     toast.error(message.title, {

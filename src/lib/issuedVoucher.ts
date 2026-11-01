@@ -51,8 +51,10 @@ import {
   type IssuanceWarrant,
   type WarrantVerdict,
 } from './issuanceWarrant'
-import { saleFor, saleIsComplete } from './reconcileIssuance'
-import type { WalletTransaction } from './transactions'
+import { reconcileIssuances, saleFor, saleIsComplete } from './reconcileIssuance'
+import { isVoucherIssuance, type WalletTransaction } from './transactions'
+
+export { isVoucherIssuance }
 
 /** How the customer paid for the voucher, as far as the record can say. */
 export type PaymentRail =
@@ -107,6 +109,12 @@ export interface VoucherRecord {
   sale: WalletTransaction[]
   /** Whether all of that sale's coupons are present in this history. */
   saleComplete: boolean
+  /**
+   * Present when this coupon's signature holds but its sale's coupons add up to
+   * less than the stall signed (#462): the figures the page states instead of
+   * calling the signature into question.
+   */
+  shortfall?: { signedMinor: number; deliveredMinor: number; partlyDelivered: boolean }
 }
 
 /**
@@ -172,22 +180,37 @@ export function isExpired(row: WalletTransaction, now: number): boolean {
 export function paymentRail(warrant: IssuanceWarrant): PaymentRail {
   if (warrant.state !== 'present') return { kind: 'unknown' }
   if (warrant.form === 'processor') return { kind: 'card', reference: warrant.reference }
-  // `merchant` only. A `delegated` warrant is not verifiable in this build
-  // (`verifyIssuanceWarrant` refuses it rather than half-checking), so naming a
-  // rail for it would assert more than the verifier is willing to.
-  return warrant.form === 'merchant' ? { kind: 'counter' } : { kind: 'unknown' }
+  // A `delegated` warrant is how a card purchase is signed since #152: the
+  // purchase issuer signs as the stall's delegate and carries the processor's
+  // reference inside the signed bytes. A delegated warrant WITHOUT a reference
+  // is some other delegate, so naming a rail for it would be a guess.
+  if (warrant.form === 'delegated') {
+    return warrant.reference ? { kind: 'card', reference: warrant.reference } : { kind: 'unknown' }
+  }
+  return { kind: 'counter' }
 }
 
 /**
  * Every voucher this history records issuing, newest first.
  *
- * `issued` only, not `cashback`. A cashback is an issuance for reconciliation —
- * `reconcileIssuance.isIssuance` counts both, because both take money at a
- * counter — and it is NOT one here, because there is no voucher: the customer
- * has no wallet, the code was read out loud, and its life is answered by the
- * gateway rather than by rows in this history. It has its own screen for
- * exactly that reason (`CashbackSection`), and mixing it in would put rows in
- * this list whose "claimed" figure could only ever be zero.
+ * `issued` rows, and `cashback` rows that carry a voucher id (#144). The portal
+ * returns the id of the voucher a cashback code unlocks, and once a customer
+ * claims it, that voucher is spent at this stall like any Sell coupon. So it
+ * belongs on the same list.
+ *
+ * Why the cashback row itself rather than a second `issued` row beside it:
+ * `reconcileIssuance.isIssuance` already counts both types as money taken at a
+ * counter, so a twin `issued` row would count the same sale twice. It would
+ * also be a second copy of the warrant and the expiry to keep in step, and a
+ * second relay record to restore. One row, read by both lists, cannot drift.
+ *
+ * A cashback without a voucher id was issued before the portal returned one.
+ * It stays off, for the routing reason below.
+ *
+ * A cashback and a Sell row cannot share a voucher id, so neither can hide the
+ * other. Both ids are random UUIDs the gateway mints per voucher, and each
+ * issue mints its own. The list keys rows by row id anyway (`issued:<id>`,
+ * `cashback:<id>`), so even a collision would render both rows.
  *
  * Expired vouchers are excluded by DEFAULT rather than absent: they are the
  * ones a customer is most likely to turn up holding, and a merchant deciding
@@ -209,7 +232,7 @@ export function issuedVouchers(
   { now, includeExpired = false }: { now: number; includeExpired?: boolean },
 ): WalletTransaction[] {
   return rows
-    .filter((row) => row.type === 'issued' && Boolean(row.voucherId))
+    .filter((row) => isVoucherIssuance(row) && Boolean(row.voucherId))
     .filter((row) => includeExpired || !isExpired(row, now))
     .sort((a, b) => b.at - a.at)
 }
@@ -233,7 +256,7 @@ export function issuedVoucher(
 ): VoucherRecord | undefined {
   if (!voucherId) return undefined
 
-  const row = rows.find((tx) => tx.type === 'issued' && tx.voucherId === voucherId)
+  const row = rows.find((tx) => isVoucherIssuance(tx) && tx.voucherId === voucherId)
   if (!row) return undefined
 
   const claims = rows.filter((tx) => isClaim(tx, row)).sort((a, b) => b.at - a.at)
@@ -243,11 +266,16 @@ export function issuedVoucher(
   )
 
   const warrant = parseIssuanceWarrant(row.issuanceWarrant)
-  const warrantVerdict = verifyIssuanceWarrant(warrant, stallPubkey, {
-    faceValueMinor: row.amount,
-    unit: row.unit,
-    faceDecimals: row.decimals,
-  })
+  // Judged at the moment the sale was recorded, not today: a card sale made
+  // under a live delegation stays authorised in the stall's ledger after the
+  // delegation lapses (#176 review). A row with no recorded time (0) falls
+  // back to the current clock.
+  const warrantVerdict = verifyIssuanceWarrant(
+    warrant,
+    stallPubkey,
+    { faceValueMinor: row.amount, unit: row.unit, faceDecimals: row.decimals },
+    row.at > 0 ? { issuedAt: row.at } : {},
+  )
 
   const attestation = parseCashAttestation(row.cashAttestation)
   // Checked against the SALE the warrant describes rather than against this
@@ -278,5 +306,23 @@ export function issuedVoucher(
     rail: paymentRail(warrant),
     sale: saleFor(rows, voucherId),
     saleComplete: saleIsComplete(rows, voucherId),
+    shortfall: shortfallFor(rows, row, stallPubkey),
   }
+}
+
+/**
+ * The same sale-level judgement the "Coupons you issued" panel makes, for one
+ * row (#462). Summing a sale needs its siblings, so this reconciles the rows
+ * that share this row's warrant rather than re-deriving the rule here.
+ */
+function shortfallFor(
+  rows: readonly WalletTransaction[],
+  row: WalletTransaction,
+  stallPubkey: string,
+): VoucherRecord['shortfall'] {
+  if (!row.issuanceWarrant) return undefined
+  const found = reconcileIssuances(rows, stallPubkey).find((item) => item.row === row)
+  if (found?.verdict !== 'understated' || !found.sale) return undefined
+  const { signedMinor, deliveredMinor, partlyDelivered } = found.sale
+  return { signedMinor, deliveredMinor, partlyDelivered }
 }

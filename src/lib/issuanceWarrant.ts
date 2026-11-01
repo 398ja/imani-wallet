@@ -30,6 +30,9 @@ import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
+import { verifyIssuerDelegation } from './issuerDelegation'
+import { TERMINAL_REFUSAL, trustedCredentialServiceKeys, verifyTerminalWarrant } from './terminalWarrant'
+
 /**
  * Separates fields in the digest preimage. Mirrors `IssuanceWarrant.java`.
  *
@@ -41,7 +44,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 const FIELD_SEPARATOR = '\u001f'
 
 /** The forms a warrant can take, matching `IssuanceWarrant.Form` on the wire. */
-export type WarrantForm = 'merchant' | 'processor' | 'delegated' | 'none'
+export type WarrantForm = 'merchant' | 'processor' | 'delegated' | 'terminal' | 'none'
 
 /**
  * A warrant as read from a coupon.
@@ -92,15 +95,48 @@ export type IssuanceWarrant =
            * non-null assertion that would otherwise rest on a parser invariant
            * nothing enforced.
            */
-          form: 'merchant' | 'delegated'
+          form: 'merchant'
           signature: string
           reference?: undefined
+          delegation?: undefined
+        }
+      | {
+          /**
+           * Signed by a key the stall delegated `coupon:issue` to, carrying the
+           * stall's signed delegation (`issuerDelegation.ts`). Both are needed:
+           * the signature alone is anybody's key.
+           */
+          form: 'delegated'
+          signature: string
+          /** The stall's kind-30078 delegation event, as it arrived. */
+          delegation: unknown
+          /**
+           * Informational: the card processor's record of the payment. Signed
+           * by the delegate (`delegatedSaleDigest`), so an edited reference
+           * fails verification, and reconciliation can trust it. Not evidence
+           * that the payment happened.
+           */
+          reference?: string
+        }
+      | {
+          /**
+           * Signed by a till's own key `K`, carrying the terminal credential the stall's
+           * issuing service minted to `K` (#160 phase 5, `terminalWarrant.ts`). Not
+           * `delegated`, which stays the card-purchase form.
+           */
+          form: 'terminal'
+          signature: string
+          /** The credential's signed NUT-10 secret, exactly as it arrived. Never the proof's C. */
+          credential: string
+          reference?: undefined
+          delegation?: undefined
         }
       | {
           /** A processor references an external record instead of signing. */
           form: 'processor'
           signature?: undefined
           reference?: string
+          delegation?: undefined
         }
     ))
   | {
@@ -134,6 +170,39 @@ export function warrantSaleDigest(
 }
 
 /**
+ * The digest a `delegated` warrant signs: the sale digest's fields plus the
+ * processor reference.
+ *
+ * The reference is what lets a stall match a card coupon to its own payment
+ * dashboard, so it must be the delegate's word and not anyone's later edit.
+ * `warrantSaleDigest` does not cover it, and a `merchant` warrant has no
+ * reference to cover, so the delegated form signs its own preimage: the same
+ * five fields, then the reference (empty when there is none). The sixth field
+ * also keeps these bytes apart from any `merchant` digest.
+ *
+ * Mirrored by `saleDigest` in `services/purchase-issuer/delegatedWarrant.ts`;
+ * that service's tests verify what it signs with this verifier.
+ */
+export function delegatedSaleDigest(
+  issuerId: string,
+  saleTotalMinor: number,
+  faceDecimals: number,
+  unit: string,
+  saleNonce: string,
+  reference: string | undefined,
+): Uint8Array {
+  const preimage = [
+    issuerId,
+    String(saleTotalMinor),
+    String(faceDecimals),
+    unit,
+    saleNonce,
+    reference ?? '',
+  ].join(FIELD_SEPARATOR)
+  return sha256(new TextEncoder().encode(preimage))
+}
+
+/**
  * Parses the raw warrant JSON off a coupon.
  *
  * `undefined` in means `absent-legacy` out — that is the whole reason this
@@ -160,7 +229,7 @@ export function parseIssuanceWarrant(raw: string | undefined | null): IssuanceWa
   // An unknown form is REFUSED, never defaulted. Treating it as `none` would
   // report "the issuer signed that nothing authorised this", a claim nobody
   // made, about a shape this build cannot read.
-  if (form !== 'merchant' && form !== 'processor' && form !== 'delegated') {
+  if (form !== 'merchant' && form !== 'processor' && form !== 'delegated' && form !== 'terminal') {
     return { state: 'invalid', reason: `unknown warrant form: ${String(form)}` }
   }
 
@@ -200,12 +269,27 @@ export function parseIssuanceWarrant(raw: string | undefined | null): IssuanceWa
   // warrant, it is an unreadable one: the signature IS the evidence. A
   // processor warrant legitimately has none, because it references an external
   // record instead.
-  const signature = typeof obj.sig === 'string' ? obj.sig : undefined
-  if ((form === 'merchant' || form === 'delegated') && !signature) {
+  //
+  // A `terminal` warrant spells it `signature` (spec 5.1); the older forms keep `sig`.
+  const signatureField = form === 'terminal' ? obj.signature : obj.sig
+  const signature = typeof signatureField === 'string' ? signatureField : undefined
+  if ((form === 'merchant' || form === 'delegated' || form === 'terminal') && !signature) {
     return { state: 'invalid', reason: `${form} warrant carries no signature` }
   }
 
+  // A terminal warrant without its credential is a signature by a key nobody vouched for.
+  if (form === 'terminal' && (typeof obj.credential !== 'string' || obj.credential.length === 0)) {
+    return { state: 'invalid', reason: 'terminal warrant carries no credential' }
+  }
+
+  // A delegated warrant without the stall's delegation is a signature by a
+  // key nobody vouched for. Refused here, so the verifier never sees one.
+  if (form === 'delegated' && (typeof obj.delegation !== 'object' || obj.delegation === null)) {
+    return { state: 'invalid', reason: 'delegated warrant carries no delegation from the stall' }
+  }
+
   const common = { state: 'present' as const, saleTotalMinor, faceDecimals, unit, saleNonce }
+  const reference = typeof obj.ref === 'string' ? obj.ref : undefined
 
   // Built per form rather than as one object with two optional fields, so the
   // type carries the invariant the checks above enforce: a signed form HAS a
@@ -213,7 +297,19 @@ export function parseIssuanceWarrant(raw: string | undefined | null): IssuanceWa
   // non-null assertion, which would otherwise rest on a parser guarantee the
   // compiler could not see and a later edit could quietly remove.
   if (form === 'processor') {
-    return { ...common, form, reference: typeof obj.ref === 'string' ? obj.ref : undefined }
+    return { ...common, form, reference }
+  }
+  if (form === 'terminal') {
+    return { ...common, form, signature: signature as string, credential: obj.credential as string }
+  }
+  if (form === 'delegated') {
+    return {
+      ...common,
+      form,
+      signature: signature as string,
+      delegation: obj.delegation,
+      ...(reference ? { reference } : {}),
+    }
   }
   return { ...common, form, signature: signature as string }
 }
@@ -251,20 +347,47 @@ export type WarrantVerdict =
 /**
  * Verifies a warrant against the coupon carrying it.
  *
- * Offline for `merchant`. `processor` is recorded, never verified — the type
- * makes that impossible to confuse, because it returns a different verdict
- * rather than `verified` with a caveat a caller might drop.
+ * Offline for `merchant` and `delegated`. `processor` is recorded, never
+ * verified — the type makes that impossible to confuse, because it returns a
+ * different verdict rather than `verified` with a caveat a caller might drop.
  *
- * `delegated` is **not implemented yet** and returns `failed` rather than
- * something optimistic. Verifying it needs two steps — the signature against
- * the credential's lock key, then that the credential was minted by `issuerId`
- * — and doing only the first accepts a credential the attacker minted for
- * themselves. A half-check here would be worse than refusing.
+ * `delegated` is two checks and BOTH must hold (`issuerDelegation.ts`):
+ *
+ * 1. The delegation is the stall's: signed by `issuerId`, scope
+ *    `coupon:issue`, and in force (see `issuedAt` below).
+ * 2. The warrant's signature is the DELEGATE's, over the sale digest plus the
+ *    processor reference (`delegatedSaleDigest`).
+ *
+ * Only the second would accept a key the attacker made for themselves; only
+ * the first would accept any sale by a genuine delegate's stolen delegation.
+ *
+ * `now` is a parameter so a test can pin the clock; callers omit it.
+ *
+ * `issuedAt` is when the coupon was issued, in epoch ms, for callers that know
+ * it: the stall's own issuance ledger, which recorded the sale. A delegation
+ * is then judged at that moment (`created_at <= issuedAt < expiration`), so a
+ * card sale made while the delegation was live stays verified after it lapses.
+ * Without it the delegation must be unexpired NOW, which is all a till holding
+ * a coupon can check: the voucher carries no signed issue time.
  */
 export function verifyIssuanceWarrant(
   warrant: IssuanceWarrant,
   issuerId: string,
   coupon: CouponUnderWarrant,
+  {
+    now = Date.now(),
+    issuedAt,
+    trustedServiceKeys,
+  }: {
+    now?: number
+    issuedAt?: number
+    /**
+     * The service keys that mint terminal credentials. Defaults to the build's
+     * `VITE_VOUCHER_ISSUER_PUBKEYS`; a build that names none refuses every `terminal`
+     * warrant, because without it anyone could mint themselves a credential.
+     */
+    trustedServiceKeys?: readonly string[]
+  } = {},
 ): WarrantVerdict {
   const { faceValueMinor: couponFaceMinor } = coupon
   switch (warrant.state) {
@@ -311,23 +434,75 @@ export function verifyIssuanceWarrant(
     return { verdict: 'claimed', reference: warrant.reference }
   }
 
-  if (warrant.form === 'delegated') {
-    return { verdict: 'failed', reason: 'delegated warrants are not verifiable in this build' }
+  if (warrant.form === 'terminal') {
+    // Offline, of a coupon already sold: the credential's expiry instant is skipped
+    // (`ExpiryCheck.skipOffline`), because a coupon sold before the till expired stays valid.
+    // The portal checked expiry, and liveness, when it issued.
+    const result = verifyTerminalWarrant({
+      issuerId,
+      credential: warrant.credential,
+      trustedServiceKeys: trustedServiceKeys ?? trustedCredentialServiceKeys(),
+      saleTotalMinor: warrant.saleTotalMinor,
+      faceDecimals: warrant.faceDecimals,
+      unit: warrant.unit,
+      saleNonce: warrant.saleNonce,
+      signatureHex: warrant.signature,
+      couponFaceMinor,
+      expiryCheck: 'skip-offline',
+    })
+    if (result.valid === true) return { verdict: 'verified' }
+    // A till the stall never attested (spec 4.6.3, review M7): the sale is unsigned by the
+    // stall, not tampered with, so it reads `unwarranted`, which is also what such a coupon read
+    // before 0.17.0. `refuseIfUnwarranted` refuses it before the swap all the same. A present
+    // but bad attestation, or one the credential outlives, is a forgery and reads `failed`.
+    if (result.refusal === TERMINAL_REFUSAL.OWNER_ATTESTATION_MISSING) return { verdict: 'unwarranted' }
+    return { verdict: 'failed', reason: `terminal warrant refused: ${result.refusal}` }
   }
 
-  const digest = warrantSaleDigest(
-    issuerId,
-    warrant.saleTotalMinor,
-    warrant.faceDecimals,
-    warrant.unit,
-    warrant.saleNonce,
-  )
+  // Whose signature the digest must carry: the stall's own, or the key the
+  // stall delegated to, but only once the delegation itself has held.
+  let signerPubkey = issuerId
+  if (warrant.form === 'delegated') {
+    const delegation = verifyIssuerDelegation(
+      warrant.delegation,
+      issuerId,
+      issuedAt === undefined ? now : { issuedAt },
+    )
+    if (!delegation.ok) {
+      return { verdict: 'failed', reason: `warrant delegation refused: ${delegation.reason}` }
+    }
+    signerPubkey = delegation.delegatePubkey
+  }
+
+  const digest =
+    warrant.form === 'delegated'
+      ? delegatedSaleDigest(
+          issuerId,
+          warrant.saleTotalMinor,
+          warrant.faceDecimals,
+          warrant.unit,
+          warrant.saleNonce,
+          warrant.reference,
+        )
+      : warrantSaleDigest(
+          issuerId,
+          warrant.saleTotalMinor,
+          warrant.faceDecimals,
+          warrant.unit,
+          warrant.saleNonce,
+        )
 
   try {
-    const ok = schnorr.verify(hexToBytes(warrant.signature), digest, hexToBytes(issuerId))
+    const ok = schnorr.verify(hexToBytes(warrant.signature), digest, hexToBytes(signerPubkey))
     return ok
       ? { verdict: 'verified' }
-      : { verdict: 'failed', reason: 'warrant signature did not verify against the stall' }
+      : {
+          verdict: 'failed',
+          reason:
+            warrant.form === 'delegated'
+              ? 'warrant signature did not verify against the stall\u2019s delegate'
+              : 'warrant signature did not verify against the stall',
+        }
   } catch (e) {
     // Malformed hex reaches here. Refuse rather than throw: the caller is
     // deciding whether to credit a merchant, not parsing a config file.

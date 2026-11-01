@@ -18,8 +18,10 @@ import { bytesToHex } from '@noble/hashes/utils'
 
 import {
   asChunk,
+  confirmChunkDeliveries,
   looksLikeChunk,
   offerChunk,
+  offerChunkFrom,
   pendingChunkTransfers,
   resetChunkAssembly,
 } from '../dmChunks'
@@ -100,7 +102,11 @@ describe('receiving a large, heavily chunked coupon', () => {
   it('does not re-hold a completed transfer after a reload', async () => {
     const parts = envelopes(couponOf(400), 5).map((raw) => asChunk(raw)!)
 
-    for (const chunk of parts) await offerChunk(chunk)
+    // The fifth wrap completes it, and dm-poll then marks THAT event processed
+    // once the coupon is saved. Only that confirmation tombstones the transfer
+    // (#204); decoding alone no longer does.
+    for (const [i, chunk] of parts.entries()) await offerChunkFrom(chunk, `wrap-${i}`)
+    expect(confirmChunkDeliveries(['wrap-4'])).toBe(1)
     expect(pendingChunkTransfers()).toBe(0)
 
     // A RELOAD, not a sign-out: every module-level Map is dropped and rebuilt
@@ -114,8 +120,8 @@ describe('receiving a large, heavily chunked coupon', () => {
     vi.resetModules()
     const reloaded = await import('../dmChunks')
 
-    for (const chunk of parts.slice(0, 4)) {
-      expect(await reloaded.offerChunk(chunk)).toBeNull()
+    for (const [i, chunk] of parts.slice(0, 4).entries()) {
+      expect((await reloaded.offerChunkFrom(chunk, `wrap-${i}`)).kind).toBe('done')
     }
 
     // Before the completed set was persisted this was 1: a pending entry
@@ -127,7 +133,8 @@ describe('receiving a large, heavily chunked coupon', () => {
   it('remembers a completed transfer for longer than the poll fetch window', async () => {
     const parts = envelopes(couponOf(400), 4).map((raw) => asChunk(raw)!)
     const t0 = Date.now()
-    for (const chunk of parts) await offerChunk(chunk, t0)
+    for (const [i, chunk] of parts.entries()) await offerChunkFrom(chunk, `wrap-${i}`, t0)
+    confirmChunkDeliveries(['wrap-3'], t0)
 
     // `dmPoll` re-reads a 7-day window, so a guard that expires at 24h left
     // six days in which stragglers re-opened an uncompletable entry.
@@ -185,7 +192,8 @@ describe('receiving a large, heavily chunked coupon', () => {
 
   it('does not resurrect a signed-out account\'s transfers', async () => {
     const parts = envelopes(couponOf(400), 3).map((raw) => asChunk(raw)!)
-    for (const chunk of parts) await offerChunk(chunk)
+    for (const [i, chunk] of parts.entries()) await offerChunkFrom(chunk, `wrap-${i}`)
+    confirmChunkDeliveries(['wrap-2'])
 
     // Completion queues a DEFERRED write. Signing out clears the store, and
     // the queued write must not then land and put the ids back -- on a shared
@@ -194,5 +202,6 @@ describe('receiving a large, heavily chunked coupon', () => {
     await new Promise((r) => setTimeout(r, 5))
 
     expect(localStorage.getItem('imani-wallet:dm-chunks:completed')).toBeNull()
+    expect(localStorage.getItem('imani-wallet:dm-chunks:completed:v2')).toBeNull()
   })
 })

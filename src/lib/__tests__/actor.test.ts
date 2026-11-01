@@ -67,8 +67,19 @@ describe('a terminal acting for its stall', () => {
     expect(actor!.terminalPubkey).toBe(DEVICE)
   })
 
-  it('may issue when its role says so', () => {
-    expect(mayIssue(terminalActor(credential(), DEVICE)!)).toBe(true)
+  // A selling role the stall attested (#160 decision 5) may issue.
+  it('may issue when its role says so and the stall attested it', () => {
+    expect(mayIssue({ ...terminalActor(credential(), DEVICE)!, attested: true })).toBe(true)
+  })
+
+  // The same role without the stall's attestation keeps Redeem and loses Sell (spec 4.6.5): an
+  // actor built anywhere but login is unattested, so nothing sells by default.
+  it('may not issue when the stall has not attested it, but still redeems', () => {
+    const unattested = terminalActor(credential(), DEVICE)!
+    expect(unattested.attested).toBeUndefined()
+    expect(mayIssue(unattested)).toBe(false)
+    expect(mayIssue({ ...unattested, attested: false })).toBe(false)
+    expect(mayRedeem(unattested)).toBe(true)
   })
 
   it('is refused issuance when it is redemption-only', () => {

@@ -6,6 +6,8 @@ import { useDriveBackup } from '../lib/useDriveBackup'
 import { legacyApi } from '../lib/legacyBridge'
 import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommission'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
+import { userMessage } from '../lib/userMessage'
+import { ConnectedSites } from '../components/ConnectedSites'
 import {
   passphraseStrength,
   validateConfirmation,
@@ -51,6 +53,7 @@ export function SecurityPage({
       {!terminal && (
         <>
           <ChangePassphrase pubkey={pubkey} />
+          <ConnectedSites pubkey={pubkey} />
           </>
       )}
 
@@ -205,7 +208,7 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
       // Drive failure must not reach the outer catch and be reported as one.
       if (drive.configured) await drive.save()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(userMessage(e))
     } finally {
       setBusy(false)
     }

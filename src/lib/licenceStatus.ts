@@ -1,15 +1,18 @@
 import {
   decideWithGrace,
   verifyLicence,
+  DENIAL_REASONS,
   GRACE_REASONS,
   type LastVerification,
   type LicenceCheck,
   type LicenceDecision,
+  type LicenceGrant,
   type LicenceVoucher,
 } from '@imani/licence'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { heldLicences, licenceSignatureVerifier } from './licences'
+import { isRevokedBySeller } from './licenceRevocations'
 import { listVouchers } from './wallet'
 
 /**
@@ -70,6 +73,29 @@ export function licenceIssuerPubkey(): string {
   return (import.meta.env.VITE_LICENCE_ISSUER_PUBKEY as string | undefined) ?? ''
 }
 
+let sellerPinUnsetLogged = false
+
+/**
+ * The licence SELLER's stall key (`VITE_LICENCE_SELLER_PUBKEY`), the `issuer` a licence must name
+ * (review of imani-wallet#197, MEDIUM-3 / D2).
+ *
+ * The gateway key in `licenceIssuerPubkey` signs EVERY stall's coupons, so any stall can mint a
+ * licence-shaped voucher through the gateway naming itself as issuer and DM it to a victim, whose
+ * wallet would then say "licensed" for a licence nobody sold. Pinning the seller stops that here;
+ * the server pins regardless (`GATEWAY_CUSTOMER_LICENCE_SELLER_PUBKEYS`).
+ *
+ * Unset does NOT pin, so a build without it behaves as before, and it is logged once so a
+ * deployment can see it is running unpinned.
+ */
+export function licenceSellerPubkey(): string {
+  const configured = ((import.meta.env.VITE_LICENCE_SELLER_PUBKEY as string | undefined) ?? '').trim().toLowerCase()
+  if (!configured && !sellerPinUnsetLogged) {
+    sellerPinUnsetLogged = true
+    console.warn('[licence] VITE_LICENCE_SELLER_PUBKEY is unset: the licence seller is not pinned in this build')
+  }
+  return configured
+}
+
 /** Unix SECONDS, matching every clock in `@imani/licence`. */
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000)
@@ -106,6 +132,11 @@ export function readLastVerification(pubkey: string): LastVerification | null {
         subscriptionId: grant.subscriptionId,
         expiresAt: grant.expiresAt,
         pilot: grant.pilot === true,
+        // Kept, so the window keeps serving the LIMITS the verification conferred (#407). Dropping
+        // them would put a Pro stall back on the free sales limit the moment its relay went quiet.
+        ...(grant.limits && typeof grant.limits === 'object' ? { limits: grant.limits } : {}),
+        ...(typeof grant.tier === 'string' ? { tier: grant.tier } : {}),
+        ...(typeof grant.validFrom === 'number' ? { validFrom: grant.validFrom } : {}),
       },
     }
   } catch {
@@ -150,6 +181,12 @@ export interface LicenceStatus {
   licence: LicenceVoucher | null
   /** When the check ran, so a screen can say what it is describing. */
   checkedAt: number
+  /**
+   * EVERY licence in force, not only the one `decision` describes (#407 §3). A stall may hold a
+   * subscription and hand grants at once, and its entitlement is the best of all of them. Each is
+   * verified on its own; under the grace window this is the grant the window carries.
+   */
+  grants?: LicenceGrant[]
 }
 
 export interface LicenceStatusOptions {
@@ -161,6 +198,8 @@ export interface LicenceStatusOptions {
   loadRows?: () => Promise<VoucherRow[]>
   /** Overridable so a test can pin a deployment key. */
   issuerPublicKey?: string
+  /** Overridable so a test can pin the seller. Defaults to `licenceSellerPubkey()`. */
+  sellerPublicKey?: string
 }
 
 /**
@@ -187,6 +226,7 @@ export async function licenceStatus(options: LicenceStatusOptions): Promise<Lice
   // nosemgrep: imani-caller-supplied-clock
   const now = options.now ?? nowSeconds()
   const issuerPublicKey = options.issuerPublicKey ?? licenceIssuerPubkey()
+  const sellerPublicKey = options.sellerPublicKey ?? licenceSellerPubkey()
   const load = options.loadRows ?? listVouchers
 
   let held: ReturnType<typeof heldLicences> = []
@@ -194,24 +234,48 @@ export async function licenceStatus(options: LicenceStatusOptions): Promise<Lice
   let licence: LicenceVoucher | null = null
 
   try {
-    held = heldLicences(await load())
+    held = heldLicences(await load(), (l) => !sellerPublicKey || sameHex(l.issuerId, sellerPublicKey))
   } catch (error) {
     // Could not look. Not "no licence" — see above.
+    const decision = decideWithGrace({
+      check: {
+        status: 'impossible',
+        detail: `the wallet could not be read (${describe(error)})`,
+      },
+      lastVerification: readLastVerification(options.pubkey),
+      now,
+    })
     return {
-      decision: decideWithGrace({
-        check: {
-          status: 'impossible',
-          detail: `the wallet could not be read (${describe(error)})`,
-        },
-        lastVerification: readLastVerification(options.pubkey),
-        now,
-      }),
+      decision,
       licence: null,
       checkedAt: now,
+      // The window carries the last verified grant, limits included, through the outage.
+      grants: decision.granted ? [decision.grant] : [],
     }
   }
 
-  if (held.length === 0) {
+  // A subscription its seller revoked (the server answered LICENCE_REVOKED, #226 W-1) grants
+  // nothing, whichever voucher of it is held: the server revokes the id for ever, renewals included.
+  // It is set aside rather than dropped, so a stall holding ONLY revoked licences is told why.
+  const revoked = held.filter((h) => isRevokedBySeller(options.pubkey, h.licence.subscriptionId, h.licence.issuerId))
+  held = held.filter((h) => !revoked.includes(h))
+
+  if (held.length === 0 && revoked.length > 0) {
+    const latest = revoked.reduce((a, b) =>
+      (b.licence.expiresAt ?? -Infinity) > (a.licence.expiresAt ?? -Infinity) ? b : a,
+    )
+    licence = latest.licence
+    // An answer, and a final one: no grace window carries a refunded subscription.
+    forgetVerification(options.pubkey)
+    check = {
+      status: 'answered',
+      verdict: {
+        granted: false,
+        reason: DENIAL_REASONS.REVOKED_BY_SELLER,
+        detail: `the seller revoked subscription ${latest.licence.subscriptionId ?? ''}`.trim(),
+      },
+    }
+  } else if (held.length === 0) {
     // No licence delivered yet. This IS an answer — the store was readable and
     // held none — so `verifyLicence` reports ABSENT and no window applies. A
     // fresh install with no subscription must not get a grace period.
@@ -223,13 +287,14 @@ export async function licenceStatus(options: LicenceStatusOptions): Promise<Lice
     }) }
   } else {
     /**
-     * The newest licence per subscription, and if a stall somehow holds two
-     * SUBSCRIPTIONS, the one expiring last. That cannot happen from anything we
-     * sell — one feature, one licence — but a customer could be re-issued onto
-     * a new id by support, and picking the one that grants longest is the
-     * reading that never takes something away from someone who paid.
+     * The licence the DECISION describes: the one that ends last. Hand grants and a subscription
+     * may be held together (#407); every one of them still counts through `grants` below, and this
+     * pick only decides what the status screen explains and what the grace window remembers.
      */
-    const best = held.reduce((a, b) =>
+    const inWindow = held.filter((h) => !(typeof h.licence.validFrom === 'number' && now < h.licence.validFrom))
+    // A renewal delivered early ends LATEST but has not started (#407 §6). Electing it would report
+    // "not yet valid" over a licence that is in force today, so licences already open come first.
+    const best = (inWindow.length > 0 ? inWindow : held).reduce((a, b) =>
       (b.licence.expiresAt ?? -Infinity) > (a.licence.expiresAt ?? -Infinity) ? b : a,
     )
     licence = best.licence
@@ -240,6 +305,7 @@ export async function licenceStatus(options: LicenceStatusOptions): Promise<Lice
         issuerPublicKey,
         now,
         presenter: options.pubkey,
+        sellerPublicKey,
         // Bound to the ROW the licence came from: the verifier re-parses that
         // exact token, so a licence cannot be checked against another's bytes.
         verifySignature: licenceSignatureVerifier(best.row),
@@ -261,11 +327,30 @@ export async function licenceStatus(options: LicenceStatusOptions): Promise<Lice
     rememberVerification(options.pubkey, { at: now, grant: decision.grant })
   }
 
-  return { decision, licence, checkedAt: now }
+  // Every held licence verified on its own. A refused one simply contributes nothing.
+  const grants: LicenceGrant[] = []
+  for (const h of held) {
+    const verdict = verifyLicence(h.licence, {
+      issuerPublicKey,
+      now,
+      presenter: options.pubkey,
+      sellerPublicKey,
+      verifySignature: licenceSignatureVerifier(h.row),
+    })
+    if (verdict.granted) grants.push(verdict.grant)
+  }
+  // Under grace nothing verified just now, and the window's carried grant is what is in force.
+  if (decision.granted && decision.source === 'grace' && grants.length === 0) grants.push(decision.grant)
+
+  return { decision, licence, checkedAt: now, grants }
 }
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function sameHex(a: string | undefined, b: string): boolean {
+  return !!a && a.trim().toLowerCase() === b.trim().toLowerCase()
 }
 
 /** Does this device currently hold the named feature? */
@@ -310,10 +395,21 @@ export function explain(status: LicenceStatus): string {
       return 'This licence is not tied to a key, so it cannot be used by anyone.'
     case 'expired':
       return 'This subscription has ended. Renewing restores it immediately.'
+    case 'not-yet-valid':
+      return 'This subscription has arrived and starts on its start date. Nothing to do until then.'
     case 'no-expiry':
       return 'This licence carries no end date, which is not something we issue.'
     case 'no-features':
       return 'This licence unlocks nothing. Support will need to re-issue it.'
+    case 'not-locked-at-mint':
+      return 'This licence is an older kind the server no longer counts. Support will re-issue it.'
+    case 'not-sold-by-us':
+      return 'This licence was not sold by us, so it grants nothing.'
+    case 'revoked-by-seller':
+      return (
+        'This subscription was revoked by the seller, usually after a refund, so it grants nothing. ' +
+        'Your free till keeps trading. A new subscription restores the others.'
+      )
     case GRACE_REASONS.NEVER_VERIFIED:
       return (
         'We have never been able to confirm a subscription on this device, ' +

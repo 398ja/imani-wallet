@@ -1,4 +1,5 @@
-import { FREE_TERMINALS, type EnrolDecision } from './terminalAllowance'
+import { type EnrolDecision } from './terminalAllowance'
+import { terminalLimit } from './entitlement'
 import { LICENCE_FEATURES } from './licenceIssue'
 import { grants, type LicenceStatus } from './licenceStatus'
 import type { TerminalRecord } from './terminalRoster'
@@ -77,9 +78,10 @@ export function servingTerminals(
     // Ascending, so "oldest first" is what `slice` takes below.
     .sort((a, b) => a.enrolledAt - b.enrolledAt)
 
-  if (grants(status, LICENCE_FEATURES.TERMINALS)) return live
+  if (grants(status, LICENCE_FEATURES.TERMINALS) && terminalLimit(status) === null) return live
 
-  return live.slice(0, FREE_TERMINALS)
+  // The oldest N keep serving, N being the tier's allowance (#407): one free, three on Basic.
+  return live.slice(0, terminalLimit(status) ?? live.length)
 }
 
 /**

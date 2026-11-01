@@ -3,7 +3,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { parseVoucherToken } from '../../lib/voucherToken'
 import { MemoryRouter } from 'react-router-dom'
+import { StrictMode } from 'react'
 
 /**
  * Only the licence CHECK is stubbed. `lapseService` — which decides which
@@ -24,6 +26,8 @@ vi.mock('../../lib/licenceStatus', async (importOriginal) => {
 })
 
 const { TerminalsPage } = await import('../TerminalsPage')
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { recordTerminal, revokeTerminal, isRevoked, REVOCATION_DELAY_HOURS } from '../../lib/terminalRoster'
 import { TERMINAL_ROLES } from '../../lib/terminalRole'
 
@@ -42,10 +46,52 @@ import { TERMINAL_ROLES } from '../../lib/terminalRole'
 const STALL = 'a'.repeat(64)
 const DOOR = 'c'.repeat(64)
 
+/**
+ * A real gateway-minted credential, so revoking runs `revokeCredential`'s own
+ * "is this a terminal credential" check for real. Only the mint is faked.
+ */
+const TOKEN = readFileSync(
+  join(__dirname, '../../lib/__tests__/fixtures/live-terminal-credential.token'),
+  'utf8',
+).trim()
+
+/** Phase 2: what the device has confirmed, as `collectEnrolled` would find it. */
+let confirmations: Array<{ terminalPubkey: string; voucherId: string }> = []
+const collect = async (stall: string) => {
+  const { markInService } = await import('../../lib/terminalRoster')
+  return confirmations.filter((c) => markInService(stall, c.terminalPubkey, c.voucherId)).length
+}
+
+/** The owner's spend client, faked: UNSPENT until spent, and spending works unless told not to. */
+let spendFails = false
+const spent: string[] = []
+const fakeMint = {
+  validateToken: vi.fn(async (token: string) => ({ state: spent.includes(token) ? 'SPENT' : 'UNSPENT' })),
+  receive: vi.fn(async (token: string) => {
+    if (spendFails) throw new Error('offline')
+    spent.push(token)
+    return {}
+  }),
+}
+
+/** No relay in a unit test: the roster sync (#160 phase 6) is its own test file. */
+const noSync = async () => false
+const noRenewals = async () => ({ changed: 0, lapsed: [] as string[] })
+
 function renderPage() {
   return render(
     <MemoryRouter>
-      <TerminalsPage stallPubkey={STALL} />
+      {/* The gateway confirms at once and there is no DM to send: the
+          round 2 tests below inject their own. */}
+      <TerminalsPage
+        sync={noSync}
+        renewals={noRenewals}
+        stallPubkey={STALL}
+        spendApi={async () => fakeMint}
+        collect={collect}
+        confirm={async () => 204}
+        deliver={async () => 0}
+      />
     </MemoryRouter>,
   )
 }
@@ -56,12 +102,19 @@ function enrol(over: Parameters<typeof recordTerminal>[1] | Record<string, unkno
     name: 'Door',
     role: TERMINAL_ROLES.REDEEM_ONLY,
     enrolledAt: 1_000_000,
-    revocationSecret: 'secret',
+    token: TOKEN,
+    voucherId: 'cred-door',
     ...(over as object),
   } as Parameters<typeof recordTerminal>[1])
 }
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  localStorage.clear()
+  spendFails = false
+  spent.length = 0
+  confirmations = []
+  fakeMint.receive.mockClear()
+})
 afterEach(cleanup)
 
 describe('what the list shows', () => {
@@ -125,16 +178,95 @@ describe('the delay is stated before the decision, not after', () => {
     expect(screen.queryByText(/close your stall/)).toBeNull()
   })
 
-  it('revokes on confirmation and updates the list without a reload', () => {
+  it('revokes on confirmation and updates the list without a reload', async () => {
     enrol()
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
     fireEvent.click(screen.getByRole('button', { name: /Revoke Door/ }))
 
-    expect(isRevoked(STALL, DOOR)).toBe(true)
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
     expect(screen.getByText('No longer in service')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
+  })
+
+  // #160 phase 1 (G10): Revoke used to mark a local row and nothing else, so a
+  // "revoked" terminal kept its authority. It must now spend the credential at
+  // the mint, with the stall's key, before the row says revoked.
+  it('spends the credential at the mint before marking the row', async () => {
+    enrol()
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    fireEvent.click(screen.getByRole('button', { name: /Revoke Door/ }))
+
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    expect(fakeMint.receive).toHaveBeenCalledWith(TOKEN)
+  })
+
+  // A revocation that did not land must not be shown as one: the owner of a
+  // stolen till who believes it is dead, and is wrong, is worse off than one
+  // who knows. The row stays in service, the screen says so, and Revoke is
+  // offered again.
+  it('leaves the row in service and says so when the spend does not land', async () => {
+    spendFails = true
+    enrol()
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    fireEvent.click(screen.getByRole('button', { name: /Revoke Door/ }))
+
+    await waitFor(() => expect(screen.getByText(/did not reach the mint/)).toBeTruthy())
+    expect(isRevoked(STALL, DOOR)).toBe(false)
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+  })
+
+  // A row set up by hand before #160 holds no credential, so nothing can be
+  // spent. Offering Revoke would mark the row while the device kept its
+  // authority. It says how to replace it instead.
+  it('offers no Revoke for a row set up before revocation existed', () => {
+    enrol({ token: undefined, voucherId: undefined })
+    renderPage()
+
+    expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
+    expect(screen.getByText(/Set up before revocation existed/)).toBeTruthy()
+  })
+
+  // A waiting row is cancelled, not revoked (spec 2.1), and Cancel is the
+  // same spend.
+  it('offers Cancel on a waiting row, and cancelling spends it', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: /Cancel Door/ }))
+
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    expect(fakeMint.receive).toHaveBeenCalledWith(TOKEN)
+  })
+
+  // Decision 4: a waiting row nobody confirmed within 24 hours is cancelled
+  // when the owner next opens the list, so an unconfirmed authority to the
+  // stall is never left in a drawer.
+  it('cancels a waiting row past its 24 hours when the list opens', async () => {
+    enrol({ status: 'waiting', enrolledAt: 1_000, waitingUntil: 2_000 })
+    renderPage()
+
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    expect(fakeMint.receive).toHaveBeenCalledWith(TOKEN)
+  })
+
+  // #160 phase 4: the device took itself out of service (or another of the owner's phones
+  // revoked it), so its credential is already spent. Opening the list asks the mint, marks the
+  // row revoked and shows it, without spending anything.
+  it('shows a terminal revoked elsewhere as revoked when the list opens', async () => {
+    enrol({ status: 'in-service' })
+    spent.push(TOKEN)
+    renderPage()
+
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    expect(await screen.findByText(/Revoked/)).toBeTruthy()
+    expect(fakeMint.receive).not.toHaveBeenCalled()
   })
 })
 
@@ -272,3 +404,373 @@ describe('what a lapse shows the owner', () => {
     expect(container.textContent).not.toMatch(/paused|suspended/i)
   })
 })
+
+describe('#160 review: rows left behind by earlier versions and lost answers', () => {
+  // A phase 0 waiting row holds no token: nothing was minted for it, so it
+  // cannot be cancelled at the mint and used to sit on the list for ever,
+  // blocking Add once two existed. It now offers Remove, which takes it off.
+  it('lets the owner remove a waiting row that was never minted', async () => {
+    enrol({ status: 'waiting', token: undefined, voucherId: undefined })
+    renderPage()
+
+    expect(screen.getByText(/Nothing was ever sent to this device/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() => expect(screen.queryByText('Door')).toBeNull())
+    expect(fakeMint.receive).not.toHaveBeenCalled()
+  })
+
+  // A request whose answer was lost is finished when the list opens: the
+  // credential is fetched by its voucher id, checked, and the row becomes an
+  // ordinary waiting row with Cancel.
+  it('finishes a credential request whose answer was lost', async () => {
+    enrol({ status: 'minting', token: undefined, mintKey: 'k-1', voucherId: 'cred-door' })
+    const resumeTransport = {
+      post: vi.fn(async () => new Response('{}', { status: 500 })),
+      get: vi.fn(async () => new Response(JSON.stringify({ status: 'ISSUED', token: TOKEN }), { status: 200 })),
+      sleep: async () => {},
+    }
+    render(
+      <MemoryRouter>
+        <TerminalsPage sync={noSync}
+        renewals={noRenewals} stallPubkey={STALL} spendApi={async () => fakeMint} transport={resumeTransport} />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText(/Still being set up/)).toBeTruthy()
+    // The live fixture is locked to its own device and stall, not to DOOR and
+    // STALL, so the check refuses it and spends it. Either way the row is
+    // settled and is no longer an unknown credential.
+    await waitFor(() => expect(screen.queryByText(/Still being set up/)).toBeNull())
+    expect(resumeTransport.get).toHaveBeenCalled()
+  })
+})
+
+describe('#160 phase 2: the row turns In service when the device confirms', () => {
+  // The owner adds a terminal; the row waits. When the device's enrolled DM
+  // arrives the row turns In service, with no reload.
+  it('promotes a waiting row when its device confirms, without a reload', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+    renderPage()
+    expect(screen.getByText(/Waiting for the device/)).toBeTruthy()
+
+    confirmations = [{ terminalPubkey: DOOR, voucherId: 'cred-door' }]
+
+    await waitFor(() => expect(screen.queryByText(/Waiting for the device/)).toBeNull(), {
+      timeout: 8000,
+    })
+    expect(screen.getByText(/Never used/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+  })
+
+  // The app runs under React StrictMode, which mounts every effect twice. The
+  // first poll can promote the row after its effect was torn down, and the
+  // second then finds nothing left to change. The list must still show the
+  // row In service, because it re-reads the roster rather than trusting the count.
+  it('turns In service under StrictMode, when the poll that promoted it was torn down', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+    confirmations = [{ terminalPubkey: DOOR, voucherId: 'cred-door' }]
+    render(
+      <StrictMode>
+        <MemoryRouter>
+          <TerminalsPage
+        sync={noSync}
+        renewals={noRenewals}
+            stallPubkey={STALL}
+            spendApi={async () => fakeMint}
+            collect={collect}
+            confirm={async () => 204}
+            deliver={async () => 0}
+          />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+
+    await waitFor(() => expect(screen.queryByText(/Waiting for the device/)).toBeNull(), {
+      timeout: 8000,
+    })
+  })
+
+  // A confirmation naming another credential of the same device does not
+  // promote this row: it might be an old one the owner already cancelled.
+  it('ignores a confirmation for a different credential', async () => {
+    const { markInService, allTerminals: rows } = await import('../../lib/terminalRoster')
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 3_600_000 })
+
+    expect(markInService(STALL, DOOR, 'some-older-credential')).toBe(false)
+    expect(rows(STALL)[0].status).toBe('waiting')
+  })
+})
+
+describe('#160 round 2: the list shows what the gateway says', () => {
+  function renderWith(confirm: (id: string) => Promise<number | null>, deliver = async () => 0) {
+    return render(
+      <MemoryRouter>
+        <TerminalsPage
+        sync={noSync}
+        renewals={noRenewals}
+          stallPubkey={STALL}
+          spendApi={async () => fakeMint}
+          collect={collect}
+          confirm={confirm}
+          deliver={deliver}
+        />
+      </MemoryRouter>,
+    )
+  }
+
+  // The device's own confirm was lost. Its enrolled DM arrives, the owner's
+  // app confirms as the stall, and only then does the row stop saying it is
+  // being confirmed. It never reads as a ready till while the gateway refuses.
+  it('confirms a device whose own confirm was lost, then shows it confirmed', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 60_000 })
+    confirmations = [{ terminalPubkey: DOOR, voucherId: 'cred-door' }]
+    let release!: () => void
+    const answered = new Promise<void>((r) => (release = r))
+    const confirm = vi.fn(async () => {
+      await answered
+      return 204
+    })
+
+    renderWith(confirm)
+
+    expect(await screen.findByText(/Confirming with the gateway/)).toBeTruthy()
+    release()
+    await waitFor(() => expect(screen.queryByText(/Confirming with the gateway/)).toBeNull())
+    expect(confirm).toHaveBeenCalledWith('cred-door')
+    expect(screen.getByText(/Never used/)).toBeTruthy()
+  })
+
+  // 410 from the gateway: lapsed. The row says it cannot sell.
+  it('shows a lapsed terminal as unable to sell', async () => {
+    enrol({ status: 'in-service', gatewayState: 'unconfirmed' })
+
+    renderWith(async () => 410)
+
+    expect(await screen.findByText(/Lapsed before it was confirmed/)).toBeTruthy()
+    expect(screen.getByText(/cannot sell\. Revoke it/)).toBeTruthy()
+  })
+
+  // A waiting row carries its setup code on the list, so a row finished by
+  // resumeMinting (or one whose enrol screen was closed early) can still be
+  // set up. And the list sends any DM that never went out.
+  it('offers the setup code on a waiting row and sends its DM', async () => {
+    enrol({ status: 'waiting', waitingUntil: Date.now() + 60_000 })
+    const deliver = vi.fn(async () => 1)
+
+    renderWith(async () => 204, deliver)
+
+    expect((await screen.findByTestId('row-setup-code')).textContent).toContain('cred-door')
+    await waitFor(() => expect(deliver).toHaveBeenCalledWith(STALL))
+  })
+})
+
+describe('a selling till set up before owner attestation (#160 decision 5, spec 4.6.5)', () => {
+  // The token carries no owner attestation. As a selling till it can redeem but not sell, so its
+  // row says "Renew to keep selling" and, since phase 6 (S4), offers one-tap Renew in place of
+  // the four re-enrol steps.
+  it('reads "Renew to keep selling" and offers Renew, not the four re-enrol steps', () => {
+    enrol({ role: TERMINAL_ROLES.ISSUE_AND_REDEEM })
+    renderPage()
+
+    const notice = screen.getByTestId('renew-to-sell').textContent ?? ''
+    expect(notice).toMatch(/^Renew to keep selling/)
+    expect(notice).not.toMatch(/Revoke it here/)
+    expect(notice).not.toMatch(/Add it again here/)
+    expect(screen.getByRole('button', { name: 'Renew Door' })).toBeTruthy()
+  })
+
+  // A redeem-only till needs no attestation to do its job, so it is not told to renew.
+  it('says nothing of renewal on a redeem-only till', () => {
+    enrol({ role: TERMINAL_ROLES.REDEEM_ONLY })
+    renderPage()
+    expect(screen.queryByTestId('renew-to-sell')).toBeNull()
+  })
+
+  // Once revoked, the row is history: renewing it is no longer the owner's next step.
+  it('says nothing of renewal once the till is revoked', () => {
+    enrol({ role: TERMINAL_ROLES.ISSUE_AND_REDEEM, revokedAt: 2_000_000 })
+    renderPage()
+    expect(screen.queryByTestId('renew-to-sell')).toBeNull()
+  })
+})
+
+describe('renewal on the list (#160 phase 6, decision 1)', () => {
+  // The fixture credential's own signed expiry: the badges are read from the token, not stored.
+  const expiresAt = parseVoucherToken(TOKEN).voucher.expiresAt as number
+
+  // One function per instant, so the page's clock effect sees a stable prop.
+  const clocks = new Map<number, () => number>()
+  const clock = (at: number) => clocks.get(at) ?? (clocks.set(at, () => at), clocks.get(at)!)
+
+  function renderAt(nowMs: number, renew = vi.fn(async () => ({ started: true })), renewals = noRenewals) {
+    render(
+      <MemoryRouter>
+        <TerminalsPage
+          sync={noSync}
+          renewals={renewals}
+          stallPubkey={STALL}
+          spendApi={async () => fakeMint}
+          collect={collect}
+          confirm={async () => 204}
+          deliver={async () => 0}
+          renew={renew}
+          now={clock(nowMs)}
+        />
+      </MemoryRouter>,
+    )
+    return renew
+  }
+
+  it('says nothing about expiry with months to go, and offers a plain Renew', () => {
+    enrol({ status: 'in-service' })
+    renderAt((expiresAt - 90 * 86_400) * 1000)
+    expect(screen.queryByTestId('expiry-line')).toBeNull()
+    expect(screen.getByTestId('renew')).toBeTruthy()
+  })
+
+  it('goes amber 30 days out, with "stops on … Renew it."', () => {
+    enrol({ status: 'in-service' })
+    renderAt((expiresAt - 20 * 86_400) * 1000)
+    expect(screen.getByTestId('expiry-line').textContent).toMatch(/^Door stops on .+\. Renew it\.$/)
+    expect(screen.getByTestId('renew-amber')).toBeTruthy()
+  })
+
+  it('goes red 7 days out, and past expiry says it stopped', () => {
+    enrol({ status: 'in-service' })
+    renderAt((expiresAt - 5 * 86_400) * 1000)
+    expect(screen.getByTestId('renew-red')).toBeTruthy()
+    cleanup()
+    renderAt((expiresAt + 86_400) * 1000)
+    expect(screen.getByTestId('renew-expired')).toBeTruthy()
+    expect(screen.getByTestId('expiry-line').textContent).toMatch(/stopped selling on/)
+  })
+
+  it('Renew calls the renewal for that terminal', async () => {
+    enrol({ status: 'in-service' })
+    const renew = renderAt((expiresAt - 5 * 86_400) * 1000)
+    fireEvent.click(screen.getByRole('button', { name: 'Renew Door' }))
+    await waitFor(() => expect(renew).toHaveBeenCalledWith(STALL, DOOR, fakeMint))
+  })
+
+  it('shows why a renewal could not start (two already waiting, Q6)', async () => {
+    enrol({ status: 'in-service' })
+    renderAt(Date.now(), vi.fn(async () => ({ started: false, message: 'Two terminals are already waiting for their device.' })))
+    fireEvent.click(screen.getByRole('button', { name: 'Renew Door' }))
+    expect(await screen.findByText(/Two terminals are already waiting/)).toBeTruthy()
+  })
+
+  it('says a renewal the device never picked up lapsed', async () => {
+    enrol({ status: 'in-service' })
+    renderAt(Date.now(), undefined, async () => ({ changed: 1, lapsed: ['Door'] }))
+    expect((await screen.findByTestId('renewal-lapsed')).textContent).toBe(
+      'The renewal did not reach Door. Open the till, then renew again.',
+    )
+  })
+
+  it('offers no Renew on a revoked terminal', () => {
+    enrol({ status: 'in-service', revokedAt: 2 })
+    renderAt(Date.now())
+    expect(screen.queryByRole('button', { name: 'Renew Door' })).toBeNull()
+  })
+})
+
+describe('#402: an online shop on the list', () => {
+  const shopRow = { shop: { url: 'https://shop.example', platform: 'woocommerce' }, status: 'in-service', name: 'shop.example' }
+
+  it('shows its outstanding codes, publishes online_shop, and withdraws it on revoke', async () => {
+    const { saveMerchant, emptyMerchant, loadMerchant, mergeMerchantEvent } = await import('../../lib/merchant')
+    saveMerchant({ ...emptyMerchant(STALL), acceptsCards: true })
+    enrol(shopRow)
+    const published: Array<{ content: string }> = []
+    let at = 100
+    render(
+      <MemoryRouter>
+        <TerminalsPage
+          sync={noSync}
+          renewals={noRenewals}
+          stallPubkey={STALL}
+          spendApi={async () => fakeMint}
+          collect={collect}
+          confirm={async () => 204}
+          deliver={async () => 0}
+          profile={{ sign: async (t) => ({ ...t, created_at: at++ }), publish: async (e) => (published.push(e as never), { ok: 1 }) }}
+          exposure={async (_s, key) => (key === DOOR ? { codes: 3, amount: 4500, unit: 'EUR' } : null)}
+        />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByTestId('shop-line').textContent).toMatch(/^3 codes, .*45.* outstanding at shop\.example$/))
+    await waitFor(() => expect(published).toHaveLength(1))
+    expect(mergeMerchantEvent(emptyMerchant(STALL), published[0].content, 1).onlineShop?.redeemKey).toBe(DOOR)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    fireEvent.click(screen.getByRole('button', { name: /Revoke shop\.example/ }))
+    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
+    await waitFor(() => expect(published).toHaveLength(2))
+    const after = mergeMerchantEvent(emptyMerchant(STALL), published[1].content, 1)
+    expect(after.onlineShop).toBeUndefined()
+    expect(after.acceptsCards).toBe(true)
+    expect(loadMerchant(STALL)?.onlineShop).toBeUndefined()
+  })
+
+  it('retries a publish whose relay connect timed out, with no other change to the list', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const { saveMerchant, emptyMerchant } = await import('../../lib/merchant')
+      saveMerchant({ ...emptyMerchant(STALL), acceptsCards: true })
+      enrol(shopRow)
+      let calls = 0
+      render(
+        <MemoryRouter>
+          <TerminalsPage
+            sync={noSync}
+            renewals={noRenewals}
+            stallPubkey={STALL}
+            spendApi={async () => fakeMint}
+            collect={collect}
+            confirm={async () => 204}
+            deliver={async () => 0}
+            profile={{ sign: async (t) => ({ ...t, created_at: 100 + calls }), publish: async () => ({ ok: ++calls >= 3 ? 1 : 0 }) }}
+            exposure={async () => null}
+          />
+        </MemoryRouter>,
+      )
+      await waitFor(() => expect(calls).toBe(1))
+      await vi.advanceTimersByTimeAsync(5_000)
+      await waitFor(() => expect(calls).toBe(2))
+      await vi.advanceTimersByTimeAsync(5_000)
+      await waitFor(() => expect(calls).toBe(3))
+      // Confirmed: the timer stops.
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(calls).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows the shop without a figure when the code store cannot say', async () => {
+    enrol(shopRow)
+    render(
+      <MemoryRouter>
+        <TerminalsPage sync={noSync} renewals={noRenewals} stallPubkey={STALL} spendApi={async () => fakeMint}
+          collect={collect} confirm={async () => 204} deliver={async () => 0} exposure={async () => null} />
+      </MemoryRouter>,
+    )
+    expect(screen.getByTestId('shop-line').textContent).toBe('Online shop at https://shop.example')
+  })
+})
+
+describe('the stall profile publisher (#402): only the relay confirms', () => {
+  it('a gateway-only copy is not "published", so the online_shop republish is retried', async () => {
+    const { profilePublisherVia } = await import('../../lib/onlineShopPublisher')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mirrorOnly = profilePublisherVia(async () => ({ ok: 0, errors: ['publish timed out'] }), async () => true, async (t) => ({ ...t, created_at: 1 }))
+    expect((await mirrorOnly.publish({})).ok).toBe(0)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('publish timed out'))).toBe(true)
+    const relayed = profilePublisherVia(async () => ({ ok: 1, errors: [] }), async () => false, async (t) => ({ ...t, created_at: 1 }))
+    expect((await relayed.publish({})).ok).toBe(1)
+    warn.mockRestore()
+  })
+})
+

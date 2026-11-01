@@ -51,16 +51,29 @@ export function hasStoredKey(): Promise<boolean> {
   return keyStore.hasKey()
 }
 
-/** Accepts an nsec or raw hex, and normalises to hex. */
+/**
+ * Accepts a backup key (nsec) or raw hex, and normalises to hex.
+ *
+ * The messages say "backup key", never "nsec" (#324): they are shown under the
+ * field where someone pasted theirs, and that is the name the app gives it
+ * everywhere else. The FORMATS accepted do not change.
+ */
 export function toPrivkeyHex(input: string): string {
   const trimmed = input.trim()
   if (trimmed.startsWith('nsec')) {
-    const decoded = nip19.decode(trimmed)
-    if (decoded.type !== 'nsec') throw new Error('That is not an nsec.')
+    // The decoder's own message ("Invalid checksum in nsec1…") is protocol
+    // talk and echoes part of the key back; a typo gets the plain sentence.
+    let decoded: ReturnType<typeof nip19.decode>
+    try {
+      decoded = nip19.decode(trimmed)
+    } catch {
+      throw new Error('That does not look like a backup key. Paste it exactly as you saved it.')
+    }
+    if (decoded.type !== 'nsec') throw new Error('That is not a backup key.')
     return bytesToHex(decoded.data)
   }
   if (!/^[0-9a-f]{64}$/i.test(trimmed)) {
-    throw new Error('Expected an nsec or a 64-character hex key.')
+    throw new Error('That does not look like a backup key. Paste it exactly as you saved it.')
   }
   return trimmed.toLowerCase()
 }
@@ -100,6 +113,35 @@ export function createSession(privkeyHex: string, callbacks: object): NapSession
 
 export function getSession(): NapSession | undefined {
   return session
+}
+
+/**
+ * Hold a terminal's unlocked key as the app's signer, with NO NAP session (#160 phase 3).
+ *
+ * A terminal is not a customer and has no account, so it never calls `/api/v1/auth/*` (spec
+ * 2.3): NAP would log its key in as a customer. It still needs a signer for NIP-98 requests and
+ * for the NUT-11 witness that hands its credential back, and the code that makes those
+ * (`signedFetch`, `witness.ts`) reads `getSigner()`. So the key is held here, in the same slot a
+ * customer's session signer uses, and `lockTerminalSigner` zeroes it.
+ *
+ * Refuses while a NAP session exists: one account per device.
+ */
+export function installTerminalSigner(privkeyHex: string): WalletSigner {
+  if (session) throw new Error('A wallet session is open on this device.')
+  signer?.clearKey()
+  signer = createWalletSigner(privkeyHex)
+  return signer
+}
+
+/**
+ * Zero and drop a terminal's signer: the idle lock and the Lock button (decision 2).
+ *
+ * A no-op while a NAP session is open, so it cannot pull the key out from under a customer.
+ */
+export function lockTerminalSigner(): void {
+  if (session) return
+  signer?.clearKey()
+  signer = undefined
 }
 
 /**

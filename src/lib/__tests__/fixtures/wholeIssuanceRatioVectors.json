@@ -1,0 +1,131 @@
+{
+  "description": "cashu-voucher#59 whole-number issuance_ratio golden vectors. Replayed by VoucherGoldenVectorTest; mirrored by imani-wallet src/lib/__tests__/wholeIssuanceRatio.test.ts. A locked voucher signed over issuance_ratio N must verify with the wire spelling \"N\" (canonical) and \"N.0\" (what cashu-lib <= 0.30.6 wrote, live on issued proofs), and with no other spelling.",
+  "version": 1,
+  "issuer": {
+    "priv": "f6b7737ceb512d66070b27fc20994e612e55d6974dbaf37511cfabc62d59cafd",
+    "pub": "28615b57803d0b05418a13677ab2aa62a51868799892414a73c5d99e02c3fcec"
+  },
+  "locked_template": {
+    "kind": "P2PK_VOUCHER",
+    "data": "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "nonce": "0123456789abcdef",
+    "tags_before_ratio": [
+      [
+        "n_sigs",
+        "1"
+      ],
+      [
+        "sigflag",
+        "SIG_INPUTS"
+      ],
+      [
+        "voucher_id",
+        "123e4567-e89b-12d3-a456-426614174000"
+      ],
+      [
+        "issuer",
+        "test-issuer"
+      ],
+      [
+        "unit",
+        "EUR"
+      ],
+      [
+        "face_value",
+        "500"
+      ],
+      [
+        "expires_at",
+        "1893456000"
+      ],
+      [
+        "face_decimals",
+        "2"
+      ],
+      [
+        "backing_strategy",
+        "FIXED"
+      ]
+    ],
+    "note": "tags_before_ratio is the exact wire order, then [\"issuance_ratio\", <wire>], then issuer_sig and issuer_pubkey (excluded from the signed bytes)."
+  },
+  "unlocked_template": {
+    "voucher_id": "123e4567-e89b-12d3-a456-426614174000",
+    "nonce": "0000000000000000000000000000000000000000000000000000000000aa",
+    "issuer": "test-issuer",
+    "unit": "EUR",
+    "face_value": 500,
+    "expires_at": 1893456000,
+    "memo": "golden",
+    "face_decimals": 2,
+    "backing_strategy": "MINIMAL"
+  },
+  "vectors": [
+    {
+      "ratio": 2,
+      "canonical_wire": "2",
+      "legacy_wire": "2.0",
+      "canonical_bytes_utf8": "[\"P2PK_VOUCHER\",\"02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"0123456789abcdef\",[[\"n_sigs\",\"1\"],[\"sigflag\",\"SIG_INPUTS\"],[\"voucher_id\",\"123e4567-e89b-12d3-a456-426614174000\"],[\"issuer\",\"test-issuer\"],[\"unit\",\"EUR\"],[\"face_value\",500],[\"expires_at\",1893456000],[\"face_decimals\",2],[\"backing_strategy\",\"FIXED\"],[\"issuance_ratio\",2]]]",
+      "sha256": "14e8b976045c9d11fd823ae9740481e3670b94ec289226e2e5bd1f5d43e69956",
+      "issuer_sig": "e4db862a86c7674c201f5d367d35509840019ca25ccb3330f8c4e3fe0227fd25b618e90af7aa0724219dd54ae33091226d9ed522d58e971a1d2f74bf20953a5d",
+      "refused_wires": [
+        "2.00",
+        "02.0",
+        "+2.0",
+        "2.",
+        "2d",
+        "2.0 ",
+        "2e0"
+      ],
+      "unlocked": {
+        "canonical_bytes_utf8": "[\"VOUCHER\",\"31323365343536372d653839622d313264332d613435362d343236363134313734303030\",\"0000000000000000000000000000000000000000000000000000000000aa\",[[\"issuer\",\"test-issuer\"],[\"unit\",\"EUR\"],[\"face_value\",500],[\"expires_at\",1893456000],[\"memo\",\"golden\"],[\"face_decimals\",2],[\"backing_strategy\",\"MINIMAL\"],[\"issuance_ratio\",2]]]",
+        "sha256": "ea1c774898feaecf893b7e6898c71c34dce541bec7e186b65456c690e4a6e9e4",
+        "issuer_sig": "10d04ffba77e694f817756160fc64fc7bc8b9a983944c7fc1bafb5a7bf554e1b488effc8c463843d4b5636d808e19e929b3bd6067bbf5deaa2042ae4bdc797b2"
+      }
+    },
+    {
+      "ratio": 50,
+      "canonical_wire": "50",
+      "legacy_wire": "50.0",
+      "canonical_bytes_utf8": "[\"P2PK_VOUCHER\",\"02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"0123456789abcdef\",[[\"n_sigs\",\"1\"],[\"sigflag\",\"SIG_INPUTS\"],[\"voucher_id\",\"123e4567-e89b-12d3-a456-426614174000\"],[\"issuer\",\"test-issuer\"],[\"unit\",\"EUR\"],[\"face_value\",500],[\"expires_at\",1893456000],[\"face_decimals\",2],[\"backing_strategy\",\"FIXED\"],[\"issuance_ratio\",50]]]",
+      "sha256": "6fb58af51d28330ebe08fc286a581a69a277a752c15a681f613ec453447ff376",
+      "issuer_sig": "c4aa1ac5b6e5b2152dc6e4e1bd367528b363773a8dc0ca16f99b424e31e364bc660682e18e489a57ff650ab21d7a3864fbb96ca9e7c5510ab0e48cdb722d5c6d",
+      "refused_wires": [
+        "50.00",
+        "050.0",
+        "+50.0",
+        "50.",
+        "50d",
+        "50.0 ",
+        "50e0"
+      ],
+      "unlocked": {
+        "canonical_bytes_utf8": "[\"VOUCHER\",\"31323365343536372d653839622d313264332d613435362d343236363134313734303030\",\"0000000000000000000000000000000000000000000000000000000000aa\",[[\"issuer\",\"test-issuer\"],[\"unit\",\"EUR\"],[\"face_value\",500],[\"expires_at\",1893456000],[\"memo\",\"golden\"],[\"face_decimals\",2],[\"backing_strategy\",\"MINIMAL\"],[\"issuance_ratio\",50]]]",
+        "sha256": "607b907c4cf77b1291764f2f31d5af25de83a157e28b97506ec926739557bcc4",
+        "issuer_sig": "3a33d844d1ada2fdbf2fe597696e0ef381f98be7ca312b6a38ce63d5a9b8483a385975597f42562b75272f154c7908d9b95593a5a018fe1d9f74b3a31c55be22"
+      }
+    },
+    {
+      "ratio": 700,
+      "canonical_wire": "700",
+      "legacy_wire": "700.0",
+      "canonical_bytes_utf8": "[\"P2PK_VOUCHER\",\"02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"0123456789abcdef\",[[\"n_sigs\",\"1\"],[\"sigflag\",\"SIG_INPUTS\"],[\"voucher_id\",\"123e4567-e89b-12d3-a456-426614174000\"],[\"issuer\",\"test-issuer\"],[\"unit\",\"EUR\"],[\"face_value\",500],[\"expires_at\",1893456000],[\"face_decimals\",2],[\"backing_strategy\",\"FIXED\"],[\"issuance_ratio\",700]]]",
+      "sha256": "7a2299298faa15668a0d436ca52189e382ea547321581d497b6a424cfc7f9a19",
+      "issuer_sig": "e758b2925a679af3fab74322aef75bd3dcccd5cd0da86acc1c16d07bba31865a1e3be3f83d8f5e7c8773dc8692ef91af383a81df400ddda348b5ab0d18da066d",
+      "refused_wires": [
+        "700.00",
+        "0700.0",
+        "+700.0",
+        "700.",
+        "700d",
+        "700.0 ",
+        "700e0"
+      ],
+      "unlocked": {
+        "canonical_bytes_utf8": "[\"VOUCHER\",\"31323365343536372d653839622d313264332d613435362d343236363134313734303030\",\"0000000000000000000000000000000000000000000000000000000000aa\",[[\"issuer\",\"test-issuer\"],[\"unit\",\"EUR\"],[\"face_value\",500],[\"expires_at\",1893456000],[\"memo\",\"golden\"],[\"face_decimals\",2],[\"backing_strategy\",\"MINIMAL\"],[\"issuance_ratio\",700]]]",
+        "sha256": "e89dacb7d8c98f5e3745cbc0eebeecc957fca440ff6a7b54e42eb28b9bce0d93",
+        "issuer_sig": "4a732af54bd5fc4a1ed5b423ddc767ae971225137c9f6db9b851b6a81e01fbe37e6788e41ed94290e06ccf50d1764cf24379b7272d9450577f2a5cdbc60865f8"
+      }
+    }
+  ]
+}

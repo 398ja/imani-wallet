@@ -5,8 +5,9 @@ import {
   type RedemptionCheck,
 } from '@imani/redemption'
 
-import { listTransactions } from './wallet'
-import { toTransaction } from './transactions'
+import { listTransactions, listVouchers } from './wallet'
+import { toTransaction, type WalletTransaction } from './transactions'
+import { repairRedemptionRows } from './redemptionRows'
 
 /**
  * How much has already been taken in against one voucher, and whether the next
@@ -135,25 +136,53 @@ export async function checkPart(input: {
 }
 
 /**
- * The rows for one voucher, in the shape the ceiling takes.
+ * Every row of this device, re-filed by `repairRedemptionRows` (#145).
+ *
+ * The one entry point for both money figures: the ceiling below and the
+ * claimed figure (`merchantClaim`, the merchant record screens). A row stamped
+ * with one voucher but carrying another voucher's coupon is filed under the
+ * coupon's voucher, and one received token counts once. See redemptionRows.ts
+ * for why that cannot loosen the bound.
  *
  * Direction comes through `toTransaction` rather than off the row, because the
- * stored rows disagree with themselves about it — a merchant's own `issued`
- * row would otherwise read as incoming and consume the whole ceiling.
+ * stored rows disagree with themselves about it: a merchant's own `issued` row
+ * would otherwise read as incoming and consume the whole ceiling.
  */
+export async function repairedTransactions(): Promise<WalletTransaction[]> {
+  const rows = (await listTransactions()).map(toTransaction)
+  return repairRedemptionRows(rows, await couponTokensOf(rows))
+}
+
+/** The rows for one voucher, repaired, in the shape the ceiling takes. */
 async function priorRedemptionsOf(
   voucherId: string,
   { excludeTransactionId }: { excludeTransactionId?: string } = {},
 ): Promise<PriorRedemption[]> {
   if (!voucherId) return []
 
-  const rows = await listTransactions()
-  return rows
-    .map(toTransaction)
+  return (await repairedTransactions())
     .filter((tx) => tx.voucherId === voucherId && tx.id !== excludeTransactionId)
     .map((tx) => ({
       amount: tx.amount,
       direction: tx.direction === 'in' ? 'in' : 'out',
       ...(tx.exactValue === undefined ? {} : { exact: tx.exactValue }),
     }))
+}
+
+/**
+ * Each incoming row's own coupon token, by token id. Rows whose coupon is not
+ * on this device are absent, and keep their stamp.
+ */
+async function couponTokensOf(rows: readonly WalletTransaction[]): Promise<Map<string, string>> {
+  const wanted = new Set(rows.filter((tx) => tx.direction === 'in').map((tx) => tx.tokenId).filter((id): id is string => !!id))
+  const tokens = new Map<string, string>()
+  if (wanted.size === 0) return tokens
+  try {
+    for (const coupon of await listVouchers()) {
+      if (coupon.token_id && coupon.token && wanted.has(coupon.token_id)) tokens.set(coupon.token_id, coupon.token)
+    }
+  } catch {
+    // No coupons to read means every row keeps its stamp, which is the strict side.
+  }
+  return tokens
 }
