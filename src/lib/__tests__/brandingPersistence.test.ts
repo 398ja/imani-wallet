@@ -29,8 +29,14 @@ const PUBKEY = 'ab'.repeat(32)
 const STORE_KEY = `imani-wallet:identity:${PUBKEY}`
 
 const relayHas = (events: unknown[]) => {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false } as unknown as Response))
+  // #428: the gateway is the one store read; the fixture is its answer (camelCase timestamp).
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ events: (events as Array<{ content: string; created_at: number }>).map((e) => ({ content: e.content, createdAt: e.created_at })) }),
+  } as unknown as Response)
+  vi.stubGlobal('fetch', fetchMock)
   vi.mocked(allEvents).mockResolvedValue(events as never)
+  return fetchMock
 }
 
 beforeEach(() => {
@@ -84,10 +90,11 @@ describe('a profile that was already fetched once', () => {
       STORE_KEY,
       JSON.stringify({ branding: { organizationName: 'Rosa' }, at: Date.now() }),
     )
-    relayHas([])
+    const fetched = relayHas([])
 
     expect((await merchantBranding(PUBKEY)).organizationName).toBe('Rosa')
     expect(allEvents).not.toHaveBeenCalled()
+    expect(fetched).not.toHaveBeenCalled()
   })
 
   /**

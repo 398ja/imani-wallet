@@ -78,12 +78,12 @@ describe('verifiedHandle', () => {
     expect(await verifiedHandle(SAMSON)).toBeNull()
   })
 
-  // The relay is read too, newest wins: a kind-0 published straight to the
-  // relay (never in the gateway cache) still counts.
-  it('reads the relay when the gateway cache has nothing', async () => {
+  // #428: the gateway is the only store read (it merges the relay server-side), so an empty
+  // gateway answer means no profile, and nothing is asked of the relay.
+  it('does not read the relay when the gateway cache has nothing', async () => {
     routes.query = () => new Response(JSON.stringify({ events: [] }))
     relay.events = [{ pubkey: SAMSON, created_at: 5, content: JSON.stringify({ nip05: HANDLE }) }]
-    expect(await verifiedHandle(SAMSON)).toBe(HANDLE)
+    expect(await verifiedHandle(SAMSON)).not.toBe(HANDLE)
   })
 
   // Unreachable is not "no profile": it fails closed with a retry message.

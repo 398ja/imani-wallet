@@ -6,7 +6,7 @@ import { claimHandle } from './registration'
 import { normaliseHandle } from './validate'
 import type { RequestSigner } from './nip98'
 import { buildProfileEvent, emptyProfile, loadProfile, saveProfile, type Profile } from './profile'
-import { allEvents, publish } from './relay'
+import { publish } from './relay'
 import { createWalletSigner } from './signer'
 import { requireTermsAccepted, type TermsAcceptance } from './terms'
 
@@ -96,22 +96,13 @@ async function newestKind0(pubkey: string): Promise<Kind0 | null> {
     return best
   })()
 
-  const fromRelay = allEvents(pubkey, 0).then((events) => {
-    const newest = events.filter((e) => e.pubkey === pubkey).sort((a, b) => b.created_at - a.created_at)[0]
-    return newest ? { content: newest.content, createdAt: newest.created_at } : null
-  })
-
-  const [gateway, relay] = await Promise.allSettled([fromGateway, fromRelay])
-  const a = gateway.status === 'fulfilled' ? gateway.value : null
-  const b = relay.status === 'fulfilled' ? relay.value : null
-  // The relay read cannot tell "unreachable" from "nothing here" (an
-  // unreachable relay resolves empty), so only the gateway can say "no
-  // profile". If it could not be asked and the relay found nothing, that is an
-  // outage, not an answer.
-  if (gateway.status === 'rejected' && !b) throw new DirectoryUnavailableError()
-  if (!a) return b
-  if (!b) return a
-  return b.createdAt > a.createdAt ? b : a
+  // #428: the gateway only (owner rule: never read the relay directly). Its query merges a live
+  // relay read server-side. Unreachable is an outage, never "no profile".
+  try {
+    return await fromGateway
+  } catch {
+    throw new DirectoryUnavailableError()
+  }
 }
 
 function normaliseNip05(value: unknown): string | null {

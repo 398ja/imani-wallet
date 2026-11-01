@@ -1,6 +1,5 @@
 import type { MerchantBranding } from './pass'
 import { EMPTY_BRANDING } from './pass'
-import { allEvents } from './relay'
 
 /**
  * Merchant branding for a merchant's pass, from their Nostr identity.
@@ -357,110 +356,11 @@ export async function fetchNewestKind0(
   // up: the relay still overrules a frozen cache, it simply does so a moment
   // after the name is on screen instead of holding it back until then.
   const cached = gatewayKind0(pubkey).catch(() => null)
-  // Sort rather than trust order — querySync merges replies from several
-  // relays. kind 0 is replaceable, but relays are not obliged to have dropped
-  // the copy they replaced.
-  const relayed = allEvents(pubkey, 0)
-    .then((events) => {
-      const newest = events.sort((a, b) => b.created_at - a.created_at)[0]
-      return newest ? { content: newest.content, createdAt: newest.created_at } : null
-    })
-    // Both stores unreachable. Callers all have a defensible fallback — the
-    // stored profile, or the pass defaults — and none of them should throw at
-    // a user over an avatar.
-    .catch(() => null)
-
-  // NEWEST STILL WINS whenever both stores are actually answering.
-  //
-  // Returning the first answer outright would have been wrong, and a test
-  // caught it: a relay holding a SUPERSEDED kind-0 could beat the gateway by a
-  // microtask and hand back the old name. "Whoever is quickest" is not the rule
-  // this module wants — the rule is newest-wins, and the only thing wrong with
-  // the old code was how long it was prepared to wait to apply it.
-  //
-  // So the wait is BOUNDED rather than removed: both stores are given GRACE_MS
-  // to answer, and the newest of whatever arrived in that time wins. A healthy
-  // store answers in 5-25ms, so in practice both are always in hand and the
-  // semantics are exactly what they were; a store that is timing out blows the
-  // budget and is left to the correction path below.
-  //
-  // The deadline runs from HERE, not from the first answer. An earlier version
-  // waited for an answer and only then started the clock, which looked
-  // equivalent and was not: when the fast store legitimately has NOTHING —
-  // routine for a stall whose kind-0 went straight to the relay, which is the
-  // very reason both stores are read — there is no first answer to start it,
-  // and the whole 3s relay timeout was back. Measured at 3003ms before this
-  // change, 0ms after.
-  const best = await settledWithin(GRACE_MS, cached, relayed)
-
-  // Whatever missed the deadline is still read to completion, and may still
-  // correct what we returned. Detached deliberately: nobody is waiting on it.
-  void Promise.all([cached, relayed]).then(([a, b]) => {
-    const latest = newer(a, b)
-    if (latest && latest.createdAt > (best?.createdAt ?? 0)) onLater?.(latest)
-  })
-
-  return best
-}
-
-/**
- * How long the faster store waits for the slower one before answering alone.
- *
- * Sized off measurements, not taste: a healthy relay EOSEs in 25ms and a
- * refused connection fails in 5, while the failure modes worth escaping are
- * 3000ms (connection timeout) and 4400ms (EOSE timeout). Anything comfortably
- * above the first pair and far below the second preserves newest-wins in every
- * healthy case while capping the unhealthy one. 150ms is also under the ~200ms
- * that reads as instant, so nobody sees this window.
- */
-const GRACE_MS = 150
-
-/**
- * The newest profile any lookup produced within `ms`, or null.
- *
- * Two ways to finish, and both matter:
- *
- *  - EVERY lookup settled: answer immediately. The common case, and why a
- *    healthy read does not sit on the timer — 25ms, not 150.
- *  - The deadline passed: answer with what arrived. A lookup still outstanding
- *    is presumed to be one of the multi-second failure modes and is dropped
- *    from the decision rather than waited on.
- *
- * Note that an empty result still COUNTS as settled. "No profile here" is a
- * real answer from a store, and a read where both stores say so must return
- * null promptly rather than idle until the deadline.
- */
-async function settledWithin<T extends { createdAt: number }>(
-  ms: number,
-  ...lookups: Promise<T | null>[]
-): Promise<T | null> {
-  let best: T | null = null
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    await Promise.race([
-      Promise.all(
-        lookups.map((lookup) =>
-          lookup.then((value) => {
-            best = newer(best, value)
-          }),
-        ),
-      ),
-      new Promise((resolve) => {
-        timer = setTimeout(resolve, ms)
-      }),
-    ])
-  } finally {
-    // Or the timer keeps the event loop alive past the answer — which in Node
-    // (the test runner, and any SSR) delays process exit for every profile read.
-    clearTimeout(timer)
-  }
-  return best
-}
-
-function newer<T extends { createdAt: number }>(a: T | null, b: T | null): T | null {
-  if (!a) return b
-  if (!b) return a
-  return b.createdAt > a.createdAt ? b : a
+  // #428, owner rule: the browser never reads the relay directly. The gateway's query merges a
+  // live relay read SERVER-side (`CachingNostrGatewayDecorator`), which now does the job the
+  // browser-side relay race used to do, so one store is asked and there is nothing to race.
+  void onLater
+  return cached
 }
 
 async function gatewayKind0(
