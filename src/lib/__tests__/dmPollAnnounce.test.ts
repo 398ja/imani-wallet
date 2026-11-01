@@ -44,6 +44,7 @@ vi.mock('../notMoneyNotice', () => ({
   showNotice: (n: Record<string, unknown>) => void notices.push(n),
 }))
 vi.mock('../refusalToast', () => ({ announceRefusal: vi.fn() }))
+vi.mock('../unsavedReceipt', () => ({ announceUnsaved: () => {}, resumeUnsavedReceipts: () => {} }))
 vi.mock('../queuedToast', () => ({
   announceQueued: () => {},
   settleQueued: () => {},
