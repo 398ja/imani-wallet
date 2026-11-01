@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Check, ChevronRight } from 'lucide-react'
-import type { Voucher } from '@imani/voucher-send'
 
 import {
   Button,
@@ -22,7 +21,7 @@ import { listVouchers } from '../lib/wallet'
 import { merchantStatus, type MerchantStatus } from '../lib/merchant'
 import { useStallStatus } from '../hooks/useStallStatus'
 import { closedMessage, mayTradeWith } from '../lib/merchantStatus'
-import { toMerchants, type Merchant } from '../lib/merchants'
+import { toMerchants, unitHoldings, type Merchant, type UnitHolding } from '../lib/merchants'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import {
   humanName,
@@ -67,37 +66,10 @@ import { userMessage } from '../lib/userMessage'
  * distinction about backing that nobody buying a coffee has any use for, so
  * groups sharing a unit are merged back together here.
  */
-type SendOption = {
-  merchant: Merchant
-  unit: string
-  decimals: number
-  totalFaceValue: number
-  vouchers: Voucher[]
-}
+type SendOption = UnitHolding
 
-function sendOptions(merchants: Merchant[]): SendOption[] {
-  const byUnit = new Map<string, SendOption>()
-  for (const merchant of merchants) {
-    for (const group of merchant.groups) {
-      const key = `${merchant.pubkey}|${group.unit.toUpperCase()}`
-      const found = byUnit.get(key)
-      if (found) {
-        found.totalFaceValue += group.totalFaceValue
-        found.vouchers.push(...group.vouchers)
-      } else {
-        byUnit.set(key, {
-          merchant,
-          unit: group.unit,
-          decimals: group.decimals,
-          totalFaceValue: group.totalFaceValue,
-          vouchers: [...group.vouchers],
-        })
-      }
-    }
-  }
-  // Most valuable first — the same order the home deck puts merchants in.
-  return [...byUnit.values()].sort((a, b) => b.totalFaceValue - a.totalFaceValue)
-}
+// Most valuable first, the same order the home deck puts merchants in.
+const sendOptions = unitHoldings
 
 /**
  * `unconfirmed`: the gateway took the send and the wallet could not learn how it ended. It may
