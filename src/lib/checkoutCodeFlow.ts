@@ -181,7 +181,7 @@ export async function runCheckoutCode(ports: CheckoutPorts, pubkey: string, id: 
 
 const save = (pubkey: string, record: CheckoutCodeRecord) => saveCheckoutCode(pubkey, record)
 
-function armContext(ports: CheckoutPorts, pubkey: string, record: CheckoutCodeRecord, part: CheckoutPartRecord, R: Uint8Array) {
+function armContext(ports: CheckoutPorts, pubkey: string, record: CheckoutCodeRecord, part: CheckoutPartRecord, R: Uint8Array, identity?: Uint8Array) {
   return {
     // The locked token is "delivered" into the record: it is the store's to receive, at deposit.
     ports: {
@@ -208,6 +208,8 @@ function armContext(ports: CheckoutPorts, pubkey: string, record: CheckoutCodeRe
       save(pubkey, record)
     },
     knownLocks: new Map(Object.entries(part.locks ?? {})),
+    // #402: a part locked to the wallet's own key (a split voucher's part) is burnt and locked by it.
+    ...(identity ? { selfSecret: identity } : {}),
     ...(part.state === 'arming' ? { resuming: true, ...(part.burnKeyset ? { burnKeyset: part.burnKeyset } : {}) } : {}),
   }
 }
@@ -228,7 +230,7 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
         save(pubkey, record)
       }
       if (!sameStallAndUnit(part.token, record)) return refuse(pubkey, record, 'not_this_stall')
-      const refusal = await armPreflight(armContext(ports, pubkey, record, part, R(part)))
+      const refusal = await armPreflight(armContext(ports, pubkey, record, part, R(part), identity))
       if (refusal) return refuse(pubkey, record, refusal.kind === 'unarmed' ? refusal.why : refusal.kind)
     }
   }
@@ -242,7 +244,7 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
       part.state = 'arming'
       save(pubkey, record)
     }
-    const out: ArmOutcome = await armGift(armContext(ports, pubkey, record, part, R(part)))
+    const out: ArmOutcome = await armGift(armContext(ports, pubkey, record, part, R(part), identity))
     if (out.kind === 'armed' || out.kind === 'not_armed') {
       // Not armed: the relay did not take a take-back. Still locked, and this wallet posts the same
       // refund itself after `x`, as for a Cashlink. The code is still worth issuing.
