@@ -116,6 +116,9 @@ export type HistoryContent = Nip60HistoryContent & {
    * inside the owner's own NIP-44 encryption like everything else here.
    */
   locked_gift?: unknown
+  /** A checkout code's status snapshot on its `checkout_code` row (#402). Nothing secret. */
+  checkout_code?: unknown
+  spend_source?: unknown
   /**
    * What the wallet checked about a received coupon (the issuer signature and
    * the warrant verdict), on `received` rows.
@@ -238,6 +241,8 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     terminal_pubkey: tx.terminalPubkey,
     ...(tx.link ? { gift_link: tx.link } : {}),
     ...(tx.lockedGift ? { locked_gift: tx.lockedGift } : {}),
+    ...(tx.checkoutCode ? { checkout_code: tx.checkoutCode } : {}),
+    ...(tx.spendSource ? { spend_source: tx.spendSource } : {}),
     ...(tx.validation ? { validation: tx.validation } : {}),
   }
 }
@@ -287,6 +292,8 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     ...(content.terminal_pubkey ? { terminalPubkey: content.terminal_pubkey } : {}),
     ...(asGiftLinkRecord(content.gift_link) ? { link: asGiftLinkRecord(content.gift_link) } : {}),
     ...(asLockedGiftRecord(content.locked_gift) ? { lockedGift: asLockedGiftRecord(content.locked_gift) } : {}),
+    ...(content.checkout_code ? { checkoutCode: content.checkout_code } : {}),
+    ...(content.spend_source ? { spendSource: content.spend_source } : {}),
     // Read back through `toTransaction`'s own `isValidation` guard, so a
     // garbled value reads as "Not checked", never as a pass.
     ...(content.validation ? { validation: content.validation } : {}),

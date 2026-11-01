@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { AlarmClock, CalendarX, Clock, Info } from 'lucide-react'
+import { Link, useParams } from 'react-router-dom'
+import { AlarmClock, CalendarX, ChevronRight, Clock, Info } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { handlerFor } from '../lib/terminalAttribution'
@@ -33,6 +33,7 @@ import { toCouponPass, TERMS, EMPTY_BRANDING } from '../lib/pass'
 import { useBranding } from '../hooks/useBranding'
 import { useExpiryClock } from '../hooks/useExpiryReminders'
 import { humanName } from '../lib/identity'
+import { spendSourceLabel } from '../lib/spendSource'
 import {
   VALIDATION_SUMMARY,
   hasValidationClaim,
@@ -693,6 +694,16 @@ export function TransactionPage({
           ['Type', transactionLabel(tx)],
           ['Date', formatDate(tx.at)],
           ['Memo', tx.memo],
+          // #402 traceability: an online shop said which of its orders spent this coupon. The
+          // shop's own word (its key sealed the envelope), shown as such.
+          ['Spent online', tx.spendSource ? spendSourceLabel(tx.spendSource) : undefined],
+          [
+            'Applied to the order',
+            tx.spendSource?.amountApplied !== undefined
+              ? formatFace(tx.spendSource.amountApplied, { unit: tx.unit, decimals: tx.decimals })
+              : undefined,
+          ],
+          ['Checkout code', tx.spendSource?.codeRef],
           /**
            * Which terminal took this — terminals ticket 09.
            *
@@ -725,6 +736,24 @@ export function TransactionPage({
       </ListSection>
 
       <CashbackSection tx={tx} />
+
+      {/* #402 traceability: an incoming coupon of the stall's own, linked to the sale that issued
+          it. The voucher id is the same from sale to spend, so the voucher's own record (what was
+          paid, by which rail, what is still out) is one tap away. */}
+      {ownStall && !outgoing && tx.voucherId ? (
+        <ListSection title="Voucher">
+          <Link
+            to={`/merchant/coupon/${encodeURIComponent(tx.voucherId)}`}
+            className="press-row -mx-1 flex items-center gap-3 rounded-xl p-3"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block font-medium text-mono-900 dark:text-mono-50">See the sale of this voucher</span>
+              <span className="block text-sm text-mono-500">Who bought it, how it was paid, what is still out</span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" aria-hidden />
+          </Link>
+        </ListSection>
+      ) : null}
 
       <GiftLinkSection link={tx.link} />
 
