@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.46.2] - 2026-11-01
+
+### Fixed
+- Use online offered more than the balance showed for the same stall (#402). It read every coupon row,
+  including ones the balance leaves out: a coupon kept as sats after a refused lock (`swapped_to_sats`,
+  whose token is the spent coupon proof) and one the mint refused as redeemed in full. It now counts
+  exactly the balance's rows (`spendable`).
+
 ## [0.46.1] - 2026-11-01
 
 ### Fixed
