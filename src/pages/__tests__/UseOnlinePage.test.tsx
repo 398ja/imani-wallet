@@ -169,7 +169,17 @@ describe('Use online', () => {
     fireEvent.click(screen.getByRole('button', { name: /Copy/ }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(screen.getByTestId('checkout-code').textContent))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel code' }))
+    // Asked first: nothing is cancelled until it is confirmed, and Keep it backs out.
+    expect(screen.getByRole('alertdialog')).toBeTruthy()
+    expect(screen.getByText(/comes back to your\s+wallet within 24 hours/)).toBeTruthy()
+    expect(deps.cancel).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Keep it' }))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(deps.cancel).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel code' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel code' }))
     expect(await screen.findByText(/Cancelling\. Your money is back within 24 hours/)).toBeTruthy()
+    expect(deps.cancel).toHaveBeenCalledTimes(1)
   })
 
   it('Shopify gets the compact form', () => {
