@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Copy, Globe } from 'lucide-react'
+import { Copy, Globe, TriangleAlert } from 'lucide-react'
 
 import { Alert, BackLink, Button, Centered, DetailRow, IdentityInline, Input, Notice, PageHeader, Panel, Screen } from '../components/ui'
 import { useMerchantLabel } from '../lib/identity'
@@ -325,6 +325,8 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
   const [record, setRecord] = useState<CheckoutCodeRecord | undefined>(() => deps.codes(pubkey).find((r) => r.id === id))
   const [copied, setCopied] = useState(false)
   const [cancelError, setCancelError] = useState<string | null>(null)
+  const [confirmCancel, setConfirmCancel] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const stallName = useMerchantLabel({ pubkey: record?.stall ?? '' })
   if (!record) return <Centered>No such code.</Centered>
   const shop = hostOf(record.shopUrl)
@@ -355,9 +357,16 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
   }
   const onCancel = async () => {
     setCancelError(null)
-    const out = await deps.cancel(deps.ports(), pubkey, record.id)
-    if (out.ok) setRecord(deps.codes(pubkey).find((r) => r.id === id))
-    else setCancelError(out.why === 'HELD' ? 'This code is in a checkout right now. Try again once the cart is closed.' : 'The code could not be cancelled. Try again in a moment.')
+    setCancelling(true)
+    try {
+      const out = await deps.cancel(deps.ports(), pubkey, record.id)
+      if (out.ok) {
+        setConfirmCancel(false)
+        setRecord(deps.codes(pubkey).find((r) => r.id === id))
+      } else setCancelError(out.why === 'HELD' ? 'This code is in a checkout right now. Try again once the cart is closed.' : 'The code could not be cancelled. Try again in a moment.')
+    } finally {
+      setCancelling(false)
+    }
   }
 
   return (
@@ -381,10 +390,40 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
       </Panel>
       {record.status === 'cancelling' && <Notice tone="warning">Cancelling. Your money is back within 24 hours, or on {expires} at the latest.</Notice>}
       {cancelError && <Alert>{cancelError}</Alert>}
-      {record.status === 'reserved' && (
-        <Button variant="ghost" className="mt-4 w-full" onClick={() => void onCancel()}>
+      {record.status === 'reserved' && !confirmCancel && (
+        <Button variant="ghost" className="mt-4 w-full" onClick={() => setConfirmCancel(true)}>
           Cancel code
         </Button>
+      )}
+      {record.status === 'reserved' && confirmCancel && (
+        // Asked at the decision, not after it, as Revoke on Terminals asks: amber, a consequence to
+        // read rather than an error. Keeping the code is first and plain, so a thumb that lands by
+        // habit lands on the safe answer.
+        <div role="alertdialog" aria-labelledby="cancel-code-title" className="expand-row mt-4 rounded-xl bg-amber-50 p-4 text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
+          <div className="flex gap-2">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <div className="text-sm">
+              <p id="cancel-code-title" className="font-medium">Cancel this code?</p>
+              <p className="mt-1">
+                It stops working at {shop} straight away. Your {formatFace(record.amount, denom)} comes back to your
+                wallet within 24 hours, or on {expires} at the latest.
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => setConfirmCancel(false)} disabled={cancelling}>
+              Keep it
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void onCancel()}
+              disabled={cancelling}
+              className="!bg-red-600 !text-white hover:!bg-red-700"
+            >
+              {cancelling ? 'Cancelling…' : 'Cancel code'}
+            </Button>
+          </div>
+        </div>
       )}
     </Screen>
   )
