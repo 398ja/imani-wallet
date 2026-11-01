@@ -36,7 +36,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 import { checkSplittable, minSplitStep, planParts, stallKey } from '@imani/wallet-core'
 
 import { isSelfLocked, latestLockX, lockableVoucher, lockWindowProblem, type WindowProblem } from './cashlinkLock'
-import { toVoucher } from './merchants'
+import { spendable, toVoucher } from './merchants'
 import { withoutInFlight } from './pay'
 import { canCarve } from './checkoutCarve'
 import { canSplit } from './voucherSplitPlan'
@@ -202,8 +202,12 @@ export function checkoutPlan(req: CheckoutPlanRequest): CheckoutPlan {
   const stall = stallKey(req.stallId)
   const unit = req.unit.trim().toUpperCase()
   const free = new Set(withoutInFlight(req.rows, req.payer))
+  // Exactly the rows the balance counts (`toMerchants`: spendable, not a licence or credential), so
+  // the figure here can never be more than the balance shows for this stall (staging 2026-11-01).
+  const money = new Set(spendable(req.rows))
 
   for (const row of req.rows) {
+    if (!money.has(row)) continue
     if (stallKey(row.issuer_id) !== stall) {
       excluded.push({ row, reason: 'wrong_stall' })
       continue

@@ -176,3 +176,17 @@ describe('checkoutPlan: a split when carving is the only obstacle (#402)', () =>
     expect(out.excluded).toEqual([expect.objectContaining({ reason: 'already_locked' })])
   })
 })
+
+describe('Use online shows the same holding as the balance (staging 2026-11-01: it showed more)', () => {
+  // The balance (toMerchants) counts only `spendable` rows, at the row's own face_value. Use online
+  // must never offer more than that: no row the balance leaves out, and no more than its face.
+  // The cause on staging: a lock refused after its burn keeps the value as a swapped_to_sats row whose
+  // token is the coupon proof, now spent. The balance left it out; Use online counted it.
+  it('a row the balance leaves out (swapped to sats, fully redeemed) is not usable online', () => {
+    const live = row(300)
+    const swapped = { ...row(500), status: 'swapped_to_sats' } as VoucherRow
+    const refused = { ...row(200), status: 'fully_redeemed' } as VoucherRow
+    const out = plan([live, swapped, refused], 100)
+    expect(out.usable.map((c) => c.row)).toEqual([live])
+  })
+})
