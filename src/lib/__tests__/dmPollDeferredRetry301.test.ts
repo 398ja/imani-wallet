@@ -17,6 +17,7 @@ vi.mock('../arrivalToast', () => ({
 vi.mock('../heldToast', () => ({ announceHeld: () => {} }))
 vi.mock('../notMoneyNotice', () => ({ licenceNotice: () => ({}), showNotice: () => {} }))
 vi.mock('../refusalToast', () => ({ announceRefusal: vi.fn() }))
+vi.mock('../unsavedReceipt', () => ({ announceUnsaved: vi.fn(), resumeUnsavedReceipts: vi.fn() }))
 vi.mock('../queuedToast', () => ({ announceQueued: () => {}, settleQueued: () => {} }))
 vi.mock('../merchant', () => ({ loadMerchant: () => null }))
 vi.mock('../attestation', () => ({ attestRedemption: async () => {}, nullifierFor: (t: string) => t }))

@@ -1,3 +1,4 @@
+import { isKeptAcrossLogout } from './unsavedReceipt'
 import { getSession, keyStore, resetSession } from './nap'
 import { drainDmPoll, startDmPoll, stopDmPoll } from './dmPoll'
 import { startRosterSync, stopRosterSync } from './terminalRosterSyncNet'
@@ -527,7 +528,10 @@ export async function attemptLogout(
   // is the whole "Switch account" journey (CL-SWITCH). The cashback token stash
   // (`imani:cashback:pending`) is outside the `imani-wallet:` prefix and was
   // never swept.
-  carryPendingClaimsAcrossLogout(sweepAppStorage)
+  //
+  // And the settled-but-unsaved record (#112): its receive id exists nowhere
+  // else, and it is keyed by pubkey so only that account reads it.
+  carryPendingClaimsAcrossLogout(() => sweepAppStorage(isKeptAcrossLogout))
 
   // And the coupons, the transaction history and the issued-coupon records.
   // Recoverable: sales come back via restoreIssued(), and every held coupon was

@@ -4,7 +4,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SimplePool } from 'nostr-tools'
 
-import { allEvents, newestAddressable } from '../relay'
 
 /**
  * Relay READS have a BOUNDED connection wait, and it must not be shorter than a
@@ -63,39 +62,7 @@ describe('relay reads', () => {
     expect((pool as unknown as { maxWaitForConnection: number }).maxWaitForConnection).toBe(3000)
   })
 
-  /**
-   * The read paths must USE the bounded pool. Asserted by observing the
-   * connection budget the query actually runs under, so deleting the option
-   * from either call site fails here rather than in production.
-   */
-  it.each([
-    ['allEvents', () => allEvents('ab'.repeat(32), 0, [])],
-    ['newestAddressable', () => newestAddressable('ab'.repeat(32), 30078, 'imani:merchant', [])],
-  ])('%s reads through a pool with a bounded connection wait', async (_name, read) => {
-    const built: number[] = []
-    const Original = SimplePool.prototype.constructor
-
-    // An empty relay list means querySync resolves immediately with no socket,
-    // so this exercises construction and teardown without touching a network.
-    const spy = vi.spyOn(SimplePool.prototype, 'querySync').mockImplementation(async function (
-      this: SimplePool,
-    ) {
-      built.push((this as unknown as { maxWaitForConnection: number }).maxWaitForConnection)
-      return []
-    })
-
-    await read()
-
-    expect(Original).toBeDefined()
-    expect(built.length).toBeGreaterThan(0)
-    // Bounded, and NOT below the 3s a slow link needs (#235). Lowering it again
-    // fails here as well as in relayReadSlowLink.test.ts.
-    for (const budget of built) {
-      expect(budget).toBeGreaterThanOrEqual(3000)
-      expect(budget).toBeLessThanOrEqual(5000)
-    }
-    spy.mockRestore()
-  })
+  // #428: reads no longer open a pool at all (relayReadRule.test.ts); only publish does.
 
   /**
    * PUBLISHING KEEPS ITS FULL BUDGET, deliberately. A read that gives up early

@@ -45,6 +45,7 @@ const ROUTE_FOR_TYPE: Record<NotificationTypeOrGeneric, string> = {
   voucher_received: '/receive',
   voucher_claimed: '/merchant/transactions',
   voucher_expiring: '/',
+  cashback_claimed: '/merchant/transactions',
   generic: '/',
 }
 
@@ -53,6 +54,7 @@ const FALLBACK_TEXT: Record<NotificationTypeOrGeneric, { title: string; body: st
   voucher_received: { title: 'Coupon received', body: 'A coupon arrived in your wallet.' },
   voucher_claimed: { title: 'Coupon claimed', body: 'A coupon you sent was claimed.' },
   voucher_expiring: { title: 'Coupon expiring', body: 'A coupon in your wallet expires soon.' },
+  cashback_claimed: { title: 'Cashback claimed', body: 'A cashback code you issued was claimed.' },
   generic: { title: 'Imani', body: 'You have a new notification.' },
 }
 
