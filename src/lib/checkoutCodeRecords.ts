@@ -109,6 +109,22 @@ export function loadCheckoutCodes(pubkey: string): CheckoutCodeRecord[] {
 export function saveCheckoutCode(pubkey: string, record: CheckoutCodeRecord): void {
   const all = loadCheckoutCodes(pubkey).filter((r) => r.id !== record.id)
   localStorage.setItem(checkoutCodesKey(pubkey), JSON.stringify([record, ...all].sort((a, b) => b.createdAt - a.createdAt)))
+  for (const listener of [...listeners]) {
+    try {
+      listener(pubkey, { ...record, parts: record.parts.map((p) => ({ ...p })) })
+    } catch {
+      // A listener is display (history); the record is written either way.
+    }
+  }
+}
+
+type CheckoutCodeListener = (pubkey: string, record: CheckoutCodeRecord) => void
+const listeners = new Set<CheckoutCodeListener>()
+
+/** Called after every successful save, with a copy of the record. Returns the unsubscribe. */
+export function onCheckoutCodeSaved(listener: CheckoutCodeListener): () => void {
+  listeners.add(listener)
+  return () => void listeners.delete(listener)
 }
 
 export const isOutstanding = (r: CheckoutCodeRecord): boolean => !r.done
