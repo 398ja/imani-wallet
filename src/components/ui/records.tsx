@@ -13,6 +13,7 @@ import { hasValidationClaim } from '../../lib/validationStatus'
 import { ValidationBadge } from './ValidationBadge'
 import { CHECKOUT_CODE_TX_TYPE, CHECKOUT_STATUS_WORDS, checkoutFunds, type CheckoutCodeSnapshot } from '../../lib/checkoutCodeHistory'
 import { useMerchantLabel } from '../../lib/identity'
+import { spendSourceLabel } from '../../lib/spendSource'
 
 /**
  * A checkout code (#402): what it is worth, the stall (named, never a key), the shop, when, and
@@ -249,11 +250,17 @@ export function TransactionListItem({ tx }: { tx: WalletTransaction }) {
               Cashlink
             </span>
           ) : null}
+          {tx.spendSource ? (
+            <span className="shrink-0 rounded-full border border-mono-300 px-1.5 text-[11px] font-medium text-mono-500 dark:border-mono-600">
+              Online
+            </span>
+          ) : null}
         </p>
         <p className="truncate text-sm text-mono-500">
           {formatDate(tx.at)}
           {tx.link ? ` · ${giftStatusLabel(tx.link)}` : ''}
-          {tx.memo ? ` · ${tx.memo}` : ''}
+          {/* #402 traceability: which shop order spent it, before the memo the shop did not write. */}
+          {tx.spendSource ? ` · ${spendSourceLabel(tx.spendSource)}` : tx.memo ? ` · ${tx.memo}` : ''}
         </p>
       </div>
       <p className="shrink-0 text-right tabular-nums text-mono-900 dark:text-mono-50">
