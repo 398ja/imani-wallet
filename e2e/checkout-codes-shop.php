@@ -4,8 +4,8 @@
  * (feat/redeemer) against staging, as a WooCommerce shop runs it (imani-checkout-woo CoreSettler).
  *
  * One JSON request on stdin, one JSON answer on stdout:
- *   {"op":"lookup|hold|release|redeem|cancel_feed|cancel|raw", "shop_sk", "code", "order_ref",
- *    "store", "gateway", "stall", "order_total", "currency"}
+ *   {"op":"lookup|hold|release|redeem|redeem_balance|cancel_feed|cancel|raw", "shop_sk", "code",
+ *    "order_ref", "store", "gateway", "stall", "order_total", "currency"}
  * Gift wraps for the stall are RETURNED (RecordingRelay), and the harness publishes them.
  *
  *   docker run --rm --network host -v $CORE:/core -v $PWD/e2e:/e2e php:8.5-cli php /e2e/checkout-codes-shop.php
@@ -91,6 +91,38 @@ try {
 				'customer_tokens' => $result->customerTokens,
 				'change'          => null === $change ? null : $res( $change ),
 				'wraps'           => $relay->events,
+			);
+			break;
+		case 'redeem_balance':
+			// #472, contract §5 "Keeping a balance": redeem with mode balance, settle (stall share, the
+			// split's rest re-locked to S, unneeded parts untouched), hand the stall its tokens, /rebalance.
+			$lookup = $store->lookup( $code );
+			$d      = ( new CheckoutValidation( $in['currency'], $in['stall'] ) )->decide( $lookup, time(), (int) $in['order_total'], $in['order_ref'] );
+			if ( ! $d->apply || null === $d->plan ) {
+				$out = array( 'stage' => 'decide', 'reason' => $d->reason );
+				break;
+			}
+			if ( ! $d->plan->balance ) {
+				$out = array( 'stage' => 'decide', 'reason' => 'the plan keeps no balance (dust, exact use, or a store without balance)' );
+				break;
+			}
+			$r   = $store->redeem( $code, $in['order_ref'], CodeStoreClient::MODE_BALANCE );
+			$out = array( 'redeem' => $res( $r ) );
+			if ( ! $r->ok() ) {
+				break;
+			}
+			$relay  = new RecordingRelay();
+			$result = $redeemer()->redeemBalance( $r->value, $d->plan, $in['stall'] );
+			$hand   = new StallHandoff( $key, $relay, $store );
+			$hand->toStall( $result->forStall(), $in['stall'] );
+			$sent = $hand->rebalanceToStore( $code, $in['order_ref'], $result );
+			$out += array(
+				'deduction'    => $d->deduction,
+				'spent'        => $result->spent,
+				'replaced'     => array_map( static fn( array $p ) => array( 'idx' => $p['idx'], 'amount' => $p['amount'] ), $result->replaced ),
+				'stall_tokens' => $result->stallTokens,
+				'rebalance'    => $res( $sent ) + array( 'value' => $sent->ok() ? $sent->value : null ),
+				'wraps'        => $relay->events,
 			);
 			break;
 		case 'cancel_feed':
