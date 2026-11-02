@@ -210,6 +210,14 @@ Body `{"order_ref": "string ≤ 128"}`.
   recorded beside it). One row per order in `checkout_code_redemption`.
 - A replay with the same body answers the same. A different body for the same order is
   `409 ALREADY_REBALANCED`.
+- Every other part this order was handed (named in neither list) must still be UNSPENT: a part the
+  shop burnt without declaring it is `422 UNDECLARED_SPEND`, so a code never shows value it lost.
+- Refusals: `400 MALFORMED`; `409 SETTLING` (the code is settling for another order) or the code's
+  state; `422 UNKNOWN_PART` (an `idx` not handed to this order, or named twice), `AMOUNT_NOT_LESS`,
+  `ALREADY_SPENT` (a successor proof), `DUPLICATE_PART` (a successor proof backs a code already),
+  `DUST`, `UNDECLARED_SPEND`, and the deposit refusals for a successor (a wrong `R` is
+  `NOT_A_LOCK`), each with `part`; `409 PARTS_NOT_SPENT` and `MINT_UNAVAILABLE` are retryable.
+  The replay is keyed on the request's meaning (order, applied, spent, replaced), not its bytes.
 
 `200 {"status": "reserved|redeemed|expired", "amount": remaining, "applied": n}`. A code whose
 `x` has passed while it was settling is `expired` straight after (its parts come back to `R`).
