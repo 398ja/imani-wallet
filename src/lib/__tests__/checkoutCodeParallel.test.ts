@@ -118,6 +118,21 @@ beforeEach(() => {
     consume: async () => {},
     activity: async () => {},
   }
+  // gateway-customer#287: the wallet asks for a gift's locks in one `/lock-batch` call. A test here
+  // replaces `ports.gateway` outright (a hook in front of the jittered fake), so each one it puts in
+  // place answers a batch through ITS own single-lock behaviour (`expandBatches`): a hook on
+  // `/cashlink/lock` (refuse, rate limit, kill one) still sees every lock, as the real batch route
+  // judges each one as `/lock` alone.
+  let gateway = ports.gateway
+  Object.defineProperty(ports, 'gateway', {
+    configurable: true,
+    enumerable: true,
+    get: () => gateway,
+    set: (g: typeof gateway) => {
+      gateway = { call: W.expandBatches(g.call.bind(g)) }
+    },
+  })
+  ports.gateway = gateway
 })
 
 describe('#477: a code made with its proofs side by side', () => {
