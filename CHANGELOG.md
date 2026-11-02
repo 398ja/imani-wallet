@@ -38,6 +38,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.48.0] - 2026-11-02
+
+### Changed
+
+- **A checkout code is made in about 8 s instead of 26-32 s** (#477, #484). The coupon proofs
+  and the code's parts are armed side by side; the pre-check checks every proof at once and
+  retries a 429; one NUT-07 check per gift, and none per proof after a fresh burn. Mint keys are
+  cached per keyset and the active keyset for 60 s, re-read fresh after a 12002 or
+  KEYSET_INACTIVE. Refunds run side by side, and the code store deposit overlaps the refund
+  deposits. Use online warms the mint. On staging a EUR coupon code went from 32 s to ~7-8 s.
+
+### Fixed
+
+- A part refused while another is part way leaves the code pending (recoverable) rather than
+  failed.
+
 ## [0.47.3] - 2026-11-02
 
 ### Fixed
