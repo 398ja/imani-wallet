@@ -14,6 +14,7 @@ import App from './App.tsx'
 import { NapSignerPage } from './pages/NapSignerPage'
 import { initNative, hideSplash } from './lib/native'
 import { loadTrustedMints } from './lib/trustedMint'
+import { installStaleBuildReload } from './lib/staleBuild'
 import './index.css'
 
 const queryClient = new QueryClient()
@@ -21,6 +22,15 @@ const queryClient = new QueryClient()
 // The NAP signer popup (#411, #410 G10) is its own page, not a route in the app: it must not start
 // a session, a relay connection or the DM poller, and it answers only the site that opened it.
 const SIGNER_PAGE = window.location.pathname.replace(/\/+$/, '') === '/nap/signer'
+
+// A tab left open across a deploy runs the old bundle; a missing lazy chunk proves it. Reload
+// before stale code can move money (staging 2026-11-02: corda's licence 4de7f5b0).
+installStaleBuildReload({
+  addEventListener: (type, fn) => window.addEventListener(type, fn),
+  reload: () => window.location.reload(),
+  storage: window.sessionStorage,
+  buildId: __APP_VERSION__,
+})
 
 // Android back button, status bar. No-op in a browser.
 initNative()
