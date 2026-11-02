@@ -361,7 +361,11 @@ Signed only when every rule holds:
    asked for (one per power-of-two output), mixed with rule-4 proposals, within the 20. It is
    signed and checked as the link-lock route signs (`LinkLock.shapeProblem` on what was signed).
    No new budget: it carries `max_sats`, rule 5 bounds it by this burn, and settling it later is a
-   new burn of a new secret.
+   new burn of a new secret. No locktime window applies (`x` is copied, never chosen, and may be
+   near): a successor settled just before `x` simply comes back to `R` at `x`. The refund is copied
+   exactly as the predecessor spells it. Any other shape that is not a plain lock (a missing
+   `sigflag`, two refund keys, extra keys) is `WRONG_PROPOSAL`; a plain lock to `S` stays
+   `LOCK_KEY_NOT_ALLOWED`.
 5. `Σ max_sats ≤` the burn's proven amount (`SuccessorSatBound`). One burn, one claim (the shared
    claim ledger), and an identical resend replays.
 
