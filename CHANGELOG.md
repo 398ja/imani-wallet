@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.47.3] - 2026-11-02
+
+### Fixed
+
+- **A tab left open across a deploy reloads itself** (#478). When a lazy chunk of the running
+  build is gone from the server (`vite:preloadError`), the app reloads once per build, keyed on
+  the entry chunk's URL. On staging an Android tab still on a pre-0.46.5 bundle ran the old
+  self-lock sweep and burnt corda's re-granted licence.
+
 ## [0.47.2] - 2026-11-02
 
 ### Fixed
