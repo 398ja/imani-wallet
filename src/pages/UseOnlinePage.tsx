@@ -14,6 +14,8 @@ import { loadCheckoutCodes, remainingOf, type CheckoutCodeRecord } from '../lib/
 import { startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
 import { appCheckoutPorts } from '../lib/checkoutCodePorts'
 import { splitVoucher } from '../lib/voucherSplit'
+import { warmMint } from '../lib/cashlinkFlow'
+import { trustedMintUrls } from '../lib/trustedMint'
 import type { OnlineShop } from '../lib/onlineShop'
 import type { VoucherRow } from '@imani/wallet-storage'
 
@@ -41,6 +43,8 @@ export interface UseOnlineDeps {
   codes: (pubkey: string) => CheckoutCodeRecord[]
   ports: typeof appCheckoutPorts
   split: typeof splitVoucher
+  /** #477: open the mint connection and read its keyset while the amount is typed. */
+  warm?: () => void
 }
 
 const realDeps: UseOnlineDeps = {
@@ -51,6 +55,9 @@ const realDeps: UseOnlineDeps = {
   codes: loadCheckoutCodes,
   ports: appCheckoutPorts,
   split: splitVoucher,
+  warm: () => {
+    for (const url of trustedMintUrls()) warmMint(url)
+  },
 }
 
 const DAY_S = 86_400
@@ -139,6 +146,14 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
   const [days, setDays] = useState<number>(7)
   const [busy, setBusy] = useState<false | 'splitting' | 'making'>(false)
   const [error, setError] = useState<string | null>(null)
+  // #477: by the time "Get code" is pressed, the mint's connection is open and its keyset known.
+  useEffect(() => {
+    try {
+      deps.warm?.()
+    } catch {
+      // A head start only.
+    }
+  }, [deps])
 
   useEffect(() => {
     let live = true

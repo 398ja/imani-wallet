@@ -226,7 +226,15 @@ async function runCheckoutCodeLocked(ports: CheckoutPorts, pubkey: string, id: s
 
 const save = (pubkey: string, record: CheckoutCodeRecord) => saveCheckoutCode(pubkey, record)
 
-function armContext(ports: CheckoutPorts, pubkey: string, record: CheckoutCodeRecord, part: CheckoutPartRecord, R: Uint8Array, identity?: Uint8Array) {
+function armContext(
+  ports: CheckoutPorts,
+  pubkey: string,
+  record: CheckoutCodeRecord,
+  part: CheckoutPartRecord,
+  R: Uint8Array,
+  identity?: Uint8Array,
+  onDelivered?: () => void,
+) {
   return {
     // The locked token is "delivered" into the record: it is the store's to receive, at deposit.
     ports: {
@@ -237,6 +245,7 @@ function armContext(ports: CheckoutPorts, pubkey: string, record: CheckoutCodeRe
         return true
       },
     },
+    ...(onDelivered ? { onDelivered } : {}),
     linkSecret: R,
     refundSecret: R,
     lockPub: record.shopKey,
@@ -292,6 +301,33 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
   // from its own R, and every write is to this one record object and saved whole and synchronously,
   // so two parts finishing together cannot lose each other's state. All parts are waited for
   // before the outcome is decided, so nothing is left running behind an answer.
+  //
+  // #477: the store needs only the locked tokens, not the relay's take-backs, so the deposit goes
+  // as soon as EVERY part's locked token is in the record, beside the last refund deposits. From
+  // that point no part can be refused (only `armed` / `not_armed` follow a delivery), so the code
+  // would be issued either way; a part the relay does not take is taken back by this wallet at
+  // `x`, as before. The body is the same one the sequential path sends, so it replays by key.
+  let early: Promise<CheckoutOutcome> | undefined
+  const allDelivered = () => record.parts.every((p) => !!p.lockedToken && p.state !== 'kept' && p.state !== 'settled' && p.state !== 'unarmed')
+  const onDelivered = () => {
+    if (early || !allDelivered()) return
+    early = deposit(ports, pubkey, record).catch((error: unknown) => ({
+      kind: 'pending' as const,
+      why: error instanceof Error ? error.message : String(error),
+      record,
+    }))
+  }
+  const finish = async (out: CheckoutOutcome | null): Promise<CheckoutOutcome | null> => {
+    if (!early) return out
+    const deposited = await early
+    if (out) return out
+    // A deposit that did not answer leaves the record ready for the next run's deposit.
+    if (deposited.kind === 'pending' && record.status === 'locking') {
+      record.status = 'depositing'
+      save(pubkey, record)
+    }
+    return deposited
+  }
   const armOne = async (part: CheckoutPartRecord): Promise<{ part: CheckoutPartRecord; out: ArmOutcome } | null> => {
     if (part.state === 'locked' || part.state === 'kept' || part.state === 'unarmed' || part.state === 'settled') return null
     // Checked above, with every other part: recorded as arming BEFORE its burn, and armed as a
@@ -300,7 +336,7 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
       part.state = 'arming'
       save(pubkey, record)
     }
-    const out: ArmOutcome = await armGift(armContext(ports, pubkey, record, part, R(part), identity))
+    const out: ArmOutcome = await armGift(armContext(ports, pubkey, record, part, R(part), identity, onDelivered))
     if (out.kind === 'armed' || out.kind === 'not_armed') {
       // Not armed: the relay did not take a take-back. Still locked, and this wallet posts the same
       // refund itself after `x`, as for a Cashlink. The code is still worth issuing.
@@ -343,10 +379,11 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
     save(pubkey, record)
     if (part.state !== 'unarmed' && part.sourceTokenId && !part.split) await ports.consume(part.sourceTokenId)
   }
-  if (pending !== undefined) return { kind: 'pending', why: pending, record }
+  if (pending !== undefined) return finish({ kind: 'pending', why: pending, record })
   if (record.parts.some((p) => p.state === 'kept' || p.state === 'settled' || p.state === 'unarmed')) {
-    return abandon(pubkey, record, record.refusal ?? 'not issued')
+    return finish(abandon(pubkey, record, record.refusal ?? 'not issued'))
   }
+  if (early) return finish(null)
   record.status = 'depositing'
   save(pubkey, record)
   return null

@@ -99,7 +99,11 @@ export type SwapAnswer =
   | { kind: 'refused'; code?: number; detail?: string }
 
 export interface CashlinkMint {
-  activeKeysetId(mintUrl: string): Promise<string>
+  /**
+   * The active sat keyset. #477: the HTTP mint may answer from a read under a minute old; pass
+   * `{ fresh: true }` after the mint said a keyset is inactive (12002, KEYSET_INACTIVE).
+   */
+  activeKeysetId(mintUrl: string, opts?: { fresh?: boolean }): Promise<string>
   keys(mintUrl: string, keysetId: string): Promise<Record<string, string>>
   swap(mintUrl: string, inputs: Array<TokenProof & { witness?: string }>, outputs: BlindedOutput[]): Promise<SwapAnswer>
   /** NUT-09. Throws when the mint cannot be read; an empty answer means it signed none of them. */
@@ -312,6 +316,12 @@ export interface ArmContext {
   /** Set when resuming: the burn keyset recorded before the first burn. */
   burnKeyset?: string
   /**
+   * #477: called once the locked token is delivered, BEFORE its refunds are deposited, so a
+   * caller that only needs the locked token (a checkout code's deposit at the store) can go on
+   * while the relay deposits run. Never awaited by the arm's outcome; must not throw.
+   */
+  onDelivered?: (lockedToken: string) => void
+  /**
    * Resuming an arm `onArming` already recorded, whether or not its burn keyset is known (#379: a
    * record that lost it must still never re-run the pre-check, which reads our own burn as a claim).
    */
@@ -484,6 +494,11 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   const lockedToken = tokenOf(mintUrl, locked)
   for (const p of locked) assertNotOpenAfterLocktime(p.secret)
   if (!(await ports.deliver(ctx.linkSecret, lockedToken))) return { kind: 'arming', why: 'not on the link yet' }
+  try {
+    ctx.onDelivered?.(lockedToken)
+  } catch {
+    // A hint to the caller; the arm goes on either way.
+  }
 
   // 4. #477: a keyset read just now (not one recorded by an earlier run) is the active one, so the
   // refunds start there; a rotation since is answered KEYSET_INACTIVE and re-read, as before.
@@ -621,7 +636,7 @@ async function lockOne(
       // The keyset recorded before the burn was archived since (a resumed run, or a rotation in
       // between): nothing was signed. The same B_ in the active keyset (rev-wallet377 M2), so a
       // later restore still finds them; the witness covers amounts and B_ only.
-      burnOuts = derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, await ports.mint.activeKeysetId(mintUrl))
+      burnOuts = derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, await ports.mint.activeKeysetId(mintUrl, { fresh: true }))
       witness = burnWitness(burnOuts)
       done = await swapOrRestore(ports.mint, mintUrl, [{ ...proof, witness }], burnOuts)
     }
@@ -758,7 +773,7 @@ async function depositOne(
     // cover keyset ids). Once.
     if (answer.status === 422 && answer.body?.refusal === 'KEYSET_INACTIVE' && attempt === 0) {
       try {
-        const fresh = await ports.mint.activeKeysetId(mintUrl)
+        const fresh = await ports.mint.activeKeysetId(mintUrl, { fresh: true })
         if (fresh !== keyset) {
           keyset = fresh
           continue
@@ -878,7 +893,7 @@ async function settleProof(ctx: ReturnContext, mintUrl: string, proof: TokenProo
     let done = await swapOrRestore(ports.mint, mintUrl, [{ ...proof, witness: refund.witness }], refund.outputs)
     if (done.kind === 'refused' && done.answer.kind === 'inactive') {
       // The keyset was archived since (the relay's post fails the same way, code_12002).
-      const fresh = refundSwap(ctx.refundSecret, proof, await ports.mint.activeKeysetId(mintUrl))
+      const fresh = refundSwap(ctx.refundSecret, proof, await ports.mint.activeKeysetId(mintUrl, { fresh: true }))
       used = fresh.outputs
       done = await swapOrRestore(ports.mint, mintUrl, [{ ...proof, witness: fresh.witness }], fresh.outputs)
     }
@@ -1366,18 +1381,48 @@ const keysCache = new Map<string, Promise<Record<string, string>>>()
 /** Test seam. */
 export function clearMintKeysCache(): void {
   keysCache.clear()
+  activeCache.clear()
+}
+
+/**
+ * #477: the active keyset, kept for a minute per mint. Rotations are rare and every caller that
+ * builds outputs handles an inactive keyset (12002 / KEYSET_INACTIVE) by asking with `fresh`.
+ */
+const ACTIVE_KEYSET_TTL_MS = 60_000
+const activeCache = new Map<string, { at: number; id: Promise<string> }>()
+
+/**
+ * #477: open the connections to the mint before the first call that has to wait for them (TLS is
+ * ~0.35 s on staging), and warm the keyset. For the screen that makes a code. Never throws.
+ */
+export function warmMint(mintUrl: string): void {
+  void httpCashlinkMint()
+    .activeKeysetId(mintUrl)
+    .then((id) => httpCashlinkMint().keys(mintUrl, id))
+    .catch(() => undefined)
 }
 
 /** The HTTP mint the app uses. */
 export function httpCashlinkMint(): CashlinkMint {
   return {
-    async activeKeysetId(mintUrl) {
-      const r = await mintFetch(`${mintUrl}/v1/keysets`, { method: 'GET' })
-      if (!r.ok) throw new Error(`keysets HTTP ${r.status}`)
-      const { keysets } = (await r.json()) as { keysets?: { id: string; unit: string; active: boolean }[] }
-      const active = keysets?.find((k) => k.active && k.unit === 'sat')
-      if (!active) throw new Error('no active sat keyset')
-      return active.id
+    activeKeysetId(mintUrl, opts) {
+      const now = Date.now()
+      const hit = activeCache.get(mintUrl)
+      if (!opts?.fresh && hit && now - hit.at < ACTIVE_KEYSET_TTL_MS) return hit.id
+      const id = (async () => {
+        const r = await mintFetch(`${mintUrl}/v1/keysets`, { method: 'GET' })
+        if (!r.ok) throw new Error(`keysets HTTP ${r.status}`)
+        const { keysets } = (await r.json()) as { keysets?: { id: string; unit: string; active: boolean }[] }
+        const active = keysets?.find((k) => k.active && k.unit === 'sat')
+        if (!active) throw new Error('no active sat keyset')
+        return active.id
+      })()
+      const entry = { at: now, id }
+      activeCache.set(mintUrl, entry)
+      id.catch(() => {
+        if (activeCache.get(mintUrl) === entry) activeCache.delete(mintUrl)
+      })
+      return id
     },
     keys(mintUrl, keysetId) {
       const key = `${mintUrl}|${keysetId}`
