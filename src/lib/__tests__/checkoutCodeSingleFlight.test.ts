@@ -201,6 +201,19 @@ describe('the record already saved as "No code was made" (the user\'s, 2026-11-0
     expect(only()).toMatchObject({ status: 'reserved', code })
   })
 
+  it('the user\'s exact case: the replay is refused (other DLEQs), the store has no keys on /mine, and the code is already used twice', async () => {
+    const { code } = await wronglyAbandoned()
+    store.byCode(code)!.status = 'redeemed'
+    store.nextDeposit = { status: 409, body: { refusal: 'IDEMPOTENCY_KEY_REUSED' } }
+    const history: Array<{ id: string; memo: string }> = []
+    ports.activity = async (row) => void history.push(row)
+    await flow.reconcileCheckoutCodes(ports, ME)
+    // Found by its terms, then followed to where the store has it: used, nothing comes back.
+    expect(only()).toMatchObject({ status: 'redeemed', code, done: true })
+    expect(only().parts.every((p) => p.state === 'settled')).toBe(true)
+    expect(history.map((h) => h.memo)).toEqual([expect.stringMatching(/code used at shop\.example/)])
+  })
+
   it('found on /mine by its exact terms from a store that does not name keys', async () => {
     const { code } = await wronglyAbandoned()
     store.nextDeposit = { status: 409, body: { refusal: 'IDEMPOTENCY_KEY_REUSED' } }
