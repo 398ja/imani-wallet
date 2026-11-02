@@ -93,6 +93,17 @@ by the same gateway route (`POST /api/v1/wallet/vouchers/cashlink/lock`), with
   `S`, `x` and `R`. Its amount is the credited face value of the sum of its proofs
   (`creditableFaceValue`). Every proof gets its own pre-signed refund at the relay.
 
+### The balance successor (#472)
+
+When an order uses less than a part, the shop re-locks what is left to `S` (§5 rule 4b), and that
+successor **replaces** the part on the code. It has exactly the shape above, with `data`, `x` and
+`R` copied from the part it replaces (the gateway refuses anything else), the same `voucher_id`
+and terms, and a smaller amount. It keeps the part's index on the code. The wallet re-arms its
+refunds at the relay (it holds `R`); after `x` it comes back to `R` whether or not it is re-armed.
+
+So the unused value stays **on the code**, for whoever holds the code, until `x`. At `x` whatever
+is left comes back to the maker (`R`). The maker cannot cancel a code (§3 `cancel`).
+
 ## 3. The code store API
 
 Base path `/v1/checkout-codes`. All calls are NIP-98 (kind 27235, `u` = the
@@ -136,11 +147,21 @@ normalises it.
 
 `200`:
 ```json
-{ "status": "reserved|held|redeemed|cancelling|cancelled|expired",
-  "amount": 2500, "unit": "eur", "expires_at": 1767000000, "stall_pubkey": "…",
-  "held_by": "order ref, only when held by this caller",
-  "parts": [ { "amount": 1000, "splittable": false, "min_step": 1 }, … ] }
+{ "status": "reserved|held|settling|redeemed|cancelling|cancelled|expired",
+  "amount": 1700, "original_amount": 2500, "unit": "eur", "expires_at": 1767000000,
+  "stall_pubkey": "…", "held_by": "order ref, only when held by this caller",
+  "balance": true, "dust_below": 50,
+  "parts": [ { "idx": 0, "amount": 1000, "splittable": false, "min_step": 1 }, … ] }
 ```
+
+- `amount` is what the code is worth **now**: the sum of its unspent parts (#472). It equals
+  `original_amount` until the code is first used. A shop plans from `amount` and `parts`.
+- `parts` lists the unspent parts only, in `idx` order. `idx` is the part's index at deposit and
+  never changes; a balance successor takes the index of the part it replaces.
+- `balance: true` says this store keeps a balance on the code (`/redeem` with `mode`, `/rebalance`).
+  A shop that does not see it uses today's flow.
+- `dust_below` (minor units, store setting `checkout.dust-below-minor`, default 50): a remainder
+  smaller than this is not kept on the code but given back to the maker, as today (§5).
 
 An unknown code, a code for another `S`, and a malformed code all get the
 **same** `404 {"refusal":"NOT_FOUND"}`, byte for byte (R2).
@@ -155,13 +176,56 @@ Body `{"order_ref": "string ≤ 128"}`.
 - `release`: `held → reserved`, for the holding `order_ref` only. Otherwise it
   is a no-op `200`.
 - `redeem`: `held → redeemed`, for the holding `order_ref` only. Returns
-  `{"parts":[{"token":"cashuB…","amount":…}], "customer_pubkey":"…"}`. A replay
-  with the same `order_ref` returns the same body (R4).
-- On any other state these return `409 {"refusal": "<STATE>"}`.
+  `{"parts":[{"idx":0,"token":"cashuB…","amount":…}], "customer_pubkey":"…"}` (the unspent
+  parts). A replay with the same `order_ref` returns the same body (R4).
+- `redeem` with `{"order_ref": "…", "mode": "balance"}` (#472): `held → settling` instead, same
+  answer. The code stays `settling` until the same order posts `/rebalance`. The parts returned are
+  kept with the order, so a replay of this order's `/redeem` returns the same body even after its
+  `/rebalance` (R4 per order, not per code). `settling` never times out and is never swept to
+  `expired`: the parts are burnt and only `/rebalance` says what replaced them.
+- On any other state these return `409 {"refusal": "<STATE>"}` (`SETTLING` while settling).
+
+### `POST /v1/checkout-codes/{code}/rebalance` (shop, after `redeem` with `mode: balance`)
+
+```json
+{ "order_ref": "…", "applied": 800, "spent": [0, 2],
+  "replaced": [ { "idx": 1, "token": "cashuB…", "amount": 700 } ] }
+```
+
+- Only from `settling`, only by the order that redeemed. `spent` and `replaced` name parts of that
+  order's `/redeem` answer, disjoint; every other part was not touched.
+- Every proof of every `spent` and `replaced` part is SPENT at the mint (NUT-07); otherwise
+  `409 PARTS_NOT_SPENT` (retryable). `MINT_UNAVAILABLE` as at deposit.
+- Each `replaced[].token` passes the deposit checks (§2, `StructuralPartVerifier`) against the
+  code's `S`, `x`, unit and stall, except the `expires_at` window (`x` is copied, not chosen), and
+  its refund key is the replaced part's `R`. Its `amount` is its credited face value and is less
+  than the replaced part's. Its proofs are unspent and back no other code. One bad token refuses
+  the whole call (`422 {"refusal", "part": idx}`), nothing changes.
+- `remaining` = the untouched parts + the `replaced` amounts. `remaining > 0` and
+  `remaining < dust_below` is `422 DUST` (the shop should have used today's flow).
+- `remaining > 0`: `settling → reserved`, the spent parts drop off the code, the replaced parts
+  carry their new tokens, and the maker gets a `rebalanced` notice (§6). `remaining = 0`:
+  `settling → redeemed`, notice `redeemed`.
+- What the order took is `before − remaining`, as the store measures it (the shop's `applied` is
+  recorded beside it). One row per order in `checkout_code_redemption`.
+- A replay with the same body answers the same. A different body for the same order is
+  `409 ALREADY_REBALANCED`.
+
+`200 {"status": "reserved|redeemed|expired", "amount": remaining, "applied": n}`. A code whose
+`x` has passed while it was settling is `expired` straight after (its parts come back to `R`).
 
 ### `POST /v1/checkout-codes/{code}/cancel` (customer, the depositor only)
 
-`reserved → cancelling`. `409 HELD` while held.
+Refused: `409 {"refusal": "NOT_CANCELLABLE"}` (#472). A code is a bearer instrument: once made,
+its value belongs to whoever holds the code, until `x`. Codes already `cancelling` before this
+change still finish through `/return` and `/cancelled`.
+
+### `GET /v1/checkout-codes/{code}/parts` (customer, the depositor only)
+
+`{"status", "amount": remaining, "parts": [{"idx", "token", "amount"}]}`: the code's unspent
+parts as they are now, so the maker's wallet can re-arm a balance successor whose `rebalanced`
+notice it never got, and refund it after `x`. Safe to give out: before `x` only `S` can spend a
+part, after `x` only `R`. Any other caller gets the usual `404`.
 
 ### `GET /v1/checkout-codes/cancelling?limit=50` (shop)
 
@@ -189,7 +253,8 @@ customer. They go to the outbox.
 ### `GET /v1/checkout-codes/mine` (customer)
 
 The caller's codes, newest first:
-`[{ "code", "status", "amount", "unit", "expires_at", "shop_key", "stall_pubkey" }]`.
+`[{ "code", "status", "amount", "remaining", "unit", "expires_at", "shop_key", "stall_pubkey" }]`.
+`amount` is what was deposited, `remaining` what is left on the code now (#472).
 This is the only place the store returns a code, and only to its depositor. The
 store therefore keeps the code **encrypted** for the depositor too: AES-GCM under a
 server key, beside `code_hash`.
@@ -199,7 +264,8 @@ server key, beside `code_hash`.
 R5: what a shop key could redirect if it were stolen, for the stall's Terminals page
 ("3 codes, €45.00 outstanding at shop.example"). The NIP-98 caller must be the
 `stall_pubkey` the codes were deposited for. `200 {"codes": n, "amount": minor, "unit": "eur"}`
-over codes locked to `S` for this stall in `reserved`, `held` or `cancelling`; one unit per
+over codes locked to `S` for this stall in `reserved`, `held`, `settling` or `cancelling`, summing
+what is left on each (`remaining`); one unit per
 stall (ADR 0005). It returns no code and no customer. Any other caller, or an `S` this stall
 has no codes for, gets `{"codes": 0, "amount": 0, "unit": <stall unit>}`, so the answer
 reveals nothing about other stalls. The wallet shows no figure for anything but a well-formed
@@ -209,10 +275,11 @@ reveals nothing about other stalls. The wallet shows no figure for anything but 
 
 ```
 reserved ──hold──▶ held ──redeem──▶ redeemed
-   │  ▲              │
-   │  └──release / TTL┘
-   ├──cancel──▶ cancelling ──cancelled──▶ cancelled
-   └── now ≥ expires_at (also from cancelling and held) ──▶ expired
+   ▲  ▲              │ └──redeem (mode: balance)──▶ settling ──rebalance, nothing left──▶ redeemed
+   │  └──release / TTL┘                               │
+   └──────────────── rebalance, a balance left ◀──────┘
+   (cancelling ──cancelled──▶ cancelled: codes cancelled before #472 only)
+   now ≥ expires_at (from reserved, held, cancelling; never settling) ──▶ expired
 ```
 
 Every transition is one conditional `UPDATE … WHERE status = ?`, so exactly one
@@ -284,6 +351,17 @@ Signed only when every rule holds:
    predecessor's terms unchanged (`VoucherTerms`, with `locktime`/`refund`/`sigflag` removed from
    the comparison) and a canonical `max_sats`, where `K` is **either** the `issuer` tag (the
    stall) **or** the predecessor's refund key `R` (the customer). Any other `K` is refused.
+
+   4b. (#472) **Or** the proposal is the balance successor: the §2 link-lock shape
+   (`LinkLock.shapeProblem` empty: `sigflag = SIG_ALL`, `n_sigs = 1`, one refund key), whose
+   `data` is the predecessor's `data` (`S`, the same bytes), whose `locktime` equals the
+   predecessor's, and whose one `refund` equals the predecessor's (`R`, the same spelling), with the
+   terms unchanged and a canonical `max_sats`. Copied, never chosen: a different `data` is
+   `LOCK_KEY_NOT_ALLOWED`, a different `locktime` or `refund` is `WRONG_PROPOSAL`. Several may be
+   asked for (one per power-of-two output), mixed with rule-4 proposals, within the 20. It is
+   signed and checked as the link-lock route signs (`LinkLock.shapeProblem` on what was signed).
+   No new budget: it carries `max_sats`, rule 5 bounds it by this burn, and settling it later is a
+   new burn of a new secret.
 5. `Σ max_sats ≤` the burn's proven amount (`SuccessorSatBound`). One burn, one claim (the shared
    claim ledger), and an identical resend replays.
 
@@ -310,6 +388,9 @@ Pinned details:
 
 Each successor carries one power-of-two output, so the shop sends one proposal per output of the
 amount it re-locks (for example 200 sats to the stall = 128 + 64 + 8, three proposals).
+
+The relay (`POST /api/v1/wallet/cashlink/refunds`) takes a balance successor's pre-signed refunds
+like any part's: it is the same shape, signed by the same gateway.
 
 ### `POST /api/v1/wallet/vouchers/checkout/unlock` (gateway-customer, the customer)
 
@@ -340,17 +421,40 @@ from `R`), so a crash anywhere resumes:
 
 Cancel is the same with every successor locked to `R`.
 
+**Keeping a balance (#472).** When the lookup says `balance: true` and what the order leaves,
+`amount − applied`, is at least `dust_below`, the shop redeems with `mode: balance` and settles
+differently:
+
+- parts the plan sends whole to the stall: as above;
+- the split part: its applied share to the stall (rule 4), the rest **re-locked to `S`** (rule 4b),
+  carried, and posted as that part's `replaced` token;
+- parts the order does not need: **not touched** (not burnt), so they stay on the code as they are.
+
+Then `/rebalance` with `spent` (the parts sent whole to the stall) and `replaced` (the split part,
+if any). Nothing is delivered to the customer. The proposal for a re-lock is built in the wallet's
+`checkoutLockProposal` tag layout: `n_sigs`, `sigflag = SIG_ALL`, `voucher_id`, the terms,
+`locktime`, `refund`, `max_sats`.
+
+When `amount − applied` is 0 or less than `dust_below` (or the lookup has no `balance`), the shop
+uses today's flow: `/redeem` without `mode`, and change to `R` through `/change`.
+
 ## 6. Notifications to the customer
 
 The store sends them itself, as NIP-17 gift wraps from its own key to the depositor's key:
 
 ```json
-{ "type": "imani-checkout-code/1", "event": "redeemed|expired|cancelled|change",
-  "code_hash": "…", "amount": 800, "unit": "eur", "tokens": ["cashuB…"] }
+{ "type": "imani-checkout-code/1", "event": "redeemed|expired|cancelled|change|rebalanced",
+  "code_hash": "…", "amount": 800, "unit": "eur", "remaining": 1700, "tokens": ["cashuB…"] }
 ```
 
 `tokens` (R-locked) appear only on `change` and `cancelled`. `redeemed` carries the amount spent.
 `expired` carries only the amount: the parts come back through the relay's pre-signed refunds.
+
+`rebalanced` (#472): an order used `amount` and `remaining` is left on the code. It carries no
+tokens (a part token can be larger than a gift wrap allows): the wallet reads the code's parts
+with `GET /{code}/parts`, marks the parts that are gone as spent (after the mint says SPENT),
+checks each new token is locked to `S` until `x` with that part's `R`, and re-arms its refunds.
+A `redeemed` that ends a balance code carries `remaining: 0` and the amount of the last order.
 
 The store publishes its nostr key at `GET /v1/checkout-codes/info` (`{"nostr_pubkey": "…"}`,
 public). The wallet drops any notice whose seal is not that key.
