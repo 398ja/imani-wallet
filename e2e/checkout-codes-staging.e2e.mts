@@ -25,6 +25,10 @@
  * Env: E2E_BASE (wallet origin), E2E_CODES (code store origin), COUPON_CORE (imani-coupon-core path).
  */
 // The flow keeps its records in localStorage. Installed before any import that could touch it.
+// A deployed wallet is built with VITE_TRUSTED_MINT_URLS (the Dockerfile refuses a build without it);
+// this run reads the same setting, so a balance successor is checked as the staging app checks it.
+// Without it every token is `untrusted_mint` and is never adopted (staging, 2026-11-02).
+process.env.VITE_TRUSTED_MINT_URLS ??= 'https://mint.staging.398ja.xyz'
 const mem = new Map<string, string>()
 ;(globalThis as Record<string, unknown>).localStorage = {
   getItem: (k: string) => mem.get(k) ?? null,
@@ -50,7 +54,8 @@ import { bytesToHex, randomBytes } from '@noble/hashes/utils'
 import { hashToCurve } from '@cashu/crypto/modules/common'
 
 import { registerMerchant } from './register.mts'
-import { startCheckoutCode, cancelCheckoutCode, unlockReturned, codeHashOf, syncBalance, type CheckoutPorts } from '../src/lib/checkoutCodeFlow'
+import { startCheckoutCode, cancelCheckoutCode, unlockReturned, codeHashOf, syncBalance, successorProblem, type CheckoutPorts } from '../src/lib/checkoutCodeFlow'
+import { deriveCheckoutRefundSecret } from '../src/lib/cashlinkLock'
 import { httpCashlinkMint, type KeptCoupon } from '../src/lib/cashlinkFlow'
 import { creditableFaceValue, exactFaceValue, parseVoucherToken, tokenProofs } from '../src/lib/voucherToken'
 import { checkSymbol, CHECKOUT_ALPHABET, display } from '../src/lib/checkoutCode'
@@ -395,7 +400,8 @@ async function main() {
     info(`redeem replay same order_ref -> ${replay.http}; hold by another order after redeem -> ${other.http} ${other.body}`)
   }
 
-  // 4. Code B: cancel, shop gives it back, customer unlocks.
+  // 4. Code B: #472, the maker cannot cancel. The store refuses NOT_CANCELLABLE, the shop's feed never
+  // lists it, nothing comes back, and the code stays reserved (its value is the holder's until x).
   const outB = await startCheckoutCode({ ports, pubkey: customer, stall, shop: onlineShop, unit, decimals, amount: 100, x, parts: [{ tokenId: 'b', token: couponB, amount: 100, faceValue: 100 }] })
   const codeB = outB.record.code ?? ''
   info(`code B: ${outB.kind} ${codeB ? display(codeB) : ''}${'why' in outB ? ` why=${outB.why}` : ''}`)
@@ -413,12 +419,11 @@ async function main() {
     const unspent = (await Promise.all(got.map((k) => states(mintUrl, k.token)))).flat().every((s) => s === 'UNSPENT')
     const mineB = await signedCall(CODES, customerSk, 'GET', '/v1/checkout-codes/mine')
     const statusB = (Array.isArray(mineB.body) ? (mineB.body as Array<Record<string, unknown>>) : []).find((r) => String(r.code).replace(/-/g, '') === codeB)?.status
-    step('4 second code cancelled and released: shop returns it, customer unlocks the value back',
-      cancel.ok && (feed.codes ?? []).includes(codeB) && !back.error && back.cancelled?.outcome === 'ok' && un.kind === 'kept' && got.length > 0 && Math.round(exact(got.map((k) => k.token))) === 100 && unspent &&
-        got.every((k) => !k.satsToken && tokenProofs(k.token).every((p) => p.secret.startsWith('["VOUCHER"'))) && statusB === 'cancelled',
-      `cancel=${JSON.stringify(cancel)} in feed=${(feed.codes ?? []).includes(codeB)} return=${JSON.stringify(back.return)} error=${back.error ?? '-'} cancelled=${JSON.stringify(back.cancelled)} unlock=${JSON.stringify(un)} kept=${got.length} exact face=${exact(got.map((k) => k.token)).toFixed(3)} rows as the wallet books them=${gotFace} UNSPENT=${unspent} store status=${statusB}`)
+    step('4 the maker cannot cancel a code (#472): NOT_CANCELLABLE, nothing returned, the code stays reserved',
+      !cancel.ok && cancel.why === 'NOT_CANCELLABLE' && !(feed.codes ?? []).includes(codeB) && back.return?.refusal === 'RESERVED' && got.length === 0 && statusB === 'reserved',
+      `cancel=${JSON.stringify(cancel)} in feed=${(feed.codes ?? []).includes(codeB)} return=${JSON.stringify(back.return)} error=${back.error ?? '-'} unlock=${JSON.stringify(un)} kept=${got.length} store status=${statusB}`)
   } else {
-    step('4 second code cancelled and released: shop returns it, customer unlocks the value back', false, `code B not issued: ${outB.kind}`)
+    step('4 the maker cannot cancel a code (#472): NOT_CANCELLABLE, nothing returned, the code stays reserved', false, `code B not issued: ${outB.kind}`)
   }
 
   // 6. #472, behind a flag: a balance order. The shop op `redeem_balance` is imani-coupon-core's
@@ -432,6 +437,16 @@ async function main() {
       shop({ op: 'hold', shop_sk: shopSk, code: codeC, order_ref: order })
       const red = shop({ op: 'redeem_balance', shop_sk: shopSk, code: codeC, stall, currency: unit, order_total: used, order_ref: order })
       const sync = await syncBalance(ports, customer, outC.record.id)
+      if (sync !== 'handled') {
+        // Why: each part the store lists against what this wallet would accept for it.
+        const partsC = await signedCall(CODES, customerSk, 'GET', `/v1/checkout-codes/${codeC}/parts`)
+        const recC = (await import('../src/lib/checkoutCodeRecords')).loadCheckoutCodes(customer).find((r) => r.id === outC.record.id)
+        for (const e of ((partsC.body as { parts?: Array<{ idx: number; token: string; amount: number }> })?.parts ?? [])) {
+          const p = recC?.parts[e.idx]
+          const why = p ? (e.token === p.lockedToken ? 'unchanged' : successorProblem(recC!, p, deriveCheckoutRefundSecret(customerSk, p.i), e.token, e.amount) ?? 'accepted') : 'no such part'
+          info(`balance part ${e.idx}: store amount=${e.amount} -> ${why}`)
+        }
+      }
       const rec = (await import('../src/lib/checkoutCodeRecords')).loadCheckoutCodes(customer).find((r) => r.id === outC.record.id)
       const mineC = await signedCall(CODES, customerSk, 'GET', '/v1/checkout-codes/mine')
       const row = (Array.isArray(mineC.body) ? (mineC.body as Array<Record<string, unknown>>) : []).find((r) => String(r.code).replace(/-/g, '') === codeC)
