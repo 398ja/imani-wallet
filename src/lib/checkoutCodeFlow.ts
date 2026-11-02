@@ -275,6 +275,8 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
   // 0. Before anything is burnt, every part: carved to its amount, then checked whole. Carving
   // writes the wallet's coupon rows, so one at a time; the checks are read-only, so side by side
   // (#477), and the first refusal in the parts' order decides, as before.
+  // #477: parts this run's pre-check just found unspent: their arm need not ask the mint again.
+  const checkedNow = new Set<CheckoutPartRecord>()
   if (record.parts.every((p) => p.state === 'new')) {
     for (const part of record.parts) {
       if (!part.token) {
@@ -295,6 +297,7 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
       const refusal = c.ok ? c.value : ({ kind: 'unarmed', why: 'unreachable' } as const)
       if (refusal) return refuse(pubkey, record, refusal.kind === 'unarmed' ? refusal.why : refusal.kind)
     }
+    for (const part of record.parts) checkedNow.add(part)
   }
 
   // 1-4 for each part, as a Cashlink. #477: parts side by side. Every step of a part is derived
@@ -336,7 +339,10 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
       part.state = 'arming'
       save(pubkey, record)
     }
-    const out: ArmOutcome = await armGift(armContext(ports, pubkey, record, part, R(part), identity, onDelivered))
+    const out: ArmOutcome = await armGift({
+      ...armContext(ports, pubkey, record, part, R(part), identity, onDelivered),
+      ...(checkedNow.has(part) ? { preChecked: true } : {}),
+    })
     if (out.kind === 'armed' || out.kind === 'not_armed') {
       // Not armed: the relay did not take a take-back. Still locked, and this wallet posts the same
       // refund itself after `x`, as for a Cashlink. The code is still worth issuing.

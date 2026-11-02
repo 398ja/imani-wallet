@@ -436,6 +436,13 @@ export interface ArmContext {
    */
   resuming?: boolean
   /**
+   * #477: this run's own pre-check (`armPreflight`) found every proof UNSPENT just now, so the arm
+   * does not ask the mint again before the burns (about 1 s on staging, on the critical path). A
+   * state gone stale since is caught by the burn itself, as for any state: the mint answers
+   * "spent" and NUT-09 says whose.
+   */
+  preChecked?: boolean
+  /**
    * #402: the key the gift is locked to, when it is not the link key: a checkout part is locked to
    * the shop key `S`. `linkSecret` is then the part's refund key `R`, which signs the deposit
    * (gateway-customer accepts the refund key there) and is what `deliver` is handed.
@@ -501,11 +508,20 @@ async function allStillUnspent(ports: ArmContext['ports'], mintUrl: string, proo
 
 /**
  * Proofs of one gift (and refunds of one part) in flight at once (#477). A coupon is one proof per
- * power-of-two denomination, so 8 covers most in one wave. Sized against gateway-customer's
+ * power-of-two denomination, so a 12 EUR coupon is up to ~14 proofs; 16 runs every proof of one in
+ * a single wave (with 8, a 9-proof coupon waited a whole burn-lock-mint round for its 9th proof,
+ * about 1.5 s on staging). The locks go in one batch call (gateway-customer#287), so the gateway's
  * per-caller limits (120 a minute on the Cashlink routes, 30 a minute per link key on the
- * refunds) and the edge's 10 a second per address with a 100 burst.
+ * refunds) and the edge's 10 a second per address with a 100 burst are not the bound here.
  */
-const ARM_CONCURRENCY = 8
+const ARM_CONCURRENCY = 16
+
+/**
+ * #477: how long the lock batch waits for proofs still burning, after the last one asked. The burns
+ * of one gift finish within a few hundred ms of each other, except for the odd slow one (a burn
+ * that took 1.9 s while the others took 0.8 s held every lock back by a second on staging).
+ */
+export const LOCK_BATCH_WAIT_MS = 300
 
 type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown }
 
@@ -553,7 +569,9 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
 
   const [burnKeyset, giftStates] = await Promise.all([
     ctx.burnKeyset ?? ports.mint.activeKeysetId(mintUrl),
-    ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret)).catch(() => undefined),
+    ctx.preChecked
+      ? Promise.resolve(proofs.map(() => 'UNSPENT' as ProofState))
+      : ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret)).catch(() => undefined),
   ])
   if (!resuming) await ctx.onArming(burnKeyset)
 
@@ -682,6 +700,9 @@ async function preflight(
     // so "not spent yet" (409) means the route exists and would sign once the gift is burnt.
     lockAll(ports, dryBodies, false),
     relayIsOn(ports, ctx.linkSecret),
+    // #477: the burn's keyset, read now (and kept a minute by the HTTP mint) so the arm does not
+    // wait for it after the pre-check. A failure here is only a cold cache.
+    ports.mint.activeKeysetId(mintUrl).catch(() => undefined),
   ])
   if (states.some((s) => s !== 'UNSPENT')) {
     return states.every((s) => s === 'SPENT') ? { kind: 'claimed' } : { kind: 'unarmed', why: 'unreachable' }
@@ -721,15 +742,16 @@ function lockBody(ctx: ArmContext, proof: TokenProof, linkPub: string, refundPub
  * gateway-customer#287: gathers the lock requests of a gift's proofs, which run side by side, into
  * one batch call. Each proof's steps either ask for exactly one lock (`ask`) or finish without one
  * (`leave`). The batch goes as soon as every proof that has started is waiting for its answer or
- * has finished, so no proof waits on one that is still burning longer than it would have waited
- * for its own call. A proof that starts after a batch went (more proofs than run at once) joins
- * the next one.
+ * has finished, or (#477) once no proof has asked for {@link LOCK_BATCH_WAIT_MS}: one slow burn
+ * then no longer holds back every other proof's lock, it joins the next batch on its own. A proof
+ * that starts after a batch went (more proofs than run at once) joins the next one.
  */
 class LockGate {
   private waiting: Array<{ body: unknown; resolve: (a: GatewayAnswer) => void; reject: (e: unknown) => void }> = []
   private active = 0
+  private timer: ReturnType<typeof setTimeout> | undefined
 
-  constructor(private readonly ports: CashlinkPorts) {}
+  constructor(private readonly ports: CashlinkPorts, private readonly waitMs = LOCK_BATCH_WAIT_MS) {}
 
   /** A proof's steps begin; every `enter` is followed by exactly one `ask` or `leave`. */
   enter(): void {
@@ -740,6 +762,12 @@ class LockGate {
     const answer = new Promise<GatewayAnswer>((resolve, reject) => this.waiting.push({ body, resolve, reject }))
     this.active -= 1
     this.flushIfReady()
+    // Proofs still burning: wait a little for them, but not for the slowest. Each new ask restarts
+    // the wait, so proofs finishing close together still go in one call.
+    if (this.waiting.length > 0) {
+      if (this.timer !== undefined) clearTimeout(this.timer)
+      this.timer = setTimeout(() => this.flush(), this.waitMs)
+    }
     return answer
   }
 
@@ -749,7 +777,16 @@ class LockGate {
   }
 
   private flushIfReady(): void {
-    if (this.active > 0 || this.waiting.length === 0) return
+    if (this.active > 0) return
+    this.flush()
+  }
+
+  private flush(): void {
+    if (this.timer !== undefined) {
+      clearTimeout(this.timer)
+      this.timer = undefined
+    }
+    if (this.waiting.length === 0) return
     const batch = this.waiting
     this.waiting = []
     void lockAll(this.ports, batch.map((w) => w.body), true).then(
