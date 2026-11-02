@@ -149,6 +149,10 @@ export interface KeptCoupon {
 }
 
 export const LOCK_PATH = '/api/v1/wallet/vouchers/cashlink/lock'
+/** gateway-customer#287: every `/lock` body of a gift in one call, each answered as `/lock` would. */
+export const LOCK_BATCH_PATH = '/api/v1/wallet/vouchers/cashlink/lock-batch'
+/** The most locks the gateway takes in one batch. */
+export const LOCK_BATCH_MAX = 32
 export const RESIGN_PATH = '/api/v1/wallet/vouchers/cashlink/resign'
 export const REFUNDS_PATH = '/api/v1/wallet/cashlink/refunds'
 
@@ -239,6 +243,111 @@ async function signRoute(ports: CashlinkPorts, path: string, body: unknown): Pro
 const notYet = (status: number): boolean => status === 409 || status === 429 || status >= 500
 
 const refusalOf = (a: GatewayAnswer): string => (typeof a.body?.refusal === 'string' ? a.body.refusal : `HTTP_${a.status}`)
+
+/** Gateways that answered the batch route 404/405 (older than gateway-customer#287): asked one by one from then on. */
+const noBatchRoute = new WeakSet<CashlinkGateway>()
+
+/** One lock body asked alone: a real lock through `signRoute`, a dry run with only the 429 retry. */
+async function askOneLock(ports: CashlinkPorts, body: unknown, real: boolean): Promise<GatewayAnswer> {
+  if (real) return signRoute(ports, LOCK_PATH, body)
+  let dry = await ports.gateway.call('POST', LOCK_PATH, body)
+  // #477: many dry runs at once can meet the gateway's per-caller limit on the Cashlink routes
+  // (120 a minute). "Not now" is never "refused": wait and ask again, as `signRoute` does.
+  for (let attempt = 0; attempt < 3 && dry.status === 429; attempt++) {
+    await ports.sleep(5_000 * (attempt + 1))
+    dry = await ports.gateway.call('POST', LOCK_PATH, body)
+  }
+  return dry
+}
+
+/**
+ * One batch call, with the 429 retry `signRoute` has. The answers, one per body in order; null
+ * when this gateway has no batch route (404/405), so the caller asks one by one. Any other answer
+ * that is not a well-formed list (a 5xx, a 429 that did not clear) is that status for every body,
+ * which each caller already reads as "not now". Throws only when the gateway is unreachable.
+ */
+async function lockBatchOnce(ports: CashlinkPorts, bodies: unknown[]): Promise<GatewayAnswer[] | null> {
+  let answer = await ports.gateway.call('POST', LOCK_BATCH_PATH, { locks: bodies })
+  for (let attempt = 0; attempt < 3 && answer.status === 429; attempt++) {
+    await ports.sleep(5_000 * (attempt + 1))
+    answer = await ports.gateway.call('POST', LOCK_BATCH_PATH, { locks: bodies })
+  }
+  if (answer.status === 404 || answer.status === 405) return null
+  const results = answer.status === 200 && Array.isArray(answer.body?.results) ? (answer.body.results as unknown[]) : null
+  if (!results || results.length !== bodies.length) {
+    // The batch as a whole was not judged (a 5xx, a 429 that did not clear, or a 4xx such as a
+    // body the edge would not take). None of that is a refusal of any one lock, so it is never
+    // passed on as a 4xx: after a burn a 4xx keeps the value as sats, and that would turn "the
+    // batch was not read" into "the coupon is not re-formed". 429 and 5xx keep their status
+    // (each caller reads them as "not now"); everything else becomes 502, also "not now".
+    const status = answer.status === 429 || answer.status >= 500 ? answer.status : 502
+    return bodies.map(() => ({ status, body: answer.body }))
+  }
+  return results.map((r) => {
+    const item = (r ?? {}) as { status?: unknown; signed_secret?: unknown; refusal?: unknown }
+    const status = typeof item.status === 'number' ? item.status : 502
+    return {
+      status,
+      body: {
+        ...(typeof item.signed_secret === 'string' ? { signed_secret: item.signed_secret } : {}),
+        ...(typeof item.refusal === 'string' ? { refusal: item.refusal } : {}),
+      },
+    }
+  })
+}
+
+/**
+ * gateway-customer#287: every lock body of a gift, answered as `/lock` answers each one, in as few
+ * calls as the gateway allows: one batch (of up to {@link LOCK_BATCH_MAX}) instead of one call per
+ * proof. Each lock that is only "not now" (429, and for a real lock (`real`) a 409
+ * PREDECESSOR_NOT_SPENT while the mint catches up with the burn) is asked again, a few times, as
+ * `signRoute` does; a dry run reads that 409 as its answer.
+ *
+ * A gateway without the batch route is asked one body at a time, side by side, exactly as before.
+ * Never rejects: a body whose answer could not be had is `{ ok: false }` in its place.
+ */
+export async function lockAll(ports: CashlinkPorts, bodies: unknown[], real: boolean): Promise<Settled<GatewayAnswer>[]> {
+  if (bodies.length === 0) return []
+  const oneByOne = () => inParallel(bodies.map((body) => () => askOneLock(ports, body, real)), ARM_CONCURRENCY)
+  if (noBatchRoute.has(ports.gateway)) return oneByOne()
+  const out: Settled<GatewayAnswer>[] = new Array(bodies.length)
+  for (let start = 0; start < bodies.length; start += LOCK_BATCH_MAX) {
+    const chunk = bodies.slice(start, start + LOCK_BATCH_MAX).map((body, i) => ({ body, n: start + i }))
+    let answers: GatewayAnswer[] | null
+    try {
+      answers = await lockBatchOnce(ports, chunk.map((c) => c.body))
+    } catch (error) {
+      for (const c of chunk) out[c.n] = { ok: false, error }
+      continue
+    }
+    if (answers === null) {
+      noBatchRoute.add(ports.gateway)
+      return oneByOne()
+    }
+    chunk.forEach((c, i) => (out[c.n] = { ok: true, value: answers![i] }))
+    // Ask again for the locks that are only "not now": rate limited (429) in their own answer, or,
+    // for a real lock, not spent yet (the burn has not reached the mint's state), as `signRoute`
+    // and the dry run's own retry do for a single call.
+    const retryable = (a: Settled<GatewayAnswer>): boolean =>
+      a.ok && (a.value.status === 429 || (real && a.value.status === 409 && a.value.body?.refusal === 'PREDECESSOR_NOT_SPENT'))
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const waiting = chunk.filter((c) => retryable(out[c.n]))
+      if (waiting.length === 0) break
+      const limited = waiting.some((c) => out[c.n].ok && (out[c.n] as { value: GatewayAnswer }).value.status === 429)
+      await ports.sleep((limited ? 5_000 : 800) * (attempt + 1))
+      let again: GatewayAnswer[] | null
+      try {
+        again = await lockBatchOnce(ports, waiting.map((c) => c.body))
+      } catch (error) {
+        for (const c of waiting) out[c.n] = { ok: false, error }
+        break
+      }
+      if (again === null) break
+      waiting.forEach((c, i) => (out[c.n] = { ok: true, value: again![i] }))
+    }
+  }
+  return out
+}
 
 /** Spread into a KeptCoupon: the face share only when there is one (#384). */
 const faceOf = (faceValue: number | undefined): { faceValue?: number } => (faceValue === undefined ? {} : { faceValue })
@@ -454,8 +563,23 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   // gift's states are read once for every proof (an answer that is stale by the burn is caught by
   // the burn itself: the mint answers "spent" and NUT-09 says whose).
   const stateOf = (n: number): ProofState | undefined => (giftStates?.length === proofs.length ? giftStates[n] : undefined)
+  // gateway-customer#287: the proofs' locks go to the gateway together, in one batch call.
+  const gate = new LockGate(ports)
+  const lockStep = async (n: number): Promise<LockStep> => {
+    gate.enter()
+    let asked = false
+    try {
+      return await lockOne(ctx, mintUrl, proofs[n].proof, burnKeyset, linkPub, refundPub, stateOf(n), (body) => {
+        if (asked) return signRoute(ports, LOCK_PATH, body)
+        asked = true
+        return gate.ask(body)
+      })
+    } finally {
+      if (!asked) gate.leave()
+    }
+  }
   const steps = await inParallel(
-    proofs.map((_, n) => () => lockOne(ctx, mintUrl, proofs[n].proof, burnKeyset, linkPub, refundPub, stateOf(n))),
+    proofs.map((_, n) => () => lockStep(n)),
     ARM_CONCURRENCY,
   )
 
@@ -539,39 +663,32 @@ async function preflight(
   }
   // #477: the NUT-07 check, every proof's dry-run lock and the relay check, all read-only, at once.
   // They are judged in the old order (spent first, then the lock route, then the relay), so the
-  // answer is the one the sequential checks gave.
-  const dryRun = async ({ proof }: { proof: TokenProof }): Promise<ArmOutcome | null> => {
-    let dry: GatewayAnswer
-    try {
-      const body = lockBody(ctx, proof, linkPub, refundPub, derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, '00'.repeat(8)))
-      dry = await ports.gateway.call('POST', LOCK_PATH, body)
-      // #477: many dry runs at once can meet the gateway's per-caller limit on the Cashlink routes
-      // (120 a minute). "Not now" is never "refused": wait and ask again, as `signRoute` does.
-      for (let attempt = 0; attempt < 3 && dry.status === 429; attempt++) {
-        await ports.sleep(5_000 * (attempt + 1))
-        dry = await ports.gateway.call('POST', LOCK_PATH, body)
-      }
-    } catch {
-      return { kind: 'unarmed', why: 'unreachable' }
-    }
+  // answer is the one the sequential checks gave. gateway-customer#287: the dry runs go in one
+  // batch call (one by one, side by side, on a gateway without the batch route).
+  const judge = (d: Settled<GatewayAnswer>): ArmOutcome | null => {
+    if (!d.ok) return { kind: 'unarmed', why: 'unreachable' }
+    const dry = d.value
     if (dry.status === 429) return { kind: 'unarmed', why: 'rate_limited' }
     if (dry.status === 404 || dry.status === 405 || dry.status >= 500) return { kind: 'unarmed', why: 'lock_route_unavailable' }
     if (!(dry.status === 409 && dry.body?.refusal === 'PREDECESSOR_NOT_SPENT')) return { kind: 'unarmed', why: 'lock_refused' }
     return null
   }
+  const dryBodies = proofs.map(({ proof }) =>
+    lockBody(ctx, proof, linkPub, refundPub, derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, '00'.repeat(8))),
+  )
   const [states, dries, relayOn] = await Promise.all([
     ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret)),
     // A dry run of every lock: the gateway checks everything but the burn before it asks the mint,
     // so "not spent yet" (409) means the route exists and would sign once the gift is burnt.
-    inParallel(proofs.map((p) => () => dryRun(p)), ARM_CONCURRENCY),
+    lockAll(ports, dryBodies, false),
     relayIsOn(ports, ctx.linkSecret),
   ])
   if (states.some((s) => s !== 'UNSPENT')) {
     return states.every((s) => s === 'SPENT') ? { kind: 'claimed' } : { kind: 'unarmed', why: 'unreachable' }
   }
   for (const d of dries) {
-    if (!d.ok) return { kind: 'unarmed', why: 'unreachable' }
-    if (d.value) return d.value
+    const refusal = judge(d)
+    if (refusal) return refusal
   }
   // A gift locked to its link with nothing to post its take-back is no better than today's, so
   // while the relay is off (or not deployed), links stay as they are.
@@ -600,6 +717,49 @@ function lockBody(ctx: ArmContext, proof: TokenProof, linkPub: string, refundPub
   }
 }
 
+/**
+ * gateway-customer#287: gathers the lock requests of a gift's proofs, which run side by side, into
+ * one batch call. Each proof's steps either ask for exactly one lock (`ask`) or finish without one
+ * (`leave`). The batch goes as soon as every proof that has started is waiting for its answer or
+ * has finished, so no proof waits on one that is still burning longer than it would have waited
+ * for its own call. A proof that starts after a batch went (more proofs than run at once) joins
+ * the next one.
+ */
+class LockGate {
+  private waiting: Array<{ body: unknown; resolve: (a: GatewayAnswer) => void; reject: (e: unknown) => void }> = []
+  private active = 0
+
+  constructor(private readonly ports: CashlinkPorts) {}
+
+  /** A proof's steps begin; every `enter` is followed by exactly one `ask` or `leave`. */
+  enter(): void {
+    this.active += 1
+  }
+
+  ask(body: unknown): Promise<GatewayAnswer> {
+    const answer = new Promise<GatewayAnswer>((resolve, reject) => this.waiting.push({ body, resolve, reject }))
+    this.active -= 1
+    this.flushIfReady()
+    return answer
+  }
+
+  leave(): void {
+    this.active -= 1
+    this.flushIfReady()
+  }
+
+  private flushIfReady(): void {
+    if (this.active > 0 || this.waiting.length === 0) return
+    const batch = this.waiting
+    this.waiting = []
+    void lockAll(this.ports, batch.map((w) => w.body), true).then(
+      (answers) => answers.forEach((a, i) => (a.ok ? batch[i].resolve(a.value) : batch[i].reject(a.error))),
+      // `lockAll` never rejects; should it, no proof is left waiting for ever.
+      (error: unknown) => batch.forEach((w) => w.reject(error)),
+    )
+  }
+}
+
 type LockStep =
   | { kind: 'locked'; proof: UnblindedProof }
   | { kind: 'gone' }
@@ -616,6 +776,8 @@ async function lockOne(
   refundPub: string,
   /** #477: the gift's state, read for every proof of the gift in one NUT-07 call. */
   known?: ProofState,
+  /** gateway-customer#287: asks for this proof's one lock, batched with the gift's other proofs. */
+  askLock: (body: unknown) => Promise<GatewayAnswer> = (body) => signRoute(ctx.ports, LOCK_PATH, body),
 ): Promise<LockStep> {
   const { ports } = ctx
   let burnOuts = derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, burnKeyset)
@@ -672,7 +834,7 @@ async function lockOne(
   if (burnState === 'SPENT') {
     let signed = ctx.knownLocks?.get(proof.secret)
     if (!signed) {
-      const replay = await signRoute(ports, LOCK_PATH, body)
+      const replay = await askLock(body)
       if (replay.status === 200 && typeof replay.body?.signed_secret === 'string') signed = replay.body.signed_secret
     }
     if (signed && isTheLockAskedFor(signed, gift, ask)) {
@@ -685,7 +847,7 @@ async function lockOne(
 
   // 2. The lock. Deterministic: a resend after a lost answer is the identical request, and the
   // gateway answers it with the identical lock.
-  const answer = await signRoute(ports, LOCK_PATH, body)
+  const answer = await askLock(body)
   if (answer.status === 200 && typeof answer.body?.signed_secret === 'string') {
     const signed = answer.body.signed_secret
     if (!isTheLockAskedFor(signed, gift, ask)) {
