@@ -205,4 +205,39 @@ describe('an online shop hands in one order as several vouchers (#402 contract �
     expect(claim.voucherId).toBe(VB)
     expect(claim.terminalPubkey).toBeUndefined()
   })
+
+  it('keeps the order each voucher was spent on, so a shop sale never reads only "Received via DM" (2026-11-02)', async () => {
+    // One €5 order (59) paid by €3.90 of one voucher and €1.10 of another; then a €1 order (60).
+    const order = (n: string, applied: number) => ({
+      kind: 'online_shop',
+      shopUrl: 'https://shop.example',
+      shopHost: 'shop.example',
+      platform: 'woocommerce',
+      orderNumber: n,
+      orderRef: `wc-order-${n}`,
+      codeRef: '3d87b6f39cb5',
+      amountApplied: applied,
+    })
+    await handIn({ ...verified(VB, 390, 1500), spendSource: order('59', 500) }, 1)
+    await handIn({ ...verified(VA, 108, 2000), spendSource: order('59', 500) }, 2)
+    await handIn({ ...verified(VA, 102, 2000), spendSource: order('60', 100) }, 3)
+
+    const claims = txs().filter((t) => t.direction === 'in')
+    expect(claims.map((t) => [t.voucherId, t.amount, t.spendSource?.orderNumber])).toEqual([
+      [VB, 390, '59'],
+      [VA, 108, '59'],
+      [VA, 102, '60'],
+    ])
+    expect(claims[2].spendSource).toMatchObject({ shopHost: 'shop.example', codeRef: '3d87b6f39cb5', amountApplied: 100 })
+    // Each voucher's own record shows its claims: none filed under the other.
+    expect(record(VA).claimedMinor).toBe(210)
+    expect(record(VB).claimedMinor).toBe(390)
+  })
+
+  it('drops a malformed order declaration rather than half-keeping it', async () => {
+    await handIn({ ...verified(VB, 300, 1500), spendSource: { kind: 'online_shop', shopUrl: 'javascript:alert(1)' } }, 1)
+    const claim = txs().find((t) => t.direction === 'in')!
+    expect(claim.voucherId).toBe(VB)
+    expect(claim.spendSource).toBeUndefined()
+  })
 })

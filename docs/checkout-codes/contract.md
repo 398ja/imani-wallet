@@ -132,7 +132,12 @@ integers in the unit's **minor units**. Times are epoch **seconds**.
   `refusal` naming the first problem and `part` its index.
 
 `201 {"code": "IMANI-…", "status": "reserved", "expires_at": …}`. The same
-`idempotency_key` from the same caller replays the same answer.
+`idempotency_key` from the same caller replays the same answer, including a deposit that
+arrives while another one of the same key is still being verified: when its proofs are taken
+by a code under the caller's own key, that code is replayed, never `DUPLICATE_PART`
+(2026-11-02). The wallet runs one deposit per code at a time, and never reads
+`DUPLICATE_PART` as "no code": the parts are locked, so they back a code, and it looks for
+it on `/mine`.
 
 Refusals (`422 {"refusal": NAME, "part": i}`): `MALFORMED`, `TOO_MANY_PARTS`,
 `AMOUNT_MISMATCH`, `UNIT_MISMATCH`, `NOT_AUTHENTIC`, `WRONG_ISSUER`,
@@ -266,8 +271,11 @@ customer. They go to the outbox.
 ### `GET /v1/checkout-codes/mine` (customer)
 
 The caller's codes, newest first:
-`[{ "code", "status", "amount", "remaining", "unit", "expires_at", "shop_key", "stall_pubkey" }]`.
+`[{ "code", "status", "amount", "remaining", "unit", "expires_at", "shop_key", "stall_pubkey", "idempotency_key" }]`.
 `amount` is what was deposited, `remaining` what is left on the code now (#472).
+`idempotency_key` is the deposit's own (from 0.2.1): a wallet that lost a deposit's answer finds
+its code by it. Without it, the wallet matches a code by its exact terms (`expires_at`, `amount`,
+`shop_key`, `stall_pubkey`), and only when exactly one fits.
 This is the only place the store returns a code, and only to its depositor. The
 store therefore keeps the code **encrypted** for the depositor too: AES-GCM under a
 server key, beside `code_hash`.
