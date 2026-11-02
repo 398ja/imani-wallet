@@ -60,6 +60,7 @@ import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './trustedMint'
 import { couponReference, fullyRedeemedMessage, isVoucherFullyRedeemed } from './fullyRedeemed'
+import type { SpendSource } from './spendSource'
 
 /**
  * A receive the mint refused as redeemed in full (cashu-mint#540), as dm-poll's terminal refusal.
@@ -1249,6 +1250,8 @@ function redemptionAdapter(): RedemptionAdapter {
             claim,
             // #402: an online shop's hand-in names its terminal on the stall's row. See shopTakings.ts.
             terminalPubkey: claim ? shopAttributionFor(opts?.senderPubkey, currentPubkey) : undefined,
+            // #402: the order an online shop spent it on, kept on the row (legacyBridge).
+            spendSource: (meta as { spendSource?: SpendSource } | undefined)?.spendSource,
           },
           (correlationId) =>
             redemption.redeem(token, {

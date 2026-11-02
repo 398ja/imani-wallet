@@ -56,6 +56,7 @@ import {
   type CheckoutPartRecord,
 } from './checkoutCodeRecords'
 import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret, type TokenProof } from './voucherToken'
+import { withWebLock } from './webLock'
 
 const { mintOf, proofBody, burnOutputsBody, restoreMine, swapOrRestore, signRoute, notYet, tokenOf, mintCarrier } = cashlinkSteps
 
@@ -169,8 +170,40 @@ export async function startCheckoutCode(req: StartCheckoutCode): Promise<Checkou
 
 const find = (pubkey: string, id: string) => loadCheckoutCodes(pubkey).find((r) => r.id === id)
 
+/**
+ * One run per code at a time, across this tab and every other tab of the origin.
+ *
+ * The page making a code and the catch-up pass (`reconcileCheckoutCodes`, from dm-poll) both run a
+ * `locking` record. Each holds its own copy of the record, so two at once lock every proof twice,
+ * deposit twice, and the LAST save wins: on 2026-11-02 the store issued the code to one run and
+ * refused the other `DUPLICATE_PART`, and the refused run's `abandoned` save overwrote the issued
+ * one. The code worked at the shop while the wallet said "No code was made".
+ *
+ * So every step that reads a record, awaits, and writes it back runs under this, keyed by the code,
+ * and re-reads the record once it holds it. In-tab calls queue on a promise chain (this also covers
+ * a page without the Locks API); across tabs, a Web Lock. Not re-entrant: nothing called under it
+ * takes it again.
+ */
+const codeQueues = new Map<string, Promise<unknown>>()
+
+export function withCheckoutCodeLock<T>(pubkey: string, id: string, fn: () => Promise<T>): Promise<T> {
+  const name = `imani-checkout-code:${pubkey}:${id}`
+  const prior = codeQueues.get(name) ?? Promise.resolve()
+  const run = prior.catch(() => undefined).then(() => withWebLock(name, fn))
+  const tail = run.catch(() => undefined)
+  codeQueues.set(name, tail)
+  void tail.then(() => {
+    if (codeQueues.get(name) === tail) codeQueues.delete(name)
+  })
+  return run
+}
+
 /** Run (or resume) one code. Never throws once the record exists. */
-export async function runCheckoutCode(ports: CheckoutPorts, pubkey: string, id: string): Promise<CheckoutOutcome> {
+export function runCheckoutCode(ports: CheckoutPorts, pubkey: string, id: string): Promise<CheckoutOutcome> {
+  return withCheckoutCodeLock(pubkey, id, () => runCheckoutCodeLocked(ports, pubkey, id))
+}
+
+async function runCheckoutCodeLocked(ports: CheckoutPorts, pubkey: string, id: string): Promise<CheckoutOutcome> {
   const record = find(pubkey, id)
   if (!record) throw new Error('No such checkout code.')
   const identity = ports.identitySecret()
@@ -349,6 +382,13 @@ async function deposit(ports: CheckoutPorts, pubkey: string, record: CheckoutCod
   }
   if (answer.status === 409 || answer.status === 429 || answer.status >= 500 || answer.status === 0) {
     return { kind: 'pending', why: `the code store said ${refusalName(answer)}`, record }
+  }
+  // These very proofs already back a code. They are locked to `S` with refunds to OUR `R`, derived
+  // from this record, so that code is this deposit's own (another run of it got there first, or an
+  // answer was lost). Never "no code": the same body again replays the code by its idempotency key,
+  // here or on the next pass.
+  if (refusalName(answer) === 'DUPLICATE_PART') {
+    return { kind: 'pending', why: 'the code store already holds these parts', record }
   }
   // A definite refusal: no code. Every part is locked and comes back at `x`.
   return abandon(pubkey, record, refusalName(answer))
@@ -617,9 +657,16 @@ export async function handleCheckoutNotice(ports: CheckoutPorts, pubkey: string,
   const store = await storePubkey(ports)
   if (!store) return 'retry'
   if (!sealer || sealer.toLowerCase() !== store) return 'ignored'
-  const record = loadCheckoutCodes(pubkey).find((r) => r.codeHash === notice.code_hash.toLowerCase())
-  if (!record) return 'ignored'
+  const found = loadCheckoutCodes(pubkey).find((r) => r.codeHash === notice.code_hash.toLowerCase())
+  if (!found) return 'ignored'
+  // Read again under the code's lock: a run or another notice may have moved it meanwhile.
+  return withCheckoutCodeLock(pubkey, found.id, async () => {
+    const record = find(pubkey, found.id)
+    return record ? handleNoticeLocked(ports, pubkey, notice, record) : 'ignored'
+  })
+}
 
+async function handleNoticeLocked(ports: CheckoutPorts, pubkey: string, notice: CheckoutNotice, record: CheckoutCodeRecord): Promise<NoticeOutcome> {
   if (notice.event === 'rebalanced') return syncBalance(ports, pubkey, record.id)
 
   if (notice.event === 'redeemed' && isBalanceEnd(record, notice)) {
@@ -747,6 +794,19 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
   if (records.length === 0) return 0
   const nowS = Math.floor(ports.now() / 1000)
 
+  // A deposit the store took while this record was saved as refused (`isUnclaimedDeposit`): the same
+  // body again, which the store answers with the code it issued for this key.
+  for (const r of records.filter((r) => r.status === 'abandoned' && isUnclaimedDeposit(r))) {
+    await withCheckoutCodeLock(pubkey, r.id, async () => {
+      const now = find(pubkey, r.id)
+      if (!now || now.status !== 'abandoned' || !isUnclaimedDeposit(now)) return
+      now.status = 'depositing'
+      delete now.refusal
+      save(pubkey, now)
+    })
+    r.status = 'depositing'
+  }
+
   for (const r of records.filter((r) => r.status === 'locking' || r.status === 'depositing')) {
     if ((await runCheckoutCode(ports, pubkey, r.id)).kind !== 'pending') changed += 1
   }
@@ -759,51 +819,133 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
   } catch {
     // Unreachable: the clock still brings expired parts back below.
   }
+  changed += await adoptIssuedElsewhere(ports, pubkey, mine)
   for (const entry of mine) {
     const code = typeof entry.code === 'string' ? normalise(entry.code) : null
     if (!code?.ok || !STORE_STATUSES.has(entry.status as CheckoutCodeStatus)) continue
-    const record = loadCheckoutCodes(pubkey).find((r) => r.code === code.canonical && !r.done)
-    if (!record) continue
-    // #472: a lost `rebalanced` (or a balance code's last order): less is left than we know of.
-    const lost =
-      typeof entry.remaining === 'number' &&
-      Number.isSafeInteger(entry.remaining) &&
-      entry.remaining < remainingOf(record) &&
-      (entry.status === 'reserved' || entry.status === 'held' || (entry.status === 'redeemed' && (record.redemptions?.length ?? 0) > 0))
-    if (lost) {
-      if ((await syncBalance(ports, pubkey, record.id)) === 'handled') changed += 1
-      continue
-    }
-    if (record.status === entry.status) continue
-    // `settling` is the store waiting on the shop's `/rebalance`: nothing to do here yet.
-    if (entry.status === 'settling') continue
-    record.status = entry.status as CheckoutCodeStatus
-    if (record.status === 'redeemed') {
-      for (const p of record.parts) if (p.state === 'locked') p.state = 'settled'
-      record.done = true
-      await activity(ports, record, 'redeemed', record.amount, `${money(record, record.amount)} code used at ${shopName(record)}`)
-    }
-    // `cancelled` is finished only once its tokens are in (they come by DM): left outstanding.
-    save(pubkey, record)
-    changed += 1
+    const found = loadCheckoutCodes(pubkey).find((r) => r.code === code.canonical && !r.done)
+    if (!found) continue
+    changed += await withCheckoutCodeLock(pubkey, found.id, async () => {
+      const record = find(pubkey, found.id)
+      if (!record || record.done) return 0
+      // #472: a lost `rebalanced` (or a balance code's last order): less is left than we know of.
+      const lost =
+        typeof entry.remaining === 'number' &&
+        Number.isSafeInteger(entry.remaining) &&
+        entry.remaining < remainingOf(record) &&
+        (entry.status === 'reserved' || entry.status === 'held' || (entry.status === 'redeemed' && (record.redemptions?.length ?? 0) > 0))
+      if (lost) return (await syncBalance(ports, pubkey, record.id)) === 'handled' ? 1 : 0
+      if (record.status === entry.status) return 0
+      // `settling` is the store waiting on the shop's `/rebalance`: nothing to do here yet.
+      if (entry.status === 'settling') return 0
+      record.status = entry.status as CheckoutCodeStatus
+      if (record.status === 'redeemed') {
+        for (const p of record.parts) if (p.state === 'locked') p.state = 'settled'
+        record.done = true
+        await activity(ports, record, 'redeemed', record.amount, `${money(record, record.amount)} code used at ${shopName(record)}`)
+      }
+      // `cancelled` is finished only once its tokens are in (they come by DM): left outstanding.
+      save(pubkey, record)
+      return 1
+    })
   }
 
   for (const r of loadCheckoutCodes(pubkey).filter((r) => !r.done && nowS < r.x && r.parts.some(needsRearm))) {
-    if (await rearmSuccessors(ports, pubkey, r.id)) changed += 1
+    if (await withCheckoutCodeLock(pubkey, r.id, () => rearmSuccessors(ports, pubkey, r.id))) changed += 1
   }
 
   for (const r of loadCheckoutCodes(pubkey).filter((r) => !r.done && nowS >= r.x)) {
-    const suspect = await syncBeforeSettle(ports, pubkey, r.id).catch(() => 'all' as const)
-    const after = await settleLockedParts(ports, pubkey, r.id, suspect).catch(() => undefined)
-    if (after?.done) {
-      changed += 1
+    const settled = await withCheckoutCodeLock(pubkey, r.id, async () => {
+      const suspect = await syncBeforeSettle(ports, pubkey, r.id).catch(() => 'all' as const)
+      const after = await settleLockedParts(ports, pubkey, r.id, suspect).catch(() => undefined)
+      if (!after?.done) return false
       if (after.status !== 'abandoned') {
         after.status = 'expired'
         save(pubkey, after)
       }
-    }
+      return true
+    }).catch(() => false)
+    if (settled) changed += 1
   }
   return changed
+}
+
+/**
+ * A deposit the store took whose answer this record never kept (2026-11-02): another run of the same
+ * record was issued the code, and this run's save of the store's `DUPLICATE_PART` refusal overwrote
+ * it, so the wallet said "No code was made" for a code the shop then used twice. Also a deposit
+ * whose answer was lost and whose retry the store refuses (a second run's tokens carry other DLEQ
+ * proofs, so the same key with a different body is `IDEMPOTENCY_KEY_REUSED`). Every part is locked,
+ * so the parts are on the store.
+ */
+export const isUnclaimedDeposit = (r: CheckoutCodeRecord): boolean =>
+  !r.code &&
+  !r.done &&
+  (r.status === 'depositing' || (r.status === 'abandoned' && r.refusal === 'DUPLICATE_PART')) &&
+  r.parts.length > 0 &&
+  r.parts.every((p) => p.state === 'locked' && !!p.lockedToken)
+
+/**
+ * Give an unclaimed deposit its code back, from the store's `/mine`. The store keys a deposit by
+ * customer and idempotency key (this record's id) and lets a locked proof back one code only, so:
+ *
+ * - when `/mine` names the key (imani-checkout-codes from 0.2.1), the code with this record's key
+ *   is this record's;
+ * - before that, the code with this record's exact terms: the same locktime `x` to the second, the
+ *   same amount, shop key and stall, that no other record of this wallet holds. Two codes of one
+ *   wallet with all of those equal would need two made in the same second for the same shop and
+ *   amount; a record that matches more than one is left alone.
+ *
+ * The parts are kept as recorded; the code is then followed like any other, by `/mine` and its
+ * notices, whatever it has been through since. Returns how many records changed.
+ */
+async function adoptIssuedElsewhere(
+  ports: CheckoutPorts,
+  pubkey: string,
+  mine: Array<{ code?: string; idempotency_key?: unknown; amount?: unknown; expires_at?: unknown; shop_key?: unknown; stall_pubkey?: unknown }>,
+): Promise<number> {
+  if (!loadCheckoutCodes(pubkey).some(isUnclaimedDeposit)) return 0
+  const held = new Set(loadCheckoutCodes(pubkey).map((r) => r.code).filter(Boolean))
+  const free = mine.flatMap((e) => {
+    const code = typeof e.code === 'string' ? normalise(e.code) : null
+    return code?.ok && !held.has(code.canonical) ? [{ ...e, canonical: code.canonical }] : []
+  })
+  const lockedAmount = (r: CheckoutCodeRecord) => r.parts.reduce((n, p) => n + (p.lockedToken ? partAmount(p.lockedToken) : 0), 0)
+  const sameTerms = (r: CheckoutCodeRecord, e: (typeof free)[number]) =>
+    e.expires_at === r.x &&
+    e.amount === lockedAmount(r) &&
+    typeof e.shop_key === 'string' &&
+    e.shop_key.toLowerCase() === r.shopKey.toLowerCase() &&
+    typeof e.stall_pubkey === 'string' &&
+    e.stall_pubkey.toLowerCase() === r.stall
+  let changed = 0
+  for (const waiting of loadCheckoutCodes(pubkey).filter(isUnclaimedDeposit)) {
+    const byKey = free.filter((e) => e.idempotency_key === waiting.id)
+    const candidates = byKey.length > 0 ? byKey : free.filter((e) => e.idempotency_key === undefined && sameTerms(waiting, e))
+    if (candidates.length !== 1) continue
+    const chosen = candidates[0]
+    changed += await withCheckoutCodeLock(pubkey, waiting.id, async () => {
+      const record = find(pubkey, waiting.id)
+      if (!record || !isUnclaimedDeposit(record) || loadCheckoutCodes(pubkey).some((r) => r.code === chosen.canonical)) return 0
+      issue(pubkey, record, chosen.canonical)
+      free.splice(free.indexOf(chosen), 1)
+      return 1
+    })
+  }
+  return changed
+}
+
+/** The store issued `canonical` for this record's parts. */
+function issue(pubkey: string, record: CheckoutCodeRecord, canonical: string): void {
+  const amount = record.parts.reduce((n, p) => n + (p.lockedToken ? partAmount(p.lockedToken) : 0), 0)
+  record.status = 'reserved'
+  delete record.refusal
+  record.code = canonical
+  record.codeHash = codeHashOf(canonical)
+  record.amount = amount
+  record.remaining = amount
+  record.redemptions = []
+  save(pubkey, record)
 }
 
 // --- A balance kept on the code (#472) ---------------------------------------
