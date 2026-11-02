@@ -343,6 +343,171 @@ describe('#477: nothing moves past a first proof or part that cannot', () => {
   })
 })
 
+describe('#477: the code is deposited at the store beside the refund deposits', () => {
+  it('the store is asked before the refunds have finished, and the code is issued once both are done', async () => {
+    const c = sevenProofs('a')
+    const call = ports.gateway.call.bind(ports.gateway)
+    let refundsDone = 0
+    let refundsDoneWhenStoreAsked = -1
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    ports.gateway = {
+      call: async (m, p, body, s) => {
+        const isRefund = p.endsWith('/cashlink/refunds') && (body as { proof?: { secret?: string } })?.proof?.secret
+        if (!isRefund) return call(m, p, body, s)
+        // Refunds wait until the store has been asked: a sequential flow would never get there.
+        await held
+        try {
+          return await call(m, p, body, s)
+        } finally {
+          refundsDone += 1
+        }
+      },
+    }
+    const storeCall = store.call.bind(store)
+    store.call = async (m, p, b) => {
+      if (p === '/v1/checkout-codes' && m === 'POST') {
+        refundsDoneWhenStoreAsked = refundsDone
+        release()
+      }
+      return storeCall(m, p, b)
+    }
+    const out = await start([c])
+    expect(out.kind).toBe('issued')
+    expect(refundsDoneWhenStoreAsked).toBe(0)
+    expect(only()).toMatchObject({ status: 'reserved' })
+    expect(only().parts[0]).toMatchObject({ state: 'locked', armed: true })
+    expect(w.gateway.deposits.size).toBe(7)
+    expect(store.codes.size).toBe(1)
+  })
+
+  it('the relay refusing the refunds still issues the code (taken back by this wallet at x)', async () => {
+    const c = coupon([64, 32], 'a')
+    w.gateway.relayOn = true
+    const call = ports.gateway.call.bind(ports.gateway)
+    ports.gateway = {
+      call: async (m, p, body, s) =>
+        p.endsWith('/cashlink/refunds') && (body as { proof?: { secret?: string } })?.proof?.secret ? { status: 503, body: { refusal: 'RELAY_DISABLED' } } : call(m, p, body, s),
+    }
+    const out = await start([c])
+    expect(out.kind).toBe('issued')
+    expect(only().parts[0]).toMatchObject({ state: 'locked', armed: false })
+  })
+
+  it('the store unreachable at the early deposit: pending, the record ready to deposit, and the next pass issues it', async () => {
+    const c = coupon([64, 32], 'a')
+    store.down = true
+    expect((await start([c])).kind).toBe('pending')
+    expect(only().status).toBe('depositing')
+    expect(only().parts[0].state).toBe('locked')
+    store.down = false
+    await flow.reconcileCheckoutCodes(ports, ME)
+    expect(only()).toMatchObject({ status: 'reserved', code: expect.stringMatching(/^IMANI/) })
+    expect(store.codes.size).toBe(1)
+  })
+
+  it('the store refusing the early deposit outright: no code, every part comes back at x', async () => {
+    const c = coupon([64], 'a')
+    store.nextDeposit = { status: 422, body: { refusal: 'WRONG_ISSUER', part: 0 } }
+    const out = await start([c])
+    expect(out.kind).toBe('abandoned')
+    expect(only()).toMatchObject({ status: 'abandoned', refusal: 'WRONG_ISSUER' })
+    expect(only().parts[0].state).toBe('locked')
+  })
+
+  it('no early deposit while a part is not yet locked: a part still part way leaves the code pending, no store call', async () => {
+    const a = coupon([64], 'a')
+    const b = coupon([32], 'b')
+    const bSecret = tokenProofs(b.token)[0].secret
+    const call = ports.gateway.call.bind(ports.gateway)
+    const isReal = realLock()
+    ports.gateway = { call: async (m, p, body, s) => (isReal(p, body) === bSecret ? Promise.reject(new Error('page died')) : call(m, p, body, s)) }
+    expect((await start([a, b])).kind).toBe('pending')
+    expect(store.calls.filter((c) => c.path === '/v1/checkout-codes' && c.method === 'POST')).toHaveLength(0)
+    ports.gateway = { call }
+    expect((await flow.runCheckoutCode(ports, ME, only().id)).kind).toBe('issued')
+    expect(store.codes.size).toBe(1)
+  })
+})
+
+describe('#477: the HTTP mint keeps its active keyset for a minute', () => {
+  const keysets = (id: string) => new Response(JSON.stringify({ keysets: [{ id, unit: 'sat', active: true }] }), { status: 200 })
+
+  it('one read serves callers within a minute; `fresh` reads again; a failed read is not kept', async () => {
+    cashlink.clearMintKeysCache()
+    let n = 0
+    let id = 'ks1'
+    let fail = true
+    vi.stubGlobal('fetch', async () => {
+      n += 1
+      if (fail) {
+        fail = false
+        return new Response('', { status: 503 })
+      }
+      return keysets(id)
+    })
+    const mint = cashlink.httpCashlinkMint()
+    await expect(mint.activeKeysetId('https://m')).rejects.toThrow()
+    expect(await Promise.all([mint.activeKeysetId('https://m'), mint.activeKeysetId('https://m')])).toEqual(['ks1', 'ks1'])
+    expect(n).toBe(2)
+    id = 'ks2'
+    expect(await mint.activeKeysetId('https://m')).toBe('ks1')
+    expect(await mint.activeKeysetId('https://m', { fresh: true })).toBe('ks2')
+    expect(await mint.activeKeysetId('https://m')).toBe('ks2')
+    expect(n).toBe(3)
+    vi.unstubAllGlobals()
+  })
+
+  it('expires after a minute', async () => {
+    cashlink.clearMintKeysCache()
+    let n = 0
+    vi.stubGlobal('fetch', async () => {
+      n += 1
+      return keysets(`ks${n}`)
+    })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    const mint = cashlink.httpCashlinkMint()
+    expect(await mint.activeKeysetId('https://m')).toBe('ks1')
+    now.mockReturnValue(1_000_000 + 59_000)
+    expect(await mint.activeKeysetId('https://m')).toBe('ks1')
+    now.mockReturnValue(1_000_000 + 61_000)
+    expect(await mint.activeKeysetId('https://m')).toBe('ks2')
+    now.mockRestore()
+    vi.unstubAllGlobals()
+  })
+
+  it('a keyset archived after it was cached: the burn is re-made with a FRESH read, never the cached id, and it arms', async () => {
+    // A mint port that caches the active keyset as the HTTP one does, unless asked `fresh`.
+    const c = coupon([64, 32], 'a')
+    const real = w.mint
+    let cached: string | undefined
+    const reads: Array<'cached' | 'fresh'> = []
+    ports.mint = {
+      activeKeysetId: async (_u, o) => {
+        if (!o?.fresh && cached) {
+          reads.push('cached')
+          return cached
+        }
+        reads.push('fresh')
+        cached = real.active().id
+        return cached
+      },
+      keys: real.keys.bind(real),
+      swap: real.swap.bind(real),
+      restore: real.restore.bind(real),
+      states: real.states.bind(real),
+    }
+    await ports.mint.activeKeysetId('m')
+    real.rotate()
+    const out = await start([c])
+    expect(out.kind).toBe('issued')
+    expect(reads).toContain('fresh')
+    // Every locked proof is in the NEW keyset, and every refund deposit too.
+    expect(tokenProofs(only().parts[0].lockedToken!).every((p) => p.id === real.active().id)).toBe(true)
+    expect(only().parts[0].armed).toBe(true)
+  })
+})
+
 describe('#477: the parallel helper', () => {
   it('waits for every task, keeps their order, and never rejects', async () => {
     const order: number[] = []
