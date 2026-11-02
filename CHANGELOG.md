@@ -38,6 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.47.1] - 2026-11-02
+
+### Fixed
+
+- **A checkout code the shop used is never shown as "No code was made"** (#479). The page
+  making a code and dm-poll's catch-up ran the same record at once; the store issued the code
+  to one and refused the other `DUPLICATE_PART`, and that refusal was saved over the issued
+  record. Runs, notices and reconcile steps of one code now queue (`withCheckoutCodeLock`,
+  in-tab and across tabs), `DUPLICATE_PART` is pending rather than "no code", and a record
+  already saved that way finds its code again on the next pass (the same deposit replayed, or
+  the code on `/mine` by its idempotency key or its exact terms, only when one fits).
+- **A shop sale names its order on the stall's books** (#479). The shop's order (`source`)
+  was dropped when the bridge rebuilt the row, so every online sale read "Received via DM";
+  it now reads "Order 59 at shop.example".
+
 ## [0.47.0] - 2026-11-02
 
 ### Changed
