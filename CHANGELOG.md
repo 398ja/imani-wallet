@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.47.2] - 2026-11-02
+
+### Fixed
+
+- 0.47.1 did not build (`tsc -b`: an unused parameter in `adoptIssuedElsewhere`). Same code.
+
 ## [0.47.1] - 2026-11-02
 
 ### Fixed

@@ -819,7 +819,7 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
   } catch {
     // Unreachable: the clock still brings expired parts back below.
   }
-  changed += await adoptIssuedElsewhere(ports, pubkey, mine)
+  changed += await adoptIssuedElsewhere(pubkey, mine)
   for (const entry of mine) {
     const code = typeof entry.code === 'string' ? normalise(entry.code) : null
     if (!code?.ok || !STORE_STATUSES.has(entry.status as CheckoutCodeStatus)) continue
@@ -900,7 +900,6 @@ export const isUnclaimedDeposit = (r: CheckoutCodeRecord): boolean =>
  * notices, whatever it has been through since. Returns how many records changed.
  */
 async function adoptIssuedElsewhere(
-  ports: CheckoutPorts,
   pubkey: string,
   mine: Array<{ code?: string; idempotency_key?: unknown; amount?: unknown; expires_at?: unknown; shop_key?: unknown; stall_pubkey?: unknown }>,
 ): Promise<number> {
