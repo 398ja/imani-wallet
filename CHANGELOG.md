@@ -38,6 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.49.1] - 2026-11-02
+
+### Changed
+
+- **One slow burn no longer holds back a checkout code's other locks** (#477, #488). The lock
+  batch goes 300 ms after the last proof is ready instead of waiting for the slowest burn; a late
+  proof follows in a call of its own. Up to 16 proofs of a coupon now run at once (8 before), so a
+  9-to-14-proof coupon burns in one round. The arm reuses its own run's pre-check instead of a
+  second mint state check (about 1 s); a proof spent in between is still caught by the burn.
+  Staging, EUR 7.85: 7.0-7.8 s for 9-10 proofs (9.4-10.1 s on 0.49.0).
+
 ## [0.49.0] - 2026-11-02
 
 ### Changed
