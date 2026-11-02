@@ -54,6 +54,20 @@ export interface CheckoutPartRecord {
   /** Whether the relay holds every proof's pre-signed refund. */
   armed?: boolean
   depositKeyset?: string
+  /**
+   * #472: earlier locked tokens of this part, oldest first, kept for audit when a balance successor
+   * replaced it (the shop used some of it and re-locked the rest to `S`). Spent at the mint.
+   */
+  replacedTokens?: string[]
+}
+
+/** #472: one order that used part of a code. Minor units, epoch ms. */
+export interface CheckoutRedemption {
+  at: number
+  /** What this order took. */
+  amount: number
+  /** What was left on the code after it. */
+  remaining: number
 }
 
 export type CheckoutCodeStatus =
@@ -63,6 +77,8 @@ export type CheckoutCodeStatus =
   | 'depositing'
   | 'reserved'
   | 'held'
+  /** #472: an order redeemed it keeping a balance; the store is waiting for its `/rebalance`. */
+  | 'settling'
   | 'cancelling'
   | 'redeemed'
   | 'cancelled'
@@ -81,6 +97,13 @@ export interface CheckoutCodeRecord {
   decimals: number
   /** Minor units. */
   amount: number
+  /**
+   * #472: what is left on the code now, minor units. Starts at `amount`; absent on records made
+   * before #472 (read it through {@link remainingOf}).
+   */
+  remaining?: number
+  /** #472: each order that used part of the code, oldest first. */
+  redemptions?: CheckoutRedemption[]
   /** Epoch seconds: every part's locktime. */
   x: number
   createdAt: number
@@ -96,8 +119,12 @@ export interface CheckoutCodeRecord {
   refusal?: string
   /** Set once every part's value is spent or back: the code no longer holds anything. */
   done?: boolean
+  /** In the store's `idx` order: a part's index here is its `idx` on the code, for good. */
   parts: CheckoutPartRecord[]
 }
+
+/** What is left on a code, minor units (#472). A record from before #472 still holds its amount. */
+export const remainingOf = (r: Pick<CheckoutCodeRecord, 'amount' | 'remaining'>): number => r.remaining ?? r.amount
 
 /** Every record, newest first. Unreadable storage throws: the caller decides what unknown means. */
 export function loadCheckoutCodes(pubkey: string): CheckoutCodeRecord[] {

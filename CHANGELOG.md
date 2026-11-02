@@ -38,6 +38,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.47.0] - 2026-11-02
+
+### Changed
+
+- **A checkout code keeps what an order did not use** (#472, option A; contract §2, §3, §6).
+  Whoever holds the code can use the rest at the same shop until it expires, and whatever is
+  left then comes back to the maker. The record keeps `remaining` and a `redemptions` list. A
+  `rebalanced` notice (and `GET /mine` showing less left, for a lost notice) makes the wallet
+  read `GET /{code}/parts`. A part that is gone is settled only once the mint says SPENT. A
+  part with a new token is adopted only if that token is this part's balance successor: locked
+  to `S` until the same `x`, refund to the part's own `R`, the same voucher, gateway-signed, and
+  worth what the store says and less than before. Its refunds are then re-armed at the relay as
+  for a fresh part, and re-armed again on a later pass if the relay was down. The old token is
+  kept for audit. At `x` the current token comes back, through the relay or by this wallet.
+  Below the store's dust threshold the shop uses today's flow, so `change` still arrives.
+- **No Cancel on checkout codes.** A code is a bearer instrument now. The code screen says
+  "Anyone with this code can use the rest until <date>; whatever is left then comes back to
+  you.", shows "£17.00 left of £25.00", and lists each use. Codes already cancelling still
+  finish.
+- History: each partial use is its own outgoing "Code used" row ("€8.00 used at shop.example,
+  €17.00 left on the code"), with no change row. The code's own row shows what is left.
+- `e2e/checkout-codes-staging.e2e.mts`: step 6, a balance order, runs only with
+  `E2E_BALANCE=on` and needs the #472 store, gateway and coupon-core.
+
 ## [0.46.5] - 2026-11-02
 
 ### Fixed

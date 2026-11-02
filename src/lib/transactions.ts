@@ -248,7 +248,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // merchant is. 'sent' is the customer's own version of the same thing —
     // a voucher passed to someone else. Anything else is incoming.
     direction:
-      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback' || type === 'gift_sent' || type === 'checkout_code'
+      type === 'payment' || type === 'issued' || type === 'sent' || type === 'cashback' || type === 'gift_sent' || type === 'checkout_code' || type === 'checkout_code_used'
         ? 'out'
         : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
@@ -863,5 +863,6 @@ export function transactionLabel(tx: WalletTransaction): string {
   if (tx.type === 'gift_pending') return 'Gift'
   if (tx.type === 'checkout_code') return 'Checkout code'
   if (tx.type === 'checkout_change') return 'Change'
+  if (tx.type === 'checkout_code_used') return 'Code used'
   return tx.type === 'issued' ? 'Issued' : 'Received'
 }

@@ -44,10 +44,6 @@ beforeEach(() => {
     shopOf: async (stall) => (stall.toLowerCase() === W.STALL ? SHOP : null),
     nowMs: () => NOW_S * 1000,
     start: vi.fn(async (req) => ({ kind: 'issued' as const, record: record({ amount: req.amount }) })),
-    cancel: vi.fn(async () => {
-      codes = [record({ status: 'cancelling' })]
-      return { ok: true }
-    }),
     codes: () => codes,
     ports: () => ({}) as never,
     split: vi.fn(async () => ({ kind: 'refused' as const, why: 'unused' })),
@@ -160,7 +156,7 @@ describe('Use online', () => {
     expect(deps.split).not.toHaveBeenCalled()
   })
 
-  it('the code screen: display form, Only works at, Copy, Cancel', async () => {
+  it('the code screen: display form, Only works at, Copy, and no Cancel (#472: a code is a bearer instrument)', async () => {
     const writeText = vi.fn(async () => {})
     Object.assign(navigator, { clipboard: { writeText } })
     at('/online/code/r1')
@@ -168,18 +164,22 @@ describe('Use online', () => {
     expect(screen.getByText('Only works at shop.example')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Copy/ }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(screen.getByTestId('checkout-code').textContent))
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel code' }))
-    // Asked first: nothing is cancelled until it is confirmed, and Keep it backs out.
-    expect(screen.getByRole('alertdialog')).toBeTruthy()
-    expect(screen.getByText(/comes back to your\s+wallet within 24 hours/)).toBeTruthy()
-    expect(deps.cancel).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Keep it' }))
-    expect(screen.queryByRole('alertdialog')).toBeNull()
-    expect(deps.cancel).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel code' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel code' }))
-    expect(await screen.findByText(/Cancelling\. Your money is back within 24 hours/)).toBeTruthy()
-    expect(deps.cancel).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('button', { name: /Cancel/ })).toBeNull()
+    expect(screen.getByTestId('bearer-note').textContent).toMatch(/^Anyone with this code can use the rest until .+; whatever is left then comes back to you\.$/)
+  })
+
+  it('#472: what is left, and each partial use', () => {
+    codes = [record({ amount: 2500, remaining: 1700, redemptions: [{ at: NOW_S * 1000, amount: 800, remaining: 1700 }] })]
+    at('/online/code/r1')
+    expect(screen.getByText(/17\.00 left of .*25\.00/)).toBeTruthy()
+    expect(screen.getByTestId('redemptions').textContent).toMatch(/8\.00 used, .*17\.00 left/)
+  })
+
+  it('a legacy cancelling code still says it is on its way back, with no Cancel button', () => {
+    codes = [record({ status: 'cancelling' })]
+    at('/online/code/r1')
+    expect(screen.getByText(/Cancelling\. Your money is back within 24 hours/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Cancel/ })).toBeNull()
   })
 
   it('Shopify gets the compact form', () => {
