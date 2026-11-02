@@ -388,6 +388,15 @@ async function importCustomer(page: Page, secretKey: Uint8Array): Promise<string
     await page.locator('input[placeholder="Choose a passphrase"]').fill(PASSPHRASE)
     await page.locator('input[placeholder="Confirm passphrase"]').fill(PASSPHRASE)
     await page.getByRole('button', { name: /^Log in$/ }).last().click()
+    // Since #338/#357 a key with no profile must claim a handle (and accept the Terms) before it
+    // is let in; the suite's key is always fresh, so A always lands here. Missing this step left
+    // the whole browser suite timing out on its retry from 2026-10-21 on.
+    const finish = page.getByRole('button', { name: 'Finish and log in' })
+    if (await finish.waitFor({ timeout: 15_000 }).then(() => true, () => false)) {
+      await page.locator('input[aria-label="Handle"]').fill('pd' + Date.now().toString().slice(-8))
+      await page.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }).check()
+      await finish.click()
+    }
     for (let i = 0; i < 30 && page.url().includes('onboarding'); i++) await page.waitForTimeout(1000)
     if (!page.url().includes('onboarding')) break
   }
