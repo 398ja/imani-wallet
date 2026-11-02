@@ -330,6 +330,30 @@ export const tokenOf = (proofs: UnblindedProof[]) => encodePlainTokenV4(MINT_URL
 
 // --- The gateway --------------------------------------------------------------
 
+/**
+ * gateway-customer#287: a gateway call that answers `/lock-batch` by asking `call` for each lock on
+ * `/lock`, as the real batch route judges each one as `/lock` alone. A test that wraps the single
+ * route (to fail, refuse or kill one lock) wraps it inside a batch too. If any lock of a batch
+ * throws (the page died, the gateway is down), the whole batch call throws, as a real one would.
+ */
+export function expandBatches(call: CashlinkGateway['call']): CashlinkGateway['call'] {
+  return async (method, path, body, signer) => {
+    if (!path.endsWith('/vouchers/cashlink/lock-batch')) return call(method, path, body, signer)
+    const locks = (body as { locks?: unknown[] } | undefined)?.locks
+    if (!Array.isArray(locks) || locks.length === 0 || locks.length > 32) return { status: 400, body: { refusal: 'VALIDATION' } }
+    const results: Array<{ status: number; signed_secret?: string; refusal?: string }> = []
+    for (const lock of locks) {
+      const a = await call(method, path.replace(/-batch$/, ''), lock, signer)
+      results.push({
+        status: a.status,
+        ...(typeof a.body?.signed_secret === 'string' ? { signed_secret: a.body.signed_secret } : {}),
+        ...(typeof a.body?.refusal === 'string' ? { refusal: a.body.refusal } : {}),
+      })
+    }
+    return { status: 200, body: { results } }
+  }
+}
+
 export interface Deposit {
   secret: string
   swap: { proof: TokenProof & { witness: string }; outputs: BlindedOutput[] }
@@ -374,6 +398,7 @@ export class FakeGateway implements CashlinkGateway {
       return forced
     }
     if (path.endsWith('/vouchers/cashlink/lock')) return this.routes ? this.lock(body as LockBody) : { status: 404, body: null }
+    if (path.endsWith('/vouchers/cashlink/lock-batch')) return this.routes && this.batchRoute ? this.lockBatch(body as { locks: LockBody[] }) : { status: 404, body: null }
     if (path.endsWith('/vouchers/bearer-split/check')) return this.routes && this.splitRoute ? this.bearerSplit(body as SplitBody, true) : { status: 404, body: null }
     if (path.endsWith('/vouchers/bearer-split')) return this.routes && this.splitRoute ? this.bearerSplit(body as SplitBody, false) : { status: 404, body: null }
     if (path.endsWith('/vouchers/checkout/unlock')) return this.routes && this.unlockRoute ? this.unlock(body as LockBody, signedBy) : { status: 404, body: null }
@@ -381,6 +406,26 @@ export class FakeGateway implements CashlinkGateway {
     if (path.endsWith('/cashlink/refunds') && method === 'POST') return this.deposit(body as DepositBody, signedBy)
     if (path.includes('/cashlink/refunds/') && method === 'GET') return this.fetch(path.split('/').pop()!, signedBy)
     return { status: 404, body: null }
+  }
+
+  /** gateway-customer#287: the batch lock route. Off to model a gateway older than it (404). */
+  batchRoute = true
+  /** Batch calls made, with how many locks each carried. */
+  batches: number[] = []
+
+  /**
+   * gateway-customer#287, as `VoucherCashlinkController.lockBatch`: each body answered exactly as
+   * `/lock` answers it alone, in order ({@link expandBatches}). Each lock goes back through
+   * `this.call`, so a test's `override` or its wrapper of `call` on the single route applies to
+   * every lock inside a batch too.
+   */
+  private async lockBatch(b: { locks: LockBody[] }): Promise<GatewayAnswer> {
+    if (Array.isArray(b?.locks) && b.locks.length > 0 && b.locks.length <= 32) this.batches.push(b.locks.length)
+    return expandBatches((method, path, body, signer) => this.call(method, path, body, signer))(
+      'POST',
+      '/api/v1/wallet/vouchers/cashlink/lock-batch',
+      b,
+    )
   }
 
   private lock(b: LockBody): GatewayAnswer {
