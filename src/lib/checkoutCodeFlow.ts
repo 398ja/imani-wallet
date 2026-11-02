@@ -508,13 +508,23 @@ async function unlockOne(ports: CheckoutPorts, mintUrl: string, proof: TokenProo
  * The locked parts of a code whose `x` has passed (expired, or never issued): each comes back by the
  * Cashlink refund path, with only `R`. A part the shop spent reads as claimed: settled too.
  */
-export async function settleLockedParts(ports: CheckoutPorts, pubkey: string, id: string): Promise<CheckoutCodeRecord | undefined> {
+export async function settleLockedParts(
+  ports: CheckoutPorts,
+  pubkey: string,
+  id: string,
+  /**
+   * #472: parts whose old token must NOT be read as "spent by the shop, so finished": the store lists
+   * a successor for them (or could not be asked). Their value may be on a successor locked to `S`.
+   * `'all'` when `/parts` could not be read for a code that has one.
+   */
+  suspect: ReadonlySet<number> | 'all' = new Set(),
+): Promise<CheckoutCodeRecord | undefined> {
   const record = find(pubkey, id)
   if (!record) return undefined
   const identity = ports.identitySecret()
   if (!identity) return record
   try {
-    for (const part of record.parts) {
+    for (const [idx, part] of record.parts.entries()) {
       if (part.state !== 'locked' || !part.lockedToken) continue
       const out = await settleLockedGift({
         ports,
@@ -524,7 +534,8 @@ export async function settleLockedParts(ports: CheckoutPorts, pubkey: string, id
         ...(part.depositKeyset ? { depositKeyset: part.depositKeyset } : {}),
         onReturning: async () => {},
       })
-      if (out.kind === 'returned' || out.kind === 'claimed') {
+      const doubted = suspect === 'all' || suspect.has(idx)
+      if (out.kind === 'returned' || (out.kind === 'claimed' && !doubted)) {
         part.state = 'settled'
         save(pubkey, record)
       }
@@ -672,12 +683,14 @@ export async function handleCheckoutNotice(ports: CheckoutPorts, pubkey: string,
     }
     return 'handled'
   }
-  // expired
-  if (record.status !== 'expired') {
-    record.status = 'expired'
-    save(pubkey, record)
+  // expired. #472: adopt any balance successor first, so the refund is of what is on the code now.
+  const suspect = await syncBeforeSettle(ports, pubkey, record.id)
+  const current = find(pubkey, record.id) ?? record
+  if (current.status !== 'expired' && !current.done) {
+    current.status = 'expired'
+    save(pubkey, current)
   }
-  const after = await settleLockedParts(ports, pubkey, record.id)
+  const after = await settleLockedParts(ports, pubkey, record.id, suspect)
   if (!after?.done) return 'retry'
   const left = remainingOf(after)
   await activity(
@@ -780,7 +793,8 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
   }
 
   for (const r of loadCheckoutCodes(pubkey).filter((r) => !r.done && nowS >= r.x)) {
-    const after = await settleLockedParts(ports, pubkey, r.id).catch(() => undefined)
+    const suspect = await syncBeforeSettle(ports, pubkey, r.id).catch(() => 'all' as const)
+    const after = await settleLockedParts(ports, pubkey, r.id, suspect).catch(() => undefined)
     if (after?.done) {
       changed += 1
       if (after.status !== 'abandoned') {
@@ -866,24 +880,50 @@ async function rearmSuccessors(ports: CheckoutPorts, pubkey: string, id: string)
  * Anything wrong leaves that part as it was and answers 'retry'. Idempotent.
  */
 export async function syncBalance(ports: CheckoutPorts, pubkey: string, id: string): Promise<NoticeOutcome> {
+  return (await syncParts(ports, pubkey, id)).outcome
+}
+
+/**
+ * #472, before any part of a code is refunded at `x`: adopt the successors the store lists (a lost
+ * `rebalanced`), then say which parts' old tokens must not be read as finished. Never changes the
+ * code's status unless nothing is left. `'all'` when `/parts` could not be read: a spent old token
+ * may then be a successor we do not know about, so it waits rather than being called finished.
+ * A record with no code (abandoned) has nothing on the store: nothing is suspect.
+ */
+export async function syncBeforeSettle(ports: CheckoutPorts, pubkey: string, id: string): Promise<ReadonlySet<number> | 'all'> {
   const record = find(pubkey, id)
-  if (!record?.code) return 'ignored'
-  if (record.done) return 'handled'
+  if (!record?.code || record.done) return new Set()
+  const out = await syncParts(ports, pubkey, id, true)
+  return out.reachable ? out.replaced : 'all'
+}
+
+async function syncParts(
+  ports: CheckoutPorts,
+  pubkey: string,
+  id: string,
+  keepStatus = false,
+): Promise<{ outcome: NoticeOutcome; reachable: boolean; replaced: Set<number> }> {
+  const replaced = new Set<number>()
+  const record = find(pubkey, id)
+  if (!record?.code) return { outcome: 'ignored', reachable: false, replaced }
+  if (record.done) return { outcome: 'handled', reachable: true, replaced }
   let answer: GatewayAnswer
   try {
     answer = await ports.store.call('GET', `${CHECKOUT_CODES_PATH}/${record.code}/parts`)
   } catch {
-    return 'retry'
+    return { outcome: 'retry', reachable: false, replaced }
   }
   const listed = answer.body?.parts
-  if (answer.status !== 200 || !Array.isArray(listed)) return 'retry'
+  if (answer.status !== 200 || !Array.isArray(listed)) return { outcome: 'retry', reachable: false, replaced }
   const byIdx = new Map<number, { token?: unknown; amount?: unknown }>()
   for (const e of listed as Array<{ idx?: unknown; token?: unknown; amount?: unknown }>) {
     if (Number.isSafeInteger(e?.idx)) byIdx.set(e.idx as number, e)
   }
   const identity = ports.identitySecret()
-  if (!identity) return 'retry'
+  if (!identity) return { outcome: 'retry', reachable: false, replaced }
   const before = remainingOf(record)
+  // What orders took, found in this pass: spent parts whole, replaced parts their difference.
+  let usedNow = 0
   let unsure = false
   try {
     for (const [idx, part] of record.parts.entries()) {
@@ -898,12 +938,15 @@ export async function syncBalance(ports: CheckoutPorts, pubkey: string, id: stri
           states = ['UNKNOWN']
         }
         if (states.length > 0 && states.every((st) => st === 'SPENT')) {
+          usedNow += part.amount
           part.state = 'settled'
           save(pubkey, record)
         } else unsure = true
         continue
       }
       if (entry.token === part.lockedToken) continue
+      // Listed with another token: whatever happens below, the old one is not this part's end.
+      replaced.add(idx)
       if (typeof entry.token !== 'string') {
         unsure = true
         continue
@@ -924,13 +967,16 @@ export async function syncBalance(ports: CheckoutPorts, pubkey: string, id: stri
         unsure = true
         continue
       }
+      replaced.delete(idx)
       part.replacedTokens = [...(part.replacedTokens ?? []), part.lockedToken]
       part.lockedToken = entry.token
+      usedNow += part.amount - (entry.amount as number)
       part.amount = entry.amount as number
       part.armed = false
       delete part.depositKeyset
       save(pubkey, record)
-      // Re-armed exactly as a fresh part: one pre-signed refund per proof, NIP-98 by R.
+      // Re-armed exactly as a fresh part: one pre-signed refund per proof, NIP-98 by R. After `x`
+      // the relay refuses it; the part then comes back by this wallet's own refund (noRelay).
       const out = await retryDeposit(ports, R, R, entry.token)
       part.armed = out.kind === 'armed'
       if ('keyset' in out && out.keyset) part.depositKeyset = out.keyset
@@ -939,8 +985,8 @@ export async function syncBalance(ports: CheckoutPorts, pubkey: string, id: stri
   } finally {
     identity.fill(0)
   }
-  const left = record.parts.filter((p) => p.state === 'locked').reduce((n, p) => n + p.amount, 0)
-  if (left < before) {
+  const left = Math.max(0, before - usedNow)
+  if (usedNow > 0) {
     const used = before - left
     record.remaining = left
     record.redemptions = [...(record.redemptions ?? []), { at: ports.now(), amount: used, remaining: left }]
@@ -948,7 +994,7 @@ export async function syncBalance(ports: CheckoutPorts, pubkey: string, id: stri
       record.status = 'redeemed'
       record.spent = used
       record.done = isFinished(record)
-    } else if (record.status !== 'cancelling') record.status = 'reserved'
+    } else if (!keepStatus && record.status !== 'cancelling') record.status = 'reserved'
     save(pubkey, record)
     const n = record.redemptions.length
     await usedActivity(
@@ -958,11 +1004,11 @@ export async function syncBalance(ports: CheckoutPorts, pubkey: string, id: stri
       used,
       left === 0 ? `${money(record, used)} used at ${shopName(record)}: nothing left on the code` : `${money(record, used)} used at ${shopName(record)}, ${money(record, left)} left on the code`,
     )
-  } else if (!unsure && record.status === 'settling') {
+  } else if (!keepStatus && !unsure && record.status === 'settling') {
     record.status = 'reserved'
     save(pubkey, record)
   }
-  return unsure ? 'retry' : 'handled'
+  return { outcome: unsure ? 'retry' : 'handled', reachable: true, replaced }
 }
 
 /** One partial use: its own outgoing history row (`checkout:<id>:used:<n>`). */
