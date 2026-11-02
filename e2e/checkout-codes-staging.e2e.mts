@@ -292,6 +292,7 @@ async function main() {
     return ''
   })
   info(`stall ${handle} ${stall}`)
+  if (process.env.E2E_PROFILE === 'on') return profileMake(m, browser, customerSk, customer, stall, shopKey)
   let couponA = '', couponB = '', couponC = ''
   try {
     couponA = await claimCashback(await issueCashback(m, '2.00'))
@@ -476,6 +477,52 @@ async function main() {
     step('5c gateway settle refuses an authorization not by S', g.status === 422 || g.status === 400 || g.status === 403, `${g.status} ${g.raw.slice(0, 200)}`)
   }
   info(`code hashes: A=${codeA ? codeHashOf(codeA).slice(0, 12) : '-'} B=${codeB ? codeHashOf(codeB).slice(0, 12) : '-'}`)
+  return finish(browser)
+}
+
+/**
+ * E2E_PROFILE=on: how long making a checkout code takes, and where. One EUR 6.00 coupon made into a
+ * code, every mint and gateway call timed (by path), plus each phase of the flow. Nothing else runs.
+ */
+async function profileMake(m: Page, browser: { close(): Promise<void> }, sk: Uint8Array, customer: string, stall: string, shopKey: string) {
+  const amount = Number(process.env.E2E_PROFILE_AMOUNT ?? '6.00')
+  const coupon = await claimCashback(await issueCashback(m, amount.toFixed(2)))
+  const v = parseVoucherToken(coupon).voucher
+  const minor = Math.round(amount * 100)
+  info(`profile: coupon ${amount.toFixed(2)} ${v.unit}, ${tokenProofs(coupon).length} proofs, face=${face(coupon)}`)
+  const calls: Array<{ what: string; ms: number }> = []
+  const timed = <T,>(what: string, p: Promise<T>): Promise<T> => {
+    const t = performance.now()
+    return p.finally(() => calls.push({ what, ms: performance.now() - t }))
+  }
+  const base = customerPorts(sk, [])
+  const mint = base.mint
+  const ports: CheckoutPorts = {
+    ...base,
+    mint: {
+      activeKeysetId: (u) => timed('mint keysets', mint.activeKeysetId(u)),
+      keys: (u, k) => timed('mint keys', mint.keys(u, k)),
+      swap: (u, i, o) => timed(`mint swap (${i.length} in, ${o.length} out)`, mint.swap(u, i, o)),
+      restore: (u, o) => timed('mint restore', mint.restore(u, o)),
+      states: (u, s) => timed('mint checkstate', mint.states(u, s)),
+    },
+    gateway: { call: (method, path, body, signer) => timed(`gateway ${method} ${path.replace(/\/[0-9a-f-]{36}/g, '/{id}')}`, base.gateway.call(method, path, body, signer)) },
+    store: { call: (method, path, body) => timed(`store ${method} ${path.split('/').slice(0, 3).join('/')}`, base.store.call(method, path, body)) },
+  }
+  const nowS = Math.floor(Date.now() / 1000)
+  const x = Math.min(nowS + 2 * DAY, (v.expiresAt ?? nowS + 60 * DAY) - DAY - 600)
+  const shop = { url: 'https://shop.e2e.example', redeemKey: shopKey, platform: 'woocommerce' as const, since: nowS }
+  const t0 = performance.now()
+  const out = await startCheckoutCode({ ports, pubkey: customer, stall, shop, unit: v.unit, decimals: v.faceDecimals ?? 2, amount: minor, x, parts: [{ tokenId: 'p', token: coupon, amount: minor, faceValue: minor }] })
+  const total = performance.now() - t0
+  const by = new Map<string, { n: number; ms: number }>()
+  for (const c of calls) by.set(c.what, { n: (by.get(c.what)?.n ?? 0) + 1, ms: (by.get(c.what)?.ms ?? 0) + c.ms })
+  const network = calls.reduce((n, c) => n + c.ms, 0)
+  info(`profile: ${out.kind} in ${(total / 1000).toFixed(1)} s, ${calls.length} calls, network ${(network / 1000).toFixed(1)} s, wallet CPU ${((total - network) / 1000).toFixed(1)} s`)
+  for (const [what, s] of [...by.entries()].sort((a, b) => b[1].ms - a[1].ms)) {
+    info(`profile:   ${String(s.n).padStart(3)} x ${what.padEnd(56)} ${(s.ms / 1000).toFixed(2).padStart(7)} s  (${(s.ms / s.n).toFixed(0)} ms each)`)
+  }
+  step(`P make a EUR ${amount.toFixed(2)} code: ${(total / 1000).toFixed(1)} s`, out.kind === 'issued', `calls=${calls.length}`)
   return finish(browser)
 }
 
