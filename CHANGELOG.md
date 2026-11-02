@@ -38,6 +38,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.49.0] - 2026-11-02
+
+### Changed
+
+- **A checkout code's locks go to the gateway in one call** (#477, gateway-customer#287, #486).
+  The pre-check's dry runs of every coupon proof are one `/cashlink/lock-batch` call, and so are
+  the real locks: the proofs still burn side by side, and their locks go together once each has
+  burnt. Each answer is read as the single `/lock` answer was; a "not spent yet" or rate-limited
+  lock inside a batch is asked again, and a batch the gateway could not judge as a whole is "not
+  now" for every lock, never a refusal (so no burn is ever kept as sats for it). A gateway
+  without the route (404) is asked one lock at a time, as in 0.48.0. Needs gateway-customer
+  0.39.0 for the speed-up.
+
 ## [0.48.0] - 2026-11-02
 
 ### Changed
