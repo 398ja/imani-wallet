@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { hexToBytes } from '@noble/hashes/utils'
 import { getPublicKey } from 'nostr-tools'
+import { hashToCurve } from '@cashu/crypto/modules/common'
 
 /**
  * #477: making a checkout code took 26 s on staging, 68 round trips one after another. The steps
@@ -194,12 +195,37 @@ describe('#477: a code made with its proofs side by side', () => {
     expect((await start([c])).kind).toBe('issued')
     const giftSecrets = new Set(tokenProofs(c.token).map((p) => p.secret))
     const whole = states.mock.calls.filter((args) => args[1].length === 7 && args[1].every((x) => giftSecrets.has(x)))
-    // The preflight's check, and the arm's own, each over all seven proofs at once.
-    expect(whole.length).toBe(2)
+    // The preflight's check over all seven proofs at once, and nothing more: the arm that follows
+    // in the same run takes its states from it (#477), instead of asking again.
+    expect(whole.length).toBe(1)
     const singleGift = states.mock.calls.filter((args) => args[1].length === 1 && tokenProofs(c.token).some((p) => p.secret === args[1][0]))
     expect(singleGift.length).toBe(0)
     // And no per-proof check of a burn the mint has just signed.
     expect(states.mock.calls.filter((args) => args[1].length === 1).length).toBe(0)
+  })
+
+  it('a coupon claimed between the pre-check and the burn is still caught by the burn, nothing lost', async () => {
+    // The arm takes the pre-check's UNSPENT on trust; a proof spent elsewhere in between must
+    // still not be locked, burnt twice or lost: the burn's "spent" answer and NUT-09 decide.
+    const c = coupon([64, 32], 'a')
+    const victim = tokenProofs(c.token)[1]
+    const states = w.mint.states.bind(w.mint)
+    let preChecked = false
+    w.mint.states = async (url, secrets) => {
+      const out = await states(url, secrets)
+      if (!preChecked && secrets.includes(victim.secret)) {
+        preChecked = true
+        // Someone else spends the proof right after the pre-check answered (no witness of ours).
+        w.mint.spent.set(hashToCurve(new TextEncoder().encode(victim.secret)).toHex(true), {})
+      }
+      return out
+    }
+
+    const out = await start([c])
+
+    expect(out.kind).not.toBe('issued')
+    expect(locksSigned()).toBeLessThanOrEqual(1)
+    expect(w.gateway.locks.has(victim.secret)).toBe(false)
   })
 })
 
