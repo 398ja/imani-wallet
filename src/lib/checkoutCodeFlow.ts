@@ -42,7 +42,7 @@ import {
   xOnlyPub,
   isTheSuccessorAskedFor,
 } from './cashlinkLock'
-import { armGift, armPreflight, cashlinkSteps, retryDeposit, settleLockedGift, type ArmOutcome, type CashlinkPorts, type GatewayAnswer } from './cashlinkFlow'
+import { armGift, armPreflight, cashlinkSteps, inParallel, retryDeposit, settleLockedGift, type ArmOutcome, type CashlinkPorts, type GatewayAnswer } from './cashlinkFlow'
 import { normalise } from './checkoutCode'
 import type { OnlineShop } from './onlineShop'
 import { checkLockedGift } from './lockedGifts'
@@ -263,7 +263,9 @@ function armContext(ports: CheckoutPorts, pubkey: string, record: CheckoutCodeRe
 async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutCodeRecord, identity: Uint8Array): Promise<CheckoutOutcome | null> {
   const R = (part: CheckoutPartRecord) => deriveCheckoutRefundSecret(identity, part.i)
 
-  // 0. Before anything is burnt, every part: carved to its amount, then checked whole.
+  // 0. Before anything is burnt, every part: carved to its amount, then checked whole. Carving
+  // writes the wallet's coupon rows, so one at a time; the checks are read-only, so side by side
+  // (#477), and the first refusal in the parts' order decides, as before.
   if (record.parts.every((p) => p.state === 'new')) {
     for (const part of record.parts) {
       if (!part.token) {
@@ -275,14 +277,23 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
         save(pubkey, record)
       }
       if (!sameStallAndUnit(part.token, record)) return refuse(pubkey, record, 'not_this_stall')
-      const refusal = await armPreflight(armContext(ports, pubkey, record, part, R(part), identity))
+    }
+    const checks = await inParallel(
+      record.parts.map((part) => () => armPreflight(armContext(ports, pubkey, record, part, R(part), identity))),
+      PART_CONCURRENCY,
+    )
+    for (const c of checks) {
+      const refusal = c.ok ? c.value : ({ kind: 'unarmed', why: 'unreachable' } as const)
       if (refusal) return refuse(pubkey, record, refusal.kind === 'unarmed' ? refusal.why : refusal.kind)
     }
   }
 
-  // 1-4 for each part, as a Cashlink.
-  for (const part of record.parts) {
-    if (part.state === 'locked' || part.state === 'kept' || part.state === 'unarmed' || part.state === 'settled') continue
+  // 1-4 for each part, as a Cashlink. #477: parts side by side. Every step of a part is derived
+  // from its own R, and every write is to this one record object and saved whole and synchronously,
+  // so two parts finishing together cannot lose each other's state. All parts are waited for
+  // before the outcome is decided, so nothing is left running behind an answer.
+  const armOne = async (part: CheckoutPartRecord): Promise<{ part: CheckoutPartRecord; out: ArmOutcome } | null> => {
+    if (part.state === 'locked' || part.state === 'kept' || part.state === 'unarmed' || part.state === 'settled') return null
     // Checked above, with every other part: recorded as arming BEFORE its burn, and armed as a
     // resume, so the pre-check is not run twice (and cannot read our own burn as a claim).
     if (part.state === 'new') {
@@ -299,19 +310,50 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
       delete part.token
       save(pubkey, record)
       if (part.sourceTokenId && !part.split) await ports.consume(part.sourceTokenId)
+    }
+    return { part, out }
+  }
+  const order = record.parts.map((part) => () => armOne(part))
+  // The first part alone: a refusal or a failure there still leaves every other coupon untouched.
+  // #477: then the rest side by side.
+  const head = await inParallel(order.slice(0, 1), 1)
+  const headStopped = head[0] !== undefined && (!head[0].ok || (head[0].value !== null && !['armed', 'not_armed'].includes(head[0].value.out.kind)))
+  const armed = headStopped ? head : [...head, ...(await inParallel(order.slice(1), PART_CONCURRENCY))]
+  // A refusal is recorded on its part at once (state and reason), so no later run repeats it. A
+  // part still part way (its burn may have happened) is resumed by the next run, so while one is,
+  // the code is pending, not abandoned: abandoning would leave that part `arming` in a record no
+  // run picks up again. Once none is, a refused part ends the attempt (all or nothing).
+  let pending: string | undefined
+  for (const a of armed) {
+    if (!a.ok) {
+      pending ??= a.error instanceof Error ? a.error.message : String(a.error)
       continue
     }
-    if (out.kind === 'arming') return { kind: 'pending', why: out.why, record }
+    if (!a.value) continue
+    const { part, out } = a.value
+    if (out.kind === 'armed' || out.kind === 'not_armed') continue
+    if (out.kind === 'arming') {
+      pending ??= out.why
+      continue
+    }
     // Refused after the burn (the value came back as sats, kept) or before it (the coupon is as it
-    // was), or gone: no code. Whatever is locked comes back at `x`.
+    // was), or gone. Whatever is locked comes back at `x`.
     part.state = out.kind === 'kept_as_sats' ? 'kept' : out.kind === 'claimed' ? 'settled' : 'unarmed'
+    record.refusal ??= out.kind === 'unarmed' ? out.why : out.kind
+    save(pubkey, record)
     if (part.state !== 'unarmed' && part.sourceTokenId && !part.split) await ports.consume(part.sourceTokenId)
-    return abandon(pubkey, record, out.kind === 'unarmed' ? out.why : out.kind)
+  }
+  if (pending !== undefined) return { kind: 'pending', why: pending, record }
+  if (record.parts.some((p) => p.state === 'kept' || p.state === 'settled' || p.state === 'unarmed')) {
+    return abandon(pubkey, record, record.refusal ?? 'not issued')
   }
   record.status = 'depositing'
   save(pubkey, record)
   return null
 }
+
+/** Parts of one code armed at once (#477); each part runs its own proofs side by side too. */
+const PART_CONCURRENCY = 3
 
 function sameStallAndUnit(token: string, record: CheckoutCodeRecord): boolean {
   try {
