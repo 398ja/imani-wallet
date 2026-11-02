@@ -339,6 +339,61 @@ describe('the change of a split, back to an ordinary coupon (staging 2026-11-01:
     expect(w.kept).toEqual([])
   })
 
+  // Staging 2026-11-02: corda's Essentials licence (locked to the stall's K alone, as every licence
+  // is) was burnt by this sweep at 06:17, the gateway refused to re-sign it (NOT_REISSUABLE) and
+  // revoked it as SPENT at 06:22. A licence or credential is never change.
+  function lockedToMe(metadata: Record<string, unknown>, nonce: string) {
+    const fields = parseVoucherToken(W.tokenOf([w.mint.issue(W.bearerSecret({ nonce: nonce.padEnd(8, 'n') }, `${nonce}0`), 1)])).voucher
+    // As gateway-customer mints a licence: P2PK_VOUCHER, data = 02‖K, the terms as tags.
+    const proposal = JSON.stringify([
+      'P2PK_VOUCHER',
+      {
+        nonce: nonce.padEnd(16, 'l'),
+        data: `02${xOnlyPub(ID)}`,
+        tags: [
+          ['n_sigs', '1'],
+          ['sigflag', 'SIG_INPUTS'],
+          ['issuer', fields.issuerId],
+          ['unit', 'GBP'],
+          ['face_value', '7000'],
+          ['expires_at', '1824913850'],
+          ['face_decimals', '2'],
+          ['backing_strategy', 'FIXED'],
+          ['merchant_metadata', JSON.stringify(metadata)],
+          ['voucher_id', 'c82dd092-3096-4466-bae8-278a50861448'],
+          ['max_sats', '1'],
+        ],
+      },
+    ])
+    return W.tokenOf([w.mint.issue(W.signLocked(proposal), 1)])
+  }
+
+  it.each([
+    ['lic', 'a subscription licence', { subscription_id: 'sub_f2b8f9e44fcda7e0', tier: 'basic', features: ['terminals'], lock_key: xOnlyPub(ID) }],
+    ['crd', 'a terminal credential', { terminal: true, lock_key: xOnlyPub(ID), role: 'redeem-only' }],
+  ])('%s: %s locked to K is never burnt, re-signed or kept as sats', async (nonce, _name, metadata) => {
+    const self = await import('../selfLockedCoupons')
+    const token = lockedToMe(metadata, nonce)
+    const [proof] = tokenProofs(token)
+    expect(isSelfLocked(proof.secret, xOnlyPub(ID))).toBe(true)
+    expect(self.isCredentialProof(proof.secret)).toBe(true)
+    expect(self.hasUnlockableProof(token, xOnlyPub(ID))).toBe(false)
+    const swapsBefore = w.mint.log.swaps.length
+
+    const done = await self.unlockSelfLockedRow(ports, { tokenId: 'row-licence', token })
+
+    expect(done.kind).toBe('unlocked')
+    if (done.kind === 'unlocked') expect(tokenProofs(done.tokens[0]).map((p) => p.secret)).toEqual([proof.secret])
+    expect(w.mint.log.swaps.length).toBe(swapsBefore)
+    expect(w.kept).toEqual([])
+  })
+
+  it('split change is still unlockable: its metadata names no subscription', async () => {
+    const self = await import('../selfLockedCoupons')
+    const { token } = await splitChange('d')
+    expect(self.hasUnlockableProof(token, xOnlyPub(ID))).toBe(true)
+  })
+
   it('a row with no K-locked proof is left exactly as it is', async () => {
     const self = await import('../selfLockedCoupons')
     const c = coupon([512, 256], 'c')
