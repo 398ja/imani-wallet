@@ -644,7 +644,12 @@ export interface StoredCode {
   code: string
   status: 'reserved' | 'held' | 'redeemed' | 'cancelling' | 'cancelled' | 'expired'
   body: { idempotency_key: string; stall_pubkey: string; shop_key: string; unit: string; amount: number; expires_at: number; parts: Array<{ token: string; amount: number }> }
+  /** #472: the code's unspent parts now, by deposit index, once an order kept a balance. */
+  current?: Array<{ idx: number; token: string; amount: number }>
 }
+
+/** #472: the parts on a stored code now (all of them until the first balance order). */
+export const currentParts = (c: StoredCode) => c.current ?? c.body.parts.map((p, idx) => ({ idx, ...p }))
 
 /**
  * `imani-checkout-codes`, from contract §3: verifies every part (the §2 shape locked to `shop_key`
@@ -665,7 +670,19 @@ export class FakeCodeStore {
     if (this.down) throw new Error('store unreachable')
     this.calls.push({ method, path, body })
     if (path === '/v1/checkout-codes/info') return { status: 200, body: { notice_type: 'imani-checkout-code/1', nostr_pubkey: STORE_PUB } }
-    if (path === '/v1/checkout-codes/mine') return { status: 200, body: [...this.codes.values()].map((c) => ({ code: c.code, status: c.status, amount: c.body.amount })) as unknown as Record<string, unknown> }
+    if (path === '/v1/checkout-codes/mine') {
+      return {
+        status: 200,
+        body: [...this.codes.values()].map((c) => ({ code: c.code, status: c.status, amount: c.body.amount, remaining: currentParts(c).reduce((n, p) => n + p.amount, 0) })) as unknown as Record<string, unknown>,
+      }
+    }
+    const parts = /^\/v1\/checkout-codes\/([^/]+)\/parts$/.exec(path)
+    if (parts && method === 'GET') {
+      const c = this.byCode(parts[1])
+      if (!c) return refused(404, 'NOT_FOUND')
+      const now = currentParts(c)
+      return { status: 200, body: { status: c.status, amount: now.reduce((n, p) => n + p.amount, 0), parts: now } }
+    }
     if (path === '/v1/checkout-codes' && method === 'POST') return this.deposit(body as StoredCode['body'])
     const cancel = /^\/v1\/checkout-codes\/([^/]+)\/cancel$/.exec(path)
     if (cancel && method === 'POST') {
@@ -747,6 +764,36 @@ export function returnToCustomer(mint: FakeMint, lockedTokens: string[]): string
     out.push(tokenOf(returned))
   }
   return out
+}
+
+/**
+ * #472, the shop's side of a balance order (contract §5 rule 4b): burn every proof of an `S`-locked
+ * part and re-sign ONE successor of `sats` (a power of two) with the same `data`, `locktime`,
+ * `refund`, voucher and terms, as the gateway's settle route would. `tamper` rewrites the proposal's
+ * lock before it is signed, for a store that lies. Returns the successor token.
+ */
+export function shopRelocks(
+  mint: FakeMint,
+  lockedToken: string,
+  sats: number,
+  tamper: { data?: string; locktime?: string; refund?: string; voucherId?: string; unsigned?: boolean } = {},
+  nonce = 'bal',
+): string {
+  const proofs = decodeProofs(lockedToken)
+  const [, body] = JSON.parse(proofs[0].secret) as [string, { nonce: string; data: string; tags: string[][] }]
+  for (const p of proofs) mint.spent.set(hashToCurve(utf8(p.secret)).toHex(true), { witness: '{"signatures":[]}' })
+  const tags = body.tags
+    .filter((t) => !['issuer_sig', 'issuer_pubkey'].includes(t[0]))
+    .map((t) => {
+      if (t[0] === 'locktime' && tamper.locktime) return ['locktime', tamper.locktime]
+      if (t[0] === 'refund' && tamper.refund) return ['refund', tamper.refund]
+      if (t[0] === 'voucher_id' && tamper.voucherId) return ['voucher_id', tamper.voucherId]
+      if (t[0] === 'max_sats') return ['max_sats', String(sats)]
+      return t
+    })
+  const proposal = JSON.stringify(['P2PK_VOUCHER', { nonce: `${nonce}${body.nonce.slice(0, 8)}`, data: tamper.data ?? body.data, tags }])
+  const signed = tamper.unsigned ? JSON.stringify(['P2PK_VOUCHER', { nonce: `${nonce}${body.nonce.slice(0, 8)}`, data: tamper.data ?? body.data, tags: [...tags, ['issuer_sig', '00'.repeat(64)], ['issuer_pubkey', ISSUER_PUB]] }]) : signLocked(proposal)
+  return tokenOf([mint.issue(signed, sats)])
 }
 
 /** The shop redeemed: every locked proof is spent by `S`. */
