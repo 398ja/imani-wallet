@@ -216,7 +216,9 @@ describe('limits', () => {
     expect(state.links.filter((l) => l.status === 'armed').length).toBe(12)
   })
 
-  it('claimed and returned links free their slot', async () => {
+  // 11 full sends (burn, lock, carry, deposit each): past vitest's 5 s default when the whole suite
+  // runs in parallel (seen on a loaded run, 2026-11-02), well inside it alone.
+  it('claimed and returned links free their slot', { timeout: 30_000 }, async () => {
     const s = sender()
     const state = emptyState(s.pubkey)
     for (let i = 0; i < 10; i++) await s.send(state, coupon(), X)
