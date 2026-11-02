@@ -662,6 +662,10 @@ export class FakeCodeStore {
   down = false
   /** Answer the next deposit with this, once. */
   nextDeposit?: GatewayAnswer
+  /** `/mine` names each code's idempotency key (imani-checkout-codes from 0.2.1). */
+  mineNamesKeys = false
+  /** Called inside each deposit before it is checked, so a test can interleave two. */
+  onDeposit?: () => Promise<void>
   private n = 0
 
   constructor(readonly mint: FakeMint) {}
@@ -673,7 +677,17 @@ export class FakeCodeStore {
     if (path === '/v1/checkout-codes/mine') {
       return {
         status: 200,
-        body: [...this.codes.values()].map((c) => ({ code: c.code, status: c.status, amount: c.body.amount, remaining: currentParts(c).reduce((n, p) => n + p.amount, 0) })) as unknown as Record<string, unknown>,
+        body: [...this.codes.values()].map((c) => ({
+          code: c.code,
+          status: c.status,
+          amount: c.body.amount,
+          remaining: currentParts(c).reduce((n, p) => n + p.amount, 0),
+          unit: c.body.unit,
+          expires_at: c.body.expires_at,
+          shop_key: c.body.shop_key,
+          stall_pubkey: c.body.stall_pubkey,
+          ...(this.mineNamesKeys ? { idempotency_key: c.body.idempotency_key } : {}),
+        })) as unknown as Record<string, unknown>,
       }
     }
     const parts = /^\/v1\/checkout-codes\/([^/]+)\/parts$/.exec(path)
@@ -704,6 +718,9 @@ export class FakeCodeStore {
     }
     const prior = this.codes.get(b.idempotency_key)
     if (prior) return { status: 201, body: { code: prior.code, status: prior.status, expires_at: b.expires_at } }
+    // The real store reads the key BEFORE it verifies and inserts, so two deposits of one key at
+    // once both miss it, and the second is refused `DUPLICATE_PART` (staging, 2026-11-02).
+    await this.onDeposit?.()
     if (!Array.isArray(b.parts) || b.parts.length < 1 || b.parts.length > 20) return { status: 422, body: { refusal: 'TOO_MANY_PARTS' } }
     if (b.parts.reduce((n, p) => n + p.amount, 0) !== b.amount) return { status: 422, body: { refusal: 'AMOUNT_MISMATCH' } }
     for (const [i, part] of b.parts.entries()) {
@@ -725,6 +742,9 @@ export class FakeCodeStore {
       }
       const states = await this.mint.states(MINT_URL, proofs.map((p) => p.secret))
       if (states.some((s) => s !== 'UNSPENT')) return { status: 422, body: { refusal: 'ALREADY_SPENT', part: i } }
+      // A locked proof backs at most one code (the store's checkout_code_proof).
+      const held = new Set([...this.codes.values()].flatMap((c) => c.body.parts.flatMap((q) => decodeProofs(q.token).map((x) => x.secret))))
+      if (proofs.some((p) => held.has(p.secret))) return { status: 422, body: { refusal: 'DUPLICATE_PART', part: i } }
     }
     const code = await this.newCode()
     this.codes.set(b.idempotency_key, { code, status: 'reserved', body: b })

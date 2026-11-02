@@ -50,6 +50,7 @@ import tokenRedemptionUrl from '../../shared/tokenRedemption.js?url'
 import { getWallet } from './wallet'
 import { getSigner } from './nap'
 import type { MerchantClaim } from './merchantClaim'
+import { parseSpendSource, type SpendSource } from './spendSource'
 // Not re-exported from the package index, so imported from source — the alias
 // already points at src/, and this is the exact derivation the store itself
 // uses, which is the whole point of not recomputing it here.
@@ -158,6 +159,7 @@ type Correlation = {
   zeroCredit?: boolean
   claim?: MerchantClaim
   terminalPubkey?: string
+  spendSource?: SpendSource
 }
 
 /** Redeems in flight, by the id each was handed. */
@@ -219,12 +221,23 @@ export async function withCorrelation<T>(
      * stall's row the way an issuance row names its till. See `shopTakings.ts`.
      */
     terminalPubkey?: string
+    /**
+     * #402: where an online shop spent this coupon (order number, shop), as the shop declared it on
+     * the envelope. The vendored builder reads `metadata.spend_source`, but the row that survives
+     * is rebuilt from empty metadata (see `installTokenIdFill`), so without this every shop sale
+     * read "Received via DM" with no order on it (2026-11-02).
+     */
+    spendSource?: SpendSource
   },
   redeem: (correlationId: string) => Promise<T>,
 ): Promise<T> {
   // Random rather than a counter, so an id from another tab or a reload can
   // never name a redeem in this one.
   const correlationId = crypto.randomUUID()
+  // Declared by the shop, so only a well-formed one rides (and is re-parsed: never half-kept).
+  const spendSource = parseSpendSource(ids.spendSource)
+  if (spendSource) ids = { ...ids, spendSource }
+  else if (ids.spendSource) ids = { ...ids, spendSource: undefined }
   const hasIds =
     ids.bundleId ||
     ids.requestId ||
@@ -234,7 +247,8 @@ export async function withCorrelation<T>(
     ids.exactValue !== undefined ||
     ids.zeroCredit ||
     ids.claim ||
-    ids.terminalPubkey
+    ids.terminalPubkey ||
+    ids.spendSource
   inFlight.set(correlationId, hasIds ? ids : undefined)
   try {
     return await redeem(correlationId)
@@ -301,6 +315,7 @@ function stampCorrelation(rows: unknown[], ids: Correlation | undefined): unknow
       // A verified zero credit, which the builder turned into the sats.
       ...(ids.zeroCredit ? { amount: 0 } : {}),
       ...(ids.terminalPubkey && !t.terminalPubkey ? { terminalPubkey: ids.terminalPubkey } : {}),
+      ...(ids.spendSource && !t.spendSource ? { spendSource: ids.spendSource } : {}),
       // OVERWRITES, unlike everything above: the builder's voucher id is the
       // gateway's (in practice a random UUID) and its amount can be a derived
       // figure, so neither matches the issuance they must be summed against.
