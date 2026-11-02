@@ -15,6 +15,10 @@
  *   3 the shop looks it up, holds it, redeems: settle burns the S-locked parts, the stall gets successors
  *   4 a second code is cancelled, the shop gives it back, the customer unlocks it
  *   5 negatives: an unknown code and a wrong shop key are refused (same 404 bytes, R2)
+ *   6 (E2E_BALANCE=on only, #472) a balance order: the shop uses part of code C and keeps the rest on
+ *     it; the customer reads `/parts`, adopts and re-arms the successor; `/mine` says what is left.
+ *     Off by default: it needs a store, gateway and imani-coupon-core with #472, and must NOT be
+ *     pointed at staging until those are deployed there.
  *
  *   npx vite-node e2e/checkout-codes-staging.e2e.mts      (vite-node: the wallet's import aliases)
  *
@@ -46,7 +50,7 @@ import { bytesToHex, randomBytes } from '@noble/hashes/utils'
 import { hashToCurve } from '@cashu/crypto/modules/common'
 
 import { registerMerchant } from './register.mts'
-import { startCheckoutCode, cancelCheckoutCode, unlockReturned, codeHashOf, type CheckoutPorts } from '../src/lib/checkoutCodeFlow'
+import { startCheckoutCode, cancelCheckoutCode, unlockReturned, codeHashOf, syncBalance, type CheckoutPorts } from '../src/lib/checkoutCodeFlow'
 import { httpCashlinkMint, type KeptCoupon } from '../src/lib/cashlinkFlow'
 import { creditableFaceValue, exactFaceValue, parseVoucherToken, tokenProofs } from '../src/lib/voucherToken'
 import { checkSymbol, CHECKOUT_ALPHABET, display } from '../src/lib/checkoutCode'
@@ -283,10 +287,11 @@ async function main() {
     return ''
   })
   info(`stall ${handle} ${stall}`)
-  let couponA = '', couponB = ''
+  let couponA = '', couponB = '', couponC = ''
   try {
     couponA = await claimCashback(await issueCashback(m, '2.00'))
     couponB = await claimCashback(await issueCashback(m, '1.00'))
+    if (process.env.E2E_BALANCE === 'on') couponC = await claimCashback(await issueCashback(m, '1.00'))
   } catch (e) {
     info(`coupon issue/claim: ${e}`)
   }
@@ -414,6 +419,26 @@ async function main() {
       `cancel=${JSON.stringify(cancel)} in feed=${(feed.codes ?? []).includes(codeB)} return=${JSON.stringify(back.return)} error=${back.error ?? '-'} cancelled=${JSON.stringify(back.cancelled)} unlock=${JSON.stringify(un)} kept=${got.length} exact face=${exact(got.map((k) => k.token)).toFixed(3)} rows as the wallet books them=${gotFace} UNSPENT=${unspent} store status=${statusB}`)
   } else {
     step('4 second code cancelled and released: shop returns it, customer unlocks the value back', false, `code B not issued: ${outB.kind}`)
+  }
+
+  // 6. #472, behind a flag: a balance order. The shop op `redeem_balance` is imani-coupon-core's
+  // `mode: balance` redeem plus `/rebalance` (checkout-codes-shop.php grows it with coupon-core #472).
+  if (process.env.E2E_BALANCE === 'on') {
+    const outC = await startCheckoutCode({ ports, pubkey: customer, stall, shop: onlineShop, unit, decimals, amount: 100, x, parts: [{ tokenId: 'c', token: couponC, amount: 100, faceValue: 100 }] })
+    const codeC = outC.record.code ?? ''
+    if (codeC) {
+      const order = `e2e-balance-${Date.now()}`
+      const used = 40
+      shop({ op: 'hold', shop_sk: shopSk, code: codeC, order_ref: order })
+      const red = shop({ op: 'redeem_balance', shop_sk: shopSk, code: codeC, stall, currency: unit, order_total: used, order_ref: order })
+      const sync = await syncBalance(ports, customer, outC.record.id)
+      const rec = (await import('../src/lib/checkoutCodeRecords')).loadCheckoutCodes(customer).find((r) => r.id === outC.record.id)
+      const mineC = await signedCall(CODES, customerSk, 'GET', '/v1/checkout-codes/mine')
+      const row = (Array.isArray(mineC.body) ? (mineC.body as Array<Record<string, unknown>>) : []).find((r) => String(r.code).replace(/-/g, '') === codeC)
+      step('6 balance order: part of the code used, the rest stays on it, re-armed by R',
+        !red.error && sync === 'handled' && rec?.remaining === 100 - used && rec.status === 'reserved' && rec.parts.every((p) => p.state !== 'locked' || p.armed) && row?.remaining === rec.remaining,
+        `redeem=${JSON.stringify(red).slice(0, 300)} sync=${sync} remaining=${rec?.remaining} status=${rec?.status} armed=${rec?.parts.map((p) => p.armed).join(',')} mine=${JSON.stringify(row)}`)
+    } else step('6 balance order: part of the code used, the rest stays on it, re-armed by R', false, `code C not issued: ${outC.kind}`)
   }
 
   // 5. Negatives.
