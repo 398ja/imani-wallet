@@ -277,4 +277,57 @@ describe('the rebalanced notice', () => {
     expect(keptSats()).toBe(32)
     for (const k of w.kept) for (const p of tokenProofs(k.token)) expect(readLinkLock(p.secret)).toBeNull()
   })
+
+})
+
+describe('a lost rebalanced, then x (review 2026-11-02: the balance was lost)', () => {
+  it('the expired notice adopts the successor first and refunds it to R: what was left comes back', async () => {
+    await threePartCode()
+    order([0], { idx: 1, sats: 32 }) // the rebalanced notice never arrives
+    W.at(w, X + 120)
+    await w.gateway.runRelay(X + 120)
+    let out = await flow.handleCheckoutNotice(ports, ME, notice('expired', { amount: 12 }), W.STORE_PUB)
+    if (out === 'retry') out = await flow.handleCheckoutNotice(ports, ME, notice('expired', { amount: 12 }), W.STORE_PUB)
+    expect(out).toBe('handled')
+    const r = only()
+    expect(r).toMatchObject({ status: 'expired', done: true, remaining: 12 })
+    expect(r.parts[1].replacedTokens?.length).toBe(1)
+    // 32 sats of the successor + the untouched 64: 12 p, exactly what was left.
+    expect(keptSats()).toBe(32 + 64)
+    expect(w.kept.reduce((n, k) => n + face(k.token), 0)).toBe(12)
+    expect(used.length).toBe(1)
+  })
+
+  it('reconcile after x with no notice at all does the same', async () => {
+    await threePartCode()
+    order([0], { idx: 1, sats: 32 })
+    W.at(w, X + 120)
+    await flow.reconcileCheckoutCodes(ports, ME)
+    await flow.reconcileCheckoutCodes(ports, ME)
+    const r = only()
+    expect(r).toMatchObject({ status: 'expired', done: true, remaining: 12 })
+    expect(keptSats()).toBe(32 + 64)
+    expect(used.length).toBe(1)
+  })
+
+  it('/parts unreachable at x: a spent old token is not called finished; the next pass, reachable, brings the successor back', async () => {
+    await threePartCode()
+    order([0], { idx: 1, sats: 32 })
+    W.at(w, X + 120)
+    const real = store.call.bind(store)
+    store.call = async (m, path, body) => (path.endsWith('/parts') ? { status: 503, body: null } : real(m, path, body))
+    expect(await flow.handleCheckoutNotice(ports, ME, notice('expired', { amount: 12 }), W.STORE_PUB)).toBe('retry')
+    await flow.reconcileCheckoutCodes(ports, ME)
+    let r = only()
+    expect(r.done).toBeFalsy()
+    // The untouched part came back as today; the spent ones wait.
+    expect(r.parts[2].state).toBe('settled')
+    expect(r.parts[0].state).toBe('locked')
+    expect(r.parts[1].state).toBe('locked')
+    store.call = real
+    await flow.reconcileCheckoutCodes(ports, ME)
+    r = only()
+    expect(r).toMatchObject({ done: true, remaining: 12 })
+    expect(keptSats()).toBe(32 + 64)
+  })
 })
