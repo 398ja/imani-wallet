@@ -490,10 +490,13 @@ async function profileMake(m: Page, browser: { close(): Promise<void> }, sk: Uin
   const v = parseVoucherToken(coupon).voucher
   const minor = Math.round(amount * 100)
   info(`profile: coupon ${amount.toFixed(2)} ${v.unit}, ${tokenProofs(coupon).length} proofs, face=${face(coupon)}`)
-  const calls: Array<{ what: string; ms: number }> = []
+  const calls: Array<{ what: string; ms: number; start: number; end: number }> = []
   const timed = <T,>(what: string, p: Promise<T>): Promise<T> => {
     const t = performance.now()
-    return p.finally(() => calls.push({ what, ms: performance.now() - t }))
+    return p.finally(() => {
+      const end = performance.now()
+      calls.push({ what, ms: end - t, start: t, end })
+    })
   }
   const base = customerPorts(sk, [])
   const mint = base.mint
@@ -517,8 +520,19 @@ async function profileMake(m: Page, browser: { close(): Promise<void> }, sk: Uin
   const total = performance.now() - t0
   const by = new Map<string, { n: number; ms: number }>()
   for (const c of calls) by.set(c.what, { n: (by.get(c.what)?.n ?? 0) + 1, ms: (by.get(c.what)?.ms ?? 0) + c.ms })
-  const network = calls.reduce((n, c) => n + c.ms, 0)
-  info(`profile: ${out.kind} in ${(total / 1000).toFixed(1)} s, ${calls.length} calls, network ${(network / 1000).toFixed(1)} s, wallet CPU ${((total - network) / 1000).toFixed(1)} s`)
+  // Wall time with at least one call in flight (calls overlap once proofs run concurrently, #477).
+  let network = 0
+  let until = -Infinity
+  for (const c of [...calls].sort((a, b) => a.start - b.start)) {
+    if (c.end <= until) continue
+    network += c.end - Math.max(c.start, until)
+    until = c.end
+  }
+  const peak = Math.max(0, ...calls.map((c) => calls.filter((d) => d.start < c.end && d.end > c.start).length))
+  info(`profile: ${out.kind} in ${(total / 1000).toFixed(1)} s, ${calls.length} calls (up to ${peak} at once), waiting on the network ${(network / 1000).toFixed(1)} s, wallet CPU ${((total - network) / 1000).toFixed(1)} s`)
+  if (process.env.E2E_PROFILE_TIMELINE === 'on') {
+    for (const c of [...calls].sort((a, b) => a.start - b.start)) info(`profile: t+${((c.start - t0) / 1000).toFixed(2)}..${((c.end - t0) / 1000).toFixed(2)} ${c.what}`)
+  }
   for (const [what, s] of [...by.entries()].sort((a, b) => b[1].ms - a[1].ms)) {
     info(`profile:   ${String(s.n).padStart(3)} x ${what.padEnd(56)} ${(s.ms / 1000).toFixed(2).padStart(7)} s  (${(s.ms / s.n).toFixed(0)} ms each)`)
   }

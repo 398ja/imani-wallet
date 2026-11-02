@@ -181,9 +181,13 @@ async function restoreMine(mint: CashlinkMint, mintUrl: string, outputs: Blinded
   return proofs
 }
 
-type SwapResult = { kind: 'proofs'; proofs: UnblindedProof[] } | { kind: 'gone' } | { kind: 'refused'; answer: SwapAnswer }
+type SwapResult = { kind: 'proofs'; proofs: UnblindedProof[]; fresh?: true } | { kind: 'gone' } | { kind: 'refused'; answer: SwapAnswer }
 
-/** A swap, then its proofs: from the answer, or from NUT-09 when the mint says it already signed. */
+/**
+ * A swap, then its proofs: from the answer, or from NUT-09 when the mint says it already signed.
+ * `fresh` when the mint signed these outputs just now: they were never signed before, so nothing
+ * can have spent them yet (#477: the caller then skips asking).
+ */
 async function swapOrRestore(
   mint: CashlinkMint,
   mintUrl: string,
@@ -192,7 +196,7 @@ async function swapOrRestore(
 ): Promise<SwapResult> {
   const answer = await mint.swap(mintUrl, inputs, outputs)
   if (answer.kind === 'signed') {
-    return { kind: 'proofs', proofs: unblindOutputs(outputs, answer.signatures, await mint.keys(mintUrl, outputs[0].id)) }
+    return { kind: 'proofs', proofs: unblindOutputs(outputs, answer.signatures, await mint.keys(mintUrl, outputs[0].id)), fresh: true }
   }
   if (answer.kind === 'spent') {
     const mine = await restoreMine(mint, mintUrl, outputs)
@@ -267,6 +271,8 @@ export type UnarmedReason =
   | 'lock_refused'
   | 'relay_unavailable'
   | 'unreachable'
+  /** #477: the gateway kept answering 429 to the pre-check; nothing was burnt, try again later. */
+  | 'rate_limited'
   /** The mint refused the burn itself (nothing moved). The only one that can follow `onArming`. */
   | 'burn_refused'
 
@@ -374,6 +380,40 @@ async function allStillUnspent(ports: ArmContext['ports'], mintUrl: string, proo
   return states.length === proofs.length && states.every((s) => s === 'UNSPENT')
 }
 
+/**
+ * Proofs of one gift (and refunds of one part) in flight at once (#477). A coupon is one proof per
+ * power-of-two denomination, so 8 covers most in one wave. Sized against gateway-customer's
+ * per-caller limits (120 a minute on the Cashlink routes, 30 a minute per link key on the
+ * refunds) and the edge's 10 a second per address with a 100 burst.
+ */
+const ARM_CONCURRENCY = 8
+
+type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown }
+
+const settled = <T,>(p: Promise<T>): Promise<Settled<T>> =>
+  p.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  )
+
+/**
+ * #477: run `tasks` at most `limit` at a time and wait for EVERY one, results in task order. Never
+ * rejects: a failed task is a `{ ok: false }` in its place, so no step is left running when the
+ * caller decides what the outcome is.
+ */
+export async function inParallel<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<Settled<T>[]> {
+  const out: Settled<T>[] = new Array(tasks.length)
+  let next = 0
+  const worker = async () => {
+    while (next < tasks.length) {
+      const n = next++
+      out[n] = await settled(Promise.resolve().then(tasks[n]))
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), tasks.length) }, worker))
+  return out
+}
+
 async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   const { ports } = ctx
   if (ctx.merchant) return { kind: 'unarmed', why: 'merchant' }
@@ -392,29 +432,52 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
     if (refusal && !(refusal.kind === 'claimed' && (await burntByUs(ports, ctx.refundSecret, mintUrl, proofs)))) return refusal
   }
 
-  const burnKeyset = ctx.burnKeyset ?? (await ports.mint.activeKeysetId(mintUrl))
+  const [burnKeyset, giftStates] = await Promise.all([
+    ctx.burnKeyset ?? ports.mint.activeKeysetId(mintUrl),
+    ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret)).catch(() => undefined),
+  ])
   if (!resuming) await ctx.onArming(burnKeyset)
 
-  // 1-3, per proof.
+  // 1-3, per proof. #477: every proof's steps are derived from R and the proof alone, so the
+  // proofs run side by side; results are taken in the gift's own order, so the locked token (and
+  // the store's idempotent deposit body built from it) is the same whichever finished first. The
+  // gift's states are read once for every proof (an answer that is stale by the burn is caught by
+  // the burn itself: the mint answers "spent" and NUT-09 says whose).
+  const stateOf = (n: number): ProofState | undefined => (giftStates?.length === proofs.length ? giftStates[n] : undefined)
+  const steps = await inParallel(
+    proofs.map((_, n) => () => lockOne(ctx, mintUrl, proofs[n].proof, burnKeyset, linkPub, refundPub, stateOf(n))),
+    ARM_CONCURRENCY,
+  )
+
+  // The mint refused every burn outright and every proof is still unspent: the link is exactly the
+  // ordinary gift it was, and must not stay 'arming' for ever (rev-wallet377 M2). On a resumed run
+  // "nothing moved in this run" is not "nothing burnt": an earlier run may have burnt ours
+  // (rev-wallet377 N1), so only the mint saying every proof is still UNSPENT lets it go back.
+  if (steps.every((s) => s.ok && s.value.kind === 'unburnt') && (await allStillUnspent(ports, mintUrl, proofs))) {
+    return { kind: 'unarmed', why: 'burn_refused' }
+  }
+
   const locked: UnblindedProof[] = []
   let gone = 0
-  let moved = 0
-  for (const { token, proof } of proofs) {
-    const step = await lockOne(ctx, mintUrl, proof, burnKeyset, linkPub, refundPub)
-    if (step.kind === 'unburnt') {
-      // Nothing burnt yet on any proof: the link is exactly the ordinary gift it was, and must not
-      // stay 'arming' for ever (rev-wallet377 M2). Part way through a multi-proof gift, the next
-      // run tries again (the burnt proofs are found by NUT-09). On a resumed run "nothing moved in
-      // this run" is not "nothing burnt": an earlier run may have burnt ours (rev-wallet377 N1), so
-      // only the mint saying every proof is still UNSPENT lets the link go back to an ordinary gift.
-      if (moved === 0 && (await allStillUnspent(ports, mintUrl, proofs))) return { kind: 'unarmed', why: 'burn_refused' }
-      throw new Error(`the burn was refused (${step.why}); left for the next run`)
+  let failure: unknown
+  for (const [n, s] of steps.entries()) {
+    if (!s.ok) {
+      failure ??= s.error
+      continue
     }
-    moved += 1
-    if (step.kind === 'locked') locked.push(step.proof)
-    else if (step.kind === 'gone') gone += 1
-    else await keepAsSats(ports, mintUrl, proof, step.proofs, 'returned', faceShareOf(token, proof.secret))
+    const out = s.value
+    if (out.kind === 'unburnt') {
+      // Part way through a multi-proof gift: the next run tries again (the burnt proofs are found
+      // by NUT-09).
+      failure ??= new Error(`the burn was refused (${out.why}); left for the next run`)
+      continue
+    }
+    if (out.kind === 'locked') locked.push(out.proof)
+    else if (out.kind === 'gone') gone += 1
+    else await keepAsSats(ports, mintUrl, proofs[n].proof, out.proofs, 'returned', faceShareOf(proofs[n].token, proofs[n].proof.secret))
   }
+  // Every proof has finished its steps (nothing is left in flight): a resumed run carries on.
+  if (failure !== undefined) throw failure
   if (locked.length === 0) return gone === proofs.length ? { kind: 'claimed' } : { kind: 'kept_as_sats' }
 
   // 3. On the link. Until a copy is confirmed stored, the link stays `arming` and this is retried.
@@ -422,8 +485,9 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   for (const p of locked) assertNotOpenAfterLocktime(p.secret)
   if (!(await ports.deliver(ctx.linkSecret, lockedToken))) return { kind: 'arming', why: 'not on the link yet' }
 
-  // 4.
-  return depositAll(ports, ctx.linkSecret, ctx.refundSecret, mintUrl, locked)
+  // 4. #477: a keyset read just now (not one recorded by an earlier run) is the active one, so the
+  // refunds start there; a rotation since is answered KEYSET_INACTIVE and re-read, as before.
+  return depositAll(ports, ctx.linkSecret, ctx.refundSecret, mintUrl, locked, ctx.burnKeyset === undefined ? burnKeyset : undefined)
 }
 
 /**
@@ -458,25 +522,45 @@ async function preflight(
     // refuse AFTER the burn. So without one, nothing is burnt.
     if (!proof.dleq) return { kind: 'unarmed', why: 'no_amount_proof' }
   }
-  const states = await ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret))
-  if (states.some((s) => s !== 'UNSPENT')) {
-    return states.every((s) => s === 'SPENT') ? { kind: 'claimed' } : { kind: 'unarmed', why: 'unreachable' }
-  }
-  // A dry run of every lock: the gateway checks everything but the burn before it asks the mint,
-  // so "not spent yet" (409) means the route exists and would sign once the gift is burnt.
-  for (const { proof } of proofs) {
+  // #477: the NUT-07 check, every proof's dry-run lock and the relay check, all read-only, at once.
+  // They are judged in the old order (spent first, then the lock route, then the relay), so the
+  // answer is the one the sequential checks gave.
+  const dryRun = async ({ proof }: { proof: TokenProof }): Promise<ArmOutcome | null> => {
     let dry: GatewayAnswer
     try {
-      dry = await ports.gateway.call('POST', LOCK_PATH, lockBody(ctx, proof, linkPub, refundPub, derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, '00'.repeat(8))))
+      const body = lockBody(ctx, proof, linkPub, refundPub, derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, '00'.repeat(8)))
+      dry = await ports.gateway.call('POST', LOCK_PATH, body)
+      // #477: many dry runs at once can meet the gateway's per-caller limit on the Cashlink routes
+      // (120 a minute). "Not now" is never "refused": wait and ask again, as `signRoute` does.
+      for (let attempt = 0; attempt < 3 && dry.status === 429; attempt++) {
+        await ports.sleep(5_000 * (attempt + 1))
+        dry = await ports.gateway.call('POST', LOCK_PATH, body)
+      }
     } catch {
       return { kind: 'unarmed', why: 'unreachable' }
     }
+    if (dry.status === 429) return { kind: 'unarmed', why: 'rate_limited' }
     if (dry.status === 404 || dry.status === 405 || dry.status >= 500) return { kind: 'unarmed', why: 'lock_route_unavailable' }
     if (!(dry.status === 409 && dry.body?.refusal === 'PREDECESSOR_NOT_SPENT')) return { kind: 'unarmed', why: 'lock_refused' }
+    return null
+  }
+  const [states, dries, relayOn] = await Promise.all([
+    ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret)),
+    // A dry run of every lock: the gateway checks everything but the burn before it asks the mint,
+    // so "not spent yet" (409) means the route exists and would sign once the gift is burnt.
+    inParallel(proofs.map((p) => () => dryRun(p)), ARM_CONCURRENCY),
+    relayIsOn(ports, ctx.linkSecret),
+  ])
+  if (states.some((s) => s !== 'UNSPENT')) {
+    return states.every((s) => s === 'SPENT') ? { kind: 'claimed' } : { kind: 'unarmed', why: 'unreachable' }
+  }
+  for (const d of dries) {
+    if (!d.ok) return { kind: 'unarmed', why: 'unreachable' }
+    if (d.value) return d.value
   }
   // A gift locked to its link with nothing to post its take-back is no better than today's, so
   // while the relay is off (or not deployed), links stay as they are.
-  if (!(await relayIsOn(ports, ctx.linkSecret))) return { kind: 'unarmed', why: 'relay_unavailable' }
+  if (!relayOn) return { kind: 'unarmed', why: 'relay_unavailable' }
   return null
 }
 
@@ -508,13 +592,23 @@ type LockStep =
   /** The mint refused the burn outright: nothing of this proof moved. */
   | { kind: 'unburnt'; why: string }
 
-async function lockOne(ctx: ArmContext, mintUrl: string, proof: TokenProof, burnKeyset: string, linkPub: string, refundPub: string): Promise<LockStep> {
+async function lockOne(
+  ctx: ArmContext,
+  mintUrl: string,
+  proof: TokenProof,
+  burnKeyset: string,
+  linkPub: string,
+  refundPub: string,
+  /** #477: the gift's state, read for every proof of the gift in one NUT-07 call. */
+  known?: ProofState,
+): Promise<LockStep> {
   const { ports } = ctx
   let burnOuts = derivedOutputs(ctx.refundSecret, 'burn', proof.secret, proof.amount, burnKeyset)
 
   // 1. Burn, or find our earlier burn.
-  const [giftState] = await ports.mint.states(mintUrl, [proof.secret])
+  const giftState = known === 'UNSPENT' || known === 'SPENT' ? known : (await ports.mint.states(mintUrl, [proof.secret]))[0]
   let burnt: UnblindedProof[]
+  let freshBurn = false
   if (giftState === 'UNSPENT') {
     const burnWitness = (outs: BlindedOutput[]) => {
       const self = selfLockedBy(ctx, proof)
@@ -541,6 +635,7 @@ async function lockOne(ctx: ArmContext, mintUrl: string, proof: TokenProof, burn
       return { kind: 'unburnt', why: done.answer.kind }
     }
     burnt = done.proofs
+    freshBurn = done.fresh === true
   } else if (giftState === 'SPENT') {
     burnt = await restoreMine(ports.mint, mintUrl, burnOuts)
     if (burnt.length === 0) return { kind: 'gone' }
@@ -556,7 +651,9 @@ async function lockOne(ctx: ArmContext, mintUrl: string, proof: TokenProof, burn
 
   // An earlier run may already have minted it: the burn's outputs are then spent, and only the
   // lock it was minted as finds it. Never read as "refused, keep the sats": those sats are gone.
-  const [burnState] = await ports.mint.states(mintUrl, [burnt[0].secret])
+  // #477: outputs the mint signed in THIS swap were never signed before, so no earlier run can
+  // have spent them: no need to ask.
+  const [burnState] = freshBurn ? ['UNSPENT' as const] : await ports.mint.states(mintUrl, [burnt[0].secret])
   if (burnState === 'SPENT') {
     let signed = ctx.knownLocks?.get(proof.secret)
     if (!signed) {
@@ -615,17 +712,20 @@ export function refundSwap(refundSecret: Uint8Array, locked: TokenProof, keyset:
 }
 
 /** 4. Deposit every locked proof's refund. One failure is enough for "not armed". */
-async function depositAll(ports: CashlinkPorts, linkSecret: Uint8Array, refundSecret: Uint8Array, mintUrl: string, locked: TokenProof[]): Promise<ArmOutcome> {
+async function depositAll(ports: CashlinkPorts, linkSecret: Uint8Array, refundSecret: Uint8Array, mintUrl: string, locked: TokenProof[], activeKeyset?: string): Promise<ArmOutcome> {
   let keyset: string
   try {
-    keyset = await ports.mint.activeKeysetId(mintUrl)
+    keyset = activeKeyset ?? (await ports.mint.activeKeysetId(mintUrl))
   } catch {
     return { kind: 'not_armed', keyset: locked[0].id, why: 'mint keysets unreadable' }
   }
-  for (const proof of locked) {
-    const result = await depositOne(ports, linkSecret, refundSecret, mintUrl, proof, keyset)
-    if (result.kind !== 'armed') return { kind: 'not_armed', keyset: result.keyset, why: result.why }
-    keyset = result.keyset
+  // #477: every refund at once (each is its own idempotent deposit, keyed by the proof); the first
+  // failure in the gift's order is the answer, as before.
+  const results = await inParallel(locked.map((proof) => () => depositOne(ports, linkSecret, refundSecret, mintUrl, proof, keyset)), ARM_CONCURRENCY)
+  for (const r of results) {
+    if (!r.ok) return { kind: 'not_armed', keyset, why: r.error instanceof Error ? r.error.message : String(r.error) }
+    if (r.value.kind !== 'armed') return { kind: 'not_armed', keyset: r.value.keyset, why: r.value.why }
+    keyset = r.value.keyset
   }
   return { kind: 'armed', keyset }
 }
@@ -1256,6 +1356,18 @@ async function mintFetch(url: string, init: RequestInit): Promise<Response> {
 
 const postJson = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
+/**
+ * #477: a keyset's keys, once per mint and keyset for the life of the page. A keyset id is derived
+ * from its keys (NUT-02), so they never change under one id. Fetched 14 times for one 7-proof code
+ * before this. A failed fetch is not kept, so the next call asks again.
+ */
+const keysCache = new Map<string, Promise<Record<string, string>>>()
+
+/** Test seam. */
+export function clearMintKeysCache(): void {
+  keysCache.clear()
+}
+
 /** The HTTP mint the app uses. */
 export function httpCashlinkMint(): CashlinkMint {
   return {
@@ -1267,13 +1379,23 @@ export function httpCashlinkMint(): CashlinkMint {
       if (!active) throw new Error('no active sat keyset')
       return active.id
     },
-    async keys(mintUrl, keysetId) {
-      const r = await mintFetch(`${mintUrl}/v1/keys/${keysetId}`, { method: 'GET' })
-      if (!r.ok) throw new Error(`keys HTTP ${r.status}`)
-      const { keysets } = (await r.json()) as { keysets?: { id: string; keys: Record<string, string> }[] }
-      const k = keysets?.[0]
-      if (!k || k.id !== keysetId || !k.keys) throw new Error('keys for another keyset')
-      return k.keys
+    keys(mintUrl, keysetId) {
+      const key = `${mintUrl}|${keysetId}`
+      const cached = keysCache.get(key)
+      if (cached) return cached
+      const fetched = (async () => {
+        const r = await mintFetch(`${mintUrl}/v1/keys/${keysetId}`, { method: 'GET' })
+        if (!r.ok) throw new Error(`keys HTTP ${r.status}`)
+        const { keysets } = (await r.json()) as { keysets?: { id: string; keys: Record<string, string> }[] }
+        const k = keysets?.[0]
+        if (!k || k.id !== keysetId || !k.keys) throw new Error('keys for another keyset')
+        return k.keys
+      })()
+      keysCache.set(key, fetched)
+      fetched.catch(() => {
+        if (keysCache.get(key) === fetched) keysCache.delete(key)
+      })
+      return fetched
     },
     async swap(mintUrl, inputs, outputs) {
       const r = await mintFetch(
