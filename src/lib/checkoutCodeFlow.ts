@@ -42,11 +42,13 @@ import {
   xOnlyPub,
   isTheSuccessorAskedFor,
 } from './cashlinkLock'
-import { armGift, armPreflight, cashlinkSteps, settleLockedGift, type ArmOutcome, type CashlinkPorts, type GatewayAnswer } from './cashlinkFlow'
+import { armGift, armPreflight, cashlinkSteps, retryDeposit, settleLockedGift, type ArmOutcome, type CashlinkPorts, type GatewayAnswer } from './cashlinkFlow'
 import { normalise } from './checkoutCode'
 import type { OnlineShop } from './onlineShop'
+import { checkLockedGift } from './lockedGifts'
 import {
   loadCheckoutCodes,
+  remainingOf,
   reserveCheckoutRefundIndices,
   saveCheckoutCode,
   type CheckoutCodeRecord,
@@ -95,6 +97,11 @@ export interface CheckoutPorts extends CashlinkPorts {
    * arrived in the wallet. Optional so test worlds without it fall back to `activity`.
    */
   changeActivity?(row: CheckoutActivity): Promise<void>
+  /**
+   * #472: one order used part of a code and the rest stays on it: its OWN outgoing history row
+   * (`checkout:<id>:used:<n>`). Optional so test worlds without it fall back to `activity`.
+   */
+  usedActivity?(row: CheckoutActivity): Promise<void>
 }
 
 // --- Making a code ----------------------------------------------------------
@@ -335,6 +342,8 @@ async function deposit(ports: CheckoutPorts, pubkey: string, record: CheckoutCod
     record.code = code.canonical
     record.codeHash = codeHashOf(code.canonical)
     record.amount = amount
+    record.remaining = amount
+    record.redemptions = []
     save(pubkey, record)
     return { kind: 'issued', record }
   }
@@ -351,7 +360,13 @@ export const codeHashOf = (canonical: string): string => bytesToHex(sha256(new T
 
 // --- Cancelling -------------------------------------------------------------
 
-/** Ask the store to cancel a `reserved` code. True once it is `cancelling` (or already further on). */
+/**
+ * Ask the store to cancel a `reserved` code. True once it is `cancelling` (or already further on).
+ *
+ * @deprecated #472: a code is a bearer instrument and the store answers `NOT_CANCELLABLE`. Not
+ * offered in the app any more; kept for the staging e2e against stores from before #472. Codes
+ * already `cancelling` still finish through the `cancelled` notice.
+ */
 export async function cancelCheckoutCode(ports: CheckoutPorts, pubkey: string, id: string): Promise<{ ok: boolean; why?: string }> {
   const record = find(pubkey, id)
   if (!record?.code) return { ok: false, why: 'no code' }
@@ -528,9 +543,11 @@ export async function settleLockedParts(ports: CheckoutPorts, pubkey: string, id
 
 export interface CheckoutNotice {
   type: typeof CHECKOUT_NOTICE_TYPE
-  event: 'redeemed' | 'expired' | 'cancelled' | 'change'
+  event: 'redeemed' | 'expired' | 'cancelled' | 'change' | 'rebalanced'
   code_hash: string
   amount?: number
+  /** #472: what is left on the code (`rebalanced`, and `redeemed` ending a balance code with 0). */
+  remaining?: number
   unit?: string
   tokens?: string[]
 }
@@ -539,10 +556,12 @@ export function parseCheckoutNotice(content: string): CheckoutNotice | null {
   try {
     const v = JSON.parse(content) as Partial<CheckoutNotice>
     if (v?.type !== CHECKOUT_NOTICE_TYPE) return null
-    if (!['redeemed', 'expired', 'cancelled', 'change'].includes(String(v.event))) return null
+    if (!['redeemed', 'expired', 'cancelled', 'change', 'rebalanced'].includes(String(v.event))) return null
     if (typeof v.code_hash !== 'string' || !/^[0-9a-f]{64}$/i.test(v.code_hash)) return null
     if (v.tokens !== undefined && !(Array.isArray(v.tokens) && v.tokens.every((t) => typeof t === 'string'))) return null
     if (v.amount !== undefined && !Number.isSafeInteger(v.amount)) return null
+    if (v.remaining !== undefined && !(Number.isSafeInteger(v.remaining) && v.remaining >= 0)) return null
+    if (v.event === 'rebalanced' && v.remaining === undefined) return null
     return v as CheckoutNotice
   } catch {
     return null
@@ -590,11 +609,31 @@ export async function handleCheckoutNotice(ports: CheckoutPorts, pubkey: string,
   const record = loadCheckoutCodes(pubkey).find((r) => r.codeHash === notice.code_hash.toLowerCase())
   if (!record) return 'ignored'
 
+  if (notice.event === 'rebalanced') return syncBalance(ports, pubkey, record.id)
+
+  if (notice.event === 'redeemed' && isBalanceEnd(record, notice)) {
+    // #472: the last order of a balance code used what was left. `amount` is that order's.
+    if (record.status !== 'redeemed') {
+      const before = remainingOf(record)
+      const spent = Math.min(notice.amount ?? before, before)
+      record.status = 'redeemed'
+      record.spent = spent
+      record.remaining = 0
+      record.redemptions = [...(record.redemptions ?? []), { at: ports.now(), amount: spent, remaining: 0 }]
+      for (const p of record.parts) if (p.state === 'locked') p.state = 'settled'
+      record.done = true
+      save(pubkey, record)
+      await activity(ports, record, 'redeemed', spent, `${money(record, spent)} used at ${shopName(record)}: nothing left on the code`)
+    }
+    return 'handled'
+  }
+
   if (notice.event === 'redeemed') {
     const spent = Math.min(notice.amount ?? record.amount, record.amount)
     if (record.status !== 'redeemed') {
       record.status = 'redeemed'
       record.spent = spent
+      record.remaining = 0
       for (const p of record.parts) if (p.state === 'locked') p.state = 'settled'
       record.done = true
       save(pubkey, record)
@@ -613,11 +652,14 @@ export async function handleCheckoutNotice(ports: CheckoutPorts, pubkey: string,
         record.change = out.face
         // The store's `redeemed` notice carries the code's amount, not what the order took; the
         // change says the rest. The code's own row then shows what the shop really spent.
-        if (record.status === 'redeemed') record.spent = Math.max(0, record.amount - out.face)
+        if (record.status === 'redeemed') record.spent = Math.max(0, finalOrderBefore(record) - out.face)
+        // #472: a balance code's last order (below the dust threshold) gave change: it took less.
+        const last = record.redemptions?.at(-1)
+        if (record.status === 'redeemed' && last && last.remaining === 0) last.amount = record.spent ?? last.amount
         save(pubkey, record)
         await changeActivity(ports, record, out.face)
         if (record.status === 'redeemed' && record.spent !== undefined) {
-          await activity(ports, record, 'redeemed', record.spent, `${money(record, record.amount)} code used at ${shopName(record)}: ${money(record, record.spent)} spent, ${money(record, out.face)} back`)
+          await activity(ports, record, 'redeemed', record.spent, `${money(record, finalOrderBefore(record))} code used at ${shopName(record)}: ${money(record, record.spent)} spent, ${money(record, out.face)} back`)
         }
       }
     }
@@ -637,7 +679,14 @@ export async function handleCheckoutNotice(ports: CheckoutPorts, pubkey: string,
   }
   const after = await settleLockedParts(ports, pubkey, record.id)
   if (!after?.done) return 'retry'
-  await activity(ports, after, 'expired', after.amount, `${money(after, after.amount)} code expired unused: back in your wallet`)
+  const left = remainingOf(after)
+  await activity(
+    ports,
+    after,
+    'expired',
+    left,
+    left === after.amount ? `${money(after, left)} code expired unused: back in your wallet` : `${money(after, left)} left on the code expired: back in your wallet`,
+  )
   return 'handled'
 }
 
@@ -668,7 +717,7 @@ async function activity(ports: CheckoutPorts, record: CheckoutCodeRecord, what: 
 
 // --- The fallback: one pass over every outstanding code ---------------------
 
-const STORE_STATUSES: ReadonlySet<CheckoutCodeStatus> = new Set(['reserved', 'held', 'cancelling', 'redeemed', 'cancelled', 'expired'])
+const STORE_STATUSES: ReadonlySet<CheckoutCodeStatus> = new Set(['reserved', 'held', 'settling', 'cancelling', 'redeemed', 'cancelled', 'expired'])
 
 /**
  * Resume codes part way, read `GET /mine` for lost notices, and bring back parts whose `x` has
@@ -689,7 +738,7 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
     if ((await runCheckoutCode(ports, pubkey, r.id)).kind !== 'pending') changed += 1
   }
 
-  let mine: Array<{ code?: string; status?: string }> = []
+  let mine: Array<{ code?: string; status?: string; remaining?: number }> = []
   try {
     const answer = await ports.store.call('GET', `${CHECKOUT_CODES_PATH}/mine`)
     if (answer.status === 200 && Array.isArray(answer.body)) mine = answer.body as typeof mine
@@ -701,7 +750,20 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
     const code = typeof entry.code === 'string' ? normalise(entry.code) : null
     if (!code?.ok || !STORE_STATUSES.has(entry.status as CheckoutCodeStatus)) continue
     const record = loadCheckoutCodes(pubkey).find((r) => r.code === code.canonical && !r.done)
-    if (!record || record.status === entry.status) continue
+    if (!record) continue
+    // #472: a lost `rebalanced` (or a balance code's last order): less is left than we know of.
+    const lost =
+      typeof entry.remaining === 'number' &&
+      Number.isSafeInteger(entry.remaining) &&
+      entry.remaining < remainingOf(record) &&
+      (entry.status === 'reserved' || entry.status === 'held' || (entry.status === 'redeemed' && (record.redemptions?.length ?? 0) > 0))
+    if (lost) {
+      if ((await syncBalance(ports, pubkey, record.id)) === 'handled') changed += 1
+      continue
+    }
+    if (record.status === entry.status) continue
+    // `settling` is the store waiting on the shop's `/rebalance`: nothing to do here yet.
+    if (entry.status === 'settling') continue
     record.status = entry.status as CheckoutCodeStatus
     if (record.status === 'redeemed') {
       for (const p of record.parts) if (p.state === 'locked') p.state = 'settled'
@@ -711,6 +773,10 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
     // `cancelled` is finished only once its tokens are in (they come by DM): left outstanding.
     save(pubkey, record)
     changed += 1
+  }
+
+  for (const r of loadCheckoutCodes(pubkey).filter((r) => !r.done && nowS < r.x && r.parts.some(needsRearm))) {
+    if (await rearmSuccessors(ports, pubkey, r.id)) changed += 1
   }
 
   for (const r of loadCheckoutCodes(pubkey).filter((r) => !r.done && nowS >= r.x)) {
@@ -724,4 +790,186 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
     }
   }
   return changed
+}
+
+// --- A balance kept on the code (#472) ---------------------------------------
+
+/** What was on the code when its last order began: the amount, or what earlier orders left. */
+function finalOrderBefore(record: CheckoutCodeRecord): number {
+  const r = record.redemptions ?? []
+  const lastIsFinal = r.at(-1)?.remaining === 0
+  const prior = lastIsFinal ? r.at(-2) : r.at(-1)
+  return prior ? prior.remaining : record.amount
+}
+
+/** A `redeemed` that ends a code which had kept a balance: `remaining: 0` after earlier orders. */
+function isBalanceEnd(record: CheckoutCodeRecord, notice: CheckoutNotice): boolean {
+  return notice.remaining === 0 && ((record.redemptions?.length ?? 0) > 0 || remainingOf(record) < record.amount)
+}
+
+/** Why a balance successor offered for `part` is not adopted, or null when it is good. */
+export function successorProblem(record: CheckoutCodeRecord, part: CheckoutPartRecord, R: Uint8Array, token: string, amount: unknown): string | null {
+  const checked = checkLockedGift(token, 'lock', record.shopKey)
+  if (!checked.ok) return checked.why
+  if (checked.x !== record.x) return 'wrong_locktime'
+  if (checked.refundPub.toLowerCase() !== xOnlyPub(R).toLowerCase()) return 'wrong_refund_key'
+  let fresh, old
+  try {
+    fresh = parseVoucherToken(token)
+    old = parseVoucherToken(part.lockedToken ?? '')
+  } catch {
+    return 'unreadable'
+  }
+  const ids = new Set(tokenProofs(token).map((p) => voucherOfSecret(p.secret)?.voucherId))
+  if (ids.size !== 1 || !ids.has(old.voucher.voucherId)) return 'wrong_voucher'
+  if (fresh.voucher.issuerPublicKey.toLowerCase() !== old.voucher.issuerPublicKey.toLowerCase()) return 'wrong_signer'
+  if (fresh.voucher.issuerId.toLowerCase() !== record.stall || fresh.voucher.unit.toUpperCase() !== record.unit.toUpperCase()) return 'wrong_stall'
+  const face = creditableFaceValue(fresh).faceValue
+  if (face !== amount || face <= 0 || face >= part.amount) return 'wrong_amount'
+  return null
+}
+
+const needsRearm = (p: CheckoutPartRecord) => p.state === 'locked' && p.armed === false && (p.replacedTokens?.length ?? 0) > 0 && !!p.lockedToken
+
+/** Arm the relay for a successor whose re-arm failed earlier. True when one became armed. */
+async function rearmSuccessors(ports: CheckoutPorts, pubkey: string, id: string): Promise<boolean> {
+  const record = find(pubkey, id)
+  const identity = ports.identitySecret()
+  if (!record || !identity) return false
+  let any = false
+  try {
+    for (const part of record.parts.filter(needsRearm)) {
+      const R = deriveCheckoutRefundSecret(identity, part.i)
+      const out = await retryDeposit(ports, R, R, part.lockedToken!)
+      if (out.kind === 'armed') {
+        part.armed = true
+        part.depositKeyset = out.keyset
+        any = true
+        save(pubkey, record)
+      }
+    }
+    return any
+  } finally {
+    identity.fill(0)
+  }
+}
+
+/**
+ * Bring a code's parts in line with the store's `GET /{code}/parts` after an order kept a balance
+ * on it (a `rebalanced` notice, or `/mine` saying less is left). Never trusts the store alone:
+ *
+ * - a part the store no longer lists is settled only once the mint says every proof is SPENT;
+ * - a part listed with a new token is adopted only when that token is the balance successor of
+ *   THIS part (locked to `S` until `x`, refund to this part's `R`, the same voucher, gateway-signed,
+ *   less than before, worth what the store says), and its refunds are re-armed at the relay.
+ *
+ * Anything wrong leaves that part as it was and answers 'retry'. Idempotent.
+ */
+export async function syncBalance(ports: CheckoutPorts, pubkey: string, id: string): Promise<NoticeOutcome> {
+  const record = find(pubkey, id)
+  if (!record?.code) return 'ignored'
+  if (record.done) return 'handled'
+  let answer: GatewayAnswer
+  try {
+    answer = await ports.store.call('GET', `${CHECKOUT_CODES_PATH}/${record.code}/parts`)
+  } catch {
+    return 'retry'
+  }
+  const listed = answer.body?.parts
+  if (answer.status !== 200 || !Array.isArray(listed)) return 'retry'
+  const byIdx = new Map<number, { token?: unknown; amount?: unknown }>()
+  for (const e of listed as Array<{ idx?: unknown; token?: unknown; amount?: unknown }>) {
+    if (Number.isSafeInteger(e?.idx)) byIdx.set(e.idx as number, e)
+  }
+  const identity = ports.identitySecret()
+  if (!identity) return 'retry'
+  const before = remainingOf(record)
+  let unsure = false
+  try {
+    for (const [idx, part] of record.parts.entries()) {
+      if (part.state !== 'locked' || !part.lockedToken) continue
+      const entry = byIdx.get(idx)
+      if (!entry) {
+        // Gone from the code: the shop spent it. Only the mint may say so.
+        let states
+        try {
+          states = await ports.mint.states(mintOf(part.lockedToken), tokenProofs(part.lockedToken).map((p) => p.secret))
+        } catch {
+          states = ['UNKNOWN']
+        }
+        if (states.length > 0 && states.every((st) => st === 'SPENT')) {
+          part.state = 'settled'
+          save(pubkey, record)
+        } else unsure = true
+        continue
+      }
+      if (entry.token === part.lockedToken) continue
+      if (typeof entry.token !== 'string') {
+        unsure = true
+        continue
+      }
+      const R = deriveCheckoutRefundSecret(identity, part.i)
+      if (successorProblem(record, part, R, entry.token, entry.amount)) {
+        unsure = true
+        continue
+      }
+      // The old token is spent (the shop burnt it to make this one) before we let it go.
+      let oldStates
+      try {
+        oldStates = await ports.mint.states(mintOf(part.lockedToken), tokenProofs(part.lockedToken).map((p) => p.secret))
+      } catch {
+        oldStates = ['UNKNOWN']
+      }
+      if (!oldStates.every((st) => st === 'SPENT')) {
+        unsure = true
+        continue
+      }
+      part.replacedTokens = [...(part.replacedTokens ?? []), part.lockedToken]
+      part.lockedToken = entry.token
+      part.amount = entry.amount as number
+      part.armed = false
+      delete part.depositKeyset
+      save(pubkey, record)
+      // Re-armed exactly as a fresh part: one pre-signed refund per proof, NIP-98 by R.
+      const out = await retryDeposit(ports, R, R, entry.token)
+      part.armed = out.kind === 'armed'
+      if ('keyset' in out && out.keyset) part.depositKeyset = out.keyset
+      save(pubkey, record)
+    }
+  } finally {
+    identity.fill(0)
+  }
+  const left = record.parts.filter((p) => p.state === 'locked').reduce((n, p) => n + p.amount, 0)
+  if (left < before) {
+    const used = before - left
+    record.remaining = left
+    record.redemptions = [...(record.redemptions ?? []), { at: ports.now(), amount: used, remaining: left }]
+    if (left === 0) {
+      record.status = 'redeemed'
+      record.spent = used
+      record.done = isFinished(record)
+    } else if (record.status !== 'cancelling') record.status = 'reserved'
+    save(pubkey, record)
+    const n = record.redemptions.length
+    await usedActivity(
+      ports,
+      record,
+      n,
+      used,
+      left === 0 ? `${money(record, used)} used at ${shopName(record)}: nothing left on the code` : `${money(record, used)} used at ${shopName(record)}, ${money(record, left)} left on the code`,
+    )
+  } else if (!unsure && record.status === 'settling') {
+    record.status = 'reserved'
+    save(pubkey, record)
+  }
+  return unsure ? 'retry' : 'handled'
+}
+
+/** One partial use: its own outgoing history row (`checkout:<id>:used:<n>`). */
+async function usedActivity(ports: CheckoutPorts, record: CheckoutCodeRecord, n: number, amount: number, memo: string): Promise<void> {
+  try {
+    await (ports.usedActivity ?? ports.activity)({ id: `checkout:${record.id}:used:${n}`, at: ports.now(), stall: record.stall, unit: record.unit, decimals: record.decimals, amount, memo })
+  } catch {
+    // History is display.
+  }
 }
