@@ -23,7 +23,7 @@ import { hexToBytes } from '@noble/hashes/utils'
 vi.mock('../trustedMint', () => ({ checkTokenBacking: () => ({ outcome: 'accept' }) }))
 vi.mock('../issuerAllowlist', () => ({ checkIssuer: () => 'ok' }))
 
-const { armGift, lockAll, LOCK_PATH, LOCK_BATCH_PATH } = await import('../cashlinkFlow')
+const { armGift, lockAll, LOCK_PATH, LOCK_BATCH_PATH, LOCK_BATCH_WAIT_MS } = await import('../cashlinkFlow')
 const { parseVoucherToken, tokenProofs } = await import('../voucherToken')
 const { bearerSecret, tokenOf, world } = await import('./cashlinkWorld')
 
@@ -270,6 +270,67 @@ describe('gateway-customer#287: a gift is locked in one gateway call', () => {
     expect(out.kind).toBe('armed')
     expect(tokenProofs(lockedToken()).map((p) => p.amount)).toEqual([64])
     expect(keptSats()).toBe(32)
+  })
+})
+
+describe('#477: one slow burn does not hold back the other locks', () => {
+  it('the locks of the proofs that burnt go after a short wait; the slow one follows on its own', async () => {
+    // Arrange: 4 proofs, the burn of the third takes far longer than the wait.
+    const gift = giftOn([64, 32, 16, 8])
+    const slow = tokenProofs(gift.token)[2].secret
+    const swap = w.mint.swap.bind(w.mint)
+    let slowBurnDoneAt = 0
+    w.mint.swap = async (url, inputs, outputs) => {
+      if (inputs.some((i) => i.secret === slow)) {
+        await new Promise((r) => setTimeout(r, LOCK_BATCH_WAIT_MS * 4))
+        const out = await swap(url, inputs, outputs)
+        slowBurnDoneAt = Date.now()
+        return out
+      }
+      return swap(url, inputs, outputs)
+    }
+    const batchSentAt: number[] = []
+    const call = w.gateway.call.bind(w.gateway)
+    w.ports.gateway = { call: (m, p, b, s) => (p === LOCK_BATCH_PATH && batchSentAt.push(Date.now()), call(m, p, b, s)) }
+
+    // Act
+    const out = await armGift(armCtx(gift))
+
+    // Assert: dry runs (4), the three that burnt (3), then the slow one (1); all locked, in order.
+    expect(out.kind).toBe('armed')
+    expect(w.gateway.batches).toEqual([4, 3, 1])
+    expect(batchSentAt[1]).toBeLessThan(slowBurnDoneAt)
+    expect(tokenProofs(lockedToken()).map((p) => p.amount)).toEqual([64, 32, 16, 8])
+    expect(w.gateway.locks.size).toBe(4)
+  })
+
+  it('burns finishing close together still go in one call', async () => {
+    // Arrange: every burn a little late, each well inside the wait of the one before.
+    const gift = giftOn([64, 32, 16, 8, 4])
+    const swap = w.mint.swap.bind(w.mint)
+    let n = 0
+    w.mint.swap = async (url, inputs, outputs) => {
+      await new Promise((r) => setTimeout(r, (n++ % 5) * (LOCK_BATCH_WAIT_MS / 6)))
+      return swap(url, inputs, outputs)
+    }
+
+    // Act
+    const out = await armGift(armCtx(gift))
+
+    // Assert
+    expect(out.kind).toBe('armed')
+    expect(w.gateway.batches).toEqual([5, 5])
+  })
+
+  it('a 12-proof coupon runs every proof in one wave: one lock batch, not two', async () => {
+    // With 8 at a time the 9th to 12th proofs waited a whole burn-lock-mint round.
+    const gift = giftOn([2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1])
+
+    const out = await armGift(armCtx(gift))
+
+    expect(out.kind).toBe('armed')
+    expect(w.gateway.batches).toEqual([12, 12])
+    expect(tokenProofs(lockedToken())).toHaveLength(12)
   })
 })
 

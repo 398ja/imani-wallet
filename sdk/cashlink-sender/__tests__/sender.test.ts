@@ -197,7 +197,9 @@ describe('send', () => {
 })
 
 describe('limits', () => {
-  it('without wallet-api the individual limit applies (the safe default), and the 11th open link is refused before anything moves', async () => {
+  // 11 and 12 full sends: past vitest's 5 s default on a loaded full-suite run (seen 2026-11-02, as
+  // the test below), well inside it alone.
+  it('without wallet-api the individual limit applies (the safe default), and the 11th open link is refused before anything moves', { timeout: 30_000 }, async () => {
     const s = sender()
     expect(await s.limits()).toEqual(INDIVIDUAL_LIMITS)
     const state = emptyState(s.pubkey)
@@ -208,7 +210,7 @@ describe('limits', () => {
     expect(w.mint.log.swaps.length).toBe(swaps)
   })
 
-  it('a business limit passed in (from wallet-api) lets a batch past 10', async () => {
+  it('a business limit passed in (from wallet-api) lets a batch past 10', { timeout: 30_000 }, async () => {
     const s = sender()
     const state = emptyState(s.pubkey)
     const lim = limitsFor('business', 50)
