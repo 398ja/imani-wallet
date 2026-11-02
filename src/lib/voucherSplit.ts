@@ -227,7 +227,7 @@ async function run(ports: SplitPorts, pubkey: string, intent: SplitIntent, K: Ui
     let done = await swapOrRestore(mint, mintUrl, [{ ...intent.proof, witness: sigAllWitness(K, intent.proof.secret, intent.proof.C, outs) }], outs)
     if (done.kind === 'refused' && done.answer.kind === 'inactive') {
       // Archived since the intent was written: nothing was signed. Same B_, the active keyset.
-      intent.burnKeyset = await mint.activeKeysetId(mintUrl)
+      intent.burnKeyset = await mint.activeKeysetId(mintUrl, { fresh: true })
       saveIntent(pubkey, intent)
       outs = burnOutputsOf(K, intent)
       done = await swapOrRestore(mint, mintUrl, [{ ...intent.proof, witness: sigAllWitness(K, intent.proof.secret, intent.proof.C, outs) }], outs)
