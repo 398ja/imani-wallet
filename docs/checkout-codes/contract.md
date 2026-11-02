@@ -201,8 +201,10 @@ Body `{"order_ref": "string ≤ 128"}`.
   its refund key is the replaced part's `R`. Its `amount` is its credited face value and is less
   than the replaced part's. Its proofs are unspent and back no other code. One bad token refuses
   the whole call (`422 {"refusal", "part": idx}`), nothing changes.
-- `remaining` = the untouched parts + the `replaced` amounts. `remaining > 0` and
-  `remaining < dust_below` is `422 DUST` (the shop should have used today's flow).
+- `remaining` = the untouched parts + the `replaced` amounts. Any `remaining ≥ 0` is accepted,
+  even one under `dust_below`: the shop chose the mode before it burnt anything, and a credited
+  value can round below the threshold afterwards. Refusing then would strand value the maker cannot
+  see. Under the threshold is still on the code, and still comes back to `R` at `x`.
 - `remaining > 0`: `settling → reserved`, the spent parts drop off the code, the replaced parts
   carry their new tokens, and the maker gets a `rebalanced` notice (§6). `remaining = 0`:
   `settling → redeemed`, notice `redeemed`.
@@ -215,8 +217,11 @@ Body `{"order_ref": "string ≤ 128"}`.
 - Refusals: `400 MALFORMED`; `409 SETTLING` (the code is settling for another order) or the code's
   state; `422 UNKNOWN_PART` (an `idx` not handed to this order, or named twice), `AMOUNT_NOT_LESS`,
   `ALREADY_SPENT` (a successor proof), `DUPLICATE_PART` (a successor proof backs a code already),
-  `DUST`, `UNDECLARED_SPEND`, and the deposit refusals for a successor (a wrong `R` is
-  `NOT_A_LOCK`), each with `part`; `409 PARTS_NOT_SPENT` and `MINT_UNAVAILABLE` are retryable.
+  `UNDECLARED_SPEND`, and the deposit refusals for a successor (`WRONG_LOCK_KEY` another `S`,
+  `MIXED_EXPIRY` another `x`, `NOT_A_LOCK` another `R`, `WRONG_ISSUER`, `UNIT_MISMATCH`,
+  `AMOUNT_MISMATCH`), each with `part`; `409 PARTS_NOT_SPENT` and `MINT_UNAVAILABLE` are retryable.
+  A non-retryable refusal after the burn is a shop fault: the shop keeps the successor tokens and
+  alerts its operator; it must not drop them.
   The replay is keyed on the request's meaning (order, applied, spent, replaced), not its bytes.
 
 `200 {"status": "reserved|redeemed|expired", "amount": remaining, "applied": n}`. A code whose
@@ -434,8 +439,10 @@ from `R`), so a crash anywhere resumes:
 Cancel is the same with every successor locked to `R`.
 
 **Keeping a balance (#472).** When the lookup says `balance: true` and what the order leaves,
-`amount − applied`, is at least `dust_below`, the shop redeems with `mode: balance` and settles
-differently:
+`amount − applied`, is at least `dust_below` (predicted as the split remainder's credited face
+value where the shop can work it out, else in minor units), the shop redeems with `mode: balance`
+and settles differently. It keeps the plan with the order: after `/rebalance` the lookup changes, so
+a resume must use the plan it started with (`/redeem` replays the same parts to the same order).
 
 - parts the plan sends whole to the stall: as above;
 - the split part: its applied share to the stall (rule 4), the rest **re-locked to `S`** (rule 4b),
