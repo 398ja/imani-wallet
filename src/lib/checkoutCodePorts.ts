@@ -14,7 +14,7 @@ import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import type { CheckoutPorts, CheckoutStore } from './checkoutCodeFlow'
 import type { SplitPorts } from './voucherSplit'
 import { loadCheckoutCodes, onCheckoutCodeSaved, type CheckoutCodeRecord } from './checkoutCodeRecords'
-import { checkoutChangeRow, checkoutCodeRow, checkoutTxId, codeIdOfActivity } from './checkoutCodeHistory'
+import { checkoutChangeRow, checkoutUsedRow, checkoutCodeRow, checkoutTxId, codeIdOfActivity } from './checkoutCodeHistory'
 
 type TxRow = Parameters<ReturnType<typeof getWallet>['addTransaction']>[0]
 
@@ -160,6 +160,16 @@ export function appCheckoutPorts(): CheckoutPorts & SplitPorts {
       const codeId = codeIdOfActivity(row.id)
       const record = codeId ? findRecord(codeId) : undefined
       if (record) await writeCodeRow(record.pubkey, record.record, row.memo)
+    },
+    async usedActivity(row) {
+      // #472: an order used part of the code; the rest stays on it. Its own outgoing row, keyed on
+      // the use, so a second notice overwrites rather than duplicates. Never a balance.
+      try {
+        await getWallet().addTransaction(checkoutUsedRow(row) as unknown as TxRow)
+        notifyWalletChanged()
+      } catch {
+        // No wallet open.
+      }
     },
     async changeActivity(row) {
       // The change is value ARRIVING (its coupons are new rows), so it is its own incoming row, keyed

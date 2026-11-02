@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Copy, Globe, TriangleAlert } from 'lucide-react'
+import { Copy, Globe } from 'lucide-react'
 
 import { Alert, BackLink, Button, Centered, DetailRow, IdentityInline, Input, Notice, PageHeader, Panel, Screen } from '../components/ui'
 import { useMerchantLabel } from '../lib/identity'
@@ -10,8 +10,8 @@ import { fetchMerchantRecord } from '../lib/merchant'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import { checkoutPlan, maxExpiryFor, type CheckoutExclusion, type CheckoutPlan } from '../lib/checkoutPlan'
 import { compact, display } from '../lib/checkoutCode'
-import { loadCheckoutCodes, type CheckoutCodeRecord } from '../lib/checkoutCodeRecords'
-import { cancelCheckoutCode, startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
+import { loadCheckoutCodes, remainingOf, type CheckoutCodeRecord } from '../lib/checkoutCodeRecords'
+import { startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
 import { appCheckoutPorts } from '../lib/checkoutCodePorts'
 import { splitVoucher } from '../lib/voucherSplit'
 import type { OnlineShop } from '../lib/onlineShop'
@@ -38,7 +38,6 @@ export interface UseOnlineDeps {
   shopOf: (stall: string) => Promise<OnlineShop | null>
   nowMs: () => number
   start: typeof startCheckoutCode
-  cancel: typeof cancelCheckoutCode
   codes: (pubkey: string) => CheckoutCodeRecord[]
   ports: typeof appCheckoutPorts
   split: typeof splitVoucher
@@ -49,7 +48,6 @@ const realDeps: UseOnlineDeps = {
   shopOf: async (stall) => (await fetchMerchantRecord(stall))?.onlineShop ?? null,
   nowMs: () => Date.now(),
   start: startCheckoutCode,
-  cancel: cancelCheckoutCode,
   codes: loadCheckoutCodes,
   ports: appCheckoutPorts,
   split: splitVoucher,
@@ -325,11 +323,8 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
 }
 
 function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: UseOnlineDeps }) {
-  const [record, setRecord] = useState<CheckoutCodeRecord | undefined>(() => deps.codes(pubkey).find((r) => r.id === id))
+  const [record] = useState<CheckoutCodeRecord | undefined>(() => deps.codes(pubkey).find((r) => r.id === id))
   const [copied, setCopied] = useState(false)
-  const [cancelError, setCancelError] = useState<string | null>(null)
-  const [confirmCancel, setConfirmCancel] = useState(false)
-  const [cancelling, setCancelling] = useState(false)
   const stallName = useMerchantLabel({ pubkey: record?.stall ?? '' })
   if (!record) return <Centered>No such code.</Centered>
   const shop = hostOf(record.shopUrl)
@@ -358,20 +353,6 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
       setCopied(false)
     }
   }
-  const onCancel = async () => {
-    setCancelError(null)
-    setCancelling(true)
-    try {
-      const out = await deps.cancel(deps.ports(), pubkey, record.id)
-      if (out.ok) {
-        setConfirmCancel(false)
-        setRecord(deps.codes(pubkey).find((r) => r.id === id))
-      } else setCancelError(out.why === 'HELD' ? 'This code is in a checkout right now. Try again once the cart is closed.' : 'The code could not be cancelled. Try again in a moment.')
-    } finally {
-      setCancelling(false)
-    }
-  }
-
   return (
     <Screen>
       <BackLink to={`/merchants/${record.stall}`} label="Done" />
@@ -385,48 +366,39 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
         </Button>
       </Panel>
       <Panel className="mt-4 p-4">
-        <DetailRow label="Amount" value={formatFace(record.amount, denom)} />
+        <DetailRow
+          label="Amount"
+          value={
+            remainingOf(record) === record.amount || record.status === 'redeemed'
+              ? formatFace(record.amount, denom)
+              : `${formatFace(remainingOf(record), denom)} left of ${formatFace(record.amount, denom)}`
+          }
+        />
         <DetailRow label="Stall" value={stallName} />
         <DetailRow label="Shop" value={shop} />
         <DetailRow label="Expires" value={expires} />
         <DetailRow label="Status" value={STATUS_WORDS[record.status] ?? record.status} />
       </Panel>
-      {record.status === 'cancelling' && <Notice tone="warning">Cancelling. Your money is back within 24 hours, or on {expires} at the latest.</Notice>}
-      {cancelError && <Alert>{cancelError}</Alert>}
-      {record.status === 'reserved' && !confirmCancel && (
-        <Button variant="ghost" className="mt-4 w-full" onClick={() => setConfirmCancel(true)}>
-          Cancel code
-        </Button>
+      {(record.redemptions?.length ?? 0) > 0 && (
+        <Panel className="mt-4 p-4">
+          <p className="mb-2 text-sm font-medium text-mono-900 dark:text-mono-50">Used</p>
+          <ul data-testid="redemptions" className="space-y-1 text-sm text-mono-600 dark:text-mono-400">
+            {record.redemptions!.map((u, n) => (
+              <li key={n} className="flex justify-between gap-2">
+                <span>{new Date(u.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                <span className="tabular-nums">
+                  {formatFace(u.amount, denom)} used, {formatFace(u.remaining, denom)} left
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
       )}
-      {record.status === 'reserved' && confirmCancel && (
-        // Asked at the decision, not after it, as Revoke on Terminals asks: amber, a consequence to
-        // read rather than an error. Keeping the code is first and plain, so a thumb that lands by
-        // habit lands on the safe answer.
-        <div role="alertdialog" aria-labelledby="cancel-code-title" className="expand-row mt-4 rounded-xl bg-amber-50 p-4 text-amber-900 dark:bg-amber-950/50 dark:text-amber-200">
-          <div className="flex gap-2">
-            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-            <div className="text-sm">
-              <p id="cancel-code-title" className="font-medium">Cancel this code?</p>
-              <p className="mt-1">
-                It stops working at {shop} straight away. Your {formatFace(record.amount, denom)} comes back to your
-                wallet within 24 hours, or on {expires} at the latest.
-              </p>
-            </div>
-          </div>
-          <div className="mt-3 flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setConfirmCancel(false)} disabled={cancelling}>
-              Keep it
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => void onCancel()}
-              disabled={cancelling}
-              className="!bg-red-600 !text-white hover:!bg-red-700"
-            >
-              {cancelling ? 'Cancelling…' : 'Cancel code'}
-            </Button>
-          </div>
-        </div>
+      {record.status === 'cancelling' && <Notice tone="warning">Cancelling. Your money is back within 24 hours, or on {expires} at the latest.</Notice>}
+      {(record.status === 'reserved' || record.status === 'held' || record.status === 'settling') && (
+        <p className="mt-4 text-sm text-mono-600 dark:text-mono-400" data-testid="bearer-note">
+          Anyone with this code can use the rest until {expires}; whatever is left then comes back to you.
+        </p>
       )}
     </Screen>
   )
@@ -435,6 +407,7 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
 const STATUS_WORDS: Partial<Record<CheckoutCodeRecord['status'], string>> = {
   reserved: 'Ready to use',
   held: 'In a checkout',
+  settling: 'In a checkout',
   cancelling: 'Cancelling',
   redeemed: 'Used',
   cancelled: 'Cancelled',

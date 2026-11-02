@@ -13,7 +13,7 @@
  * never adds to or subtracts from a balance: it describes where the value is. One row per code,
  * never one per status change, so the history reads one movement, not several.
  */
-import type { CheckoutCodeRecord, CheckoutCodeStatus } from './checkoutCodeRecords'
+import { remainingOf, type CheckoutCodeRecord, type CheckoutCodeStatus } from './checkoutCodeRecords'
 
 export const CHECKOUT_CODE_TX_TYPE = 'checkout_code'
 
@@ -21,6 +21,7 @@ export const CHECKOUT_CODE_TX_TYPE = 'checkout_code'
 export const CHECKOUT_STATUS_WORDS: Record<CheckoutCodeStatus, string> = {
   reserved: 'Ready to use',
   held: 'In a checkout',
+  settling: 'In a checkout',
   cancelling: 'Cancelling',
   redeemed: 'Used',
   cancelled: 'Cancelled',
@@ -37,6 +38,8 @@ export interface CheckoutCodeSnapshot {
   shopHost: string
   /** Minor units the shop spent, once redeemed. */
   spent?: number
+  /** #472: minor units still on the code. */
+  remaining?: number
 }
 
 /** Where the code's value is, for the row's amount. */
@@ -75,6 +78,7 @@ export function asCheckoutCodeSnapshot(value: unknown): CheckoutCodeSnapshot | u
     status: v.status as CheckoutCodeStatus,
     shopHost: typeof v.shopHost === 'string' ? v.shopHost : '',
     ...(typeof v.spent === 'number' ? { spent: v.spent } : {}),
+    ...(typeof v.remaining === 'number' ? { remaining: v.remaining } : {}),
   }
 }
 
@@ -98,6 +102,13 @@ export function checkoutChangeRow(a: { id: string; at: number; stall: string; un
   }
 }
 
+/** #472: one order that used part of a code, value out to the stall. Keyed `checkout:<id>:used:<n>`. */
+export const CHECKOUT_USED_TX_TYPE = 'checkout_code_used'
+
+export function checkoutUsedRow(a: { id: string; at: number; stall: string; unit: string; decimals: number; amount: number; memo: string }): Record<string, unknown> {
+  return { ...checkoutChangeRow(a), type: CHECKOUT_USED_TX_TYPE, direction: 'out' }
+}
+
 /** The history row for a code, in the camelCase shape every writer uses. */
 export function checkoutCodeRow(record: CheckoutCodeRecord, memo?: string): Record<string, unknown> {
   const snapshot: CheckoutCodeSnapshot = {
@@ -105,6 +116,7 @@ export function checkoutCodeRow(record: CheckoutCodeRecord, memo?: string): Reco
     status: record.status,
     shopHost: hostOf(record.shopUrl),
     ...(record.spent !== undefined ? { spent: record.spent } : {}),
+    ...(record.remaining !== undefined ? { remaining: record.remaining } : {}),
   }
   return {
     id: checkoutTxId(record.id),
@@ -112,8 +124,9 @@ export function checkoutCodeRow(record: CheckoutCodeRecord, memo?: string): Reco
     type: CHECKOUT_CODE_TX_TYPE,
     direction: 'out',
     timestamp: record.createdAt,
-    // What left the coupon list for the code; a redeemed code shows what the shop spent.
-    amount: record.status === 'redeemed' && record.spent !== undefined ? record.spent : record.amount,
+    // What is on the code (#472: what is LEFT, earlier orders have their own rows); a redeemed
+    // code shows what its last order spent.
+    amount: record.status === 'redeemed' && record.spent !== undefined ? record.spent : remainingOf(record),
     unit: record.unit,
     decimals: record.decimals,
     merchantId: record.stall,
