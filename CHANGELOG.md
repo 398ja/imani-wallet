@@ -38,6 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.46.5] - 2026-11-02
+
+### Fixed
+- A stall's subscription licence (or a terminal credential) was burnt by the sweep that turns a
+  split's self-locked change back into ordinary coupons (0.46.1, #402). A licence is locked to the
+  stall's own key exactly as that change is, so the sweep swapped it at the mint, gateway-customer
+  refused to re-sign it (`NOT_REISSUABLE`), and the licence register then found it SPENT and revoked
+  it (staging 2026-11-02: corda lost its Essentials licence while the subscription service still
+  showed the plan). The sweep now skips any row that is a licence or credential, and never burns a
+  proof whose metadata names a `subscription_id` or `terminal` (the gateway's own rule).
+
 ## [0.46.4] - 2026-11-01
 
 ### Fixed

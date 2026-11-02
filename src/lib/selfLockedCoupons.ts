@@ -20,6 +20,16 @@
  * is found the same way. A definite refusal after the burn keeps the value as sats (never lost).
  *
  * Proofs that are not locked to K alone are left exactly as they are.
+ *
+ * ## Never a licence or a terminal credential
+ *
+ * A subscription licence is ALSO locked to K alone (`lock_key` is the stall), and so is a terminal
+ * credential. Neither is change: the lock is what makes it the stall's, and its `voucher_id` is what
+ * gateway-customer's licence register watches. Burning one spends it at the mint, the gateway then
+ * refuses to re-sign it (`NOT_REISSUABLE`, the rule in `VoucherLockedSplitService.isCredential`), and
+ * the next licence check finds it SPENT and revokes it (staging 2026-11-02: corda's Essentials licence,
+ * swapped at 06:17 by this sweep, revoked at 06:22, its value left as a sats row). So such a proof is
+ * never unlockable, here or by the app's sweep.
  */
 import { cashlinkSteps, type CashlinkPorts } from './cashlinkFlow'
 import {
@@ -71,6 +81,51 @@ export function hasSelfLockedProof(token: string, selfPub: string): boolean {
   }
 }
 
+/**
+ * A licence or terminal credential: its metadata names a `subscription_id`, or says `terminal`. The
+ * same rule as gateway-customer's `VoucherLockedSplitService.isCredential`, which refuses to re-sign
+ * one, so this wallet never burns what the gateway will not give back. Read straight from the
+ * `merchant_metadata` tag, as the gateway reads it, so a proof whose other tags this wallet cannot
+ * parse is still recognised. Unreadable metadata is not a credential (as there). Never throws.
+ */
+export function isCredentialProof(secret: string): boolean {
+  try {
+    const raw = metadataTag(secret) ?? voucherOfSecret(secret)?.merchantMetadata
+    if (!raw) return false
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false
+    const m = parsed as Record<string, unknown>
+    return 'subscription_id' in m || String(m.terminal) === 'true'
+  } catch {
+    return false
+  }
+}
+
+/** The first value of a NUT-10 secret's `merchant_metadata` tag, or undefined. Never throws. */
+function metadataTag(secret: string): string | undefined {
+  try {
+    const body = (JSON.parse(secret) as unknown[])[1] as { tags?: unknown } | undefined
+    const row = Array.isArray(body?.tags) ? (body.tags as unknown[]).find((t) => Array.isArray(t) && t[0] === 'merchant_metadata') : undefined
+    return Array.isArray(row) && row[1] != null ? String(row[1]) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Locked to `selfPub` alone AND not a licence or credential: change this wallet may unlock. */
+export function isUnlockableSelfLocked(secret: string, selfPub: string): boolean {
+  return isSelfLocked(secret, selfPub) && !isCredentialProof(secret)
+}
+
+/** Whether any proof of `token` is change this wallet may unlock. Never throws. */
+export function hasUnlockableProof(token: string, selfPub: string): boolean {
+  try {
+    return tokenProofs(token).some((p) => isUnlockableSelfLocked(p.secret, selfPub))
+  } catch {
+    return false
+  }
+}
+
 /** NUT-11 SIG_INPUTS witness: K over `sha256(secret)`. */
 function inputWitness(key: Uint8Array, secret: string): string {
   return JSON.stringify({ signatures: [bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(secret)), key))] })
@@ -89,7 +144,7 @@ export async function unlockSelfLockedRow(ports: SelfLockPorts, row: SelfLockedR
     const untouched: TokenProof[] = []
     const tokens: string[] = []
     for (const proof of tokenProofs(row.token)) {
-      if (!isSelfLocked(proof.secret, selfPub)) {
+      if (!isUnlockableSelfLocked(proof.secret, selfPub)) {
         untouched.push(proof)
         continue
       }
