@@ -10,7 +10,9 @@ import { getSigner } from './nap'
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
 import { appCashlinkPorts } from './cashlinkPorts'
 import { xOnlyPub } from './cashlinkLock'
-import { hasSelfLockedProof, unlockSelfLockedRow, type SelfLockPorts } from './selfLockedCoupons'
+import { hasUnlockableProof, unlockSelfLockedRow, type SelfLockPorts } from './selfLockedCoupons'
+import { isLicence } from './licences'
+import { isTerminalCredential } from './notMoney'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import { withoutInFlight } from './pay'
@@ -58,7 +60,11 @@ async function sweep(pubkey: string): Promise<number> {
     if (!row.token) continue
     const status = String(row.status ?? '').toLowerCase()
     if (status === 'spent' || status === 'redeemed') continue
-    if (!hasSelfLockedProof(row.token, selfPub)) continue
+    // A licence or terminal credential is locked to K too, and is not change: burning one spends it
+    // and the gateway revokes it (staging 2026-11-02). Skipped by row and, in case a row reads
+    // neither way, by proof (`hasUnlockableProof`).
+    if (isLicence(row) || isTerminalCredential(row)) continue
+    if (!hasUnlockableProof(row.token, selfPub)) continue
     const out = await unlockSelfLockedRow(p, { tokenId: row.token_id, token: row.token })
     if (out.kind !== 'unlocked') continue
     // The new rows first, then the old one: a page that dies in between leaves a duplicate the next
