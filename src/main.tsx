@@ -29,7 +29,9 @@ installStaleBuildReload({
   addEventListener: (type, fn) => window.addEventListener(type, fn),
   reload: () => window.location.reload(),
   storage: window.sessionStorage,
-  buildId: __APP_VERSION__,
+  // The entry chunk's own URL: its hash changes with every build. (`__APP_VERSION__` is
+  // package.json's version, which deploys do not bump, so it would allow one reload per tab ever.)
+  buildId: import.meta.url,
 })
 
 // Android back button, status bar. No-op in a browser.
