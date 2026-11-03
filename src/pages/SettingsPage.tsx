@@ -1,9 +1,8 @@
 import { Link } from 'react-router-dom'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell } from 'lucide-react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
-import { AboutSection } from '../components/AboutSection'
 
 /**
  * Settings.
@@ -111,10 +110,19 @@ export function SettingsPage({
         </div>
       )}
 
-      {/* Every role. */}
-      <AboutSection />
+      {/* Every role, last: what is running, the legal pages, support. Its own page (AboutPage). */}
+      <div className="mt-6">
+        <ListSection title="Imani">
+          <AboutRow />
+        </ListSection>
+      </div>
     </Screen>
   )
+}
+
+/** The row into Settings → About. Shared with the terminal's Settings, so every role has the same one. */
+export function AboutRow() {
+  return <SettingRow to="/settings/about" icon={Info} label="About" hint="Version, legal, support" />
 }
 
 /**
