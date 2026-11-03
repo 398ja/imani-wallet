@@ -278,6 +278,16 @@ describe('the routes a terminal has', () => {
     expect(await screen.findByRole('button', { name: 'Take this terminal out of service' })).toBeTruthy()
     expect(screen.queryByText(/Log out/)).toBeNull()
   })
+
+  // Settings → About is a page of its own on a till too; without the route the catch-all
+  // would send the cashier back to the till home.
+  it('opens Settings → About as its own page', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
+    at('/settings/about')
+    expect(await screen.findByRole('heading', { level: 1, name: 'About imani' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /Support/ }).getAttribute('href')).toBe('mailto:hello@imani.casa')
+  })
 })
 
 describe('a refused device is never stranded (#160 review, MEDIUM)', () => {

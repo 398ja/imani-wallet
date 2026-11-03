@@ -3,7 +3,8 @@ import { Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { Lock, QrCode, Send, Settings } from 'lucide-react'
 
 import { Alert, Button, Centered, Input, PageHeader, Panel, Screen, ListSection, BackLink } from '../components/ui'
-import { AboutSection } from '../components/AboutSection'
+import { AboutRow } from './SettingsPage'
+import { AboutPage } from './AboutPage'
 import { Avatar } from '../components/ui/Avatar'
 import { RemoteImage } from '../components/ui/RemoteImage'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
@@ -230,6 +231,7 @@ export function TerminalApp() {
         }
       />
       <Route path="/settings" element={<TerminalSettings />} />
+      <Route path="/settings/about" element={<AboutPage />} />
       {/* Sell and cashback (#160 phase 5): only for a selling role in a live FULL session, the
           same question `issueAndDeliver` asks before minting. A redeem-only or REDUCED till
           lands on the till instead. The terminal warrant is signed with K and the credential
@@ -582,7 +584,9 @@ export function TerminalSettings() {
           Security
         </Link>
       </ListSection>
-      <AboutSection />
+      <ListSection title="Imani">
+        <AboutRow />
+      </ListSection>
     </Screen>
   )
 }
