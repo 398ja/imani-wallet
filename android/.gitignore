@@ -62,7 +62,9 @@ captures/
 .cxx/
 
 # Google Services (e.g. APIs or Firebase)
-# google-services.json
+# Deliberately ignored: identifies the Firebase project, dropped in locally
+# (see imani-docs/wallet/native-push-activation.md).
+google-services.json
 
 # Freeline
 freeline.py
