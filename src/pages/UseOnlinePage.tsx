@@ -8,7 +8,7 @@ import { listVouchers } from '../lib/wallet'
 import { toMerchants } from '../lib/merchants'
 import { fetchMerchantRecord } from '../lib/merchant'
 import { formatFace, parseAmountToMinor } from '../lib/format'
-import { checkoutPlan, maxExpiryFor, type CheckoutExclusion, type CheckoutPlan } from '../lib/checkoutPlan'
+import { availableOf, checkoutPlan, maxExpiryFor, type CheckoutExclusion, type CheckoutPlan } from '../lib/checkoutPlan'
 import { compact, display } from '../lib/checkoutCode'
 import { loadCheckoutCodes, remainingOf, type CheckoutCodeRecord } from '../lib/checkoutCodeRecords'
 import { startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
@@ -188,7 +188,7 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
   const x = loaded.nowS + days * DAY_S
   const amount = parseAmountToMinor(amountText, decimals) ?? 0
   const plan: CheckoutPlan = checkoutPlan({ rows: loaded.rows, payer: pubkey, stallId: stall, unit, amount, x, nowS: loaded.nowS })
-  const usable = plan.usable.reduce((n, c) => n + c.faceValue, 0)
+  const usable = availableOf(plan.usable)
   const latest = maxExpiryFor(plan.plan ?? plan.usable, loaded.nowS)
   const offered = EXPIRY_CHOICES.filter((d) => latest !== null && loaded.nowS + d * DAY_S <= latest)
   const excluded = new Map<CheckoutExclusion, number>()
