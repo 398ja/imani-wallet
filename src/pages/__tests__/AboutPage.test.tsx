@@ -10,7 +10,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { AboutPage, releaseLabel } from '../AboutPage'
 import { SettingsPage } from '../SettingsPage'
 import { TerminalSettings } from '../TerminalApp'
-import { appVersion, deployVersion } from '../../lib/about'
+import { androidApkUrl, androidHint, androidReleaseFrom, appVersion, deployVersion, offerAndroidApp } from '../../lib/about'
 
 const roles: Array<[string, () => React.ReactElement]> = [
   ['customer', () => <SettingsPage merchant={false} />],
@@ -171,5 +171,73 @@ describe('the About page', () => {
     expect(v.textContent).toBe(long)
     expect(v.className).not.toMatch(/\btruncate\b/)
     expect(v.className).toMatch(/\bbreak-all\b/)
+  })
+})
+
+describe('About → Get the app (the Android download the deploy publishes)', () => {
+  const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36'
+  const IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    vi.stubEnv('VITE_ANDROID_APK_URL', '/download/imani-wallet.apk')
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(ANDROID_UA)
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ version_name: '0.51.3', size: 4_539_654 }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('offers the APK as a download, with the version and size from android.json beside it', async () => {
+    drawAbout()
+    const link = screen.getByTestId('about-android-download')
+    expect(link.getAttribute('href')).toBe('/download/imani-wallet.apk')
+    expect(link.hasAttribute('download')).toBe(true)
+    expect(screen.getByRole('heading', { name: 'Get the app' })).toBeTruthy()
+    expect(await screen.findByText('Version 0.51.3 · 4.5 MB')).toBeTruthy()
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/download\/android\.json$/)
+  })
+
+  it('still works when android.json cannot be read: it just says what it is for', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('nope', { status: 404 }))
+    drawAbout()
+    expect(screen.getByTestId('about-android-hint').textContent).toBe('For Android phones')
+    await Promise.resolve()
+    expect(screen.getByTestId('about-android-hint').textContent).toBe('For Android phones')
+  })
+
+  it('is not offered when the build names no APK, on an iPhone, or inside the app itself', () => {
+    vi.stubEnv('VITE_ANDROID_APK_URL', '')
+    drawAbout()
+    expect(screen.queryByTestId('about-android-download')).toBeNull()
+    cleanup()
+
+    vi.stubEnv('VITE_ANDROID_APK_URL', '/download/imani-wallet.apk')
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE_UA)
+    drawAbout()
+    expect(screen.queryByTestId('about-android-download')).toBeNull()
+
+    expect(offerAndroidApp(true, ANDROID_UA)).toBe(false)
+    expect(offerAndroidApp(false, ANDROID_UA)).toBe(true)
+  })
+
+  it('accepts only a same-origin path or an https URL for the APK', () => {
+    expect(androidApkUrl('/download/imani-wallet.apk')).toBe('/download/imani-wallet.apk')
+    expect(androidApkUrl('https://wallet.example/download/a.apk')).toBe('https://wallet.example/download/a.apk')
+    expect(androidApkUrl('//evil.example/a.apk')).toBeNull()
+    expect(androidApkUrl('http://wallet.example/a.apk')).toBeNull()
+    expect(androidApkUrl('javascript:alert(1)')).toBeNull()
+    expect(androidApkUrl(null)).toBeNull()
+    expect(androidApkUrl('')).toBeNull()
+  })
+
+  it('reads android.json defensively', () => {
+    expect(androidReleaseFrom({ version_name: '0.51.3', size: 10 })).toEqual({ version_name: '0.51.3', size: 10 })
+    expect(androidReleaseFrom({ version_name: '<b>x</b>', size: 10 })).toBeNull()
+    expect(androidReleaseFrom({ version_name: '0.51.3', size: -1 })).toBeNull()
+    expect(androidReleaseFrom(null)).toBeNull()
+    expect(androidHint(null)).toBe('For Android phones')
   })
 })

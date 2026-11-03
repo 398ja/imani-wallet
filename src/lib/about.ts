@@ -44,5 +44,50 @@ export function websitePage(path: string): string | null {
 
 export const PRIVACY_PATH = '/privacy.html'
 export const COOKIES_PATH = '/cookies.html'
+
+/**
+ * Where About's "Android app" row downloads the app from (`VITE_ANDROID_APK_URL`, set by imani-deploy to
+ * the APK its deploy publishes, `/download/imani-wallet.apk`), or null when the build names none (a local
+ * or prod build that ships no APK: no row). A same-origin path or an https URL, nothing else.
+ */
+export function androidApkUrl(raw: unknown = import.meta.env.VITE_ANDROID_APK_URL): string | null {
+  if (typeof raw !== 'string') return null
+  const v = raw.trim()
+  if (v.startsWith('/') && !v.startsWith('//')) return v
+  return /^https:\/\/[^/\s]+\/\S*$/.test(v) ? v : null
+}
+
+/**
+ * Whether to offer the Android download here: not inside the app itself (it is already installed),
+ * and not on an iPhone or iPad, which cannot install it.
+ */
+export function offerAndroidApp(native: boolean, userAgent: string): boolean {
+  if (native) return false
+  // iPadOS reports a Mac user agent; the touch points tell them apart.
+  const touchMac = /Macintosh/.test(userAgent) && typeof navigator !== 'undefined' && navigator.maxTouchPoints > 1
+  return !(/iPhone|iPad|iPod/.test(userAgent) || touchMac)
+}
+
+/** What the deploy published beside the APK (`android.json`): only the fields About shows. */
+export interface AndroidRelease {
+  version_name: string
+  size: number
+}
+
+/** android.json sits beside the APK; null for anything that is not the shape we expect. */
+export function androidReleaseFrom(json: unknown): AndroidRelease | null {
+  if (typeof json !== 'object' || json === null) return null
+  const { version_name, size } = json as Record<string, unknown>
+  if (typeof version_name !== 'string' || !/^\d+\.\d+\.\d+$/.test(version_name)) return null
+  if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) return null
+  return { version_name, size }
+}
+
+/** "Version 0.51.3 · 4.5 MB": the size is what someone on mobile data decides on. */
+export function androidHint(r: AndroidRelease | null): string {
+  if (r === null) return 'For Android phones'
+  return `Version ${r.version_name} · ${(r.size / 1_000_000).toFixed(1)} MB`
+}
+
 /** Where Settings → About's Support row writes to. Not the website's general hello@ address. */
 export const SUPPORT_EMAIL = 'support@imani.casa'

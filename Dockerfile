@@ -116,6 +116,10 @@ ENV VITE_DEPLOY_VERSION=$VITE_DEPLOY_VERSION
 # version. Optional: unset shows package.json's version marked "dev".
 ARG VITE_WALLET_VERSION=
 ENV VITE_WALLET_VERSION=$VITE_WALLET_VERSION
+# The Android APK the deploy publishes (imani-deploy scripts/android-apk.sh), offered in Settings →
+# About to browsers that can install it. Optional: unset, no download row.
+ARG VITE_ANDROID_APK_URL=
+ENV VITE_ANDROID_APK_URL=$VITE_ANDROID_APK_URL
 
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages through the paths
