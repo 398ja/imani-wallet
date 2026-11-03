@@ -182,6 +182,46 @@ describe('Use online', () => {
     expect(screen.queryByRole('button', { name: /Cancel/ })).toBeNull()
   })
 
+  it('the code screen links to the shop in a new tab and shows the stall with the profile component', () => {
+    at('/online/code/r1')
+    const link = screen.getByTestId('shop-link') as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe(SHOP.url)
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(link.getAttribute('title')).toBe(SHOP.url)
+    expect(link.textContent).toMatch(/shop\.example/)
+    expect(screen.getByTestId('stall-card').querySelector('[aria-busy], img, svg, span')).toBeTruthy()
+  })
+
+  it('the amount screen shows the stall card and the shop link', async () => {
+    at(`/online?stall=${W.STALL}`)
+    await screen.findByText('Usable at shop.example')
+    expect(screen.getByTestId('stall-card')).toBeTruthy()
+    const link = screen.getByTestId('shop-link') as HTMLAnchorElement
+    expect(link.href).toBe(`${SHOP.url}/`)
+    expect(link.target).toBe('_blank')
+    expect(link.rel).toBe('noopener noreferrer')
+  })
+
+  it('a code with no shop url and no stall profile still renders, with no link', () => {
+    codes = [record({ shopUrl: '' })]
+    at('/online/code/r1')
+    expect(screen.getByTestId('checkout-code')).toBeTruthy()
+    expect(screen.queryByTestId('shop-link')).toBeNull()
+    expect(screen.getByText('Not recorded')).toBeTruthy()
+    expect(screen.getByTestId('stall-card')).toBeTruthy()
+  })
+
+  it('a long shop url shows the host and keeps the full url as href', () => {
+    const long = 'https://a-very-long-subdomain.example.co.uk/shop/checkout?ref=imani'
+    codes = [record({ shopUrl: long })]
+    at('/online/code/r1')
+    const link = screen.getByTestId('shop-link') as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe(long)
+    expect(link.textContent).toContain('a-very-long-subdomain.example.co.uk')
+    expect(link.textContent).not.toContain('/shop/checkout')
+  })
+
   it('Shopify gets the compact form', () => {
     codes = [record({ platform: 'shopify' })]
     at('/online/code/r1')
