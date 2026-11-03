@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Copy, Globe } from 'lucide-react'
+import { Copy, ExternalLink, Globe } from 'lucide-react'
 
 import { Alert, BackLink, Button, Centered, DetailRow, IdentityInline, Input, Notice, PageHeader, Panel, Screen } from '../components/ui'
-import { useMerchantLabel } from '../lib/identity'
+import { humanName } from '../lib/identity'
 import { listVouchers } from '../lib/wallet'
 import { toMerchants } from '../lib/merchants'
 import { fetchMerchantRecord } from '../lib/merchant'
@@ -69,6 +69,59 @@ const hostOf = (url: string) => {
   } catch {
     return url
   }
+}
+
+/** Only an `https:` address becomes a link; anything else is no address at all. */
+const httpsUrl = (url: string | undefined): string | null => {
+  if (!url) return null
+  try {
+    return new URL(url).protocol === 'https:' ? url : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The shop, as a link out. The host is what reads (a full URL with a path is noise at this size);
+ * the full address stays the href and the title. A new tab, so the wallet (and a code half-made in
+ * it) stays where it was.
+ */
+export function ShopLink({ url, className = '' }: { url: string | undefined; className?: string }) {
+  const href = httpsUrl(url)
+  if (!href) return <span className={`text-mono-500 ${className}`}>Not recorded</span>
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={href}
+      data-testid="shop-link"
+      className={`pressable inline-flex min-w-0 max-w-full items-center gap-1.5 font-medium text-mono-900 underline-offset-4 hover:underline dark:text-mono-50 ${className}`}
+    >
+      <Globe className="h-4 w-4 shrink-0 text-mono-500" aria-hidden />
+      <span className="truncate">{hostOf(href)}</span>
+      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-mono-400" aria-hidden />
+      <span className="sr-only">(opens in a new tab)</span>
+    </a>
+  )
+}
+
+/**
+ * Who the code is for: the stall, as the app shows a stall everywhere else (avatar, name, handle),
+ * and its shop beneath it. `linkToProfile` is off where leaving would lose a half-typed amount.
+ */
+function StallCard({ stall, fallbackName, shopUrl, linkToProfile }: { stall: string; fallbackName?: string; shopUrl: string | undefined; linkToProfile: boolean }) {
+  return (
+    <div className="mb-6 divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800" data-testid="stall-card">
+      <div className="p-4">
+        <IdentityInline pubkey={stall} fallbackName={fallbackName} size="md" linkToProfile={linkToProfile} />
+      </div>
+      <div className="flex items-center justify-between gap-4 px-4 py-3">
+        <span className="shrink-0 text-sm text-mono-500">Shop</span>
+        <ShopLink url={shopUrl} className="text-sm" />
+      </div>
+    </div>
+  )
 }
 
 const EXCLUSION_WORDS: Record<CheckoutExclusion, string> = {
@@ -169,8 +222,6 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
     if (!loaded) return undefined
     return toMerchants(loaded.rows).find((m) => m.pubkey.toLowerCase() === stall)?.groups[0]
   }, [loaded, stall])
-  // The stall's own name (kind 0, then the coupon's issuer name), never its key (#402 review).
-  const stallName = useMerchantLabel({ pubkey: stall, name: group?.merchantName })
 
   if (!loaded) return <Centered>Checking your vouchers…</Centered>
   if (!loaded.shop) {
@@ -263,20 +314,29 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
   return (
     <Screen>
       <BackLink to={`/merchants/${stall}`} label="Back" />
-      <PageHeader title="Coupon code" subtitle={`${stallName} · to spend at ${hostOf(shop.url)}`} />
+      <PageHeader title="Coupon code" subtitle="A code to type at the shop's checkout." />
+      {/* Who it is for, as the app names a stall everywhere else, and the shop one tap away. Not a
+          link to the profile: a tap there would lose the amount being typed. */}
+      <StallCard stall={stall} fallbackName={humanName(group?.merchantName)} shopUrl={shop.url} linkToProfile={false} />
       {/* The one figure that matters, large, as on the coupon itself; why the rest cannot go
           follows in small type, beside the figure it explains. */}
       <Panel className="p-5">
-        <p className="text-sm text-mono-500">Usable at {hostOf(shop.url)}</p>
-        <p className="text-amount tracking-tight text-mono-900 dark:text-mono-50">{formatFace(usable, denom)}</p>
-        {[...excluded.entries()].map(([reason, minor]) => (
-          <p key={reason} className="mt-1 text-xs text-mono-600 dark:text-mono-400">
-            {formatFace(minor, denom)} {EXCLUSION_WORDS[reason]}
-          </p>
-        ))}
+        <p className="truncate text-sm text-mono-500" title={shop.url}>
+          Usable at {hostOf(shop.url)}
+        </p>
+        <p className="mt-1 text-amount tracking-tight tabular-nums text-mono-900 dark:text-mono-50">{formatFace(usable, denom)}</p>
+        {excluded.size > 0 && (
+          <div className="mt-2 space-y-0.5">
+            {[...excluded.entries()].map(([reason, minor]) => (
+              <p key={reason} className="text-xs text-mono-600 dark:text-mono-400">
+                {formatFace(minor, denom)} {EXCLUSION_WORDS[reason]}
+              </p>
+            ))}
+          </div>
+        )}
       </Panel>
 
-      <div className="mt-6 space-y-5">
+      <div className="mt-8 space-y-6">
         <Input
           label={`Amount (${unit})`}
           className="text-lg"
@@ -340,7 +400,6 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
 function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: UseOnlineDeps }) {
   const [record] = useState<CheckoutCodeRecord | undefined>(() => deps.codes(pubkey).find((r) => r.id === id))
   const [copied, setCopied] = useState(false)
-  const stallName = useMerchantLabel({ pubkey: record?.stall ?? '' })
   if (!record) return <Centered>No such code.</Centered>
   const shop = hostOf(record.shopUrl)
   const denom = { unit: record.unit, decimals: record.decimals }
@@ -350,7 +409,8 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
     return (
       <Screen>
         <BackLink to={`/merchants/${record.stall}`} label="Done" />
-        <PageHeader title="Your code" subtitle={`${stallName} · for ${shop}`} />
+        <PageHeader title="Your code" subtitle={record.shopUrl ? `For ${shop}` : undefined} />
+        <StallCard stall={record.stall} shopUrl={record.shopUrl} linkToProfile />
         <Notice tone="warning">
           {record.status === 'abandoned'
             ? `No code was made. Your vouchers come back on their own by ${expires}.`
@@ -368,50 +428,50 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
       setCopied(false)
     }
   }
+  const amountWords =
+    remainingOf(record) === record.amount || record.status === 'redeemed'
+      ? formatFace(record.amount, denom)
+      : `${formatFace(remainingOf(record), denom)} left of ${formatFace(record.amount, denom)}`
   return (
     <Screen>
       <BackLink to={`/merchants/${record.stall}`} label="Done" />
-      <PageHeader title="Your code" subtitle={`Only works at ${shop}`} />
-      <Panel className="p-5 text-center">
-        <p className="break-all font-mono text-2xl font-semibold tracking-wider text-mono-900 dark:text-mono-50" data-testid="checkout-code">
+      <PageHeader title="Your code" subtitle={record.shopUrl ? `Only works at ${shop}` : undefined} />
+      {/* The code is the one thing to act on: large, monospaced, Copy directly beneath it. */}
+      <Panel className="mb-6 px-5 py-6 text-center">
+        <p className="break-all font-mono text-[1.375rem] font-semibold leading-snug tracking-wide text-mono-900 dark:text-mono-50" data-testid="checkout-code">
           {shown}
         </p>
-        <Button variant="outline" className="mt-4" onClick={() => void onCopy()}>
+        <Button size="lg" className="mt-5 w-full" onClick={() => void onCopy()}>
           <Copy className="mr-2 h-4 w-4" aria-hidden /> {copied ? 'Copied' : 'Copy'}
         </Button>
       </Panel>
-      <Panel className="mt-4 p-4">
-        <DetailRow
-          label="Amount"
-          value={
-            remainingOf(record) === record.amount || record.status === 'redeemed'
-              ? formatFace(record.amount, denom)
-              : `${formatFace(remainingOf(record), denom)} left of ${formatFace(record.amount, denom)}`
-          }
-        />
-        <DetailRow label="Stall" value={stallName} />
-        <DetailRow label="Shop" value={shop} />
+      <StallCard stall={record.stall} shopUrl={record.shopUrl} linkToProfile />
+      <section className="mb-6 divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">
+        <DetailRow label="Amount" value={amountWords} />
         <DetailRow label="Expires" value={expires} />
         <DetailRow label="Status" value={STATUS_WORDS[record.status] ?? record.status} />
-      </Panel>
+      </section>
       {(record.redemptions?.length ?? 0) > 0 && (
-        <Panel className="mt-4 p-4">
-          <p className="mb-2 text-sm font-medium text-mono-900 dark:text-mono-50">Used</p>
-          <ul data-testid="redemptions" className="space-y-1 text-sm text-mono-600 dark:text-mono-400">
+        <section className="mb-6">
+          <h2 className="mb-2 text-sm font-medium text-mono-500">Used</h2>
+          <ul
+            data-testid="redemptions"
+            className="divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 text-sm dark:divide-mono-800 dark:border-mono-800"
+          >
             {record.redemptions!.map((u, n) => (
-              <li key={n} className="flex justify-between gap-2">
-                <span>{new Date(u.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
-                <span className="tabular-nums">
+              <li key={n} className="flex items-baseline justify-between gap-4 p-4">
+                <span className="text-mono-500">{new Date(u.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                <span className="text-right tabular-nums text-mono-900 dark:text-mono-50">
                   {formatFace(u.amount, denom)} used, {formatFace(u.remaining, denom)} left
                 </span>
               </li>
             ))}
           </ul>
-        </Panel>
+        </section>
       )}
       {record.status === 'cancelling' && <Notice tone="warning">Cancelling. Your money is back within 24 hours, or on {expires} at the latest.</Notice>}
       {(record.status === 'reserved' || record.status === 'held' || record.status === 'settling') && (
-        <p className="mt-4 text-sm text-mono-600 dark:text-mono-400" data-testid="bearer-note">
+        <p className="text-sm leading-relaxed text-mono-500" data-testid="bearer-note">
           Anyone with this code can use the rest until {expires}; whatever is left then comes back to you.
         </p>
       )}
