@@ -38,6 +38,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.51.0] - 2026-11-03
+
+### Added
+
+- **Settings → About, for every role** (#493, with imani-deploy#358). Shows the Imani release
+  (imani-deploy `git describe`), the wallet's release tag, the build date and the mint in use, and
+  links to the Terms and Conditions, Privacy and Cookie policies on the public website (new tab),
+  plus a contact address. A build given no versions shows "dev" rather than guessing; the legal
+  links are hidden when the build names no website.
+
+### Changed
+
+- **The Use online coupon-code screens are redesigned** (#492). Both the amount screen and the code
+  (which is also the code's History record) show the stall's profile (avatar, name, handle) and
+  link to the shop's site in a new tab. The code page leads with the code and one Copy action, with
+  amount, expiry and status in aligned rows and partial uses in their own list. Missing shop URL or
+  profile, long names and long URLs are handled.
+
+### Fixed
+
+- **The balance rounds a voucher's coupons once, not each coupon** (#494). A voucher held as several
+  coupon rows (the change of a checkout code comes back one row per proof) showed less than it is
+  worth: 6 rows worth 8.9943 EUR read 8.98 EUR, now 8.99 EUR. The total is the exact sum rounded
+  down once, so it never shows more than the coupons cover. The checkout code's maximum and the Use
+  online available amount are capped at what can actually be spent; spending still takes the rows
+  one by one, so a cent of rounding can remain unspendable until the rows are merged (follow-up).
+
 ## [0.50.0] - 2026-11-03
 
 ### Changed
