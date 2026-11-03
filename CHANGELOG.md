@@ -9,15 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Pay, Send and Send by link show the same balance as Home** (follow-up to #494). They added up
-  each coupon's own rounding, so a voucher held as several coupons (a checkout code's change) read
-  a cent low: 8.98 EUR where Home said 8.99. They now round once per voucher, like Home. A send
-  still draws coupon by coupon, so an amount between what can be drawn and the balance (8.99 there)
-  is refused before the tap with "You can use up to €8.98 of your €8.99…", not offered and then
-  refused by the gateway.
-
 ### Added
 
 - **The stall hears when a customer claims its cashback** (#158, with
@@ -46,6 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the missing route with 500, so a wallet shipped first logged "drain refused 500" every 10s
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
+
+## [0.51.3] - 2026-11-03
+
+### Fixed
+
+- **Pay, Send and Send by link show the same balance as Home** (#499, follow-up to #494). They added
+  up each coupon's own rounding, so a voucher held as several coupons (a checkout code's change)
+  read a cent low: 8.98 EUR where Home said 8.99. They now round once per voucher, like Home. A
+  send still draws coupon by coupon, so an amount between what can be drawn and the balance (8.99
+  there) is refused before the tap with "You can use up to €8.98 of your €8.99…", not offered and
+  then refused by the gateway.
 
 ## [0.51.2] - 2026-11-03
 
