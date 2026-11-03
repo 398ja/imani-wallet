@@ -23,6 +23,7 @@ import { useStallStatus } from '../hooks/useStallStatus'
 import { closedMessage, mayTradeWith } from '../lib/merchantStatus'
 import { toMerchants, unitHoldings, type Merchant, type UnitHolding } from '../lib/merchants'
 import { formatFace, parseAmountToMinor } from '../lib/format'
+import { roundingShortfallNote } from '../lib/couponTotals'
 import {
   humanName,
   identityLabel,
@@ -391,6 +392,12 @@ export function SendPage({ pubkey }: { pubkey: string }) {
   // what the send would happily do.
   const obstacle = minor === null || minor <= 0 ? null : splitObstacle(chosen.vouchers, minor)
   const short = minor !== null && minor > chosen.totalFaceValue
+  // Within the balance but over what can be drawn: a voucher held as several coupons, each rounding
+  // down on its own, can leave a cent that will not go (georges 8.98 vs 8.99).
+  const roundingNote =
+    minor === null || minor <= 0
+      ? null
+      : roundingShortfallNote(minor, chosen.spendable, chosen.totalFaceValue, (v) => formatFace(v, chosen))
 
   // ── Step 4: confirm ──────────────────────────────────────────────────────
   if (confirming && minor !== null) {
@@ -584,15 +591,16 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         />
 
         {short && <Alert>Short by {formatFace(minor - chosen.totalFaceValue, chosen)}.</Alert>}
+        {!short && roundingNote && <Alert>{roundingNote}</Alert>}
         {/* Holding enough is not the same as being able to send it: a voucher
             cannot be divided below one sat's worth of face value. */}
-        {!short && obstacle && <Alert>{obstacle}</Alert>}
+        {!short && !roundingNote && obstacle && <Alert>{obstacle}</Alert>}
         {stallBlocked && stallNote && <Alert>{stallNote}</Alert>}
 
         <Button
           size="lg"
           className="w-full"
-          disabled={minor === null || minor <= 0 || short || !!obstacle || stallBlocked}
+          disabled={minor === null || minor <= 0 || short || !!roundingNote || !!obstacle || stallBlocked}
           onClick={() => setConfirming(true)}
         >
           Continue

@@ -7,7 +7,7 @@ import { toEpochMs } from './format'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { parseVoucherToken } from './voucherToken'
 import { isLicence } from './licences'
-import { roundedOnceTotal } from './couponTotals'
+import { roundedOnceTotal, spendableTotal } from './couponTotals'
 import { isTerminalCredential } from './notMoney'
 import type { WalletTransaction } from './transactions'
 
@@ -467,7 +467,17 @@ export interface UnitHolding {
   merchant: Merchant
   unit: string
   decimals: number
+  /**
+   * The balance, minor units: rounded once per voucher, the same figure Home shows (`walletTotals`),
+   * so Pay and Send never disagree with it (staging 2026-11-02, "georges 8.98 vs 8.99").
+   */
   totalFaceValue: number
+  /**
+   * What a send or payment may draw, minor units (`spendableTotal`): never above the balance, and
+   * never above the per-coupon credits a send draws part by part. A cent below `totalFaceValue` when
+   * a voucher is held as several coupons whose own rounding loses it.
+   */
+  spendable: number
   voucherCount: number
   vouchers: Voucher[]
 }
@@ -479,7 +489,6 @@ export function holdingForUnit(merchant: Merchant, unit: string): UnitHolding | 
   for (const group of merchant.groups) {
     if (group.unit.toUpperCase() !== wanted) continue
     if (found) {
-      found.totalFaceValue += group.totalFaceValue
       found.voucherCount += group.voucherCount
       found.vouchers.push(...group.vouchers)
     } else {
@@ -487,11 +496,16 @@ export function holdingForUnit(merchant: Merchant, unit: string): UnitHolding | 
         merchant,
         unit: group.unit,
         decimals: group.decimals,
-        totalFaceValue: group.totalFaceValue,
+        totalFaceValue: 0,
+        spendable: 0,
         voucherCount: group.voucherCount,
         vouchers: [...group.vouchers],
       }
     }
+  }
+  if (found) {
+    found.totalFaceValue = roundedOnceTotal(found.vouchers)
+    found.spendable = spendableTotal(found.vouchers)
   }
   return found
 }
