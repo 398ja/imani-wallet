@@ -112,6 +112,10 @@ RUN sh /tmp/check-website-base-url-build.sh
 # imani-deploy's deploy-staging.sh (`git describe --tags --always`). Optional: unset shows "dev".
 ARG VITE_DEPLOY_VERSION=
 ENV VITE_DEPLOY_VERSION=$VITE_DEPLOY_VERSION
+# The imani-wallet release tag this image is built from (build-refs.env), shown as the wallet
+# version. Optional: unset shows package.json's version marked "dev".
+ARG VITE_WALLET_VERSION=
+ENV VITE_WALLET_VERSION=$VITE_WALLET_VERSION
 
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages through the paths
