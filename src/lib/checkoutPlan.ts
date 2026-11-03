@@ -41,6 +41,7 @@ import { withoutInFlight } from './pay'
 import { canCarve } from './checkoutCarve'
 import { canSplit } from './voucherSplitPlan'
 import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } from './voucherToken'
+import { spendableTotal } from './couponTotals'
 
 /** Contract §3: 1 ≤ parts ≤ 20. */
 export const MAX_CHECKOUT_PARTS = 20
@@ -127,6 +128,14 @@ function candidateOf(row: VoucherRow, x: number, nowS: number, payer: string): C
   }
   const voucher = { ...toVoucher(row), face_value: faceValue }
   return { row, voucher, faceValue, expiresAt, splittable: isSplittable(voucher) }
+}
+
+/** What these candidates can cover, minor units (see `spendableTotal`). */
+export function availableOf(usable: readonly CheckoutCandidate[]): number {
+  return spendableTotal(
+    usable.map((c) => ({ token: c.row.token, face_value: c.faceValue, status: c.row.status })),
+    usable.map((c) => c.faceValue),
+  )
 }
 
 /** `planParts` over candidates, mapped back to them. Null when the amount is not met. */
@@ -229,7 +238,10 @@ export function checkoutPlan(req: CheckoutPlanRequest): CheckoutPlan {
   const xProblem = lockWindowProblem(req.x, undefined, req.nowS)
   if (xProblem) return { usable, excluded, obstacle: { kind: 'expiry_window', problem: xProblem } }
 
-  const available = usable.reduce((sum, c) => sum + c.faceValue, 0)
+  // Never more than the coupons cover: each part is credited on its own (`faceValue`), and a
+  // voucher's parts together never more than `floor` of their exact value (the ledger's rule, staging
+  // 2026-11-02). `spendableTotal` is the smaller of the two.
+  const available = availableOf(usable)
   if (!Number.isSafeInteger(req.amount) || req.amount <= 0 || available < req.amount) {
     return { usable, excluded, obstacle: { kind: 'insufficient_value', available } }
   }

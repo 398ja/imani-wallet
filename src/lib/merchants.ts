@@ -7,6 +7,7 @@ import { toEpochMs } from './format'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
 import { parseVoucherToken } from './voucherToken'
 import { isLicence } from './licences'
+import { roundedOnceTotal } from './couponTotals'
 import { isTerminalCredential } from './notMoney'
 import type { WalletTransaction } from './transactions'
 
@@ -160,7 +161,7 @@ export function toMerchants(rows: VoucherRow[]): Merchant[] {
  * that stops being true, render per-unit subtotals instead of one number.
  */
 export function totalFaceValue(merchant: Merchant): number {
-  return merchant.groups.reduce((sum, g) => sum + g.totalFaceValue, 0)
+  return roundedOnceTotal(merchant.groups.flatMap((g) => g.vouchers))
 }
 
 /**
@@ -437,25 +438,23 @@ export interface UnitTotal {
  * confident, meaningless figure on the home screen. Largest first.
  */
 export function walletTotals(merchants: Merchant[]): UnitTotal[] {
-  const byUnit = new Map<string, UnitTotal>()
+  const byUnit = new Map<string, UnitTotal & { vouchers: Voucher[] }>()
 
   for (const merchant of merchants) {
     for (const group of merchant.groups) {
       const unit = group.unit ?? 'UNKNOWN'
       const existing = byUnit.get(unit)
       if (existing) {
-        existing.minor += group.totalFaceValue
+        existing.vouchers.push(...group.vouchers)
       } else {
-        byUnit.set(unit, {
-          unit,
-          decimals: group.decimals ?? 0,
-          minor: group.totalFaceValue,
-        })
+        byUnit.set(unit, { unit, decimals: group.decimals ?? 0, minor: 0, vouchers: [...group.vouchers] })
       }
     }
   }
+  // Rounded once per voucher, not per row (staging 2026-11-02, "georges 8.98 vs 8.99").
+  for (const t of byUnit.values()) t.minor = roundedOnceTotal(t.vouchers)
 
-  return [...byUnit.values()].sort((a, b) => b.minor - a.minor)
+  return [...byUnit.values()].map(({ unit, decimals, minor }) => ({ unit, decimals, minor })).sort((a, b) => b.minor - a.minor)
 }
 
 /**
