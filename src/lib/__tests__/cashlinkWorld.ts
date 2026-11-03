@@ -338,6 +338,7 @@ export const tokenOf = (proofs: UnblindedProof[]) => encodePlainTokenV4(MINT_URL
  */
 export function expandBatches(call: CashlinkGateway['call']): CashlinkGateway['call'] {
   return async (method, path, body, signer) => {
+    if (path.endsWith('/cashlink/refunds/batch') && method === 'POST') return refundBatch(call, path, body, signer)
     if (!path.endsWith('/vouchers/cashlink/lock-batch')) return call(method, path, body, signer)
     const locks = (body as { locks?: unknown[] } | undefined)?.locks
     if (!Array.isArray(locks) || locks.length === 0 || locks.length > 32) return { status: 400, body: { refusal: 'VALIDATION' } }
@@ -352,6 +353,22 @@ export function expandBatches(call: CashlinkGateway['call']): CashlinkGateway['c
     }
     return { status: 200, body: { results } }
   }
+}
+
+/**
+ * gateway-customer#288: `/refunds/batch` answered by asking `call` for each deposit on `/refunds`,
+ * signed by the batch's one caller, as `CashlinkRefundController.depositBatch` judges each deposit
+ * as `/refunds` alone. Always 200 for a valid body.
+ */
+async function refundBatch(call: CashlinkGateway['call'], path: string, body: unknown, signer?: RequestSigner): Promise<GatewayAnswer> {
+  const deposits = (body as { deposits?: unknown[] } | undefined)?.deposits
+  if (!Array.isArray(deposits) || deposits.length === 0 || deposits.length > 32) return { status: 400, body: { refusal: 'VALIDATION' } }
+  const results: Array<Record<string, unknown>> = []
+  for (const deposit of deposits) {
+    const a = await call('POST', path.replace(/\/batch$/, ''), deposit, signer)
+    results.push({ status: a.status, ...(a.body && typeof a.body === 'object' ? a.body : {}) })
+  }
+  return { status: 200, body: { results } }
 }
 
 export interface Deposit {
@@ -403,9 +420,22 @@ export class FakeGateway implements CashlinkGateway {
     if (path.endsWith('/vouchers/bearer-split')) return this.routes && this.splitRoute ? this.bearerSplit(body as SplitBody, false) : { status: 404, body: null }
     if (path.endsWith('/vouchers/checkout/unlock')) return this.routes && this.unlockRoute ? this.unlock(body as LockBody, signedBy) : { status: 404, body: null }
     if (path.endsWith('/vouchers/cashlink/resign')) return this.routes ? this.resign(body as LockBody) : { status: 404, body: null }
+    if (path.endsWith('/cashlink/refunds/batch') && method === 'POST') return this.refundBatchRoute ? this.refundBatch(body, signer) : { status: 404, body: null }
     if (path.endsWith('/cashlink/refunds') && method === 'POST') return this.deposit(body as DepositBody, signedBy)
     if (path.includes('/cashlink/refunds/') && method === 'GET') return this.fetch(path.split('/').pop()!, signedBy)
     return { status: 404, body: null }
+  }
+
+  /** gateway-customer#288: the refund batch route. Off to model a gateway older than it (404). */
+  refundBatchRoute = true
+  /** Refund batch calls made, with how many deposits each carried. */
+  refundBatches: number[] = []
+
+  /** gateway-customer#288: each deposit judged through `this.call` on `/refunds`, so hooks and overrides apply. */
+  private async refundBatch(b: unknown, signer?: RequestSigner): Promise<GatewayAnswer> {
+    const deposits = (b as { deposits?: unknown[] } | undefined)?.deposits
+    if (Array.isArray(deposits) && deposits.length > 0 && deposits.length <= 32) this.refundBatches.push(deposits.length)
+    return expandBatches((method, path, body, s) => this.call(method, path, body, s))('POST', '/api/v1/wallet/cashlink/refunds/batch', b, signer)
   }
 
   /** gateway-customer#287: the batch lock route. Off to model a gateway older than it (404). */
