@@ -6,6 +6,7 @@ import { getDecimals } from '@imani/money'
 import { listVouchers } from '../lib/wallet'
 import { holdingForUnit, issuerKey, toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
+import { roundingShortfallNote } from '../lib/couponTotals'
 import { identityLabel, useIdentity } from '../lib/identity'
 import {
   passedOver,
@@ -110,7 +111,10 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // Every group in the unit, not the first: coupons from several sales (different
   // issuance ratios) are separate groups but one balance (#460).
   const group = merchant ? holdingForUnit(merchant, request.unit) : undefined
+  // The balance as Home shows it (rounded once per voucher), and what can actually be drawn, which
+  // can be a cent less when a voucher is held as several coupons (georges 8.98 vs 8.99).
   const available = group?.totalFaceValue ?? 0
+  const spendable = group?.spendable ?? 0
   // How to read `request.amount`, which is MINOR UNITS.
   //
   // The NUT-18V wire carries no decimals at all — round-tripping a request
@@ -139,6 +143,9 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // the issuer had already timed out.
   const expired = request.expiresAt !== undefined && request.expiresAt * 1000 < loadedAt
   const shortfall = request.amount - available
+  const roundingNote = group
+    ? roundingShortfallNote(request.amount, spendable, available, (minor) => formatFace(minor, denom))
+    : null
   // Same check payRequest selects with, so the button and the send agree on
   // what is payable — a coupon divisible on one and not the other would let the
   // user tap Pay only to be refused.
@@ -154,7 +161,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
     stall.status === 'loading'
       ? 'Checking this merchant is open…'
       : closedMessage(stall.status === 'customer' ? 'unknown' : stall.status, issuer?.name ?? merchant?.name)
-  const payable = !expired && !!merchant && !!group && shortfall <= 0 && !obstacle && stallOpen
+  const payable = !expired && !!merchant && !!group && shortfall <= 0 && !roundingNote && !obstacle && stallOpen
 
   if (status.step === 'done') {
     // A payment drawn across several coupons can land in pieces, and what landed
@@ -258,10 +265,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       {!expired && group && shortfall > 0 && (
         <Alert>Short by {formatFace(shortfall, denom)}.</Alert>
       )}
+      {!expired && group && shortfall <= 0 && roundingNote && <Alert>{roundingNote}</Alert>}
       {/* Holding enough is not the same as being able to pay it: a coupon
           cannot be divided below one sat's worth of face value. Surfaced here
           so the obstacle is visible before the tap, not thrown afterwards. */}
-      {!expired && group && shortfall <= 0 && obstacle && <Alert>{obstacle}</Alert>}
+      {!expired && group && shortfall <= 0 && !roundingNote && obstacle && <Alert>{obstacle}</Alert>}
       {!expired && payable && passedNote && (
         <p className="mb-2 text-sm text-mono-500">{passedNote}</p>
       )}

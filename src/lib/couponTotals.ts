@@ -76,3 +76,21 @@ export function roundedOnceTotal(rows: readonly Row[]): number {
 export function spendableTotal(rows: readonly (Row & { face_value?: number | null })[], perRow: readonly number[] = rows.map((r) => Number(r.face_value ?? 0))): number {
   return Math.min(perRow.reduce((s, v) => s + v, 0), roundedOnceTotal(rows))
 }
+
+/**
+ * Why an amount within the balance still cannot go, for Pay and Send: the balance is rounded once
+ * per voucher, a spend draws coupon by coupon, and each coupon rounds down on its own. Null when the
+ * amount fits what can be spent, or when it is over the balance anyway (then "Short by" says it).
+ */
+export function roundingShortfallNote(
+  amount: number,
+  spendable: number,
+  balance: number,
+  format: (minor: number) => string,
+): string | null {
+  if (amount <= spendable || amount > balance) return null
+  return (
+    `You can use up to ${format(spendable)} of your ${format(balance)}. ` +
+    'It is held as several vouchers, and each one rounds down.'
+  )
+}
