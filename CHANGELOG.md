@@ -11,15 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Get the Android app from Settings → About.** A "Download for Android" row (version and size
-  from the `android.json` the deploy publishes beside the APK) when the build sets
-  `VITE_ANDROID_APK_URL`. Not shown inside the app itself or on iPhone/iPad.
-- **The Android app is built by the deploy.** `android/app/build.gradle` takes its version
-  (`IMANI_VERSION_NAME`, `IMANI_VERSION_CODE`) and release signing key (`IMANI_KEYSTORE*`) from the
-  environment, and `capacitor.config.ts` its origin from `IMANI_APP_URL` (an https origin only).
-  A local build is unchanged: version 0.0.0-dev, unsigned release, staging origin. The build itself
-  lives in imani-deploy (`scripts/android-apk.sh`).
-
 - **The stall hears when a customer claims its cashback** (#158, with
   imani-gateway-portal#59). The portal sends a `cashback_claimed` Web Push and keeps a
   drainable notice; `src/lib/cashbackClaimDrain.ts` collects the notice
@@ -46,6 +37,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the missing route with 500, so a wallet shipped first logged "drain refused 500" every 10s
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
+
+## [0.52.0] - 2026-11-03
+
+### Added
+
+- **Get the Android app from Settings → About** (#504). A "Download for Android" row (version and
+  size from the `android.json` the deploy publishes beside the APK) when the build sets
+  `VITE_ANDROID_APK_URL`. Not shown inside the app itself or on iPhone/iPad.
+- **The Android app is built by the deploy** (#504, imani-deploy#376). `android/app/build.gradle`
+  takes its version (`IMANI_VERSION_NAME`, `IMANI_VERSION_CODE`) and release signing key
+  (`IMANI_KEYSTORE*`) from the environment, and `capacitor.config.ts` its origin from
+  `IMANI_APP_URL` (an https origin only). A local build is unchanged: version 0.0.0-dev, unsigned
+  release, staging origin.
+
+### Changed
+
+- `google-services.json` is gitignored (#502). The public code check contract is documented (#503).
 
 ## [0.51.3] - 2026-11-03
 
