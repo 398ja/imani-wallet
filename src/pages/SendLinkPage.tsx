@@ -6,6 +6,7 @@ import type { Voucher } from '@imani/voucher-send'
 import { Alert, BackLink, Button, Centered, Input, Notice, PageHeader, Panel, Screen } from '../components/ui'
 import { ClaimLinkPanel } from '../components/CashbackClaimLink'
 import { formatFace, parseAmountToMinor, formatDate } from '../lib/format'
+import { roundedOnceTotal, roundingShortfallNote, spendableTotal } from '../lib/couponTotals'
 import {
   DEFAULT_EXPIRY_DAYS,
   EXPIRY_CHOICES_DAYS,
@@ -37,7 +38,16 @@ import { RETURN_PROMISE_COPY, RETURNS_ON_ITS_OWN_COPY, RETURNS_WHEN_OPENED_COPY 
  * opening this screen first takes back any that have expired (#295 phase 0). The link is shown here
  * and in History, and never logged.
  */
-type Option = { merchant: Merchant; unit: string; decimals: number; total: number; vouchers: Voucher[] }
+type Option = {
+  merchant: Merchant
+  unit: string
+  decimals: number
+  /** The balance, rounded once per voucher as Home shows it (`roundedOnceTotal`). */
+  total: number
+  /** What can be drawn: a cent less when a voucher is held as several coupons (`spendableTotal`). */
+  spendable: number
+  vouchers: Voucher[]
+}
 
 /** Why some coupons are not offered, so the picker can say so in plain words. */
 type Left = Partial<Record<GiftExclusion, boolean>>
@@ -55,14 +65,17 @@ function options(merchants: Merchant[], sender: string, nowMs: number): { usable
       if (vouchers.length === 0) continue
       const key = `${merchant.pubkey}|${group.unit.toUpperCase()}`
       const found = byKey.get(key)
-      const total = vouchers.reduce((s, v) => s + (v.face_value ?? 0), 0)
       if (found) {
-        found.total += total
         found.vouchers.push(...vouchers)
       } else {
-        byKey.set(key, { merchant, unit: group.unit, decimals: group.decimals, total, vouchers })
+        byKey.set(key, { merchant, unit: group.unit, decimals: group.decimals, total: 0, spendable: 0, vouchers })
       }
     }
+  }
+  // Rounded once per voucher, not per coupon (georges 8.98 vs 8.99): the giftable coupons only.
+  for (const o of byKey.values()) {
+    o.total = roundedOnceTotal(o.vouchers)
+    o.spendable = spendableTotal(o.vouchers)
   }
   return { usable: [...byKey.values()].sort((a, b) => b.total - a.total), ownStall: !!left.own_stall, left }
 }
@@ -224,6 +237,8 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const minor = parseAmountToMinor(amount, chosen.decimals)
   const obstacle = minor === null || minor <= 0 ? null : splitObstacle(chosen.vouchers, minor)
   const short = minor !== null && minor > chosen.total
+  const roundingNote =
+    minor === null || minor <= 0 ? null : roundingShortfallNote(minor, chosen.spendable, chosen.total, (v) => formatFace(v, chosen))
   const expiries = chosen.vouchers.map((v) => toEpochMs(v.expires_at))
   // #295 Q8: only the choices that end at least a day before the voucher. The others stay on screen,
   // dimmed, with the reason underneath, so the three familiar choices never move about.
@@ -354,11 +369,12 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
         </div>
         <Input label="Note (optional)" placeholder="Happy birthday" value={memo} onChange={(e) => setMemo(e.target.value)} />
         {short && <Alert>Short by {formatFace(minor - chosen.total, chosen)}.</Alert>}
-        {!short && obstacle && <Alert>{obstacle}</Alert>}
+        {!short && roundingNote && <Alert>{roundingNote}</Alert>}
+        {!short && !roundingNote && obstacle && <Alert>{obstacle}</Alert>}
         <Button
           size="lg"
           className="w-full"
-          disabled={minor === null || minor <= 0 || short || !!obstacle}
+          disabled={minor === null || minor <= 0 || short || !!roundingNote || !!obstacle}
           onClick={() => {
             setDays(effectiveDays)
             setConfirmedAt(Date.now())
