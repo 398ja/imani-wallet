@@ -1,9 +1,24 @@
-import { ArrowUpRight, Cookie, FileText, LifeBuoy, Lock } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Capacitor } from '@capacitor/core'
+import { ArrowUpRight, Cookie, Download, FileText, LifeBuoy, Lock, Smartphone } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, ListSection } from '../components/ui'
 import { ImaniMark } from '../components/ui/ImaniMark'
-import { appVersion, buildDate, deployVersion, websitePage, PRIVACY_PATH, COOKIES_PATH, SUPPORT_EMAIL } from '../lib/about'
+import {
+  androidApkUrl,
+  androidHint,
+  androidReleaseFrom,
+  appVersion,
+  buildDate,
+  deployVersion,
+  offerAndroidApp,
+  websitePage,
+  PRIVACY_PATH,
+  COOKIES_PATH,
+  SUPPORT_EMAIL,
+} from '../lib/about'
+import type { AndroidRelease } from '../lib/about'
 import { TERMS_PATH } from '../lib/terms'
 
 /**
@@ -28,6 +43,8 @@ export function AboutPage() {
     { label: 'Cookie policy', href: websitePage(COOKIES_PATH), icon: Cookie },
   ]
   const links = legal.filter((l): l is { label: string; href: string; icon: LucideIcon } => l.href !== null)
+  const apkUrl = androidApkUrl()
+  const apk = apkUrl && offerAndroidApp(Capacitor.isNativePlatform(), navigator.userAgent) ? apkUrl : null
 
   return (
     <Screen>
@@ -63,7 +80,39 @@ export function AboutPage() {
       <ListSection title="Help">
         <LinkRow href={`mailto:${SUPPORT_EMAIL}`} label="Support" hint={SUPPORT_EMAIL} icon={LifeBuoy} />
       </ListSection>
+
+      {apk && <AndroidAppSection href={apk} />}
     </Screen>
+  )
+}
+
+/**
+ * Get the app: the Android download, last because it is the least frequent reason to be here. A
+ * plain link with `download`, so the browser saves the file rather than navigating to it. The version
+ * and size come from android.json beside it; without that (offline, an older deploy) the row still
+ * works and just says what it is for.
+ */
+function AndroidAppSection({ href }: { href: string }) {
+  const [release, setRelease] = useState<AndroidRelease | null>(null)
+  useEffect(() => {
+    const ctrl = new AbortController()
+    fetch(new URL('android.json', new URL(href, window.location.href)).toString(), { signal: ctrl.signal, cache: 'no-cache' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => setRelease(androidReleaseFrom(j)))
+      .catch(() => {})
+    return () => ctrl.abort()
+  }, [href])
+  return (
+    <ListSection title="Get the app">
+      <a href={href} download className="flex items-center gap-3 p-4 press-row" data-testid="about-android-download">
+        <Smartphone className="h-5 w-5 shrink-0 text-mono-400" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-mono-900 dark:text-mono-50">Download for Android</p>
+          <p className="truncate text-sm text-mono-500 tabular-nums" data-testid="about-android-hint">{androidHint(release)}</p>
+        </div>
+        <Download className="h-4 w-4 shrink-0 text-mono-400" aria-hidden />
+      </a>
+    </ListSection>
   )
 }
 

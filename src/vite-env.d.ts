@@ -31,4 +31,6 @@ interface ImportMetaEnv {
   readonly VITE_DEPLOY_VERSION?: string
   /** The imani-wallet release tag this build is (Settings → About). Unset: package.json + "dev". */
   readonly VITE_WALLET_VERSION?: string
+  /** The Android APK this deploy publishes (Settings → About's download row). Unset: no row. */
+  readonly VITE_ANDROID_APK_URL?: string
 }

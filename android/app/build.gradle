@@ -1,5 +1,18 @@
 apply plugin: 'com.android.application'
 
+/*
+ * Release identity, set by the automated build (imani-deploy scripts/android-apk.sh, android/build-apk.sh):
+ *   IMANI_VERSION_NAME  the wallet tag without its "v" (0.51.3); IMANI_VERSION_CODE derived from it,
+ *                       major*1_000_000 + minor*1_000 + patch, so every release installs over the last.
+ *   IMANI_KEYSTORE / IMANI_KEYSTORE_PASSWORD / IMANI_KEY_ALIAS / IMANI_KEY_PASSWORD  the release key.
+ * A local build has none of them: version 0.0.0-dev / code 1, and `assembleRelease` is unsigned
+ * (`assembleDebug` is what a developer runs). Nothing secret is ever read from a file in the repo.
+ */
+def envOr = { String name, String fallback -> System.getenv(name) ?: fallback }
+def imaniVersionName = envOr('IMANI_VERSION_NAME', '0.0.0-dev')
+def imaniVersionCode = envOr('IMANI_VERSION_CODE', '1').toInteger()
+def releaseKeystore = System.getenv('IMANI_KEYSTORE')
+
 android {
     namespace "xyz.tcheeric.imani.wallet"
     compileSdk rootProject.ext.compileSdkVersion
@@ -7,8 +20,8 @@ android {
         applicationId "xyz.tcheeric.imani.wallet"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode imaniVersionCode
+        versionName imaniVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // Stop AGP rasterising vectors into per-density PNGs. minSdk is 23, so
         // VectorDrawable is native everywhere this runs — and the generated
@@ -23,10 +36,23 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (releaseKeystore) {
+            release {
+                storeFile file(releaseKeystore)
+                storePassword System.getenv('IMANI_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('IMANI_KEY_ALIAS') ?: 'imani'
+                keyPassword System.getenv('IMANI_KEY_PASSWORD') ?: System.getenv('IMANI_KEYSTORE_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (releaseKeystore) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

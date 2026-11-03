@@ -1,6 +1,17 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 import { KeyboardResize } from '@capacitor/keyboard';
 
+/** The wallet origin the WebView loads. See `server.url` below. */
+function appUrl(): string {
+  const fromEnv = (typeof process !== 'undefined' ? process.env.IMANI_APP_URL : undefined)?.trim();
+  const url = fromEnv || 'https://wallet.staging.398ja.xyz';
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    throw new Error(`IMANI_APP_URL must be a bare https origin, got ${url}`);
+  }
+  return parsed.origin;
+}
+
 const config: CapacitorConfig = {
   appId: 'xyz.tcheeric.imani.wallet',
   appName: 'Imani Wallet',
@@ -27,7 +38,9 @@ const config: CapacitorConfig = {
     // `initNative()` and the onboarding back-button fix only exist on the device
     // once this branch is deployed there. Delete this block to go back to the
     // bundled build.
-    url: 'https://wallet.staging.398ja.xyz',
+    // `IMANI_APP_URL` (the automated build sets it per deployment, imani-deploy scripts/android-apk.sh), else
+    // staging. Only an https origin is accepted, so a typo cannot ship an app that loads plain http.
+    url: appUrl(),
   },
   plugins: {
     Keyboard: {
