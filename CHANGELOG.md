@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Settings → About is its own page** (`/settings/about`, every role, terminals included). Settings
+  keeps one About row. The page leads with the imani mark, the name and the wallet version, then
+  the Imani release and build date, the legal pages (new tab, announced to screen readers) and
+  Support (`mailto:`; was "Contact us"). The mint is no longer shown. The release drops the
+  `imani-deploy-` tag prefix the label already says, and a long value moves under its label
+  instead of truncating.
+
 ### Added
 
 - **The stall hears when a customer claims its cashback** (#158, with

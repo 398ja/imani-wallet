@@ -3,8 +3,8 @@
  *
  * DEPLOY VERSION: the imani-deploy release this wallet was shipped in. Passed as the
  * `VITE_DEPLOY_VERSION` build arg by imani-deploy's scripts/deploy-staging.sh (from
- * `git describe --tags --always` of the deploy checkout). A local or hand-made build has
- * none, and says so ("dev") rather than guessing.
+ * `git describe --tags --match 'imani-deploy-v*' --always` of the deploy checkout, imani-deploy#361).
+ * A local or hand-made build has none, and says so ("dev") rather than guessing.
  */
 import { websiteBaseUrl } from './terms'
 
