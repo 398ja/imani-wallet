@@ -155,6 +155,10 @@ export const LOCK_BATCH_PATH = '/api/v1/wallet/vouchers/cashlink/lock-batch'
 export const LOCK_BATCH_MAX = 32
 export const RESIGN_PATH = '/api/v1/wallet/vouchers/cashlink/resign'
 export const REFUNDS_PATH = '/api/v1/wallet/cashlink/refunds'
+/** gateway-customer#288: a part's refund deposits in one call, each answered as `/refunds` would. */
+export const REFUNDS_BATCH_PATH = REFUNDS_PATH + '/batch'
+/** The most deposits the gateway takes in one batch. */
+export const REFUNDS_BATCH_MAX = 32
 
 // --- Shared steps -----------------------------------------------------------
 
@@ -934,14 +938,146 @@ async function depositAll(ports: CashlinkPorts, linkSecret: Uint8Array, refundSe
     return { kind: 'not_armed', keyset: locked[0].id, why: 'mint keysets unreadable' }
   }
   // #477: every refund at once (each is its own idempotent deposit, keyed by the proof); the first
-  // failure in the gift's order is the answer, as before.
-  const results = await inParallel(locked.map((proof) => () => depositOne(ports, linkSecret, refundSecret, mintUrl, proof, keyset)), ARM_CONCURRENCY)
+  // failure in the gift's order is the answer, as before. gateway-customer#288: in one batch call.
+  const results = await depositMany(ports, linkSecret, refundSecret, mintUrl, locked, keyset)
   for (const r of results) {
     if (!r.ok) return { kind: 'not_armed', keyset, why: r.error instanceof Error ? r.error.message : String(r.error) }
     if (r.value.kind !== 'armed') return { kind: 'not_armed', keyset: r.value.keyset, why: r.value.why }
     keyset = r.value.keyset
   }
   return { kind: 'armed', keyset }
+}
+
+type DepositOutcome = { kind: 'armed' | 'not_armed'; keyset: string; why: string }
+
+/** Gateways that answered the refund batch route 404/405 (older than gateway-customer#288): one call per deposit from then on. */
+const noRefundBatchRoute = new WeakSet<CashlinkGateway>()
+
+/** The `/refunds` body of one locked proof's pre-signed refund into `keyset`. */
+function depositBody(refundSecret: Uint8Array, locked: TokenProof, keyset: string) {
+  const { outputs, witness } = refundSwap(refundSecret, locked, keyset)
+  return {
+    proof: { amount: locked.amount, id: locked.id, secret: locked.secret, C: locked.C, witness },
+    outputs: outputs.map((o) => ({ amount: o.amount, id: o.id, B_: o.B_ })),
+  }
+}
+
+/**
+ * One refund batch call. The answers, one per body in order; null when this gateway has no batch
+ * route (404/405). A batch not judged as a whole (5xx, 4xx, 429, a body of the wrong shape) is 502
+ * for every body, which reads as "not armed", never anything worse: the lock is already made, and
+ * the wallet takes the gifts back itself at `x` (or `retryDeposit` stores them on a later run).
+ * An item without a numeric status is 502 too. Throws only when the gateway is unreachable.
+ */
+async function refundBatchOnce(ports: CashlinkPorts, linkSecret: Uint8Array, bodies: unknown[]): Promise<GatewayAnswer[] | null> {
+  const answer = await ports.gateway.call('POST', REFUNDS_BATCH_PATH, { deposits: bodies }, linkKeySigner(linkSecret))
+  if (answer.status === 404 || answer.status === 405) return null
+  const results = answer.status === 200 && Array.isArray(answer.body?.results) ? (answer.body.results as unknown[]) : null
+  if (!results || results.length !== bodies.length) {
+    return bodies.map(() => ({ status: 502, body: { refusal: `BATCH_HTTP_${answer.status}` } }))
+  }
+  return results.map((r) => {
+    const item = (r ?? {}) as { status?: unknown; refusal?: unknown; replayed?: unknown; state?: unknown }
+    const status = typeof item.status === 'number' ? item.status : 502
+    return {
+      status,
+      body: {
+        ...(typeof item.refusal === 'string' ? { refusal: item.refusal } : {}),
+        ...(typeof item.replayed === 'boolean' ? { replayed: item.replayed } : {}),
+        ...(typeof item.state === 'string' ? { state: item.state } : {}),
+      },
+    }
+  })
+}
+
+/** A deposit answer read exactly as {@link depositOne} reads it; 'inactive' for a 422 KEYSET_INACTIVE. */
+function readDeposit(answer: GatewayAnswer, keyset: string): DepositOutcome | 'inactive' {
+  if (answer.status === 201 || answer.status === 200) return { kind: 'armed', keyset, why: '' }
+  if (answer.status === 422 && answer.body?.refusal === 'KEYSET_INACTIVE') return 'inactive'
+  return { kind: 'not_armed', keyset, why: refusalOf(answer) }
+}
+
+/**
+ * gateway-customer#288: every locked proof's refund deposit, answered as {@link depositOne} answers
+ * each one, in one batch call per {@link REFUNDS_BATCH_MAX} instead of one call per proof. The
+ * deposits answered KEYSET_INACTIVE are rebuilt in the freshly read active keyset and sent again,
+ * once, in a second batch. A gateway without the route is asked one deposit at a time, as before,
+ * and remembered. Never rejects.
+ */
+async function depositMany(
+  ports: CashlinkPorts,
+  linkSecret: Uint8Array,
+  refundSecret: Uint8Array,
+  mintUrl: string,
+  locked: TokenProof[],
+  keyset: string,
+): Promise<Settled<DepositOutcome>[]> {
+  const oneByOne = () => inParallel(locked.map((proof) => () => depositOne(ports, linkSecret, refundSecret, mintUrl, proof, keyset)), ARM_CONCURRENCY)
+  if (noRefundBatchRoute.has(ports.gateway)) return oneByOne()
+  const out: Settled<DepositOutcome>[] = new Array(locked.length)
+  const ready: number[] = []
+  locked.forEach((proof, n) => {
+    try {
+      assertNotOpenAfterLocktime(proof.secret)
+      ready.push(n)
+    } catch (error) {
+      out[n] = { ok: false, error }
+    }
+  })
+  const unreachable = (ks: string): Settled<DepositOutcome> => ({ ok: true, value: { kind: 'not_armed', keyset: ks, why: 'relay unreachable' } })
+  for (let start = 0; start < ready.length; start += REFUNDS_BATCH_MAX) {
+    const chunk = ready.slice(start, start + REFUNDS_BATCH_MAX)
+    let answers: GatewayAnswer[] | null
+    try {
+      answers = await refundBatchOnce(ports, linkSecret, chunk.map((n) => depositBody(refundSecret, locked[n], keyset)))
+    } catch {
+      for (const n of chunk) out[n] = unreachable(keyset)
+      continue
+    }
+    if (answers === null) {
+      noRefundBatchRoute.add(ports.gateway)
+      return oneByOne()
+    }
+    const inactive: number[] = []
+    chunk.forEach((n, i) => {
+      const read = readDeposit(answers![i], keyset)
+      if (read === 'inactive') inactive.push(n)
+      else out[n] = { ok: true, value: read }
+    })
+    if (inactive.length === 0) continue
+    // gc#262 R3: our keyset was archived. Read the active one again and rebuild those outputs (the
+    // same B_, a new id, the same SIG_ALL signature). Once, in one more batch.
+    let fresh: string | undefined
+    try {
+      fresh = await ports.mint.activeKeysetId(mintUrl, { fresh: true })
+    } catch {
+      fresh = undefined
+    }
+    if (fresh === undefined || fresh === keyset) {
+      for (const n of inactive) out[n] = { ok: true, value: { kind: 'not_armed', keyset, why: 'KEYSET_INACTIVE' } }
+      continue
+    }
+    const freshKeyset = fresh
+    let again: GatewayAnswer[] | null
+    try {
+      again = await refundBatchOnce(ports, linkSecret, inactive.map((n) => depositBody(refundSecret, locked[n], freshKeyset)))
+    } catch {
+      for (const n of inactive) out[n] = unreachable(freshKeyset)
+      continue
+    }
+    if (again === null) {
+      // The route vanished between two calls (a rollback): those few one at a time.
+      noRefundBatchRoute.add(ports.gateway)
+      const single = await inParallel(inactive.map((n) => () => depositOne(ports, linkSecret, refundSecret, mintUrl, locked[n], freshKeyset)), ARM_CONCURRENCY)
+      inactive.forEach((n, i) => (out[n] = single[i]))
+      continue
+    }
+    inactive.forEach((n, i) => {
+      const read = readDeposit(again![i], freshKeyset)
+      out[n] = { ok: true, value: read === 'inactive' ? { kind: 'not_armed', keyset: freshKeyset, why: 'KEYSET_INACTIVE' } : read }
+    })
+  }
+  return out
 }
 
 async function depositOne(
