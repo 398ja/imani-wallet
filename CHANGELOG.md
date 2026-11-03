@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.51.2] - 2026-11-03
+
+### Fixed
+
+- **Settings → About's Support writes to support@imani.casa** (#498), not the website's general
+  hello@imani.casa.
+
 ## [0.51.1] - 2026-11-03
 
 ### Changed

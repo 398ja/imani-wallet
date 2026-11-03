@@ -44,5 +44,5 @@ export function websitePage(path: string): string | null {
 
 export const PRIVACY_PATH = '/privacy.html'
 export const COOKIES_PATH = '/cookies.html'
-/** The contact address the public website lists. */
-export const SUPPORT_EMAIL = 'hello@imani.casa'
+/** Where Settings → About's Support row writes to. Not the website's general hello@ address. */
+export const SUPPORT_EMAIL = 'support@imani.casa'

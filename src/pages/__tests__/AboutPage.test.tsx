@@ -110,10 +110,13 @@ describe('the About page', () => {
     expect(document.body.textContent).not.toContain('398ja.xyz')
   })
 
-  it('offers Support (not "Contact us") as a mailto to the website\'s address', () => {
+  it('offers Support (not "Contact us") as a mailto to support@imani.casa', () => {
     drawAbout()
     const support = section('Help').getByRole('link', { name: /Support/ })
-    expect(support.getAttribute('href')).toBe('mailto:hello@imani.casa')
+    expect(support.getAttribute('href')).toBe('mailto:support@imani.casa')
+    // The address is shown too, and it is the support one, not the website's general hello@.
+    expect(support.textContent).toContain('support@imani.casa')
+    expect(document.body.textContent).not.toContain('hello@imani.casa')
     // A mailto opens the mail app; it is not a new tab.
     expect(support.getAttribute('target')).toBeNull()
     expect(screen.queryByText(/Contact us/i)).toBeNull()

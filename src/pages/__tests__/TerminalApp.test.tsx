@@ -286,7 +286,7 @@ describe('the routes a terminal has', () => {
     unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
     at('/settings/about')
     expect(await screen.findByRole('heading', { level: 1, name: 'About imani' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Support/ }).getAttribute('href')).toBe('mailto:hello@imani.casa')
+    expect(screen.getByRole('link', { name: /Support/ }).getAttribute('href')).toBe('mailto:support@imani.casa')
   })
 })
 
