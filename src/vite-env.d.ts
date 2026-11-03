@@ -8,6 +8,9 @@
  */
 declare const __APP_VERSION__: string
 
+/** When the bundle was built, ISO 8601 (see vite.config.ts). */
+declare const __BUILD_DATE__: string
+
 /**
  * Build-time `VITE_*` values this app reads through `import.meta.env`. Each is
  * compiled into the bundle, none is a secret, and the image passes them as
@@ -24,4 +27,6 @@ interface ImportMetaEnv {
   readonly VITE_WEBSITE_BASE_URL?: string
   /** #402: `on` shows "Use online" (checkout codes). Off by default, so the feature ships dark. */
   readonly VITE_CHECKOUT_CODES?: string
+  /** The imani-deploy release this build shipped in (Settings → About). Unset: shown as "dev". */
+  readonly VITE_DEPLOY_VERSION?: string
 }

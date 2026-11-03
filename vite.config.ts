@@ -448,6 +448,8 @@ export default defineConfig({
   // deployed.
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    // When this bundle was built, for Settings → About (src/lib/about.ts).
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
   },
   // Scoped to src/, because `packages/` now lives in this repo and ships its own
   // suites — dm-poll's and wallet-storage's among them, the latter wanting
