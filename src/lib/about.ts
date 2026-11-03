@@ -17,9 +17,16 @@ export function deployVersion(raw: unknown = import.meta.env.VITE_DEPLOY_VERSION
   return v === '' ? DEPLOY_VERSION_FALLBACK : v
 }
 
-/** The wallet's own version, from package.json (vite.config.ts). */
-export function appVersion(): string {
-  return typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : DEPLOY_VERSION_FALLBACK
+/**
+ * The wallet's own release: the imani-wallet tag this image was built from (`VITE_WALLET_VERSION`,
+ * passed by imani-deploy's deploy-staging.sh from build-refs.env, e.g. "v0.51.0"). package.json's
+ * version is not bumped per release here (it reads 0.41.0 while v0.50.0 runs), so it is only the
+ * fallback for a build given no tag, shown with "dev" so nobody mistakes it for a release.
+ */
+export function appVersion(raw: unknown = import.meta.env.VITE_WALLET_VERSION): string {
+  if (typeof raw === 'string' && raw.trim() !== '') return raw.trim()
+  const pkg = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : ''
+  return pkg === '' ? DEPLOY_VERSION_FALLBACK : `${pkg} (${DEPLOY_VERSION_FALLBACK})`
 }
 
 /** When the bundle was built, as YYYY-MM-DD, or null if unknown. */

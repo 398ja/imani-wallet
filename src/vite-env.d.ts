@@ -29,4 +29,6 @@ interface ImportMetaEnv {
   readonly VITE_CHECKOUT_CODES?: string
   /** The imani-deploy release this build shipped in (Settings → About). Unset: shown as "dev". */
   readonly VITE_DEPLOY_VERSION?: string
+  /** The imani-wallet release tag this build is (Settings → About). Unset: package.json + "dev". */
+  readonly VITE_WALLET_VERSION?: string
 }
