@@ -280,6 +280,27 @@ This is the only place the store returns a code, and only to its depositor. The
 store therefore keeps the code **encrypted** for the depositor too: AES-GCM under a
 server key, beside `code_hash`.
 
+### `GET /v1/code-check/{code}` (anyone holding the code, no NIP-98)
+
+The public check, like a gift card's balance check (imani-checkout-codes 0.3.0). The code is the
+only credential. Knowing a code never lets anyone spend it (R0: every part is locked to `S`), so
+this is a privacy boundary, not a theft one, and it says only what a holder needs:
+
+`200`:
+```json
+{ "status": "active|in_use|used|expired", "remaining": 1700, "unit": "eur", "expires_at": 1767000000,
+  "stall": { "pubkey": "…", "name": "…", "nip05": "…" },
+  "shop": { "url": "https://shop.example" } }
+```
+
+- `status`: `active` (reserved), `in_use` (held or settling: an order at the shop has it),
+  `used` (redeemed), `expired` (expired, cancelling, cancelled). `remaining` is 0 when used or expired.
+- `stall.name`, `stall.nip05` and `shop.url` are read from the stall's own signed events (kind 0, and
+  §4's `online_shop.url`, https only), verified by the store, and each may be absent.
+- Never: parts, tokens, `S`, the maker, the order, `original_amount`.
+- Every miss is the R2 404, byte for byte. Its own limits (R3), tighter than the NIP-98 API: per
+  address, per code, and a global ceiling on misses that answers 429 to everyone while it is closed.
+
 ### `GET /v1/checkout-codes/exposure?shop_key={S}` (stall)
 
 R5: what a shop key could redirect if it were stolen, for the stall's Terminals page
