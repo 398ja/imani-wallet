@@ -97,6 +97,7 @@ import { ProfilePage } from './pages/ProfilePage'
 import { FinishProfilePrompt } from './components/FinishProfilePrompt'
 import { claimProfileWith } from './lib/profileGate'
 import { SettingsPage } from './pages/SettingsPage'
+import { AboutPage } from './pages/AboutPage'
 import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
 import { TerminalsPage } from './pages/TerminalsPage'
@@ -721,6 +722,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             have no stall record, and selling is chosen at registration. Only the
             trading SCREENS are gated on `active` (see `canTrade`). */}
         <Route path="/settings" element={<SettingsPage merchant={merchant !== null} />} />
+        {/* Every role: what is running, the legal pages, support (no predicate). */}
+        <Route path="/settings/about" element={<AboutPage />} />
         <Route
           path="/settings/merchant"
           element={
