@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.50.0] - 2026-11-03
+
+### Changed
+
+- **A checkout code part's refund deposits go to the gateway in one call** (#477,
+  gateway-customer#288, #490). Each answer is read as the single `/refunds` answer was; the ones
+  answered `KEYSET_INACTIVE` are rebuilt in the fresh keyset and sent again once, together. A
+  gateway without the route (404/405) is remembered and asked one deposit at a time, as before.
+  A batch that could not be read as a whole leaves the part "not armed", never anything worse:
+  this wallet then posts the same refund itself at `x`. Needs gateway-customer 0.40.0 for the
+  speed-up.
+
 ## [0.49.1] - 2026-11-02
 
 ### Changed
