@@ -3,6 +3,7 @@ import { Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { Lock, QrCode, Send, Settings } from 'lucide-react'
 
 import { Alert, Button, Centered, Input, PageHeader, Panel, Screen, ListSection, BackLink } from '../components/ui'
+import { AboutSection } from '../components/AboutSection'
 import { Avatar } from '../components/ui/Avatar'
 import { RemoteImage } from '../components/ui/RemoteImage'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
@@ -571,7 +572,7 @@ function AskToRenew({ send = sendRenewRequest }: { send?: () => Promise<boolean>
   )
 }
 
-function TerminalSettings() {
+export function TerminalSettings() {
   return (
     <Screen>
       <BackLink to="/" label="Till" />
@@ -581,6 +582,7 @@ function TerminalSettings() {
           Security
         </Link>
       </ListSection>
+      <AboutSection />
     </Screen>
   )
 }
