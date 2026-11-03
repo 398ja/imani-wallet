@@ -108,6 +108,11 @@ ENV VITE_WEBSITE_BASE_URL=$VITE_WEBSITE_BASE_URL
 COPY scripts/check-website-base-url-build.sh /tmp/check-website-base-url-build.sh
 RUN sh /tmp/check-website-base-url-build.sh
 
+# The imani-deploy release this image ships in, shown in Settings → About. Passed by
+# imani-deploy's deploy-staging.sh (`git describe --tags --always`). Optional: unset shows "dev".
+ARG VITE_DEPLOY_VERSION=
+ENV VITE_DEPLOY_VERSION=$VITE_DEPLOY_VERSION
+
 COPY . .
 # `tsc -b && vite build`. The tsc half typechecks ./packages through the paths
 # mirror in tsconfig.app.json, and the nap packages through their published

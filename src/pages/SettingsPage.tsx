@@ -3,6 +3,7 @@ import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, T
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
+import { AboutSection } from '../components/AboutSection'
 
 /**
  * Settings.
@@ -109,6 +110,9 @@ export function SettingsPage({
           </ListSection>
         </div>
       )}
+
+      {/* Every role. */}
+      <AboutSection />
     </Screen>
   )
 }
