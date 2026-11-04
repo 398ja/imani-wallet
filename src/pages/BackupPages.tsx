@@ -27,10 +27,10 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
   const [downloaded, setDownloaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const download = () => {
+  const download = async () => {
     setError(null)
     try {
-      downloadText(backupFilename(profile), createBackup(profile.pubkey))
+      await downloadText(backupFilename(profile), createBackup(profile.pubkey))
       setDownloaded(true)
     } catch (e) {
       setError(userMessage(e))

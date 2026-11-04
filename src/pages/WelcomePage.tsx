@@ -38,10 +38,10 @@ export function WelcomePage({
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
-  const download = () => {
+  const download = async () => {
     setError(null)
     try {
-      downloadText(backupFilename(profile), createBackup(profile.pubkey))
+      await downloadText(backupFilename(profile), createBackup(profile.pubkey))
       setDownloaded(true)
     } catch (e) {
       setError(userMessage(e))
