@@ -38,6 +38,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.53.0] - 2026-11-04
+
+### Added
+
+- **The free tier has a sales threshold in every merchant currency** (#506, #507). Before, it
+  priced only AUD, CAD, CHF, EUR, GBP and USD, so a free stall created in NGN, KES, JPY, XOF or
+  any other currency the onboarding picker offered was allowed to sell nothing (and its currency
+  is locked once chosen). `packages/licence/src/freeTierAmounts.ts` now lists 154 currencies in
+  minor units. Each is about 100 USD at the 2026-11-04 rates, rounded down to 2 significant
+  figures: 100 face in the six majors, 65,000 XOF/XAF (100 EUR at the fixed 655.957), and for
+  example 130,000 NGN, 12,000 KES, 1,100 GHS, 1,600 ZAR, 4,000 MRU, 15,000 JPY. The bundled
+  catalog uses it, and `services/subscription/catalog.json` publishes it as **v5**, with the
+  `fx` table removed. No exchange rate is read at runtime. Tier limits are still off by default
+  (`VITE_TIER_LIMITS`).
+- **The wallet fetches the signed catalog at startup and then daily** (`startCatalogRefresh`),
+  not only when Settings › Subscription is opened.
+- **Quarterly refresh by PR** (`.github/workflows/free-tier-amounts.yml`). On 2 Jan, Apr, Jul
+  and Oct (or on demand) it re-runs `scripts/free-tier-amounts.mts` on that day's rates and opens
+  a `chore/free-tier-amounts` PR listing every changed threshold. It opens nothing when no amount
+  changed, keeps a currency's last amount when the feed stops quoting it, and fails rather than
+  proposing a threshold that moved more than 50% (re-run with `force` after checking).
+
+### Changed
+
+- **The onboarding currency picker offers only currencies with a free-tier threshold.** It no
+  longer lists XDR, XSU (units of account), CUC, KPW, SVC (withdrawn or no usable rate), or HRK,
+  SLL, ZWL (replaced by EUR, SLE, ZWG).
+
 ## [0.52.0] - 2026-11-03
 
 ### Added
