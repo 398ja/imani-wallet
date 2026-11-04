@@ -208,7 +208,17 @@ describe('the effective entitlement', () => {
   })
 
   it('refuses to sell rather than reading an unpriceable currency as unlimited', () => {
-    expect(ask([], 'XAF').sales).toMatchObject({ amount: 0, overshoot: 0 })
+    // XDR has no amount in the free tier (#506 keeps it out of onboarding) and no FX rate.
+    expect(ask([], 'XDR').sales).toMatchObject({ amount: 0, overshoot: 0 })
+  })
+
+  it('gives the free tier a threshold in every merchant currency, with no FX table (#506)', () => {
+    expect(BUNDLED_CATALOG.fx).toBeUndefined()
+    expect(ask([], 'GBP').sales).toMatchObject({ amount: 100_00, overshoot: 10_00 })
+    expect(ask([], 'NGN').sales).toMatchObject({ amount: 130_000_00, overshoot: 13_000_00 })
+    expect(ask([], 'KES').sales).toMatchObject({ amount: 12_000_00 })
+    expect(ask([], 'XOF').sales).toMatchObject({ amount: 65_000 })
+    expect(ask([], 'JPY').sales).toMatchObject({ amount: 15_000 })
   })
 })
 

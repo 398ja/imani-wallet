@@ -39,6 +39,7 @@ export type {
 
 export type { TierCatalog, TierDefinition, SignedCatalog, CatalogVerdict, BadgeName } from './catalog.js'
 export { BUNDLED_CATALOG, FREE_TIER, acceptCatalog, parseCatalog, amountIn, badgeOf } from './catalog.js'
+export { FREE_TIER_AMOUNTS } from './freeTierAmounts.js'
 
 export type { Entitlement, SalesAllowance, EntitlementOptions, CountedSale, SaleDecision } from './entitlement.js'
 export { entitlementOf, maySell, periodStart, salesInPeriod, WARN_AT } from './entitlement.js'

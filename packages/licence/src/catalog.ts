@@ -1,5 +1,6 @@
 import type { LicenceGrant, LicenceLimits } from './types.js'
 import { isBadgeName, type BADGE_NAMES } from './read.js'
+import { FREE_TIER_AMOUNTS } from './freeTierAmounts.js'
 
 /** A verification badge (#418), lowest first. */
 export type BadgeName = (typeof BADGE_NAMES)[number]
@@ -57,9 +58,14 @@ const USD_DECIMALS = 2
 /**
  * The catalog compiled into the app, used until a signed one has been fetched.
  *
- * Mirrors the published plans (www.imani.casa/pricing): 100 one-off and 1 till (Starter, the `free`
- * tier), no sales limit and 3 tills (Essentials, the `basic` tier), no limits plus API and e-commerce (Pro), in the major
- * currencies, with a 10 % overshoot. Version 1, so any catalog we publish replaces it.
+ * Mirrors the published plans (www.imani.casa/pricing): about 100 USD one-off and 1 till (Starter,
+ * the `free` tier), no sales limit and 3 tills (Essentials, the `basic` tier), no limits plus API and
+ * e-commerce (Pro), with a 10 % overshoot.
+ *
+ * The free threshold is hard-coded in every merchant currency (`FREE_TIER_AMOUNTS`, #506), the
+ * same table services/subscription/catalog.json publishes. No exchange rate is needed, so a device
+ * that has never fetched a catalog already has the right limit in NGN or KES, not 0. The version
+ * stays at 1, so any catalog we publish still replaces this one.
  *
  * The free tier's terminal allowance is 1 ENROLLED terminal on top of the owner's own device, which
  * is how `terminalAllowance` has always counted (the owner's device is counted, never converted).
@@ -70,7 +76,7 @@ export const BUNDLED_CATALOG: TierCatalog = {
   tiers: {
     free: {
       features: [],
-      limits: { sales: { period: 'lifetime', amounts: majors(100_00) }, terminals: 1 },
+      limits: { sales: { period: 'lifetime', amounts: { ...FREE_TIER_AMOUNTS } }, terminals: 1 },
     },
     basic: {
       features: ['terminals'],
@@ -83,10 +89,6 @@ export const BUNDLED_CATALOG: TierCatalog = {
       badge: 'silver',
     },
   },
-}
-
-function majors(minor: number): Record<string, number> {
-  return { GBP: minor, EUR: minor, USD: minor, CAD: minor, AUD: minor, CHF: minor }
 }
 
 /** A catalog as published: the document and our signature over it. */
