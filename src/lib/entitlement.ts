@@ -113,6 +113,30 @@ export async function refreshCatalog(fetchImpl: typeof fetch = fetch): Promise<b
   }
 }
 
+/** How often an open wallet re-fetches the catalog. Limits change rarely, by a new version. */
+export const CATALOG_REFRESH_MS = 24 * 60 * 60 * 1000
+
+let refreshTimer: ReturnType<typeof setInterval> | undefined
+
+/**
+ * Fetch the catalog now and then daily, for as long as the app runs (#506).
+ *
+ * Before this, only Settings › Subscription fetched it, so a stall that never opened that screen
+ * kept the bundled catalog for good. The catalog is the same for every account, so this is
+ * started once and outlives a logout. Idempotent, and silent on failure like `refreshCatalog`.
+ */
+export function startCatalogRefresh(fetchImpl?: typeof fetch): void {
+  if (refreshTimer !== undefined) return
+  void refreshCatalog(fetchImpl)
+  refreshTimer = setInterval(() => void refreshCatalog(fetchImpl), CATALOG_REFRESH_MS)
+}
+
+/** Stop the daily refresh. For tests. */
+export function stopCatalogRefresh(): void {
+  clearInterval(refreshTimer)
+  refreshTimer = undefined
+}
+
 /** The stall's entitlement right now. */
 export function entitlementFor(
   status: LicenceStatus,

@@ -11,6 +11,7 @@ import { releaseWalletForOtherTab } from './lib/walletHandover'
 import { RestoringVouchers, WalletOpening } from './components/WalletOpening'
 import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
+import { startCatalogRefresh } from './lib/entitlement'
 import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
 import { startCashbackClaims, stopCashbackClaims } from './lib/cashbackClaimDrain'
 import { startPushListener, stopPushListener } from './lib/notifications/listener'
@@ -179,6 +180,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // dm-poll's job on the real redemption. Stopped on logout, like the
         // poller above, for the same StrictMode reason.
         startIncomingNotifications(pubkey)
+
+        // The signed tier catalog, now and daily (#506): a stall that never opens Settings ›
+        // Subscription still gets a newer limit. Same for every account, so started once.
+        startCatalogRefresh()
 
         // The other half of the same idea, for when the app is NOT open: a
         // push the service worker (or the native plugin) received is posted

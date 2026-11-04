@@ -11,6 +11,7 @@ import { licenceOf } from '../read'
 import { DENIAL_REASONS, type LicenceGrant, type LicenceVoucher } from '../types'
 import { acceptCatalog, amountIn, BUNDLED_CATALOG, parseCatalog, type TierCatalog } from '../catalog'
 import { entitlementOf, maySell, periodStart, salesInPeriod } from '../entitlement'
+import { FREE_TIER_AMOUNTS } from '../freeTierAmounts'
 
 const US = 'a'.repeat(64)
 const CUSTOMER = 'c'.repeat(64)
@@ -208,7 +209,20 @@ describe('the effective entitlement', () => {
   })
 
   it('refuses to sell rather than reading an unpriceable currency as unlimited', () => {
-    expect(ask([], 'XAF').sales).toMatchObject({ amount: 0, overshoot: 0 })
+    // XDR has no amount in the free tier (#506 keeps it out of onboarding) and no FX rate.
+    expect(ask([], 'XDR').sales).toMatchObject({ amount: 0, overshoot: 0 })
+  })
+
+  it('gives the free tier a threshold in every merchant currency, with no FX table (#506)', () => {
+    expect(BUNDLED_CATALOG.fx).toBeUndefined()
+    expect(ask([], 'GBP').sales).toMatchObject({ amount: 100_00, overshoot: 10_00 })
+    expect(ask([], 'XOF').sales).toMatchObject({ amount: 65_000 })
+    // NGN, KES and JPY follow the quarterly rates snapshot, so the check is that the table is used.
+    for (const code of ['NGN', 'KES', 'JPY']) {
+      const amount = FREE_TIER_AMOUNTS[code]
+      expect(amount).toBeGreaterThan(0)
+      expect(ask([], code).sales).toMatchObject({ amount, overshoot: Math.floor(amount / 10), currency: code })
+    }
   })
 })
 

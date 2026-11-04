@@ -1,3 +1,5 @@
+import { FREE_TIER_AMOUNTS } from '@imani/licence'
+
 import { CURRENCIES } from './merchant'
 
 /**
@@ -59,7 +61,20 @@ export function currencyLabel(code: string): string {
   return name === code ? code : `${name} (${code})`
 }
 
-/** Every code this runtime knows, named and sorted by name. */
+/**
+ * Every code a stall may be created in: the runtime's list, narrowed to the codes the free tier has
+ * a sales threshold for (#506).
+ *
+ * The currency is locked once the stall exists, and a stall in a currency the catalog cannot price
+ * is allowed to sell nothing on the free tier. So the picker never offers one. This also drops
+ * what `Intl` lists but no merchant trades in: units of account (XDR, XSU), withdrawn or
+ * sanctioned codes (CUC, KPW, SVC) and replaced ones (HRK, SLL, ZWL).
+ */
+export function isMerchantCurrency(code: string): boolean {
+  return Object.hasOwn(FREE_TIER_AMOUNTS, code)
+}
+
+/** Every code this runtime knows that a stall may use, named and sorted by name. */
 export function allCurrencies(): Currency[] {
   if (!all) {
     let codes: readonly string[] = CURRENCIES
@@ -71,6 +86,7 @@ export function allCurrencies(): Currency[] {
       // Leaves the common list in place.
     }
     all = codes
+      .filter(isMerchantCurrency)
       .map((code) => ({ code, name: currencyName(code) }))
       .sort((a, b) => a.name.localeCompare(b.name))
   }
