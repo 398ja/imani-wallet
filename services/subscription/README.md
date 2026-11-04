@@ -61,3 +61,12 @@ docker build -f services/subscription/Dockerfile -t imani-subscription .
 
 Bump `version` in `catalog.json` whenever a number changes. Wallets ignore a catalog that is not
 newer than the one they hold.
+
+**The free tier's threshold is hard-coded in every merchant currency** (#506): about 100 USD,
+rounded down to 2 significant figures (100 face in USD, EUR, GBP, CHF, CAD and AUD; 65,000 in XOF
+and XAF). There is no exchange-rate table and no rate feed at runtime. The amounts live in
+`packages/licence/src/freeTierAmounts.ts`, which the wallet's bundled catalog uses, and are copied
+into `catalog.json`. The onboarding currency picker offers exactly these codes. Do not edit them by
+hand. At the quarterly review, run `npx tsx scripts/free-tier-amounts.mts`, which rewrites both and
+bumps the version if an amount changed. `src/lib/__tests__/freeTierCurrencies.test.ts` fails if
+the two differ.

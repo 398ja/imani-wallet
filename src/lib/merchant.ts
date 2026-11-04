@@ -146,7 +146,8 @@ export const CATEGORIES = [
 /**
  * The currencies offered before a merchant types anything, from
  * possa-merchant's `IssuanceStep.tsx`. Not the limit: `searchCurrencies` in
- * ./currencies reaches every code the runtime knows.
+ * ./currencies reaches every code the runtime knows that the free tier has a
+ * threshold for (#506). Each code here must have one too; a test checks it.
  */
 export const CURRENCIES = [
   'EUR',

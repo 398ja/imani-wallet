@@ -16,6 +16,9 @@ import {
   currentCatalog,
   forgetCatalog,
   refreshCatalog,
+  startCatalogRefresh,
+  stopCatalogRefresh,
+  CATALOG_REFRESH_MS,
   salesPosition,
   checkSale,
   SalesLimitError,
@@ -171,5 +174,28 @@ describe('fetching the published catalog', () => {
     })).toBe(false)
     expect(asked).toBe(false)
     vi.unstubAllEnvs()
+  })
+
+  it('fetches at start and then daily, once however often it is started (#506)', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('VITE_SUBSCRIPTION_SITE_URL', 'https://plans.example.test')
+    let asked = 0
+    const fetchImpl = async () => {
+      asked += 1
+      return new Response('nope', { status: 502 })
+    }
+    try {
+      startCatalogRefresh(fetchImpl)
+      startCatalogRefresh(fetchImpl)
+      expect(asked).toBe(1)
+      await vi.advanceTimersByTimeAsync(CATALOG_REFRESH_MS - 1)
+      expect(asked).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(asked).toBe(2)
+    } finally {
+      stopCatalogRefresh()
+      vi.useRealTimers()
+      vi.unstubAllEnvs()
+    }
   })
 })
