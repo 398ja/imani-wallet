@@ -1,0 +1,111 @@
+# The quarterly refresh of the free tier's threshold in every merchant currency (#506).
+#
+# The thresholds are hard-coded (about 100 USD each, rounded down to 2 significant figures), so
+# they drift as currencies move. Every quarter this re-runs scripts/free-tier-amounts.mts against
+# that day's rates and opens a PR with what changed. Nothing is published until a person merges
+# it and the subscription service is redeployed: the rates are a snapshot taken here, never a
+# feed the wallet or the gateway reads.
+#
+# The run FAILS, opening nothing, when a threshold would move by more than 50 % in one go (a bad
+# feed reading is likelier than a currency halving in a quarter). GitHub then emails the failure.
+# Check the rate by hand, then run this workflow manually with `force` ticked.
+#
+# GITHUB_TOKEN-made PRs trigger no other workflow, so the tests that guard the table run here,
+# before the PR is opened.
+name: Free-tier amounts
+
+on:
+  schedule:
+    # 06:00 UTC on the 2nd of January, April, July and October.
+    - cron: '0 6 2 1,4,7,10 *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Accept a threshold that moved by more than 50 % (check the rate first)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: free-tier-amounts
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BRANCH: chore/free-tier-amounts
+      # Outside the checkout, so the summary is never committed. (`runner.temp` is not available
+      # at job level.)
+      SUMMARY: /tmp/free-tier-summary.md
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Regenerate the amounts from today's rates
+        env:
+          FREE_TIER_SUMMARY: ${{ env.SUMMARY }}
+        run: npx tsx scripts/free-tier-amounts.mts ${{ inputs.force && '--force' || '' }}
+
+      - name: Anything to propose?
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "No threshold changed at today's rates." >> "$GITHUB_STEP_SUMMARY"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: The guards on the table still hold
+        if: steps.diff.outputs.changed == 'true'
+        run: >
+          npx vitest run
+          packages/licence
+          services/subscription
+          src/lib/__tests__/freeTierCurrencies.test.ts
+          src/lib/__tests__/currencies.test.ts
+          src/lib/__tests__/entitlement.test.ts
+
+      - name: Open or update the PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          git commit -qam "chore(subscriptions): refresh the free-tier amounts at today's rates (#506)"
+          git push -qf origin "$BRANCH"
+
+          body="$(cat "$SUMMARY")
+
+          Opened by \`.github/workflows/free-tier-amounts.yml\` (#506). Check the larger moves against a second source before merging. After merging, redeploy the subscription service so it serves the new catalog version. Wallets pick it up within a day, and the bundled copy with the next release."
+
+          existing="$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --body "$body"
+            echo "Updated PR #$existing" >> "$GITHUB_STEP_SUMMARY"
+          elif gh pr create --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" \
+              --title "chore(subscriptions): refresh the free-tier amounts ($(date -u +%Y-%m-%d))" --body "$body"; then
+            :
+          else
+            # The repository may not let Actions open PRs (Settings > Actions > General). The branch
+            # is pushed either way, so say where it is rather than fail silently.
+            gh issue create --title "Free-tier amounts refresh ready to review ($(date -u +%Y-%m-%d))" \
+              --body "$body
+
+          Actions could not open the PR itself. Open it from https://github.com/${{ github.repository }}/compare/$BRANCH"
+          fi
