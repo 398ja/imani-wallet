@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core'
 import { DRIVE_FILENAME } from './backup'
 
 /**
@@ -57,6 +58,35 @@ declare global {
 }
 
 export class DriveError extends Error {}
+
+/**
+ * Ceiling on waiting for Google's token callback. Generous, because a real
+ * person may be picking an account or typing a password, but finite: GIS has
+ * environments (blocked popups, embedded WebViews) where neither `callback` nor
+ * `error_callback` ever fires, and an unsettled promise is a button that spins
+ * forever.
+ */
+export const TOKEN_TIMEOUT_MS = 3 * 60 * 1000
+
+export const NATIVE_UNSUPPORTED =
+  'Google Drive backup is not available in the Android app yet: Google does not allow its sign-in ' +
+  'inside an app WebView. Save the backup file instead, or back up to Drive from the web wallet in a browser.'
+
+/**
+ * Why the Android app cannot run this flow at all.
+ *
+ * The app is a Capacitor WebView. GIS's token client opens its consent page
+ * with `window.open`; Capacitor's WebView has no multi-window support, so the
+ * popup is either dropped or handed to the system browser via an ACTION_VIEW
+ * intent (Bridge.launchIntent). In the browser it is a separate window with no
+ * `opener`, so the postMessage back never arrives; and Google refuses OAuth in
+ * embedded WebViews anyway (`disallowed_useragent`). Either way neither GIS
+ * callback fires. Fixing this properly needs native Google sign-in with an
+ * Android OAuth client, which is a Google Cloud console change.
+ */
+function nativeApp(): boolean {
+  return Capacitor.isNativePlatform()
+}
 
 /**
  * Whether this build carries the OAuth client id Google needs.
@@ -123,21 +153,33 @@ async function accessToken(): Promise<string> {
     )
   }
 
+  if (nativeApp()) throw new DriveError(NATIVE_UNSUPPORTED)
+
   await loadGis()
   const oauth2 = window.google?.accounts.oauth2
   if (!oauth2) throw new DriveError('Could not reach Google. Check your connection and try again.')
 
   return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new DriveError('Google sign-in did not finish. Allow pop-ups for this site and try again.')),
+      TOKEN_TIMEOUT_MS,
+    )
+    const settle = <T>(fn: (v: T) => void) => (v: T) => {
+      clearTimeout(timer)
+      fn(v)
+    }
+    const ok = settle(resolve)
+    const fail = settle(reject)
     const client = oauth2.initTokenClient({
       client_id: id,
       scope: SCOPE,
       callback: (response) => {
-        if (response.access_token) return resolve(response.access_token)
-        reject(new DriveError(response.error_description ?? 'Google did not grant access to Drive.'))
+        if (response.access_token) return ok(response.access_token)
+        fail(new DriveError(response.error_description ?? 'Google did not grant access to Drive.'))
       },
       // Closing the chooser is a decision, not a fault. Without this the
       // promise never settles and the button spins for the rest of the session.
-      error_callback: () => reject(new DriveError('Google sign-in was cancelled.')),
+      error_callback: () => fail(new DriveError('Google sign-in was cancelled.')),
     })
     client.requestAccessToken()
   })
