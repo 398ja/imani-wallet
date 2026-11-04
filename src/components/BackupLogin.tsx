@@ -8,6 +8,7 @@ import { applyBackup, parseBackup, type ParsedBackup } from '../lib/backup'
 import { refuseIfAnotherWallet } from '../lib/keySlotGuard'
 import { userMessage } from '../lib/userMessage'
 import { getBackup } from '../lib/drive'
+import { backupFileAccept } from '../lib/backupFileAccept'
 import { keyStore } from '../lib/nap'
 import { claimProfile, ProfileMissingError, rememberHandle, requireProfile } from '../lib/profileGate'
 import { FinishProfileStep } from './FinishProfileStep'
@@ -71,8 +72,14 @@ export function BackupLogin({
   }
 
   const fromFile = async (file: File | undefined) => {
-    if (!file) return
     setProblem(null)
+    if (!file) {
+      // A change event with no file means the picker came back empty handed
+      // (on Android, Capacitor reports a failed picker as no files). Say so
+      // rather than leave the screen unchanged.
+      setProblem('No file was opened. Try again, or choose another way in.')
+      return
+    }
     try {
       setParsed(parseBackup(await file.text()))
       setSource('file')
@@ -177,7 +184,7 @@ export function BackupLogin({
         <input
           ref={fileInput}
           type="file"
-          accept="application/json,.json"
+          accept={backupFileAccept()}
           className="hidden"
           tabIndex={-1}
           aria-hidden
