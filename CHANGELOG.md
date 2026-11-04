@@ -38,6 +38,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.53.1] - 2026-11-04
+
+### Fixed
+
+- **Android: a backup file can be picked to log in** (#511, #512). The login picker asked for
+  `application/json,.json`. Capacitor turns that into `EXTRA_MIME_TYPES`, so the system picker
+  greyed out every file not labelled `application/json`, which on Android is nearly all of them.
+  In the app it now asks for `*/*`, and `parseBackup` still turns away anything that is not a
+  backup. An empty picker result says "No file was opened…" instead of doing nothing.
+- **Android: the backup file, backup key and nsec export can be saved** (#511, #512). A `blob:`
+  download does nothing in the app's WebView, which has no download handler. In the app the text
+  is written to the app's private cache, handed to the share sheet, and the cache copy is deleted
+  afterwards. A failure says so. Adds `@capacitor/filesystem` 7, so the app needs the new APK.
+- `.json` exports are labelled `application/json`, not `text/plain`.
+- **Android: Google Drive backup no longer hangs** (#509). Google refuses its sign-in inside an app
+  WebView and the consent window can't report back, so the token wait never ended. In the app the
+  wallet now says straight away that Drive is not available yet, and every platform stops waiting
+  for Google after 3 minutes. Native Drive support is #510.
+
 ## [0.53.0] - 2026-11-04
 
 ### Added
