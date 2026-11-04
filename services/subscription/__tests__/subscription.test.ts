@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { acceptCatalog, BUNDLED_CATALOG, entitlementOf, licenceOf, parseCatalog } from '@imani/licence'
+import { acceptCatalog, BUNDLED_CATALOG, entitlementOf, FREE_TIER_AMOUNTS, licenceOf, parseCatalog } from '@imani/licence'
 import { buildAuthCompleteRequest, createPrivateKeySigner } from '@imani/nap-client-http'
 
 import { createApp, type Request } from '../app.ts'
@@ -763,8 +763,13 @@ describe('the published catalog', () => {
     expect(catalogSignatureValid(signed, SELLER.pk)).toBe(true)
     expect(acceptCatalog(signed, { verifySignature: (s) => catalogSignatureValid(s, SELLER.pk), current: BUNDLED_CATALOG }).accepted).toBe(true)
     expect(catalogSignatureValid({ ...signed, body: signed.body.replace('10000', '99999') }, SELLER.pk)).toBe(false)
-    expect(parseCatalog(signed.body)?.fx?.XAF).toEqual({ perUsd: 600, decimals: 0 })
-    expect(parseCatalog(signed.body)?.version).toBe(4)
+    // #506: the free threshold is hard-coded in every merchant currency, with no FX table. The
+    // version rises with each quarterly refresh, so only its floor is pinned.
+    const published = parseCatalog(signed.body)!
+    expect(published.version).toBeGreaterThanOrEqual(5)
+    expect(published.fx).toBeUndefined()
+    expect(published.tiers.free.limits.sales?.amounts).toEqual(FREE_TIER_AMOUNTS)
+    expect(published.tiers.free.limits.sales?.amounts).toMatchObject({ GBP: 10000, XOF: 65000 })
     expect(Object.keys(parseCatalog(signed.body)!.tiers)).toEqual(['free', 'basic', 'pro'])
     // #418: the bought tiers earn their badges from the catalog; Starter earns none.
     const tiers = parseCatalog(signed.body)!.tiers
