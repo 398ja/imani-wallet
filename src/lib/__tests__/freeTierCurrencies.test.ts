@@ -48,23 +48,25 @@ describe('the free tier in every merchant currency', () => {
 
   it('is about 100 USD and a round number, in the minor units the wallet mints in', () => {
     const at = (code: string) => FREE_TIER_AMOUNTS[code] / 10 ** currencyDecimals(code)
+    // Fixed by decision, not by a rate: these never move at the quarterly refresh.
     for (const code of ['USD', 'EUR', 'GBP', 'CHF', 'CAD', 'AUD']) expect(at(code)).toBe(100)
     expect(at('XOF')).toBe(65_000)
     expect(at('XAF')).toBe(65_000)
-    expect(at('NGN')).toBe(130_000)
-    expect(at('KES')).toBe(12_000)
-    expect(at('GHS')).toBe(1_100)
-    expect(at('JPY')).toBe(15_000)
-    expect(at('KWD')).toBe(31)
+    // The rest follow the rates the quarterly refresh (.github/workflows/free-tier-amounts.yml)
+    // snapshots, so they are checked by rule, not by value: whole units where the currency has
+    // a sub-unit to spare, so a merchant reads 130,000 NGN and never 134,606.07.
+    expect(at('JPY')).toBeGreaterThan(1_000)
+    expect(at('KWD')).toBeLessThan(100)
     for (const [code, minor] of Object.entries(FREE_TIER_AMOUNTS)) {
       expect(Number.isSafeInteger(minor) && minor > 0, code).toBe(true)
-      // Two significant figures at most, so a merchant reads 130,000 and not 134,606.
+      // Two significant figures at most.
       expect(Number(at(code).toPrecision(2)), code).toBe(at(code))
     }
   })
 
   it('lets a free stall in NGN sell up to its threshold plus the overshoot, and no further', () => {
+    const ngn = FREE_TIER_AMOUNTS.NGN
     const e = entitlementOf({ catalog: PUBLISHED, grants: [], currency: 'NGN', now: 1_800_000_000 })
-    expect(e.sales).toMatchObject({ amount: 13_000_000, overshoot: 1_300_000, currency: 'NGN' })
+    expect(e.sales).toMatchObject({ amount: ngn, overshoot: Math.floor(ngn / 10), currency: 'NGN' })
   })
 })
