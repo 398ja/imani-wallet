@@ -148,7 +148,7 @@ export async function signedFetch(
    * `headers` are extra, unsigned request headers such as `Idempotency-Key`. They
    * cannot replace `Authorization` or `Content-Type`.
    */
-  options: { signal?: AbortSignal; headers?: Record<string, string> } = {},
+  options: { signal?: AbortSignal; headers?: Record<string, string>; keepalive?: boolean } = {},
 ): Promise<Response> {
   const body = payload === undefined ? undefined : JSON.stringify(payload)
   // An unlocked till names its credential on every request, so the portal can tell what this
@@ -168,5 +168,6 @@ export async function signedFetch(
     body,
     credentials: 'include',
     ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.keepalive ? { keepalive: true } : {}),
   })
 }
