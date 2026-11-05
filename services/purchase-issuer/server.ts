@@ -44,7 +44,7 @@ import { tokenFor, FileCredentialStore } from './adapters'
 import { confirmAll, CredentialConfirmer, retryUnconfirmed } from './confirmation'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
-import { fileAnchors, httpPublishEvent, httpQueryWraps, httpScrub, httpStallName, type GiftPorts } from './giftDelivery'
+import { fileAnchors, httpPublishEvent, httpQueryWraps, httpReportOutcome, httpScrub, httpStallName, type GiftPorts } from './giftDelivery'
 import { mailerClient } from '../imani-mailer/client.ts'
 import { countPass, renderMetrics } from './metrics'
 import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPass } from './outbox'
@@ -115,6 +115,7 @@ export function giftTrackerFor(config: IssuerConfig, fetchImpl: typeof fetch = f
       now: () => Date.now(),
       ...(g.sweepEveryMs ? { sweepEveryMs: g.sweepEveryMs } : {}),
       ...(g.checkoutCodesUrl ? { checkCode: httpCodeCheck(g.checkoutCodesUrl, fetchImpl) } : {}),
+      reportOutcome: httpReportOutcome(config.purchasesUrl, config.purchasesToken, fetchImpl),
     })
     trackers.set(config, t)
   }
