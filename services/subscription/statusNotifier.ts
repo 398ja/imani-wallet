@@ -18,6 +18,7 @@ import WebSocketImpl from 'ws'
 
 import { wrapMessage } from '../../src/lib/giftWrap.ts'
 import { subscriptionStatusJson, type SubscriptionStatusMessage } from '../../src/lib/subscriptionStatus.ts'
+import { eventSizes } from './metrics.ts'
 import type { Seller } from './issuer.ts'
 
 /**
@@ -33,6 +34,9 @@ export interface StatusNotifier {
 
 /** Publish one event to a relay and wait for its OK, within `timeoutMs`. */
 export async function publishTo(url: string, event: Event, timeoutMs: number): Promise<void> {
+  // Event size (#532): once per publish, before connecting, whatever the outcome. Never throws.
+  // Both the status notifier and the badge publisher reach the relay through here.
+  eventSizes.recordEvent(event, 'relay')
   const relay = await Promise.race([
     Relay.connect(url),
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`connect ${url} timed out`)), timeoutMs)),
