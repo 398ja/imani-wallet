@@ -55,7 +55,33 @@ export interface TrackedGift {
    * shown, and the last remaining value the public code-check reported (minor units).
    */
   codeGift?: { code: { iv: string; sealed: string }; decimals: number; unit: string; lastRemaining: number }
+  /**
+   * Business metrics: the latest outcome seen for this gift, until payment-adapter has it
+   * (`sent`). payment-adapter owns every gift state; this tracker only reports what it alone sees.
+   */
+  report?: { outcome: GiftOutcome; remainingMinor?: number; sent?: boolean }
+  /** The sweep is done with this row and keeps it only until its report is delivered. */
+  finished?: boolean
 }
+
+/**
+ * What the recipient did, as payment-adapter's `POST /api/v1/purchases/gifts/{draftId}/outcome`
+ * takes it. Mapping from what this tracker observes (and the contract state payment-adapter files
+ * it under):
+ * - voucher, every proof SPENT before claimBy: CLAIMED (redeemed);
+ * - voucher, every proof UNSPENT at or after claimBy: EXPIRED (expired);
+ * - voucher, any proof SPENT at or after claimBy: RETURNED (returned). The mint cannot tell a
+ *   buyer's take-back from a late claim; a take-back is what the expiry path invites, so it is the
+ *   nearest honest bucket;
+ * - code, remaining dropped but not to zero: PARTLY_USED with the remaining balance (outstanding,
+ *   spent part redeemed);
+ * - code, remaining reached zero: CLAIMED (redeemed);
+ * - code, expired with value left: EXPIRED with the last remaining balance (expired).
+ */
+export type GiftOutcome = 'CLAIMED' | 'PARTLY_USED' | 'EXPIRED' | 'RETURNED'
+
+/** `ok` delivered (or already final there); `gone` will never be accepted; `retry` try next sweep. */
+export type ReportResult = 'ok' | 'gone' | 'retry'
 
 /** What discharge hands the tracker. Plain buyer email: sealed before it touches disk. */
 export interface TrackInput {
@@ -88,6 +114,8 @@ export interface TrackerPorts {
   now(): number
   /** #410: the public `GET /v1/code-check/{code}`. Absent, code rows are kept but never checked. */
   checkCode?(code: string): Promise<{ status: 'active' | 'in_use' | 'used' | 'expired'; remaining: number }>
+  /** Business metrics: tell payment-adapter a gift's outcome. Absent, nothing is reported. */
+  reportOutcome?(draftId: string, outcome: GiftOutcome, remainingMinor?: number): Promise<ReportResult>
 }
 
 /** Minor units as a currency, as discharge formats the gift amount. */
@@ -220,7 +248,30 @@ export class GiftTracker {
       const out = { claimed: 0, expired: 0, dropped: 0 }
       const now = this.ports.now()
       let changed = false
+      // A finished row is kept only until payment-adapter has its outcome.
+      const finish = (id: string) => {
+        const row = rows[id]
+        if (row?.report && !row.report.sent && this.ports.reportOutcome) row.finished = true
+        else delete rows[id]
+        out.dropped += 1
+      }
       for (const [id, row] of Object.entries(rows)) {
+        if (row.report && !row.report.sent && this.ports.reportOutcome) {
+          if (await this.deliverReport(row)) changed = true
+          if (row.finished && row.report.sent) {
+            delete rows[id]
+            changed = true
+            continue
+          }
+        }
+        if (row.finished) {
+          // Undeliverable for the whole keep window: give up, payment-adapter keeps its last state.
+          if (now >= row.claimBy + KEEP_AFTER_CLAIM_BY_MS) {
+            delete rows[id]
+            changed = true
+          }
+          continue
+        }
         if (now >= row.claimBy + KEEP_AFTER_CLAIM_BY_MS) {
           delete rows[id]
           out.dropped += 1
@@ -232,10 +283,9 @@ export class GiftTracker {
         changed = true
         if (row.kind === 'code') {
           const done = await this.sweepCode(row, now, out)
-          if (done) {
-            delete rows[id]
-            out.dropped += 1
-          }
+          if (done) finish(id)
+          if (await this.deliverReport(rows[id])) changed = true
+          if (rows[id]?.finished && rows[id].report?.sent) delete rows[id]
           continue
         }
         let states: Map<string, ProofState>
@@ -251,18 +301,26 @@ export class GiftTracker {
         const allUnspent = each.every((s) => s === 'UNSPENT')
         if (now < row.claimBy) {
           if (!allSpent) continue
+          this.observe(row, 'CLAIMED')
           const sent = await this.notify(row, 'claimed')
           if (sent !== 'retry') {
-            delete rows[id]
             if (sent === 'sent') out.claimed += 1
-            out.dropped += 1
+            finish(id)
           }
+          if (await this.deliverReport(rows[id])) changed = true
+          if (rows[id]?.finished && rows[id].report?.sent) delete rows[id]
           continue
         }
         if (anySpent) {
-          delete rows[id]
-          out.dropped += 1
+          this.observe(row, 'RETURNED')
+          finish(id)
+          if (await this.deliverReport(rows[id])) changed = true
+          if (rows[id]?.finished && rows[id].report?.sent) delete rows[id]
           continue
+        }
+        if (allUnspent) {
+          this.observe(row, 'EXPIRED')
+          await this.deliverReport(row)
         }
         if (allUnspent && row.notified.expired === undefined) {
           const sent = await this.notify(row, 'expired')
@@ -270,9 +328,9 @@ export class GiftTracker {
             row.notified.expired = now
             out.expired += 1
           } else if (sent === 'refused') {
-            // Permanent refusal: no point tracking a notice that can never be sent.
-            delete rows[id]
-            out.dropped += 1
+            // Permanent refusal: no point tracking a notice that can never be sent. The expiry
+            // is still reported (above), so the gift is not left outstanding in the metrics.
+            finish(id)
           }
         }
       }
@@ -306,6 +364,7 @@ export class GiftTracker {
     const money = (n: number) => formatMinor(n, cg.decimals, cg.unit)
     // The store reports 0 remaining once a code is expired: what came back is the last value seen.
     if (check.status === 'expired') {
+      if (cg.lastRemaining > 0) this.observe(row, 'EXPIRED', cg.lastRemaining)
       if (cg.lastRemaining <= 0 || row.notified.expired !== undefined) return true
       const sent = await this.send(row, 'gift-code-expired', `${row.draftId}:code-expired`, {
         stall: row.stall,
@@ -332,10 +391,38 @@ export class GiftTracker {
       expiresOn: displayDate(row.claimBy),
       ...(check.remaining > 0 ? { remaining: money(check.remaining) } : {}),
     })
+    // Observed whatever the mail did: the spend happened.
+    this.observe(row, check.remaining <= 0 ? 'CLAIMED' : 'PARTLY_USED', Math.max(0, check.remaining))
     if (sent === 'retry') return false
     cg.lastRemaining = check.remaining
     if (sent === 'sent') out.claimed += 1
     return check.remaining === 0
+  }
+
+  /** Record the latest outcome; a change (or a new balance) makes it due for delivery again. */
+  private observe(row: TrackedGift, outcome: GiftOutcome, remainingMinor?: number): void {
+    if (!this.ports.reportOutcome) return
+    const prev = row.report
+    if (prev && prev.outcome === outcome && prev.remainingMinor === remainingMinor) return
+    row.report = { outcome, ...(remainingMinor !== undefined ? { remainingMinor } : {}) }
+  }
+
+  /** Deliver a due report. True when the row changed. Never throws. */
+  private async deliverReport(row: TrackedGift | undefined): Promise<boolean> {
+    if (!row?.report || row.report.sent || !this.ports.reportOutcome) return false
+    let result: ReportResult
+    try {
+      result = await this.ports.reportOutcome(row.draftId, row.report.outcome, row.report.remainingMinor)
+    } catch {
+      result = 'retry'
+    }
+    if (result === 'retry') {
+      countGiftSweepError()
+      return false
+    }
+    // `gone`: payment-adapter will never take it (no such gift there). Stop asking.
+    row.report.sent = true
+    return true
   }
 
   private async send(row: TrackedGift, template: string, idempotencyKey: string, fields: Record<string, string>): Promise<'sent' | 'retry' | 'refused'> {

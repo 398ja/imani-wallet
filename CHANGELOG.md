@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with thresholds from `NOSTR_EVENT_SIZE_LIMITS` (default
   `strfry_max_event=65536,wrap_budget=55121`). The shared recorder is
   `src/lib/nostrEventSizeMetrics.ts`, copied into the subscription image.
+- **Subscription business metrics** (business-metrics contract, 2026-11-05). The subscription
+  service's `/metrics` now re-derives from the ledger on each scrape
+  `imani_subscriptions{tier,term,grant_kind,status}`,
+  `imani_subscription_paid_value{currency,tier,term,status}` (latest paid invoice per subscription,
+  major units), `imani_subscription_licences{state}`, and the housekeeping
+  `imani_business_metrics_poll_failures_total{source="subscription"}` and
+  `imani_business_metrics_last_poll_seconds{source="subscription"}`. `imani_subscriptions` gains the
+  `term` and `grant_kind` labels (it was `{tier,status}`). A ledger that cannot be read keeps the
+  last values and counts a failure instead of reporting zero.
+- **Gift claim outcomes reach payment-adapter** (business metrics). The purchase issuer's gift
+  tracker reports what it sees (CLAIMED, PARTLY_USED with the remaining balance, EXPIRED, RETURNED)
+  to `POST /api/v1/purchases/gifts/{draftId}/outcome`, so payment-adapter is the single owner of
+  `imani_product_*{product="gift"}` and no gift is counted twice. A report that cannot be delivered
+  is kept on the tracker row and retried on the next sweep.
+
 - **The stall hears when a customer claims its cashback** (#158, with
   imani-gateway-portal#59). The portal sends a `cashback_claimed` Web Push and keeps a
   drainable notice; `src/lib/cashbackClaimDrain.ts` collects the notice
