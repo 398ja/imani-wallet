@@ -87,6 +87,10 @@ ARG VITE_GIFTING_SITE_URL=
 ENV VITE_GIFTING_SITE_URL=$VITE_GIFTING_SITE_URL
 ARG VITE_GIFTING_HANDLE_DOMAIN=
 ENV VITE_GIFTING_HANDLE_DOMAIN=$VITE_GIFTING_HANDLE_DOMAIN
+# Shop-code gifts (#410): "on" lets the gift return page (/gift-return) read a code gift's parts at
+# the code store and receive what is left after expiry. Anything else ships it dark (the default).
+ARG VITE_GIFTING_CODE_GIFTS=
+ENV VITE_GIFTING_CODE_GIFTS=$VITE_GIFTING_CODE_GIFTS
 
 # Checkout codes for online shops (#402, src/lib/checkoutCodePorts.ts). "on" shows "Use online";
 # anything else ships the feature dark, which is the default. Not a secret. imani-deploy's
