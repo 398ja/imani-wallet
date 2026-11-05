@@ -72,6 +72,15 @@ const VERIFY = process.argv.includes('--verify')
 const GATEWAY = (process.env.GATEWAY_URL ?? 'http://localhost:28082').replace(/\/$/, '')
 const PORTAL = (process.env.PORTAL_URL ?? GATEWAY).replace(/\/$/, '')
 const CURRENCY = process.env.CURRENCY ?? 'EUR'
+
+/** The stall's `merchant` issuance warrant for one sale, as src/lib/warrantSigner.ts signs it. */
+function merchantWarrant(stall, saleTotalMinor, unit) {
+  const faceDecimals = new Intl.NumberFormat('en', { style: 'currency', currency: unit }).resolvedOptions().maximumFractionDigits
+  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)))
+  const preimage = [stall.pubHex, String(saleTotalMinor), String(faceDecimals), unit, nonce].join('\u001f')
+  const sig = bytesToHex(schnorr.sign(sha256(utf8ToBytes(preimage)), hexToBytes(stall.privHex)))
+  return JSON.stringify({ form: 'merchant', sale_total: saleTotalMinor, face_decimals: faceDecimals, unit, nonce, sig })
+}
 const VALIDITY_DAYS = Number(process.env.VOUCHER_VALIDITY_DAYS ?? '90')
 
 /** How long to wait for the ACL to notice a new stall record. */
@@ -327,6 +336,8 @@ async function verify(stalls) {
         quantity: 1,
         expiry_days: VALIDITY_DAYS,
         memo: 'stall enrolment check',
+        // The portal refuses a sale with no warrant (since 2026-11-05).
+        issuance_warrant: merchantWarrant(stall, 500, CURRENCY),
       }),
     })
     const issued = res.status === 201 || res.status === 200

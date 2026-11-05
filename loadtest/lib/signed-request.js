@@ -179,7 +179,22 @@ export function napLogin(base, identity) {
     .map((p) => p.trim())
     .filter(Boolean)
 
-  return { cookie, permissions }
+  return { cookie, permissions, identity }
+}
+
+/**
+ * Sign a 32-byte digest (hex) with the signer sidecar. The sidecar signs any message hash, so this
+ * is how a k6 script produces the same schnorr signatures the wallet makes on the device.
+ */
+export function signDigest(privHex, msgHex) {
+  const signed = timed(signing_ms, () =>
+    http.post(`${SIGNER_URL}/sign`, JSON.stringify({ privHex, msgHex }), {
+      headers: { 'Content-Type': 'application/json' },
+      tags: { name: 'signer' },
+    }),
+  )
+  if (signed.status !== 200) throw new Error(`the signer refused to sign (${signed.status})`)
+  return JSON.parse(signed.body).sigHex
 }
 
 /** Derive a public key, for a customer known only by their private key. */

@@ -9,8 +9,38 @@
 // a run at a local stack is a flag rather than an edit.
 
 import http from 'k6/http'
-import { nip98Header } from './signed-request.js'
+import crypto from 'k6/crypto'
+import { nip98Header, signDigest } from './signed-request.js'
 import { gateway_ms, timed } from './metrics.js'
+
+/** `src/lib/issuanceWarrant.ts` FIELD_SEPARATOR. */
+const FIELD_SEPARATOR = '\u001f'
+
+/**
+ * Minor-unit decimals for the currencies these scenarios sell in. The wallet takes them from Intl
+ * (`currencyDecimals`); k6 has no Intl, so the few that are not 2 are listed. The portal refuses a
+ * warrant whose decimals differ from the sale's, so an unlisted 0- or 3-decimal currency fails
+ * loudly rather than minting a wrong coupon.
+ */
+const ZERO_DECIMALS = new Set(['JPY', 'KRW', 'XAF', 'XOF', 'CLP', 'ISK', 'UGX', 'VND', 'RWF', 'PYG'])
+const THREE_DECIMALS = new Set(['BHD', 'IQD', 'JOD', 'KWD', 'LYD', 'OMR', 'TND'])
+function decimalsFor(unit) {
+  return ZERO_DECIMALS.has(unit) ? 0 : THREE_DECIMALS.has(unit) ? 3 : 2
+}
+
+/**
+ * The stall's `merchant` issuance warrant for one sale, as the wallet's Sell signs it
+ * (`src/lib/warrantSigner.ts`): sha256 of issuer, sale total, decimals, unit and a fresh nonce,
+ * schnorr-signed by the stall. Without one the portal still issues (migration policy), but every
+ * receiving wallet refuses the coupon, and it counts as `voucher_issuance_warrant_total{outcome="absent"}`.
+ */
+export function merchantWarrant(stall, saleTotalMinor, unit) {
+  const faceDecimals = decimalsFor(unit)
+  const nonce = crypto.sha256(`${Date.now()}-${Math.random()}-${stall.pubHex}`, 'hex').slice(0, 32)
+  const preimage = [stall.pubHex, String(saleTotalMinor), String(faceDecimals), unit, nonce].join(FIELD_SEPARATOR)
+  const sig = signDigest(stall.privHex, crypto.sha256(preimage, 'hex'))
+  return JSON.stringify({ form: 'merchant', sale_total: saleTotalMinor, face_decimals: faceDecimals, unit, nonce, sig })
+}
 
 // `customer.staging.398ja.xyz` was the old default and is now explicitly 404'd
 // as a retired host in imani-deploy's nginx, so a run that forgot the variable
@@ -175,6 +205,9 @@ export function issueCouponAsStall(session, { faceValueMinor, currency, expiryDa
     quantity: 1,
     expiry_days: expiryDays,
     memo,
+    // quantity is 1, so the sale total is the one coupon's face value. The session carries the
+    // stall it logged in as (napLogin), which is who signs.
+    ...(session.identity ? { issuance_warrant: merchantWarrant(session.identity, faceValueMinor, currency) } : {}),
   })
   return timed(gateway_ms, () =>
     http.post(`${PORTAL}/api/v1/portal/vouchers`, body, {
