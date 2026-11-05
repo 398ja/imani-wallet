@@ -1839,6 +1839,9 @@ export function httpCashlinkGateway(): CashlinkGateway {
 }
 
 /** A gift wrap of `token` to the link key, sealed by the link key itself (it names nobody). */
-export function wrapForLink(linkSecret: Uint8Array, token: string) {
-  return nip17.wrapEvent(linkSecret, { publicKey: linkPubOf(linkSecret) }, JSON.stringify({ type: 'cashu_token_transfer', token }))
+export function wrapForLink(linkSecret: Uint8Array, token: string, senderPubkey?: string) {
+  // `sender_pubkey` is the issuer's PUBLIC key, so the claimer can send the "claimed" receipt back
+  // (the same field the gateway puts on a bearer gift's wrap). Never a secret.
+  const sender = senderPubkey && /^[0-9a-f]{64}$/.test(senderPubkey) ? { sender_pubkey: senderPubkey } : {}
+  return nip17.wrapEvent(linkSecret, { publicKey: linkPubOf(linkSecret) }, JSON.stringify({ type: 'cashu_token_transfer', token, ...sender }))
 }
