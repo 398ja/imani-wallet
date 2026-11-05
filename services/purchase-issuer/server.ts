@@ -37,6 +37,7 @@
  * becomes two coupons. A person restarts it once payment-adapter is back.
  */
 
+import { httpCodeCheck, httpDeposit } from './codeGift'
 import { createServer, type IncomingMessage } from 'node:http'
 
 import { tokenFor, FileCredentialStore } from './adapters'
@@ -97,6 +98,7 @@ function giftPortsFor(config: IssuerConfig, g: NonNullable<IssuerConfig['gifts']
     anchor: fileAnchors(g.anchorsPath),
     stallName: httpStallName(config.gatewayUrl, fetchImpl),
     track: (input, mintUrl) => giftTrackerFor(config, fetchImpl).track(input, mintUrl),
+    ...(g.checkoutCodesUrl ? { codes: { deposit: httpDeposit(g.checkoutCodesUrl, fetchImpl), publicBaseUrl: g.checkoutCodesUrl } } : {}),
   }
 }
 
@@ -112,6 +114,7 @@ export function giftTrackerFor(config: IssuerConfig, fetchImpl: typeof fetch = f
       sendMail: (req) => mailer.send(req),
       now: () => Date.now(),
       ...(g.sweepEveryMs ? { sweepEveryMs: g.sweepEveryMs } : {}),
+      ...(g.checkoutCodesUrl ? { checkCode: httpCodeCheck(g.checkoutCodesUrl, fetchImpl) } : {}),
     })
     trackers.set(config, t)
   }

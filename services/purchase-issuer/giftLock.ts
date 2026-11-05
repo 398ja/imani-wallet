@@ -179,8 +179,10 @@ export function verifyLockedGift(token: string, lock: GiftLock): string | null {
 }
 
 /** The buyer's copy of the locked gift (contract §3 "Buyer take-back"), as rumor content. */
-export function giftSentRumor(input: { token: string; stall: string; to: string | null; claimBy: number }): string {
-  return JSON.stringify({ type: 'imani_gift_sent', v: 1, token: input.token, stall: input.stall, to: input.to, claimBy: input.claimBy })
+export function giftSentRumor(input: { token: string; stall: string; to: string | null; claimBy: number; gift?: 'code' }): string {
+  // #410: a code gift's part sits at the code store and may be replaced by balance successors, so the
+  // return page reads `/v1/checkout-codes/mine` as R for it rather than settle this token alone.
+  return JSON.stringify({ type: 'imani_gift_sent', v: 1, token: input.token, stall: input.stall, to: input.to, claimBy: input.claimBy, ...(input.gift ? { gift: input.gift } : {}) })
 }
 
 export interface ClaimEmail {

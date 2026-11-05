@@ -5,8 +5,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 
-import { isNip05, normaliseRecipientHandle, parseShopHandle } from '../handle'
-import { loadShop, robotsFor, SHOP_COPY, type ShopDeps } from '../shop'
+import { isNip05, parseShopHandle } from '../handle'
+import { codeGiftAvailable, codeGiftsEnabled, loadShop, robotsFor, SHOP_COPY, shopHost, type ShopDeps } from '../shop'
+import { parseOnlineShop } from '@wallet/lib/onlineShop'
 import {
   claimDeadline,
   draftMatches,
@@ -64,13 +65,7 @@ describe('parseShopHandle (owner edit 1)', () => {
   })
 })
 
-describe('recipient handles', () => {
-  it('normalises', () => {
-    expect(normaliseRecipientHandle(' @Bob@Example.COM ', 'imani.casa')).toBe('bob@example.com')
-    expect(normaliseRecipientHandle('bob', 'imani.casa')).toBe('bob@imani.casa')
-    expect(normaliseRecipientHandle('', 'imani.casa')).toBeNull()
-    expect(normaliseRecipientHandle('bob@', 'imani.casa')).toBeNull()
-  })
+describe('nip05', () => {
   it('isNip05', () => {
     expect(isNip05('_@example.com')).toBe(true)
     expect(isNip05('a@-x.com')).toBe(false)
@@ -145,7 +140,30 @@ describe('loadShop: the stall-page edge cases', () => {
   })
 })
 
-const form = (over: Partial<GiftForm> = {}): GiftForm => ({ ...EMPTY_FORM, amount: '20', handle: 'bob@example.com', buyerEmail: 'me@example.com', ...over })
+const SHOP_FIELD = { url: 'https://www.olive.example/store', redeem_key: 'ab'.repeat(32), platform: 'woocommerce', since: 1767000000 }
+
+describe('code gifts: only for a stall whose online shop takes checkout codes', () => {
+  const withShop = record({ onlineShop: parseOnlineShop(SHOP_FIELD) ?? undefined })
+  it('the build switch is off unless literally on', () => {
+    expect(codeGiftsEnabled(undefined)).toBe(false)
+    expect(codeGiftsEnabled('true')).toBe(false)
+    expect(codeGiftsEnabled(' ON ')).toBe(true)
+  })
+  it('offered only with a well-formed online_shop on the stall record, and the switch on', () => {
+    expect(codeGiftAvailable({ record: withShop }, true)).toBe(true)
+    expect(codeGiftAvailable({ record: withShop }, false)).toBe(false)
+    expect(codeGiftAvailable({ record: record() }, true)).toBe(false)
+    // A malformed field is no shop (fail closed, contract §4), so no choice either.
+    const bad = record({ onlineShop: parseOnlineShop({ ...SHOP_FIELD, url: 'http://olive.example' }) ?? undefined })
+    expect(codeGiftAvailable({ record: bad }, true)).toBe(false)
+  })
+  it('names the shop by its host, never its key', () => {
+    expect(shopHost({ record: withShop })).toBe('olive.example')
+    expect(shopHost({ record: record() })).toBeNull()
+  })
+})
+
+const form = (over: Partial<GiftForm> = {}): GiftForm => ({ ...EMPTY_FORM, amount: '20', email: 'bob@example.com', buyerEmail: 'me@example.com', ...over })
 
 describe('form validation', () => {
   it('amounts: rejects rather than rounds', () => {
@@ -157,20 +175,26 @@ describe('form validation', () => {
     expect(toMinorUnits('5.5', 0)).toBeNull()
   })
   it('every sender gives an email, signed in or not (G15)', () => {
-    for (const deliver of ['handle', 'email'] as const) {
-      for (const signedIn of [false, true]) {
-        expect(validate(form({ deliver, buyerEmail: '' }), { signedIn }).buyerEmail).toBe("We need your email to tell you when it's claimed.")
-        expect(validate(form({ deliver, buyerEmail: 'me@example.com' }), { signedIn }).buyerEmail).toBeUndefined()
-      }
+    for (const signedIn of [false, true]) {
+      expect(validate(form({ buyerEmail: '' }), { signedIn }).buyerEmail).toBe("We need your email to tell you when it's claimed.")
+      expect(validate(form({ buyerEmail: 'me@example.com' }), { signedIn }).buyerEmail).toBeUndefined()
     }
   })
-  it('handle to the stall itself is refused', () => {
-    expect(validate(form({ handle: 'alice' }), { signedIn: false, stallNip05: 'alice@imani.casa' }).handle).toMatch(/can't send/)
+  it('a gift goes only to an email: there is no handle field and an empty email is refused', () => {
+    expect(EMPTY_FORM).not.toHaveProperty('handle')
+    expect(EMPTY_FORM).not.toHaveProperty('deliver')
+    expect(validate(form({ email: '' }), { signedIn: false }).email).toBe('Enter an email address.')
+    expect(validate(form({ email: 'bob@imani.casa' }), { signedIn: false })).toEqual({})
+  })
+  it('a code gift is refused where the shop takes no codes, and fine where it does', () => {
+    expect(validate(form({ gift: 'code' }), { signedIn: false }).gift).toMatch(/codes/)
+    expect(validate(form({ gift: 'code' }), { signedIn: false, codeGifts: true })).toEqual({})
+    expect(validate(form({ gift: 'voucher' }), { signedIn: false, codeGifts: false })).toEqual({})
   })
   it('email syntax', () => {
     expect(isEmail('bob@example.com')).toBe(true)
     expect(isEmail('bob@exmaple')).toBe(false)
-    expect(validate(form({ deliver: 'email', email: 'nope' }), { signedIn: false }).email).toBeDefined()
+    expect(validate(form({ email: 'nope' }), { signedIn: false }).email).toBeDefined()
   })
   it('message: plain text, capped, no links', () => {
     expect(messageProblem('Happy birthday!')).toBeNull()
@@ -185,15 +209,18 @@ describe('form validation', () => {
 describe('draft pinning', () => {
   const ctx = { stallPubkey: STALL, stallHandle: 'alice@imani.casa', currency: 'eur', terms: 'EUR:90:100', refundPubkey: BOB, signedIn: false }
   it('builds the request from the form, normalised', () => {
-    const req = draftRequest(form({ handle: '@Bob@Example.com', message: '  hi  ' }), ctx)
-    expect(req).toMatchObject({ amountMinor: 2000, currency: 'EUR', delivery: { kind: 'handle', handle: 'bob@example.com', refundPubkey: BOB }, message: 'hi', buyerEmail: 'me@example.com' })
-    expect(req.delivery.sealed).toBeUndefined()
+    const req = draftRequest(form({ email: ' bob@example.com ', message: '  hi  ' }), ctx)
+    expect(req).toMatchObject({ amountMinor: 2000, currency: 'EUR', delivery: { kind: 'email', email: 'bob@example.com', refundPubkey: BOB }, message: 'hi', buyerEmail: 'me@example.com' })
+    expect(req.delivery).not.toHaveProperty('handle')
   })
-  it('email gifts carry the seal and no handle; a signed-in sender still sends their email (G15)', () => {
-    const e = draftRequest(form({ deliver: 'email', email: 'bob@example.com' }), { ...ctx, sealed: 'v1.x.y' })
+  it('every gift carries the seal; a signed-in sender still sends their email (G15)', () => {
+    const e = draftRequest(form(), { ...ctx, sealed: 'v1.x.y' })
     expect(e.delivery).toEqual({ kind: 'email', email: 'bob@example.com', refundPubkey: BOB, sealed: 'v1.x.y' })
-    const s = draftRequest(form({ deliver: 'handle', handle: 'bob@example.com' }), { ...ctx, signedIn: true })
-    expect(s.buyerEmail).toBe('me@example.com')
+    expect(draftRequest(form(), { ...ctx, signedIn: true }).buyerEmail).toBe('me@example.com')
+  })
+  it('a voucher request is byte-for-byte the old shape (no gift field); a code says so', () => {
+    expect(draftRequest(form(), ctx)).not.toHaveProperty('gift')
+    expect(draftRequest(form({ gift: 'code' }), ctx).gift).toBe('code')
   })
   const draft = (over: Partial<Draft['delivery']> = {}, top: Partial<Draft> = {}): Draft => ({
     draftId: 'd1',
@@ -201,20 +228,24 @@ describe('draft pinning', () => {
     stallPubkey: STALL,
     amountMinor: 2000,
     currency: 'EUR',
-    delivery: { kind: 'handle', recipientPubkey: BOB, refundPubkey: BOB, claimWindowDays: 30, ...over },
+    delivery: { kind: 'email', email: 'bob@example.com', refundPubkey: BOB, claimWindowDays: 30, ...over },
     ...top,
   })
   it('accepts a draft that pins what was reviewed', () => {
-    expect(draftMatches(draft(), draftRequest(form(), ctx), BOB)).toBe(true)
+    expect(draftMatches(draft(), draftRequest(form(), ctx))).toBe(true)
+    expect(draftMatches(draft({}, { gift: 'code' }), draftRequest(form({ gift: 'code' }), ctx))).toBe(true)
   })
-  it('refuses a draft that pinned another recipient, amount, stall, currency or refund key', () => {
+  it('refuses a draft that pinned another recipient, amount, stall, currency, refund key or gift kind', () => {
     const req = draftRequest(form(), ctx)
-    expect(draftMatches(draft({ recipientPubkey: 'c'.repeat(64) }), req, BOB)).toBe(false)
+    expect(draftMatches(draft({ email: 'eve@example.com' }), req)).toBe(false)
+    // A server that does not know codes answers a voucher: never paid as a code, and the reverse.
+    expect(draftMatches(draft(), draftRequest(form({ gift: 'code' }), ctx))).toBe(false)
+    expect(draftMatches(draft({}, { gift: 'code' }), req)).toBe(false)
     expect(draftMatches(draft({}, { amountMinor: 1 }), req)).toBe(false)
     expect(draftMatches(draft({}, { stallPubkey: BOB }), req)).toBe(false)
     expect(draftMatches(draft({}, { currency: 'USD' }), req)).toBe(false)
     expect(draftMatches(draft({ refundPubkey: STALL }), req)).toBe(false)
-    expect(draftMatches(draft({ kind: 'email' }), req)).toBe(false)
+    expect(draftMatches(draft({ kind: 'handle' }), req)).toBe(false)
   })
   it('expiry: a 30-minute draft is never paid once expired', () => {
     expect(isExpired({ expiresAt: new Date(Date.now() - 1).toISOString() })).toBe(true)
@@ -243,17 +274,31 @@ describe('draft pinning', () => {
     expect(() => keep('alice', { form: form() }, broken)).not.toThrow()
     expect(recall('alice', broken)).toBeNull()
   })
+  it('a form kept by the old page (a handle gift) comes back as an email gift, asking for the email', () => {
+    const store = new Map([['imani:gift:alice', JSON.stringify({ form: { amount: '20', deliver: 'handle', handle: 'bob@example.com', email: '', message: 'hi', from: '', buyerEmail: 'me@example.com' }, draftId: 'old' })]])
+    const kept = recall('alice', { getItem: (k: string) => store.get(k) ?? null })!
+    expect(kept.form).toEqual({ amount: '20', gift: 'voucher', email: '', message: 'hi', from: '', buyerEmail: 'me@example.com' })
+    expect(kept.draftId).toBe('old')
+    expect(validate(kept.form, { signedIn: false }).email).toBeDefined()
+  })
 })
 
 describe('gift secrets (G3, G4, G8)', () => {
   it('signed-in buyer: refund key is the wallet key, no secret made here', () => {
-    expect(newGiftSecrets('handle', BOB)).toEqual({ linkSecret: undefined, refundPubkey: BOB })
+    const s = newGiftSecrets(BOB)
+    expect(s.refundPubkey).toBe(BOB)
+    expect(s.refundSecret).toBeUndefined()
+    expect(s.linkSecret).toMatch(/^[0-9a-f]{64}$/)
   })
-  it('guest: a fresh R whose pubkey is the refund key; email gets a link secret', () => {
-    const g = newGiftSecrets('email', null)
+  it('guest: a fresh R whose pubkey is the refund key, and a link secret', () => {
+    const g = newGiftSecrets(null)
     expect(getPublicKey(hexToBytes(g.refundSecret!))).toBe(g.refundPubkey)
     expect(g.linkSecret).toMatch(/^[0-9a-f]{64}$/)
-    expect(newGiftSecrets('handle', null).linkSecret).toBeUndefined()
+  })
+  it('code gift: a signed-in buyer gets a fresh R too, never the wallet key (contract §2)', () => {
+    const c = newGiftSecrets(BOB, { freshRefund: true })
+    expect(c.refundPubkey).not.toBe(BOB)
+    expect(getPublicKey(hexToBytes(c.refundSecret!))).toBe(c.refundPubkey)
   })
   it('seals to the issuer only, bound to the purchase', () => {
     const issuer = generateSecretKey()
@@ -293,7 +338,7 @@ describe('api', () => {
   it('signs a draft with NIP-98 over the exact body when signed in, not for guests', async () => {
     const f = vi.fn(async () => json(201, {}))
     const signer = { pubkey: BOB, signEvent: vi.fn(async (t: unknown) => ({ ...(t as object), pubkey: BOB, sig: 's', id: 'i' })) }
-    const req = draftRequest(form({ deliver: 'handle', handle: 'bob@example.com' }), { stallPubkey: STALL, stallHandle: 'alice@imani.casa', currency: 'EUR', terms: 't', refundPubkey: BOB, signedIn: true })
+    const req = draftRequest(form(), { stallPubkey: STALL, stallHandle: 'alice@imani.casa', currency: 'EUR', terms: 't', refundPubkey: BOB, signedIn: true })
     await giftingApi(f as unknown as typeof fetch).createDraft(req, signer)
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit]
     const auth = (init.headers as Record<string, string>).Authorization
