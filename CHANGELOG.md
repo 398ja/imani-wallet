@@ -38,6 +38,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.55.3] - 2026-11-05
+
+### Fixed
+
+- **A Cashlink of several coupons can be claimed and taken back** (#533, part of #532). The arm
+  locked every coupon into ONE token, which `parseVoucherToken` refuses ("mixes proofs from more
+  than one voucher"). Both the claimer and the issuer dropped it, so the link could be neither
+  claimed nor taken back. The arm now puts one locked token per voucher on the link, cut into
+  wraps of at most 55,121 bytes measured on the real event (strfry refuses over 65,536). The
+  reader splits a token already on a link this way, so links armed by 0.55.2 or older recover:
+  open the app and use Take it back, or claim the link. Take-back, settle and the claim recheck
+  now cover every locked token, not just the first. An arm that stops between wraps is resumed
+  until every part is on the link. Checkout code parts are not cut: the code store gets each
+  part as one token.
+- **A Cashlink take-back is in History** (#533). Taking a Cashlink back now writes an incoming
+  "Taken back from Cashlink" row in the link's bundle, beside the sent row's "Taken back".
+
 ## [0.55.2] - 2026-11-05
 
 ### Fixed
