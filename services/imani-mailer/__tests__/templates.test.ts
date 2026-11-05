@@ -97,7 +97,9 @@ describe('built-in templates', () => {
       expect(out.subject).toBe('Ann sent you a Olive shop code')
       expect(out.subject).not.toContain(CODE)
       expect(out.text).toContain(`Your code:\n${CODE}`)
-      expect(out.text).toContain('Enter it at checkout on https://olive.example/')
+      // shopUrl is a line field (shop hosts cannot be allow-listed), so it renders as given; the
+      // issuer sends URL.href, already normalised.
+      expect(out.text).toContain('Enter it at checkout on https://olive.example')
       expect(out.text).toContain('Use it by 4 December 2026.')
       expect(out.text).toContain(`https://codes.imani.test/v1/code-check/${CODE}`)
       expect(out.text).not.toMatch(TAKE_BACK)

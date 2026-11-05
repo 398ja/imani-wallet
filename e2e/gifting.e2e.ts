@@ -510,7 +510,7 @@ async function main() {
     check('one gift-code email, keyed <draftId>:code-mail, to the recipient', codeMails.length === 1 && cm.idempotencyKey === `${paidCode.draftId}:code-mail` && cm.to === 'dan@example.com')
     check(
       'the gift-code fields: amount, shop, code, x and the balance link',
-      cm?.fields?.amount === '€15.00' && cm.fields.code === 'IMANI-ABCD-2345-EFGH' && cm.fields.shopUrl === 'https://olive.example' && cm.fields.balanceUrl === `${ORIGIN}/fake-codes/v1/code-check/${CODE}` && cm.fields.expiresOn === new Date(x * 1000).toUTCString().slice(0, 16),
+      cm?.fields?.amount === '€15.00' && cm.fields.code === 'IMANI-ABCD-2345-EFGH' && cm.fields.shopUrl === 'https://olive.example/' && cm.fields.balanceUrl === `${ORIGIN}/fake-codes/v1/code-check/${CODE}` && cm.fields.expiresOn === new Date(x * 1000).toUTCString().slice(0, 16),
       JSON.stringify(cm?.fields),
     )
     check('no relay refund is armed: the only event is the buyer copy to R', relay.length === 1 && relay.every((e) => (e.tags as string[][]).some((t) => t[0] === 'p' && t[1] === R)))
