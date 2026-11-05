@@ -93,7 +93,9 @@ describe('eventSizeTelemetry (#532)', () => {
   it('caps the queue, dropping the oldest', () => {
     // A sender that never settles keeps the one flush parked, so the queue grows to the cap.
     const blocked = createReporter({ send: () => new Promise(() => {}), doc: null })
-    for (let i = 0; i < MAX_QUEUE * 3; i++) blocked.record(sign('a', i % 2 ? 1 : 7))
+    // Two events signed once: signing 1,500 took 3.5 s and timed out under a full run.
+    const events = [sign('a', 1), sign('a', 7)]
+    for (let i = 0; i < MAX_QUEUE * 3; i++) blocked.record(events[i % 2])
     expect(blocked.pending()).toBe(MAX_QUEUE)
     blocked.stop()
   })
