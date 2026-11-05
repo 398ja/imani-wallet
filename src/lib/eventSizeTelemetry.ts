@@ -66,9 +66,13 @@ export function createReporter(opts: { send?: BatchSender; intervalMs?: number; 
   const send = opts.send ?? defaultSender
   let queue: EventSizeEntry[] = []
   let timer: ReturnType<typeof setInterval> | undefined
+  // One flush at a time (review of #535): with a slow or hanging gateway, every crossing of FLUSH_AT
+  // started another loop, 30 requests in flight for 1,500 events. While one runs, the queue just
+  // grows to MAX_QUEUE (oldest dropped) and the running loop drains it.
+  let flushing: Promise<void> | undefined
   const doc = opts.doc === undefined ? (typeof document === 'undefined' ? null : document) : opts.doc
 
-  const flush = async (): Promise<void> => {
+  const drain = async (): Promise<void> => {
     while (queue.length > 0) {
       const batch = queue.slice(0, MAX_BATCH)
       queue = queue.slice(batch.length)
@@ -79,6 +83,12 @@ export function createReporter(opts: { send?: BatchSender; intervalMs?: number; 
         // dropped
       }
     }
+  }
+  const flush = (): Promise<void> => {
+    flushing ??= drain().finally(() => {
+      flushing = undefined
+    })
+    return flushing
   }
   const flushQuietly = () => {
     void flush().catch(() => undefined)

@@ -91,12 +91,21 @@ describe('eventSizeTelemetry (#532)', () => {
   })
 
   it('caps the queue, dropping the oldest', () => {
-    // A sender that never settles keeps the flush loop parked, so the queue can grow to the cap.
+    // A sender that never settles keeps the one flush parked, so the queue grows to the cap.
     const blocked = createReporter({ send: () => new Promise(() => {}), doc: null })
-    const e = sign('a')
-    for (let i = 0; i < MAX_QUEUE * 3; i++) blocked.record(e)
-    expect(blocked.pending()).toBeLessThanOrEqual(MAX_QUEUE)
+    for (let i = 0; i < MAX_QUEUE * 3; i++) blocked.record(sign('a', i % 2 ? 1 : 7))
+    expect(blocked.pending()).toBe(MAX_QUEUE)
     blocked.stop()
+  })
+
+  it('keeps ONE request in flight however many events arrive while the gateway hangs (review of #535)', async () => {
+    let calls = 0
+    const r = createReporter({ send: () => (calls++, new Promise(() => {})), doc: null })
+    const e = sign('a')
+    for (let i = 0; i < MAX_QUEUE * 3; i++) r.record(e)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(calls).toBe(1)
+    r.stop()
   })
 
   it('sends nothing without a signer', async () => {
