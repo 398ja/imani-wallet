@@ -54,7 +54,8 @@ beforeEach(() => {
   w = world(NOW)
 })
 
-describe('a Cashlink of several coupons', () => {
+// Real Schnorr and NUT-11 per proof: 2-3 s alone, past vitest's 5 s default under a full parallel run.
+describe('a Cashlink of several coupons', { timeout: 30_000 }, () => {
   it('is put on the link as one parseable locked token per voucher', async () => {
     const out = await arm()
     expect(out.kind).toBe('armed')
@@ -83,7 +84,7 @@ describe('a Cashlink of several coupons', () => {
   })
 })
 
-describe('a link armed the old way, one token mixing coupons (the owner\'s stuck Cashlink 1)', () => {
+describe('a link armed the old way, one token mixing coupons (the owner\'s stuck Cashlink 1)', { timeout: 30_000 }, () => {
   async function mixedOnLink(): Promise<string> {
     await arm()
     const proofs = w.wraps.flatMap((t) => tokenProofs(t))

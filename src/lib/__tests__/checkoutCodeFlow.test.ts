@@ -109,7 +109,7 @@ describe('making a code', () => {
     const r = only()
     expect(tokenProofs(r.parts[0].lockedToken!).length).toBe(24)
     expect(lockedSats()).toBe(amounts.reduce((n, a) => n + a, 0))
-  })
+  }, 30_000)
 
   it('multi-part: two coupons, one multi-proof, each part its own R from a wallet-wide counter', async () => {
     const a = coupon([64], 'a')
