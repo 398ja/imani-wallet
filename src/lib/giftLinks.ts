@@ -109,6 +109,22 @@ function rememberLock(pubkey: string, giftSecret: string, signed: string): void 
 }
 
 /**
+ * #533: an arm puts a link's locked coupons on it as several wraps, so a run can stop after some of
+ * them. Fewer locked proofs on the link than bearer proofs it locked from means the rest are minted
+ * but on no wrap: the arm is resumed to deliver them (it replays every step by derivation), or
+ * neither the claimer nor a take-back could ever reach them. A proof kept as sats instead of locked
+ * also counts short, and costs one extra resume: the resumed arm leaves `arming` either way.
+ */
+function partlyDelivered(locked: GiftToken[], tokens: GiftToken[]): boolean {
+  try {
+    const count = (ts: GiftToken[]) => ts.reduce((n, t) => n + tokenProofs(t.token).length, 0)
+    return count(locked) < count(giftCandidates(tokens))
+  } catch {
+    return false
+  }
+}
+
+/**
  * The gift on this link locked to it with THIS wallet's refund key: the sender's own Cashlink.
  *
  * The link's public key is public (a wrap's p tag), and the lock route takes any link key, so a
@@ -1024,7 +1040,7 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
     linksInFlight.add(k)
     let outcome: ReturnOutcome
     try {
-      outcome = await settleLocked(rows, secret, locked[0].token, true)
+      outcome = await settleLocked(rows, secret, locked.map((t) => t.token), true)
     } finally {
       linksInFlight.delete(k)
     }
@@ -1060,17 +1076,34 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
 }
 
 /**
+ * The link's outcome from each locked token's: anything unfinished wins (the next run carries on),
+ * then any coupon back here makes it "taken back", and only all claimed is "claimed".
+ */
+export function combineReturns(outcomes: ReturnOutcome[]): ReturnOutcome {
+  if (outcomes.length === 0) return { kind: 'unknown', why: 'nothing locked' }
+  const unknown = outcomes.find((o) => o.kind === 'unknown')
+  if (unknown) return unknown
+  const kinds = new Set(outcomes.map((o) => o.kind))
+  if (kinds.has('returning')) return outcomes.find((o) => o.kind === 'returning')!
+  if (kinds.has('waiting')) return kinds.size === 1 ? { kind: 'waiting' } : { kind: 'returning', why: 'part way' }
+  return kinds.has('returned') ? { kind: 'returned' } : { kind: 'claimed' }
+}
+
+/**
  * One run for a locked link (#295 phase 4), recording what it found. `takeBackNow` is "Take it back"
  * before the link expires. Never throws.
  */
-async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken: string, takeBackNow = false): Promise<ReturnOutcome> {
+async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedTokens: string[], takeBackNow = false): Promise<ReturnOutcome> {
   const link = openLinkOf(rows)
   const refundSecret = refundSecretFor(link)
   if (!refundSecret) return { kind: 'unknown', why: 'no refund key here' }
   const pubkey = sessionAccount(getSigner) ?? ''
   try {
     const ports = await cashlinkSeam.ports()
-    const outcome = await settleLockedGift({
+    // Every locked token on the link (one per coupon), not only the first: a link of several
+    // coupons came back one coupon at a time, and the rest stayed on the link.
+    const outcomes: ReturnOutcome[] = []
+    for (const lockedToken of lockedTokens) outcomes.push(await settleLockedGift({
       ports,
       linkSecret,
       refundSecret,
@@ -1085,7 +1118,8 @@ async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken
         await cashlinkSeam.markMoving(pubkey, rows[0].id)
         if (link.arm?.s !== 'returning') await setLinkArm(rows, { s: 'returning', ...(link.arm?.ks ? { ks: link.arm.ks } : {}) })
       },
-    })
+    }))
+    const outcome = combineReturns(outcomes)
     const told = takeBackNow ? { noticedAt: Date.now() } : {}
     if (outcome.kind === 'returned') {
       await setLinkStatus(rows, 'reclaimed', Date.now(), told)
@@ -1096,8 +1130,12 @@ async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken
     } else if (outcome.kind === 'waiting' && link.arm?.s === 'not_armed' && Math.floor(ports.now() / 1000) < link.x) {
       // Not armed yet and still before its expiry: leave the take-back with the service again (the
       // same derivation, so one it already holds replays). Off or refused: stays as it is.
-      const again = await retryDeposit(ports, linkSecret, refundSecret, lockedToken)
-      if (again.kind === 'armed') await setLinkArm(rows, { s: 'armed', ks: again.keyset })
+      let armed: string | undefined
+      for (const lockedToken of lockedTokens) {
+        const again = await retryDeposit(ports, linkSecret, refundSecret, lockedToken)
+        armed = again.kind === 'armed' && armed !== '' ? again.keyset : ''
+      }
+      if (armed) await setLinkArm(rows, { s: 'armed', ks: armed })
     }
     return outcome
   } finally {
@@ -1212,7 +1250,7 @@ export async function reconcileGiftLinks(
       // must never be read below as "claimed".
       const link = openLinkOf(parts)
       const locked = ownLockedOnLink(link, secret, tokens)
-      if (link.arm?.s === 'arming' && link.i !== undefined && locked.length === 0) {
+      if (link.arm?.s === 'arming' && link.i !== undefined && (locked.length === 0 || partlyDelivered(locked, tokens))) {
         await armLink(sessionAccount(getSigner) ?? '', k, secret, link.i, link.x)
         return
       }
@@ -1228,7 +1266,7 @@ export async function reconcileGiftLinks(
         }
         const fresh = (await linkRows()).filter((r) => r.link.k === k && r.link.status === 'outstanding')
         if (fresh.length === 0) return
-        const outcome = await settleLocked(fresh, secret, locked[0].token)
+        const outcome = await settleLocked(fresh, secret, locked.map((t) => t.token))
         if (outcome.kind === 'returned') reclaimed += 1
         else if (outcome.kind === 'claimed') claimed += 1
         return
@@ -1388,7 +1426,9 @@ async function recheckClaim(rows: LinkRow[], linkSecret: Uint8Array, tokens: Gif
     const ports = await cashlinkSeam.ports()
     const locked = ownLockedOnLink(link, linkSecret, tokens)
     if (locked.length > 0) {
-      const states = await tokenStates(ports, locked[0].token)
+      // Every locked token on the link (one per coupon, #533), not only the first: a link whose
+      // first coupon was claimed but whose second is still locked is open, not settled.
+      const states = (await Promise.all(locked.map((t) => tokenStates(ports, t.token)))).flat()
       if (states.some((s) => s !== 'SPENT' && s !== 'UNSPENT')) return 'left'
       const locktime = lockedLocktime(locked[0].token) ?? link.x
       if (states.some((s) => s === 'UNSPENT')) {
@@ -1396,7 +1436,7 @@ async function recheckClaim(rows: LinkRow[], linkSecret: Uint8Array, tokens: Gif
         return 'open'
       }
       await syncLinkExpiry(rows, locktime)
-      const outcome = await settleLocked(rows, linkSecret, locked[0].token)
+      const outcome = await settleLocked(rows, linkSecret, locked.map((t) => t.token))
       if (outcome.kind === 'claimed') await confirmClaim(rows)
       return outcome.kind === 'returned' ? 'returned' : 'left'
     }
