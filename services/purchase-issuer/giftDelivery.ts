@@ -294,6 +294,28 @@ export function fileAnchors(path: string) {
   }
 }
 
+/**
+ * Business metrics: payment-adapter's `POST /api/v1/purchases/gifts/{draftId}/outcome`, so the one
+ * owner of gift states learns what the recipient did. 2xx is delivered; 400, 404 and 409 will never
+ * be accepted (`gone`); anything else, or no answer, is retried on the next sweep.
+ */
+export function httpReportOutcome(purchasesUrl: string, token: string, fetchImpl: typeof fetch = fetch) {
+  return async (draftId: string, outcome: string, remainingMinor?: number): Promise<'ok' | 'gone' | 'retry'> => {
+    try {
+      const r = await fetchImpl(`${trim(purchasesUrl)}/api/v1/purchases/gifts/${encodeURIComponent(draftId)}/outcome`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ outcome, ...(remainingMinor !== undefined ? { remainingMinor } : {}) }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (r.ok) return 'ok'
+      return r.status === 400 || r.status === 404 || r.status === 409 ? 'gone' : 'retry'
+    } catch {
+      return 'retry'
+    }
+  }
+}
+
 /** Payment-adapter's scrub (`POST /api/v1/purchases/{eventId}/scrub`). */
 export function httpScrub(purchasesUrl: string, token: string, fetchImpl: typeof fetch = fetch) {
   return async (eventId: string): Promise<boolean> => {

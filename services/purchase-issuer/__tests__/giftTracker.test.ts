@@ -13,6 +13,8 @@ import {
   KEEP_AFTER_CLAIM_BY_MS,
   SWEEP_EVERY_MS,
   type ProofState,
+  type GiftOutcome,
+  type ReportResult,
   type TrackedGift,
   type TrackerStore,
   type TrackInput,
@@ -20,6 +22,7 @@ import {
 import type { SendOutcome, SendRequest } from '../../imani-mailer/mailer.ts'
 import { encodePlainTokenV4 } from '../../../src/lib/plainToken'
 import { giftNoticeCount, resetMetricsForTest, renderMetrics } from '../metrics'
+import { httpReportOutcome } from '../giftDelivery'
 import { runPass } from '../worker'
 import { compile, render, resolveFields } from '../../imani-mailer/templates'
 import { BUILTIN_TEMPLATES } from '../../imani-mailer/builtins'
@@ -442,5 +445,117 @@ describe('#410 code gift row (public code-check, no secret)', () => {
     h.tick()
     await h.tracker.sweep()
     expect(h.mails.map((m) => m.template)).toEqual(['gift-code-used'])
+  })
+})
+
+describe('business metrics: claim outcomes reported to payment-adapter (the one owner of gift states)', () => {
+  type Report = { draftId: string; outcome: GiftOutcome; remainingMinor?: number }
+  function reporting(opts: { states: () => ProofState[]; answer?: () => ReportResult; code?: Array<{ status: 'active' | 'in_use' | 'used' | 'expired'; remaining: number }> }) {
+    let now = T0
+    const store = memStore()
+    const reports: Report[] = []
+    const tracker = new GiftTracker(KEY, store, {
+      now: () => now,
+      sweepEveryMs: 1,
+      checkStates: async (_m, ys) => new Map(ys.map((y, i) => [y, opts.states()[i] ?? 'UNKNOWN'])),
+      ...(opts.code ? { checkCode: async () => opts.code!.shift() ?? { status: 'active' as const, remaining: 2000 } } : {}),
+      sendMail: async () => ({ ok: true, status: 202, messageId: 'm', duplicate: false, sandboxed: true }),
+      reportOutcome: async (draftId, outcome, remainingMinor) => {
+        reports.push({ draftId, outcome, ...(remainingMinor !== undefined ? { remainingMinor } : {}) })
+        return opts.answer ? opts.answer() : 'ok'
+      },
+    })
+    return { tracker, store, reports, at: (ms: number) => void (now = ms), tick: () => void (now += 1000) }
+  }
+
+  it('a claimed voucher is reported CLAIMED once, then the row is dropped', async () => {
+    const h = reporting({ states: () => ['SPENT', 'SPENT'] })
+    await h.tracker.track(input(), 'm')
+    await h.tracker.sweep()
+    h.tick()
+    await h.tracker.sweep()
+    expect(h.reports).toEqual([{ draftId: DRAFT, outcome: 'CLAIMED' }])
+    expect(h.store.rows).toEqual({})
+  })
+
+  it('unspent past claimBy is EXPIRED, and a later take-back is RETURNED', async () => {
+    let states: ProofState[] = ['UNSPENT', 'UNSPENT']
+    const h = reporting({ states: () => states })
+    await h.tracker.track(input(), 'm')
+    h.at(CLAIM_BY)
+    await h.tracker.sweep()
+    h.at(CLAIM_BY + 1000)
+    await h.tracker.sweep()
+    states = ['SPENT', 'SPENT']
+    h.at(CLAIM_BY + 2000)
+    await h.tracker.sweep()
+    expect(h.reports.map((r) => r.outcome)).toEqual(['EXPIRED', 'RETURNED'])
+    expect(h.store.rows).toEqual({})
+  })
+
+  it('a report payment-adapter could not take is kept and retried, and the finished row waits for it', async () => {
+    let answer: ReportResult = 'retry'
+    const h = reporting({ states: () => ['SPENT', 'SPENT'], answer: () => answer })
+    await h.tracker.track(input(), 'm')
+    await h.tracker.sweep()
+    expect(h.store.rows[DRAFT]).toMatchObject({ finished: true, report: { outcome: 'CLAIMED' } })
+    answer = 'ok'
+    h.tick()
+    await h.tracker.sweep()
+    expect(h.reports.map((r) => r.outcome)).toEqual(['CLAIMED', 'CLAIMED'])
+    expect(h.store.rows).toEqual({})
+    // Only one claimed email for all that: the notice is not re-sent while the report waits.
+  })
+
+  it('a code gift reports PARTLY_USED with what is left, then CLAIMED when spent', async () => {
+    const h = reporting({
+      states: () => [],
+      code: [
+        { status: 'active', remaining: 1200 },
+        { status: 'active', remaining: 0 },
+      ],
+    })
+    await h.tracker.track(input({ kind: 'code', code: { code: 'IMANIABCD2345EFGH', amountMinor: 2000, decimals: 2, unit: 'EUR' } }), 'm')
+    h.tick()
+    await h.tracker.sweep()
+    h.tick()
+    await h.tracker.sweep()
+    expect(h.reports).toEqual([
+      { draftId: DRAFT, outcome: 'PARTLY_USED', remainingMinor: 1200 },
+      { draftId: DRAFT, outcome: 'CLAIMED', remainingMinor: 0 },
+    ])
+    expect(h.store.rows).toEqual({})
+  })
+
+  it('a code that expires with value left reports EXPIRED with the last balance', async () => {
+    const h = reporting({ states: () => [], code: [{ status: 'active', remaining: 500 }, { status: 'expired', remaining: 0 }] })
+    await h.tracker.track(input({ kind: 'code', code: { code: 'IMANIABCD2345EFGH', amountMinor: 2000, decimals: 2, unit: 'EUR' } }), 'm')
+    h.tick()
+    await h.tracker.sweep()
+    h.tick()
+    await h.tracker.sweep()
+    expect(h.reports.at(-1)).toEqual({ draftId: DRAFT, outcome: 'EXPIRED', remainingMinor: 500 })
+  })
+
+  it('httpReportOutcome posts the outcome with the bearer token and classifies answers', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    const answers = [204, 200, 404, 409, 503]
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init })
+      return new Response(null, { status: answers.shift()! })
+    }) as unknown as typeof fetch
+    const report = httpReportOutcome('http://pa:8080/', 'tok', fetchImpl)
+    expect(await report('d-1', 'PARTLY_USED', 300)).toBe('ok')
+    expect(await report('d-1', 'CLAIMED')).toBe('ok')
+    expect(await report('d-1', 'CLAIMED')).toBe('gone')
+    expect(await report('d-1', 'CLAIMED')).toBe('gone')
+    expect(await report('d-1', 'CLAIMED')).toBe('retry')
+    expect(calls[0].url).toBe('http://pa:8080/api/v1/purchases/gifts/d-1/outcome')
+    expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer tok' })
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ outcome: 'PARTLY_USED', remainingMinor: 300 })
+    const down = httpReportOutcome('http://pa', 't', (async () => {
+      throw new Error('ECONNREFUSED')
+    }) as unknown as typeof fetch)
+    expect(await down('d', 'CLAIMED')).toBe('retry')
   })
 })
