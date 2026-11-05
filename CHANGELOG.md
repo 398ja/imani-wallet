@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The free-tier thresholds come from imani-xrate** (#506, owner decision "Option A"), the same
+  hand-set fiat rates gateway-customer and gateway-core back vouchers with, instead of
+  open.er-api.com. xrate is internal only, so `scripts/free-tier-amounts.mts` no longer fetches
+  anything: it reads an export of xrate's `GET /v1/rates`, committed as
+  `services/subscription/xrate-rates.json` (version 154, the 2026-11-04 seed, which reproduces the
+  current thresholds exactly). An open.er-api.com response is refused.
+- `.github/workflows/free-tier-amounts.yml` is manual only: rates move when an operator changes
+  them in xrate, not on a calendar, and the runner cannot reach xrate.
+
 ### Added
 
 - **The stall hears when a customer claims its cashback** (#158, with
