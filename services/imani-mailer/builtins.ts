@@ -198,7 +198,11 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       shop: { type: 'line', max: 253, required: true },
       amount: { type: 'line', max: 40, required: true },
       code: { type: 'line', max: 24, required: true },
-      shopUrl: { type: 'url', required: true },
+      // A LINE, not a url: every shop has its own host, so MAILER_LINK_HOSTS cannot list them, and a
+      // url field would refuse every code gift. payment-adapter pins it from the stall's SIGNED
+      // `imani:merchant` record (https only, fail closed) and purchase-issuer re-checks it is https.
+      // The balance link below points at our own code store, so it stays an allow-listed url.
+      shopUrl: { type: 'line', max: 300, required: true },
       expiresOn: { type: 'line', max: 60, required: true },
       balanceUrl: { type: 'url', required: true },
       message: { type: 'text', max: 280 },

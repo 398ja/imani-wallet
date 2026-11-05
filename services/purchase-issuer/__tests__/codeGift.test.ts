@@ -322,6 +322,29 @@ describe('code gift discharge', () => {
     expect(bodies.some((b) => b.url.endsWith('/wallet/vouchers'))).toBe(false)
   })
 
+  it('a shop url that is not a clean https url is refused before minting', async () => {
+    for (const shopUrl of ['http://olive.example', 'https://user:pw@olive.example', 'https://olive.example/a b', 'javascript:alert(1)', 'https://localhost/x', `https://olive.example/${'a'.repeat(300)}`]) {
+      const g = fakeGifts()
+      const bodies = fakeGateway(honestMint)
+      expect((await discharge('http://gw', obligation(codeDelivery({ shopUrl })), portsWith(g.ports))).kind).toBe('attention')
+      expect(bodies.some((b) => b.url.endsWith('/wallet/vouchers'))).toBe(false)
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('the mail renders with a shop host the mailer does NOT allow-list (shopUrl is plain text)', () => {
+    const t = compile('gift-code', BUILTIN_TEMPLATES['gift-code'])
+    const fields = {
+      stall: 'Olive', shop: 'olive.example', amount: '€15.00', code: 'IMANI-AB12-CD34-EF56', shopUrl: 'https://olive.example/shop',
+      expiresOn: '4 December 2026', balanceUrl: `https://codes.example/v1/code-check/${CODE}`,
+    }
+    const out = render(t, resolveFields(t, fields, { hosts: ['codes.example'], allowHttp: false }))
+    expect(out.text).toContain('Enter it at checkout on https://olive.example/shop')
+    // The balance link is still checked against the allowlist.
+    expect(() => resolveFields(t, { ...fields, balanceUrl: 'https://evil.example/x' }, { hosts: ['codes.example'], allowHttp: false }))
+      .toThrow(/allowed host/)
+  })
+
   it('the balance link', () => {
     expect(balanceUrl('https://codes.example/', CODE)).toBe(`https://codes.example/v1/code-check/${CODE}`)
   })

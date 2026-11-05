@@ -36,7 +36,7 @@ import { handBuyerTheGift, publishLinkWrap, sendClaimEmail, sendCodeEmail, type 
 import type { GiftDelivery } from './purchasesApi'
 import { getPublicKey } from 'nostr-tools'
 import { displayDate, tokenMintUrl } from './giftTracker'
-import { balanceUrl, codeLockFor, depositBody, depositCode, depositorOf, displayCode, verifyCodePart } from './codeGift'
+import { balanceUrl, cleanShopUrl, codeLockFor, depositBody, depositCode, depositorOf, displayCode, verifyCodePart } from './codeGift'
 import { hexToBytes } from '@noble/hashes/utils'
 
 /** One coupon a stall owes because a card payment cleared. */
@@ -257,6 +257,11 @@ export async function discharge(
       // The link secret is unused for a code: the seal is never opened, only scrubbed after delivery.
       if (!giftDelivery.recipientEmail || !obligation.gift?.draftId || !giftDelivery.shopKey || !giftDelivery.shopUrl || !giftDelivery.codeExpiresAt) {
         return { kind: 'attention', reason: 'code gift: no recipient email, draft, shop key, shop url or code expiry pinned; nothing minted' }
+      }
+      // Checked BEFORE minting: the mail carries this url as plain text (each shop has its own host,
+      // so it cannot be on the mailer's link allowlist), so only a clean https url is ever sent.
+      if (cleanShopUrl(giftDelivery.shopUrl) === null) {
+        return { kind: 'attention', reason: 'code gift: the pinned shop url is not a clean https url; nothing minted' }
       }
       lockPubkey = giftDelivery.shopKey.toLowerCase()
     } else {
@@ -634,12 +639,9 @@ async function deliverCodeGift(
   if (!deposited.ok) return failed(deposited.reason, deposited.permanent)
 
   const stall = (await gifts.stallName(obligation.stallPubkey)) ?? 'a local stall'
-  let shop: string
-  try {
-    shop = new URL(delivery.shopUrl!).hostname
-  } catch {
-    return failed('the pinned shop url is not a url', true)
-  }
+  const shopLink = cleanShopUrl(delivery.shopUrl)
+  if (shopLink === null) return failed('the pinned shop url is not a clean https url', true)
+  const shop = shopLink.host
   const amount = formatAmount(deposited.amount, obligation.faceDecimals, obligation.faceUnit)
   const expiresOn = new Date(lock.locktime * 1000).toUTCString().slice(0, 16)
   const mailed = await sendCodeEmail(gifts, {
@@ -651,7 +653,7 @@ async function deliverCodeGift(
       shop,
       amount,
       code: displayCode(deposited.code),
-      shopUrl: delivery.shopUrl!,
+      shopUrl: shopLink.href,
       expiresOn,
       balanceUrl: balanceUrl(codes.publicBaseUrl, deposited.code),
       ...(delivery.message ? { message: delivery.message } : {}),

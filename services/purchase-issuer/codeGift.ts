@@ -159,6 +159,25 @@ export function balanceUrl(publicBaseUrl: string, code: string): string {
   return `${publicBaseUrl.trim().replace(/\/+$/, '')}${CODE_CHECK_PATH}/${encodeURIComponent(code)}`
 }
 
+/**
+ * The shop link the recipient is told to use, or null. It goes into the mail as plain text (a shop
+ * host cannot be on the mailer's link allowlist), so only a plain https url is accepted: no
+ * credentials, no spaces or control characters, a real host, at most 300 characters.
+ */
+export function cleanShopUrl(raw: string | null | undefined): URL | null {
+  if (typeof raw !== 'string') return null
+  const s = raw.trim()
+  if (s.length === 0 || s.length > 300 || [...s].some((c) => c.charCodeAt(0) <= 0x20 || c.charCodeAt(0) === 0x7f)) return null
+  let u: URL
+  try {
+    u = new URL(s)
+  } catch {
+    return null
+  }
+  if (u.protocol !== 'https:' || u.username || u.password || !u.hostname.includes('.')) return null
+  return u.href.length > 300 ? null : u
+}
+
 // ─── HTTP adapters ──────────────────────────────────────────────────────────
 
 function nip98(key: Uint8Array, url: string, method: string, body: string): string {
