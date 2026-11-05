@@ -661,6 +661,158 @@ tested and ruled out, and `drain.js` at 958 drains shows no step at all. It is
 recorded as unexplained rather than guessed at, and the summary now names the
 shape so nobody reads that p95 as load.
 
+## Checkout codes
+
+    node loadtest/signer.mjs &
+    node loadtest/pool.mjs --size 20
+    node loadtest/stalls.mjs --count 2 --verify
+    npx vite-node loadtest/checkout-codes-make.mts -- --stalls 2 --codes 12      # GENERATION
+    k6 run loadtest/checkout-codes.js                                            # VALIDATION + REDEMPTION
+    npx vite-node loadtest/checkout-codes-make.mts -- --cleanup                  # afterwards
+
+A checkout code (#402) is what a customer types at a stall's online shop: a
+reference to coupon parts locked to the shop's key `S`, held by the code store
+(imani-checkout-codes), which staging proxies same-origin at
+`/v1/checkout-codes` on the wallet host. Two halves, because they are two
+different kinds of work.
+
+### Generation: `checkout-codes-make.mts`
+
+Making a code is not one request. The wallet burns each coupon proof at the
+mint, has the gateway sign its `S`-locked successor
+(`/api/v1/wallet/vouchers/cashlink/lock`), then deposits the locked parts
+(`POST /v1/checkout-codes`, NIP-98 by the customer). The lock step is cashu
+blinding, which k6 cannot run, and reimplementing it would measure a path no
+customer takes. So this is a Node driver around the wallet's own
+`startCheckoutCode`, with the same ports e2e/checkout-codes-staging.e2e.mts uses.
+
+Each code is a whole sale first: a stall (`stalls.mjs`) issues a coupon on its
+NAP session, the mint backs it (polled as market-day.js polls), and a pool
+customer makes a code from it for that stall's shop. The shop key is derived
+from the stall's pubkey, so the same stall always has the same shop.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--stalls` | 2 | stalls, the pool's first identities, as everywhere |
+| `--codes` | 3 | codes to make |
+| `--rate-start` / `--rate-end` | 1 / same | codes per minute, linear ramp between them |
+| `--concurrency` | 4 | codes in flight at once |
+| `--x` | `short` | `short`: the earliest `x` the gateway locks (now + 1h06m). Anything else: the latest |
+| `--append` | off | add to the codes file rather than replace it |
+
+It reports each stage separately (issue, mint wait, lock + deposit, the
+deposit call alone) because the whole is dominated by the mint wait, and a
+slow store would otherwise hide inside it. Output: `.loadtest-codes.json` (git
+ignores it; it holds the shop keys) and
+`results/checkout-codes-make-summary.json`. Exit 0 when the thresholds hold, 1
+when crossed, 107 when setup fails.
+
+**From one host, generation is bounded by issuance**, not the store: issuance
+is rate limited per client IP (see the issuance ramp). A throttled code is
+counted `rate limited`, never failed, so the run says how much less it applied
+than it meant to.
+
+### Validation and redemption: `checkout-codes.js`
+
+The shop side, all NIP-98 signed by the shop key `S` through the sidecar. Four
+k6 scenarios, so their numbers stay apart:
+
+| Scenario | Executor | What it asserts |
+|---|---|---|
+| `validate` | `ramping-arrival-rate`, 5 to 25/min | real codes look up `reserved` with their amount and stall; unknown codes, typos (bad check symbol) and **another shop's** code all answer the same bytes as a code nobody made (R2) |
+| `race` | one VU, `http.batch` | two orders hold one code at once: **exactly one** 200, the other `409 HELD`. Both redeem at once: exactly one 200 with parts. The winner asks again and gets the same body (R4). A third order is `409 REDEEMED` |
+| `expired` | a few iterations | a code past its `x` looks up `expired` and a hold is `409 EXPIRED` |
+| `check` | 4/min | the public balance check, `GET /v1/code-check/{code}`, no auth: `active`, and never parts or `S` |
+
+The race is the reason the file exists. A store that lets two orders win one
+code has handed the same customer money to two shops, so it is gated at
+`rate==1.0` and cannot be tuned away. Each round **consumes** a code (it ends
+redeemed), so the first `RACE_ROUNDS` (default 10) live codes go to the race
+and the rest are looked up.
+
+**Expired needs patience, not a clock.** The store expires a code when
+`now >= x`, and the gateway will not lock an `x` sooner than an hour away. So
+an expired case exists only when the codes file holds a code from a generation
+run at least ~66 minutes old: the driver keeps the previous run's codes under
+`previous` for exactly this. Until then the summary says `expired NOT
+MEASURED`, rather than reporting zero failures of a check that never ran.
+
+Knobs: `SMOKE=1`, `START_RATE`, `PEAK_RATE`, `MISS_SHARE` (0.3),
+`RACE_ROUNDS`, `CHECK_RATE`, `MAX_VUS`, `RAMP_DURATION`, `PLATEAU_DURATION`,
+`CODES_URL` (defaults to `GATEWAY_URL`; the shops' host
+`codes.staging.398ja.xyz` serves the same routes, but codes and NIP-98 `u` tags
+must agree on the origin).
+
+### Choosing the thresholds
+
+No baseline existed, so the latency marks come from what the **client** will
+tolerate rather than from a guess about the server, and each was then checked
+against one smoke run so none fails a healthy deployment by construction.
+
+| Threshold | Value | Why |
+|---|---|---|
+| `race_one_winner`, `redeem_replays`, `misses_indistinguishable` | `rate==1.0` | correctness: one double win or one distinguishable miss is a defect, not noise |
+| `unexpected_answer` | `rate<0.01` | the error rate. 404 and 409 are *correct* answers here, so `http_req_failed` (22% on a healthy run) cannot be the gate; an answer outside the set a request may get is |
+| lookup | p95 < 500ms, p99 < 1500ms | it sits inside a shop's checkout page load; a plugin's whole store timeout is 10s (imani-coupon-core `CurlTransport`). Smoke: p95 370ms |
+| hold, redeem | p95 < 1s, p99 < 2.5s | one transactional state change each, at order placement; twice the lookup's. Smoke: p95 452ms / 354ms |
+| public check | p95 < 1s, p99 < 2.5s | reads the stall's profile from relays (cached 10 min). Smoke: p95 439ms |
+| deposit (generation) | p95 < 3s, p99 < 5s | the wallet gives the store 15s (`STORE_TIMEOUT_MS`), and a deposit does a NUT-07 mint check. Smoke: p95 2.1s |
+| whole code (generation) | p95 < 45s, p99 < 75s | the wallet waits up to 60s for the mint, so past ~75s the customer's screen has given up. Smoke: p95 38s, 21s of it the mint wait |
+
+The first generation smoke used 2s / 30s and crossed both on a healthy run,
+because the mint wait on staging was 13-21s, not the ~6s market-day measured on
+2026-09-23. They were re-derived from the client budgets above rather than
+loosened to whatever passed.
+
+### Load on shared staging
+
+Small by design, and bounded by the edge before it could be anything else:
+
+- **The ramp:** lookups 5 to 25 a minute for ~5.5 minutes (~110 lookups),
+  10 race rounds (~60 writes), ~20 public checks. Under the edge's per-address
+  zones (30/min lookups, 60/min writes, 10/min public checks), so it does not
+  lock the load generator's address out of anything a person on the same
+  network is doing.
+- **Generation:** each code is one real coupon issued (100 minor EUR by
+  default), one mint backing, one lock per proof and one deposit. Twelve codes
+  at 1 to 2 a minute is ~10 minutes of light issuance. This is the half that
+  competes with other people's runs, through issuance's per-IP limit.
+- **The ceiling from one host is the edge, not the store.** Raising
+  `PEAK_RATE` past 30 only measures nginx's 429. Finding the store's own
+  ceiling needs several addresses or a run from inside the deployment.
+
+Tell whoever else uses staging before a generation run, as for any issuance.
+
+### Cleaning up
+
+    npx vite-node loadtest/checkout-codes-make.mts -- --cleanup
+
+A maker **cannot cancel** a code (#472, `409 NOT_CANCELLABLE`): its value is
+the holder's until `x`. So reserved codes are left to expire, which is why
+generation uses the shortest `x` by default. At `x` the store sweeps them to
+`expired` and the parts return to the maker through the refund key. Cleanup
+releases any code an interrupted race left **held** (by its `held_by` order,
+so it is not stuck for the 30-minute hold TTL), drops redeemed and expired
+codes from the file, and keeps the rest. Codes the race redeemed are spent by
+design: their parts went to the test shop's key, which nothing else holds.
+
+The coupons a run issued belong to pool stalls and customers on a test
+deployment, as every other scenario's do.
+
+### Proven, and not
+
+[`results/staging-2026-11-05-checkout-codes-smoke.md`](results/staging-2026-11-05-checkout-codes-smoke.md).
+Against a stub store (`loadtest/stub/`, which keeps only the hold/redeem state
+machine and the R2 bytes), the race was shown to **fail** when the store lets two
+orders hold one code (`BROKEN=double`: exit 99, `race_one_winner` 0%), and setup to stop with
+107 when the signer or the store is missing:
+
+    STUB_CODES="$(node loadtest/stub/checkout-codes-fixture.mjs)" node loadtest/stub/checkout-codes-store.mjs &
+    SMOKE=1 RACE_ROUNDS=2 CODES_URL=http://127.0.0.1:18087 k6 run loadtest/checkout-codes.js
+
+The fixture overwrites `.loadtest-codes.json`, so move a real one aside first.
+Against staging, one smoke pass of each half. **No ramp has been run against staging.**
+
 ## What can and cannot be run against staging
 
 Every tier answers on **`wallet.staging.398ja.xyz`**, routed by path.
@@ -676,6 +828,8 @@ against a host that no longer exists.
 | `send.js` | **no** | needs issuance |
 | `market-day.js` | **yes, fully** | once `stalls.mjs` has enrolled the stalls |
 | `swap-race.js` | **yes** | a probe, not a ramp: does concurrent issuance still burn proofs? |
+| `checkout-codes-make.mts` | **yes, at a low rate** | issues real coupons, so it shares issuance's per-IP limit |
+| `checkout-codes.js` | **yes** | the store is proxied same-origin; the edge's 30/min lookup zone is the ceiling |
 
 Staging runs `nap_auth.lua` in front of `/api/v1/portal/`, and that gate clears
 any client-supplied `X-Edge-Auth` / `X-Auth-Permissions` before demanding a
