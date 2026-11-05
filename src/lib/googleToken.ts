@@ -90,12 +90,9 @@ export function driveConfigured(): boolean {
   return platform() === 'android' || clientId() !== ''
 }
 
-function withCeiling<T>(work: Promise<T>): Promise<T> {
+function withCeiling<T>(work: Promise<T>, timeoutMessage: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new DriveError('Google sign-in did not finish. Allow pop-ups for this site and try again.')),
-      TOKEN_TIMEOUT_MS,
-    )
+    const timer = setTimeout(() => reject(new DriveError(timeoutMessage)), TOKEN_TIMEOUT_MS)
     work.then(
       (v) => {
         clearTimeout(timer)
@@ -168,6 +165,7 @@ async function gisToken(): Promise<string> {
       })
       client.requestAccessToken()
     }),
+    'Google sign-in did not finish. Allow pop-ups for this site and try again.',
   )
 }
 
@@ -178,7 +176,11 @@ async function gisToken(): Promise<string> {
 async function nativeToken(): Promise<string> {
   let result: { accessToken: string; grantedScopes: string[] }
   try {
-    result = await withCeiling(DriveAuth.authorize({ scopes: [DRIVE_SCOPE] }))
+    result = await withCeiling(
+      DriveAuth.authorize({ scopes: [DRIVE_SCOPE] }),
+      // No pop-ups in the app: a stuck consent screen is the only way to get here.
+      'Google sign-in did not finish. Close it and try again.',
+    )
   } catch (e) {
     if (e instanceof DriveError) throw e
     if ((e as { code?: string } | null)?.code === 'cancelled') throw new DriveError(CANCELLED)

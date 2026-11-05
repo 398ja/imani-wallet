@@ -141,7 +141,10 @@ describe('drive access token', () => {
       plugin.authorize.mockReturnValueOnce(new Promise(() => {}))
       const caught = putBackup('{}').catch((e: unknown) => e)
       await vi.advanceTimersByTimeAsync(TOKEN_TIMEOUT_MS)
-      expect(await caught).toBeInstanceOf(DriveError)
+      const error = await caught
+      expect(error).toBeInstanceOf(DriveError)
+      // No "allow pop-ups" advice in the app: there are no pop-ups there.
+      expect((error as Error).message).not.toMatch(/pop-up/)
     })
   })
 

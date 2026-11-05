@@ -73,7 +73,14 @@ public class DriveAuthPlugin extends Plugin {
                 switch (DriveAuthOutcome.afterAuthorize(result.hasResolution(), result.getAccessToken())) {
                     case RESOLVE:
                         pending = call;
-                        consent.launch(new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender()).build());
+                        try {
+                            consent.launch(new IntentSenderRequest.Builder(result.getPendingIntent().getIntentSender()).build());
+                        } catch (RuntimeException e) {
+                            // Without this a failed launch would leave `pending` set, and every later
+                            // authorize() would be refused as "busy" until the app restarts.
+                            pending = null;
+                            call.reject("could not open Google's consent screen", DriveAuthOutcome.FAILED, e);
+                        }
                         break;
                     case GRANTED:
                         resolveWith(call, result);
