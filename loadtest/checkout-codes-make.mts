@@ -283,9 +283,14 @@ const pct = (xs: number[], p: number) => {
 }
 const stats = (xs: number[]) => ({ count: xs.length, avg: xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0, p95: pct(xs, 95), p99: pct(xs, 99), max: xs.length ? Math.max(...xs) : 0 })
 
-/** A deterministic shop key per stall, so a re-run talks to the same shop. */
+/**
+ * A deterministic shop key per stall, so a re-run talks to the same shop.
+ *
+ * Derived from the stall's PRIVATE key. A derivation from its public key would let anyone who
+ * reads the stall's profile recompute S and redeem the run's codes, which hold real (if test) value.
+ */
 function shopFor(stall: Identity) {
-  const privHex = bytesToHex(sha256(new TextEncoder().encode(`imani-loadtest-shop-${stall.pubHex}`)))
+  const privHex = bytesToHex(sha256(new TextEncoder().encode(`imani-loadtest-shop/v2/${stall.privHex}`)))
   return { privHex, pubHex: getPublicKey(hexToBytes(privHex)), stall: stall.pubHex }
 }
 
@@ -371,7 +376,7 @@ async function main() {
     const p = makeOne(stalls[s], sessions[s], customer, shops[s].pubHex, depositTimes)
       .then((r) => {
         results.push(r)
-        const tag = r.ok ? `made ${r.code}` : `NOT made at ${r.stage}: ${r.why}`
+        const tag = r.ok === true ? `made ${r.code}` : `NOT made at ${(r as NotMade).stage}: ${(r as NotMade).why}`
         console.log(`  #${String(n).padStart(4, '0')} stall ${s} ${tag}  ${Object.entries(r.ms).map(([k, v]) => `${k}=${Math.round(v ?? 0)}ms`).join(' ')}`)
         if (r.ok) made.push({ code: r.code, stall: stalls[s].pubHex, shop: s, customer: customer.pubHex, amount: r.amount, unit: r.unit, expires_at: r.x, made_at: Math.floor(Date.now() / 1000) })
       })
