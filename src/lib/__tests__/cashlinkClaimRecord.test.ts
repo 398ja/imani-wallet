@@ -79,16 +79,17 @@ vi.mock('../giftLink', async (orig) => {
     tokenState: async () => 'UNSPENT',
   }
 })
-const sent = vi.hoisted(() => ({ token: '' }))
+const sent = vi.hoisted(() => ({ token: '', tokens: [] as string[] }))
 vi.mock('../pay', () => ({
   sendVouchers: async (args: { recipient: { pubkey: string }; link: Record<string, unknown> }) => {
     h.rows.push({ id: 'sent:t0', type: 'sent', timestamp: 1, link: args.link })
-    h.wraps.set(args.recipient.pubkey, [sent.token])
+    h.wraps.set(args.recipient.pubkey, sent.tokens.length ? sent.tokens : [sent.token])
     return { id: 's1', requested: 100, delivered: 100, parts: 1 }
   },
 }))
 
-const { world, bearerSecret, tokenOf } = await import('./cashlinkWorld')
+const { world, bearerSecret, tokenOf, MINT_URL: MINT } = await import('./cashlinkWorld')
+const { tokenProofs } = await import('../voucherToken')
 const giftLinks = await import('../giftLinks')
 const { deriveLinkSecret, linkPubOf, secretToText } = await import('../giftLink')
 const { appCashlinkPorts, claimedRow } = await import('../cashlinkPorts')
@@ -116,6 +117,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout'], shouldAdvanceTime: true })
   vi.setSystemTime(NOW * 1000)
   sent.token = tokenOf([w.mint.issue(bearerSecret(), 64)])
+  sent.tokens = []
   vi.spyOn(giftLinks.cashlinkSeam, 'ports').mockResolvedValue(w.ports)
   w.ports.deliver = async (secret, token) => {
     h.wraps.set(linkPubOf(secret), [...(h.wraps.get(linkPubOf(secret)) ?? []), token])
@@ -195,6 +197,43 @@ describe('claiming a locked Cashlink', () => {
     expect(back.every((r) => String(r.id).startsWith('returned:') && r.memo === 'Taken back from Cashlink')).toBe(true)
     expect(h.rows.find((r) => r.type === 'sent')).toMatchObject({ link: { status: 'reclaimed' } })
     expect(h.receipts).toHaveLength(0)
+  })
+
+  it('"Take it back" on a link of several coupons brings EVERY coupon back, not only the first', async () => {
+    // Review of #533: take-back settled `locked[0]` only. With one locked token per voucher, the
+    // rest stayed on the link while the row said "Taken back".
+    // One bearer token per voucher, as a several-coupon send puts them on the link.
+    sent.tokens = ['vA', 'vB', 'vC'].map((v, i) => tokenOf([1, 2].map((a, n) => w.mint.issue(bearerSecret({ voucherId: v } as never, `${v}${n}${i}`), a))))
+    const { k } = await sendLockedLink()
+    const onLink = h.wraps.get(linkPubOf(deriveLinkSecret(ID, 0)))!.filter((t) => tokenProofs(t).every((p) => p.secret.startsWith('["P2PK')))
+    expect(onLink).toHaveLength(3)
+    await giftLinks.takeBack(k)
+    await flush()
+    const back = h.rows.filter((r) => r.type === 'received')
+    expect(back).toHaveLength(6)
+    expect(new Set(h.vouchers.map((v) => v.voucher_id))).toEqual(new Set(['vA', 'vB', 'vC']))
+    for (const t of onLink) expect(await w.mint.states(MINT, tokenProofs(t).map((p) => p.secret))).toEqual(tokenProofs(t).map(() => 'SPENT'))
+    expect(new Set(back.map((r) => r.bundleId)).size).toBe(1)
+    expect(h.rows.find((r) => r.type === 'sent')).toMatchObject({ link: { status: 'reclaimed' } })
+  })
+
+  it('an arm that stops after the FIRST of several parts is on the link is finished by the reconcile: every part reaches the link', async () => {
+    // Review of #533: with several wraps per link, a run can stop between them. The reconcile saw a
+    // locked token on the link and settled it as armed, so the parts not yet delivered never were.
+    sent.tokens = ['vA', 'vB', 'vC'].map((v, i) => tokenOf([1, 2].map((a, n) => w.mint.issue(bearerSecret({ voucherId: v } as never, `${v}${n}${i}`), a))))
+    const store = w.ports.deliver
+    let delivered = 0
+    w.ports.deliver = async (secret, token) => (++delivered === 2 ? false : store(secret, token))
+    const { k } = await sendLockedLink()
+    const lockedNow = () => h.wraps.get(linkPubOf(deriveLinkSecret(ID, 0)))!.filter((t) => tokenProofs(t).every((p) => p.secret.startsWith('["P2PK')))
+    expect(lockedNow()).toHaveLength(1)
+    w.ports.deliver = store
+    await giftLinks.reconcileGiftLinks(NOW * 1000)
+    await flush()
+    expect(new Set(lockedNow().map((t) => tokenProofs(t)[0].secret)).size).toBe(3)
+    await giftLinks.takeBack(k)
+    await flush()
+    expect(h.rows.filter((r) => r.type === 'received')).toHaveLength(6)
   })
 })
 

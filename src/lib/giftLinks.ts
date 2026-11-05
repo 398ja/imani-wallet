@@ -109,6 +109,22 @@ function rememberLock(pubkey: string, giftSecret: string, signed: string): void 
 }
 
 /**
+ * #533: an arm puts a link's locked coupons on it as several wraps, so a run can stop after some of
+ * them. Fewer locked proofs on the link than bearer proofs it locked from means the rest are minted
+ * but on no wrap: the arm is resumed to deliver them (it replays every step by derivation), or
+ * neither the claimer nor a take-back could ever reach them. A proof kept as sats instead of locked
+ * also counts short, and costs one extra resume: the resumed arm leaves `arming` either way.
+ */
+function partlyDelivered(locked: GiftToken[], tokens: GiftToken[]): boolean {
+  try {
+    const count = (ts: GiftToken[]) => ts.reduce((n, t) => n + tokenProofs(t.token).length, 0)
+    return count(locked) < count(giftCandidates(tokens))
+  } catch {
+    return false
+  }
+}
+
+/**
  * The gift on this link locked to it with THIS wallet's refund key: the sender's own Cashlink.
  *
  * The link's public key is public (a wrap's p tag), and the lock route takes any link key, so a
@@ -1234,7 +1250,7 @@ export async function reconcileGiftLinks(
       // must never be read below as "claimed".
       const link = openLinkOf(parts)
       const locked = ownLockedOnLink(link, secret, tokens)
-      if (link.arm?.s === 'arming' && link.i !== undefined && locked.length === 0) {
+      if (link.arm?.s === 'arming' && link.i !== undefined && (locked.length === 0 || partlyDelivered(locked, tokens))) {
         await armLink(sessionAccount(getSigner) ?? '', k, secret, link.i, link.x)
         return
       }
@@ -1410,7 +1426,9 @@ async function recheckClaim(rows: LinkRow[], linkSecret: Uint8Array, tokens: Gif
     const ports = await cashlinkSeam.ports()
     const locked = ownLockedOnLink(link, linkSecret, tokens)
     if (locked.length > 0) {
-      const states = await tokenStates(ports, locked[0].token)
+      // Every locked token on the link (one per coupon, #533), not only the first: a link whose
+      // first coupon was claimed but whose second is still locked is open, not settled.
+      const states = (await Promise.all(locked.map((t) => tokenStates(ports, t.token)))).flat()
       if (states.some((s) => s !== 'SPENT' && s !== 'UNSPENT')) return 'left'
       const locktime = lockedLocktime(locked[0].token) ?? link.x
       if (states.some((s) => s === 'UNSPENT')) {
