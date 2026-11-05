@@ -99,6 +99,18 @@ describe('making a code', () => {
     expect(records.checkoutCodesInFlight(ME)).toBe(1)
   })
 
+  it('a part too big for one relay wrap is still ONE locked token, worth the whole part (it goes to the store, not to a wrap)', async () => {
+    // Review of #533: the arm cut a voucher's locked proofs into wraps of at most 55,121 B, and the
+    // checkout deliver keeps one `lockedToken` per part, so a large part lost all but its last cut.
+    const amounts = Array.from({ length: 24 }, (_, n) => 2 ** (n % 12))
+    const big = coupon(amounts, 'big')
+    const out = await start([part(big)])
+    expect(out.kind).toBe('issued')
+    const r = only()
+    expect(tokenProofs(r.parts[0].lockedToken!).length).toBe(24)
+    expect(lockedSats()).toBe(amounts.reduce((n, a) => n + a, 0))
+  })
+
   it('multi-part: two coupons, one multi-proof, each part its own R from a wallet-wide counter', async () => {
     const a = coupon([64], 'a')
     const b = coupon([64, 32], 'b')

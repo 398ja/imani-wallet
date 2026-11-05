@@ -657,7 +657,12 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   // several coupons locked as one token could be neither claimed nor taken back (staging,
   // 2026-11-05, a 3-coupon link). Every part must be on the link before it counts as delivered.
   for (const p of locked) assertNotOpenAfterLocktime(p.secret)
-  const lockedTokens = splitTokenByVoucher(tokenOf(mintUrl, locked)).flatMap((t) => fitToWraps(ctx.linkSecret, mintUrl, tokenProofs(t)))
+  // Cut into relay-sized wraps only for a Cashlink. A checkout part (`lockPub`, #402) is one coupon
+  // handed to the code store whole as ONE token: its `deliver` keeps a single `lockedToken`, so a cut
+  // part would reach the store short (review of #533).
+  const lockedTokens = ctx.lockPub
+    ? [tokenOf(mintUrl, locked)]
+    : splitTokenByVoucher(tokenOf(mintUrl, locked)).flatMap((t) => fitToWraps(ctx.linkSecret, mintUrl, tokenProofs(t)))
   for (const part of lockedTokens) {
     if (!(await ports.deliver(ctx.linkSecret, part))) return { kind: 'arming', why: 'not on the link yet' }
   }
