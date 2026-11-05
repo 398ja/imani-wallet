@@ -3,7 +3,6 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 
 import type { WarrantVerdict } from './issuanceWarrant'
-import { encodePlainTokenV4 } from './plainToken'
 
 /**
  * Reads a voucher out of the token it is actually carried in, and checks the
@@ -1173,35 +1172,5 @@ export function verifyVoucher(v: SignedVoucherFields): VoucherVerification {
   } catch {
     // Malformed hex, bad point, truncated blob — all of it is "not verified".
     return { signatureValid: false, legacyCanonical: false }
-  }
-}
-
-/**
- * A TokenV4 cut into one token per voucher (and lock key), proofs in their original order.
- *
- * A Cashlink of several coupons was locked into ONE token holding every coupon's proofs (staging,
- * 2026-11-05). `parseVoucherToken` refuses such a token ("mixes proofs from more than one
- * voucher"), so the link's own gift was dropped by every reader: neither the claimer nor the
- * issuer could find it. Each proof is fine on its own, so the reader cuts the token instead of
- * dropping it, and the arm now writes one token per voucher. A token of one voucher, or one this
- * cannot read, is returned as it is.
- */
-export function splitTokenByVoucher(token: string): string[] {
-  try {
-    const root = decodeCbor(base64UrlDecode(token.slice(6))) as Record<string, unknown>
-    const proofs = tokenProofs(token)
-    const groups = new Map<string, TokenProof[]>()
-    for (const p of proofs) {
-      const v = voucherOfSecret(p.secret)
-      if (!v) return [token]
-      const key = `${v.voucherId}\u0000${v.lockKey ?? ''}`
-      groups.set(key, [...(groups.get(key) ?? []), p])
-    }
-    if (groups.size <= 1) return [token]
-    const mintUrl = String(root.m ?? '')
-    const unit = String(root.u ?? 'sat')
-    return [...groups.values()].map((group) => encodePlainTokenV4(mintUrl, unit, group))
-  } catch {
-    return [token]
   }
 }
