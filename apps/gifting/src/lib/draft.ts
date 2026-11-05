@@ -71,7 +71,7 @@ export function messageProblem(message: string): string | null {
 
 export function validate(
   form: GiftForm,
-  ctx: { signedIn: boolean; decimals?: number; codeGifts?: boolean },
+  ctx: { decimals?: number; codeGifts?: boolean },
 ): FormErrors {
   const errors: FormErrors = {}
   if (toMinorUnits(form.amount, ctx.decimals) === null) errors.amount = 'Enter an amount like 25.00.'
@@ -81,8 +81,8 @@ export function validate(
   const m = messageProblem(form.message)
   if (m) errors.message = m
   if (form.from.length > FROM_MAX) errors.from = `Keep the name to ${FROM_MAX} characters.`
-  // G15: every gift needs the sender's email (the receipt, a guest's return link, and the claimed /
-  // not-claimed notices), signed in or not.
+  // G15: every gift needs the sender's email (the receipt, the return link, and the claimed /
+  // not-claimed notices).
   if (!isEmail(form.buyerEmail)) errors.buyerEmail = "We need your email to tell you when it's claimed."
 
   return errors
@@ -143,7 +143,6 @@ export function draftRequest(
     decimals?: number
     refundPubkey?: string
     sealed?: string
-    signedIn: boolean
   },
 ): DraftRequest {
   const amountMinor = toMinorUnits(form.amount, ctx.decimals)

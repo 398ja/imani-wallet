@@ -3,9 +3,8 @@
  *
  * - `ℓ` (link secret): the claim key of an email gift. Never shown to the buyer (G8). Sealed to
  *   the Purchase Issuer's key so delivery can run from the Stripe webhook with the tab gone (G4).
- * - `R` (refund secret): for a GUEST, a fresh key whose pubkey is the gift's refund key. The
- *   buyer gets it back as the "return link" (option D). For a SIGNED-IN buyer the refund key is the
- *   wallet's own pubkey (option A), so nothing is generated.
+ * - `R` (refund secret): a fresh key whose pubkey is the gift's refund key, for every buyer (the
+ *   site is public, so every buyer is a guest). The buyer gets it back as the "return link".
  *
  * Sealing is NIP-44 v2 from a one-off key to the issuer's key, framed `v1.<ephemeralPub>.<payload>`.
  * The plaintext names what it is for (stall, amount, recipient), so the issuer refuses to use a
@@ -29,12 +28,13 @@ export interface SealBinding {
   recipient: string
 }
 
-/** Every gift goes to an email, so every gift has a link secret. */
-export function newGiftSecrets(buyerPubkey: string | null, opts: { freshRefund?: boolean } = {}): GiftSecrets {
+/**
+ * Every gift goes to an email, so every gift has a link secret. The site is public (owner,
+ * 2026-11-05), so every buyer is a guest: R is always a fresh key, never an identity key, and comes
+ * back to the buyer as the return link.
+ */
+export function newGiftSecrets(): GiftSecrets & { refundSecret: string } {
   const linkSecret = bytesToHex(generateSecretKey())
-  // A code gift (owner, 2026-11-05; contract §2): R is per code and never an identity key, so a
-  // signed-in buyer gets a fresh R too, sent home by the same return link as a guest's.
-  if (buyerPubkey && !opts.freshRefund) return { linkSecret, refundPubkey: buyerPubkey }
   const r = generateSecretKey()
   return { linkSecret, refundSecret: bytesToHex(r), refundPubkey: getPublicKey(r) }
 }

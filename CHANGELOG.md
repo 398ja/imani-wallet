@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.55.0] - 2026-11-05
+
+### Changed
+
+- **The gifting site is public: nobody signs in** (#410, owner decision 2026-11-05). The "Sign in
+  with your wallet" button, the session lookup and the signed-in branches are gone. Every buyer is
+  a guest, so every gift's refund key is a fresh key made in the browser and comes back to the buyer
+  as the return link in their email, the same for vouchers and shop codes. The home page now says
+  "Send a gift". payment-adapter still accepts guest drafts unchanged.
+
 ## [0.54.1] - 2026-11-05
 
 ### Fixed
