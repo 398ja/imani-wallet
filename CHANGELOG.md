@@ -38,6 +38,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.55.1] - 2026-11-05
+
+### Fixed
+
+- **A claimed Cashlink shows in History** (#528). Claiming a link-locked Cashlink kept the coupon
+  but wrote no transaction, because that path never ran the legacy receive's atomic write. It now
+  writes a `received` row with the same id the legacy path uses, so a retry overwrites it.
+
+### Added
+
+- **The issuer hears when their Cashlink is claimed** (#528). The claimer's wallet sends a payment
+  receipt to the link's issuer. gateway-core fires the `voucher_claimed` push from it server-side
+  (so the issuer's app need not be open), and the issuer's receipt drain files the bell entry and
+  toast. Locked links now carry the issuer's public key in the wrap. Links made before this release
+  name no issuer, so they still show as claimed on the sender's next settle, with no push. Nothing
+  secret goes in the receipt, and its id is stable, so a retry sends no second push.
+
 ## [0.55.0] - 2026-11-05
 
 ### Changed
