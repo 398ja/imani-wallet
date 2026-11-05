@@ -38,6 +38,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.54.0] - 2026-11-05
+
+### Changed
+
+- **The gifting site sends gifts to an email address only** (#410, #515). Sending to an Imani handle,
+  and to yourself, is gone: the field, the live handle lookup, its validation and the draft path.
+  A form kept from the old page comes back as an email gift with the address left blank. Drafts and
+  return links already issued for a handle are still read and honoured.
+
+### Added
+
+- **Shop-code gifts** (#410, #515, #520, #521, #522). When the stall has an online shop that takes
+  checkout codes, the buyer chooses what to send with a segmented control: a voucher, or a code for
+  the shop. Behind `VITE_GIFTING_CODE_GIFTS=on` (site) and `PURCHASE_CODE_GIFTS=true` (issuer), both
+  off by default.
+  - purchase-issuer mints the gift locked to the shop key S, refundable to a fresh buyer key R after
+    the code's expiry x, deposits it at imani-checkout-codes (`<draftId>:code`), and mails the
+    recipient the code (`gift-code`: amount, shop, `IMANI-XXXX-XXXX-XXXX`, expiry and a balance
+    link). Nothing is armed at a relay and R's secret never reaches the server.
+  - The buyer hears when the code is used and when it expires (`gift-code-used`,
+    `gift-code-expired`). Their return link shows what is left and, only after x, receives it into
+    a wallet, including balance successors after a partial spend. A code gift never offers an early
+    take-back.
+  - The shop link goes into the mail as plain text, because shop hosts cannot be on the mailer's link
+    allowlist. The issuer accepts only a clean https shop url, checked before anything is minted.
+
 ## [0.53.3] - 2026-11-05
 
 ### Fixed
