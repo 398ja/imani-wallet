@@ -23,6 +23,7 @@ import { dirname } from 'node:path'
 import type { SendOutcome, SendRequest } from '../imani-mailer/mailer.ts'
 import { giftSentRumor, wrapForLink } from './giftLock'
 import type { TrackInput } from './giftTracker'
+import type { CodeGiftPorts } from './codeGift'
 
 export const NOSTR_EVENTS_PATH = '/api/v1/nostr/events'
 export const NOSTR_QUERY_PATH = '/api/v1/nostr/query'
@@ -63,6 +64,8 @@ export interface GiftPorts {
   stallName(stallPubkey: string): Promise<string | null>
   /** G15 §4.3: record a delivered gift for claimed/expired notices (`giftTracker.ts`). Optional. */
   track?(input: TrackInput, mintUrl: string): Promise<void>
+  /** #410 code gifts: the code store. Absent (`PURCHASE_CODE_GIFTS` off), code gifts are parked before minting. */
+  codes?: CodeGiftPorts
 }
 
 export type StepResult = { ok: true } | { ok: false; reason: string; permanent: boolean }
@@ -128,10 +131,25 @@ export async function sendClaimEmail(
   return { ok: false, reason: `the claim email was refused: ${out.error}`, permanent: !out.retryable }
 }
 
+/** The recipient's code email (`gift-code`), under one idempotency key for every retry. */
+export async function sendCodeEmail(
+  ports: GiftPorts,
+  req: { to: string; idempotencyKey: string; fields: Record<string, string> },
+): Promise<StepResult> {
+  let out: SendOutcome
+  try {
+    out = await ports.sendMail({ template: 'gift-code', to: req.to, fields: req.fields, idempotencyKey: req.idempotencyKey })
+  } catch {
+    return { ok: false, reason: 'imani-mailer is unreachable', permanent: false }
+  }
+  if (out.ok) return ok
+  return { ok: false, reason: `the code email was refused: ${out.error}`, permanent: !out.retryable }
+}
+
 /** Hand the buyer the locked token (contract §3): a NIP-17 wrap to the refund key. */
 export async function handBuyerTheGift(
   ports: GiftPorts,
-  input: { refundPubkey: string; token: string; stall: string; to: string | null; claimBy: number },
+  input: { refundPubkey: string; token: string; stall: string; to: string | null; claimBy: number; gift?: 'code' },
 ): Promise<StepResult> {
   const sealKey = hexToBytes(ports.sealSecretHex)
   const wrap = nip17.wrapEvent(sealKey, { publicKey: input.refundPubkey }, giftSentRumor(input)) as unknown as WrapEvent

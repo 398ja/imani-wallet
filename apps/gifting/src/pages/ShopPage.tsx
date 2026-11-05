@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { CreditCard, Pencil } from 'lucide-react'
+import { CreditCard, Pencil, ShoppingBag, Ticket } from 'lucide-react'
 
 import { Alert, Centered, Panel, Screen } from '@wallet/components/ui/layout'
 import { Button } from '@wallet/components/ui/Button'
@@ -23,14 +23,14 @@ import {
   termsVersion,
   toMinorUnits,
   validate,
-  type DeliveryKind,
   type Draft,
   type FormErrors,
   type GiftForm,
+  type GiftKind,
 } from '../lib/draft'
-import { displayHandle, normaliseRecipientHandle } from '../lib/handle'
+import { displayHandle } from '../lib/handle'
 import { newGiftSecrets, returnLink, seal } from '../lib/gift'
-import { loadShop, robotsFor, SHOP_COPY, type Shop, type ShopState } from '../lib/shop'
+import { codeGiftAvailable, loadShop, robotsFor, SHOP_COPY, shopHost, type Shop, type ShopState } from '../lib/shop'
 import { WALLET_ORIGIN } from '../lib/signer'
 import type { Account } from '../lib/session'
 
@@ -160,35 +160,6 @@ function ShopHeader({ shop, children }: { shop: Shop; children?: React.ReactNode
   )
 }
 
-type Resolved = { kind: 'idle' } | { kind: 'checking' } | { kind: 'none' } | { kind: 'ok'; pubkey: string; name?: string; picture?: string }
-
-function useResolvedHandle(raw: string): Resolved {
-  const nip05 = normaliseRecipientHandle(raw)
-  const [answer, setAnswer] = useState<{ nip05: string; r: Resolved } | null>(null)
-  useEffect(() => {
-    if (!nip05) return
-    let live = true
-    const done = (r: Resolved) => live && setAnswer({ nip05, r })
-    // Debounced: one lookup when they stop typing (§2).
-    const t = setTimeout(() => {
-      api
-        .resolve(nip05)
-        .then(async (pubkey) => {
-          if (!pubkey) return done({ kind: 'none' })
-          const b = await merchantBranding(pubkey).catch(() => ({}) as { organizationName?: string; logoUrl?: string })
-          done({ kind: 'ok', pubkey, name: b.organizationName, picture: b.logoUrl })
-        })
-        .catch(() => done({ kind: 'none' }))
-    }, 400)
-    return () => {
-      live = false
-      clearTimeout(t)
-    }
-  }, [nip05])
-  if (!nip05) return { kind: 'idle' }
-  return answer?.nip05 === nip05 ? answer.r : { kind: 'checking' }
-}
-
 function GiftFlow({
   shop,
   session,
@@ -203,12 +174,16 @@ function GiftFlow({
   goForm: (field?: string) => void
 }) {
   const kept = useMemo(() => recall(shop.canonical), [shop.canonical])
-  const [form, setForm] = useState<GiftForm>(kept?.form ?? EMPTY_FORM)
+  const codes = codeGiftAvailable(shop)
+  const [form, setForm] = useState<GiftForm>(() => {
+    const f = kept?.form ?? EMPTY_FORM
+    // A kept code choice for a shop that no longer takes codes falls back to a voucher.
+    return f.gift === 'code' && !codes ? { ...f, gift: 'voucher' } : f
+  })
   const [touched, setTouched] = useState(false)
   const signedIn = session !== null
   const decimals = safeDecimals(shop.record.issuanceCurrency)
-  const errors = validate(form, { signedIn, decimals, stallNip05: shop.nip05 })
-  const resolved = useResolvedHandle(form.deliver === 'handle' ? form.handle : '')
+  const errors = validate(form, { signedIn, decimals, codeGifts: codes })
 
   useEffect(() => keep(shop.canonical, { ...(recall(shop.canonical) ?? {}), form }), [shop.canonical, form])
   // "From" defaults to nothing for a guest; prefilled from the profile once signed in.
@@ -218,21 +193,17 @@ function GiftFlow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 
-  const handleProblem =
-    form.deliver === 'handle' && resolved.kind === 'none'
-      ? "We couldn't find that handle."
-      : form.deliver === 'handle' && resolved.kind === 'ok' && resolved.pubkey === shop.pubkey
-        ? `You can't send a ${shop.name} voucher to ${shop.name}.`
-        : undefined
-  const canReview = Object.keys(errors).length === 0 && !handleProblem && (form.deliver !== 'handle' || resolved.kind === 'ok')
+  const canReview = Object.keys(errors).length === 0
 
   if (step === 'review') {
-    if (Object.keys(errors).length > 0) return <RedirectTo to={`/shop/${shop.canonical}`} />
+    if (!canReview) return <RedirectTo to={`/shop/${shop.canonical}`} />
     return <Review shop={shop} form={form} session={session} goForm={goForm} />
   }
 
   const set = (patch: Partial<GiftForm>) => setForm((f) => ({ ...f, ...patch }))
   const show = (field: keyof FormErrors) => (touched ? errors[field] : undefined)
+  const host = shopHost(shop)
+  const noun = form.gift === 'code' ? 'shop code' : 'voucher'
 
   return (
     <ShopHeader shop={shop}>
@@ -244,51 +215,35 @@ function GiftFlow({
           if (canReview) goReview()
         }}
       >
+        {codes && (
+          <div className="mb-6">
+            <GiftKindControl value={form.gift} onChange={(gift) => set({ gift })} />
+            {/* One sentence that says what the selected thing is, directly under the control that chose it. */}
+            <p key={form.gift} className="materialize mt-2 text-sm text-mono-500" data-testid="gift-kind-hint">
+              {form.gift === 'code'
+                ? `A code to type in at checkout on ${host ?? `${shop.name}'s online shop`}.`
+                : `Spent in person at ${shop.name}, from the Imani wallet.`}
+            </p>
+            {show('gift') && (
+              <p className="mt-1 text-sm text-red-600" role="alert">
+                {errors.gift}
+              </p>
+            )}
+          </div>
+        )}
+
         <Field id="amount" label={`Amount (${shop.record.issuanceCurrency.toUpperCase()})`} error={show('amount')}>
           <input id="amount" inputMode="decimal" autoComplete="off" className={inputClass} value={form.amount} placeholder="25.00" onChange={(e) => set({ amount: e.target.value })} />
         </Field>
 
-        <fieldset id="deliver" className="mb-4">
-          <legend className="mb-2 block text-sm font-medium">Deliver to</legend>
-          {(
-            [
-              ['handle', "Someone's handle"],
-              ['email', 'An email address'],
-            ] as Array<[DeliveryKind, string]>
-          ).map(([kind, label]) => (
-            <label key={kind} className="mb-2 flex items-center gap-2 text-callout">
-              <input type="radio" name="deliver" value={kind} checked={form.deliver === kind} onChange={() => set({ deliver: kind })} /> {label}
-            </label>
-          ))}
-          {show('deliver') && <p className="text-sm text-red-600">{errors.deliver}</p>}
-        </fieldset>
-
-        {form.deliver === 'handle' && (
-          <Field id="handle" label="Their handle" error={show('handle') ?? handleProblem}>
-            <input id="handle" autoComplete="off" autoCapitalize="none" className={inputClass} value={form.handle} placeholder="name@domain" onChange={(e) => set({ handle: e.target.value })} />
-            {resolved.kind === 'checking' && <p className="mt-1 text-sm text-mono-500">Looking them up…</p>}
-            {resolved.kind === 'ok' && resolved.pubkey !== shop.pubkey && (
-              <div className="mt-2 flex items-center gap-2 text-sm" data-testid="resolved-recipient">
-                <Avatar src={resolved.picture} name={resolved.name ?? normaliseRecipientHandle(form.handle) ?? ''} />
-                <span>
-                  {/* Who this is, by name and handle: what a buyer can check. Never a key. */}
-                  <span className="font-medium">{resolved.name ?? displayHandle(normaliseRecipientHandle(form.handle) ?? '')}</span>{' '}
-                  {resolved.name && <span className="text-mono-500">{displayHandle(normaliseRecipientHandle(form.handle) ?? '')}</span>}
-                </span>
-              </div>
-            )}
-          </Field>
-        )}
-
-        {form.deliver === 'email' && (
-          <Field id="email" label="Their email address" error={show('email')}>
-            <input id="email" type="email" autoComplete="off" className={inputClass} value={form.email} placeholder="name@example.com" onChange={(e) => set({ email: e.target.value })} />
-          </Field>
-        )}
+        <Field id="email" label="Their email address" error={show('email')}>
+          <input id="email" type="email" autoComplete="off" className={inputClass} value={form.email} placeholder="name@example.com" onChange={(e) => set({ email: e.target.value })} />
+          <p className="mt-1 text-xs text-mono-500">We&apos;ll email them the {noun}.</p>
+        </Field>
 
         <Field id="message" label="Message (optional)" error={show('message')}>
           <textarea id="message" maxLength={MESSAGE_MAX + 20} rows={3} className={inputClass} value={form.message} onChange={(e) => set({ message: e.target.value })} />
-          <p className="mt-1 text-right text-xs text-mono-500">
+          <p className="mt-1 text-right text-xs tabular-nums text-mono-500">
             {form.message.length}/{MESSAGE_MAX}
           </p>
         </Field>
@@ -300,22 +255,60 @@ function GiftFlow({
         <Field id="buyerEmail" label="Your email" error={show('buyerEmail')}>
           <input id="buyerEmail" type="email" autoComplete="email" className={inputClass} value={form.buyerEmail} onChange={(e) => set({ buyerEmail: e.target.value })} />
           <p className="mt-1 text-xs text-mono-500">
-            {signedIn
-              ? 'For your receipt, and to tell you when it is claimed or if it is not.'
-              : 'For your receipt, your link to take the gift back, and to tell you when it is claimed or if it is not.'}
+            {form.gift === 'code'
+              ? 'For your receipt, your link for whatever is left unspent at expiry, and to tell you when the code is used or expires.'
+              : signedIn
+                ? 'For your receipt, and to tell you when it is claimed or if it is not.'
+                : 'For your receipt, your link to take the gift back, and to tell you when it is claimed or if it is not.'}
           </p>
         </Field>
 
-        <p className="mb-4 text-xs text-mono-500">
+        <Button type="submit" size="lg" className="mt-2 w-full" disabled={touched && !canReview}>
+          Review
+        </Button>
+
+        <p className="mt-4 text-xs text-mono-500">
           We keep the recipient&apos;s email and your message only as long as delivery and the claim window need them. {shop.name} gets no buyer or
           recipient details from Imani. Stripe, as {shop.name}&apos;s card processor, shares the card payment details it collects with them.
         </p>
-
-        <Button type="submit" size="lg" className="w-full" disabled={touched && !canReview}>
-          Review
-        </Button>
       </form>
     </ShopHeader>
+  )
+}
+
+/**
+ * Voucher or shop code: a segmented control (a radio group underneath, so arrow keys, labels and
+ * screen readers work as for any radio). The selected segment is a raised thumb that slides with a
+ * critically damped curve; with reduced motion it just appears in place.
+ */
+function GiftKindControl({ value, onChange }: { value: GiftKind; onChange: (v: GiftKind) => void }) {
+  const options: Array<[GiftKind, string, typeof Ticket]> = [
+    ['voucher', 'Voucher', Ticket],
+    ['code', 'Shop code', ShoppingBag],
+  ]
+  return (
+    <fieldset id="gift">
+      <legend className="mb-2 block text-sm font-medium">What to send</legend>
+      <div className="relative grid grid-cols-2 rounded-xl bg-mono-100 p-1 dark:bg-mono-900" role="radiogroup" aria-label="What to send">
+        <span
+          aria-hidden
+          className="absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-lg bg-white shadow-sm transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none dark:bg-mono-700"
+          style={{ transform: value === 'code' ? 'translateX(100%)' : 'translateX(0)' }}
+        />
+        {options.map(([kind, label, Icon]) => (
+          <label
+            key={kind}
+            className={`relative z-10 flex cursor-pointer select-none items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-callout font-medium transition-colors duration-100 ease-out has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-mono-400 active:opacity-70 ${
+              value === kind ? 'text-mono-950 dark:text-white' : 'text-mono-500'
+            }`}
+          >
+            <input type="radio" name="gift" value={kind} className="sr-only" checked={value === kind} onChange={() => onChange(kind)} />
+            <Icon className="h-4 w-4" aria-hidden />
+            {label}
+          </label>
+        ))}
+      </div>
+    </fieldset>
   )
 }
 
@@ -371,18 +364,15 @@ function Review({
       const previous = recall(shop.canonical)?.draftId
       // Editing invalidates the old draft (§3). Best effort: an orphan simply expires.
       if (previous) void api.invalidate(previous)
-      const secrets = newGiftSecrets(form.deliver, sessionKey)
-      let sealed: string | undefined
-      if (form.deliver === 'email') {
-        const issuer = await api.issuerKey()
-        // G4: ONLY ℓ is sealed to the issuer, bound to this stall, amount and address. R never
-        // leaves this browser except in the guest's own return link (G-R3).
-        sealed = seal(
-          issuer,
-          { stallPubkey: shop.pubkey, amountMinor: toMinorUnits(form.amount, safeDecimals(shop.record.issuanceCurrency)) ?? 0, recipient: form.email.trim().toLowerCase() },
-          { linkSecret: secrets.linkSecret! },
-        )
-      }
+      const secrets = newGiftSecrets(sessionKey, { freshRefund: form.gift === 'code' })
+      const issuer = await api.issuerKey()
+      // G4: ONLY ℓ is sealed to the issuer, bound to this stall, amount and address. R never
+      // leaves this browser except in the guest's own return link (G-R3).
+      const sealed = seal(
+        issuer,
+        { stallPubkey: shop.pubkey, amountMinor: toMinorUnits(form.amount, safeDecimals(shop.record.issuanceCurrency)) ?? 0, recipient: form.email.trim().toLowerCase() },
+        { linkSecret: secrets.linkSecret },
+      )
       const req = draftRequest(form, {
         stallPubkey: shop.pubkey,
         stallHandle: shop.nip05,
@@ -463,6 +453,8 @@ function Review({
   const deadline = claimDeadline(Date.now(), validity, draft.delivery.claimWindowDays)
   const expiry = validity ? day(new Date(Date.now() + validity * 86_400_000)) : 'no expiry'
   // G17 (C): a gift taken back keeps the voucher's original expiry, so say what that leaves.
+  const isCode = draft.gift === 'code'
+  const host = shopHost(shop)
   const keeps = validity ? ` It keeps its original expiry, so you'd have until ${expiry} to spend it.` : " It doesn't expire."
 
   return (
@@ -470,45 +462,40 @@ function Review({
       <h1 className="mb-4 mt-4 text-title font-semibold">Check your gift</h1>
       {notice && <p className="mb-3 text-sm text-mono-500">{notice}</p>}
 
-      <Section title="Voucher" onEdit={() => goForm('amount')}>
+      <Section title={isCode ? 'Shop code' : 'Voucher'} onEdit={() => goForm(isCode ? 'gift' : 'amount')}>
         <div className="mb-2 flex items-center gap-3">
           <Avatar src={shop.branding.picture} name={shop.name} />
           <div>
             <p className="font-medium">{shop.name}</p>
-            <p className="text-xs text-mono-500">{displayHandle(shop.nip05)}</p>
+            <p className="text-xs text-mono-500">{isCode && host ? host : displayHandle(shop.nip05)}</p>
           </div>
         </div>
         <p className="text-title font-semibold" data-testid="review-amount">
           {money(draft.amountMinor, draft.currency)}
         </p>
-        <p className="text-sm text-mono-500">Spend it at {shop.name}. Voucher expiry: {expiry}.</p>
+        <p className="text-sm text-mono-500" data-testid="review-kind">
+          {isCode
+            ? `A code to use at checkout on ${host ?? `${shop.name}'s online shop`}. Code expiry: ${expiry}.`
+            : `Spend it at ${shop.name}. Voucher expiry: ${expiry}.`}
+        </p>
       </Section>
 
-      <Section title="Recipient" onEdit={() => goForm('deliver')}>
-        {draft.delivery.kind === 'handle' && draft.delivery.recipientPubkey && (
-          <div data-testid="review-recipient">
-            <p className="font-medium">{displayHandle(normaliseRecipientHandle(form.handle) ?? '')}</p>
-            <p className="text-xs text-mono-500">Check this is the right person. The gift goes to their wallet as it is now.</p>
-            <p className="mt-1 text-sm text-mono-500" data-testid="review-take-back">
-              If they don&apos;t take it by {day(deadline)}, you can take it back.{keeps}
-            </p>
-          </div>
-        )}
-        {draft.delivery.kind === 'email' && (
-          <div data-testid="review-recipient">
-            <p className="break-all text-title font-semibold">{draft.delivery.email}</p>
-            <p className="mt-1 text-sm text-mono-500">
-              We&apos;ll email a link to claim it. They may need to check their spam folder.
-            </p>
-            <p className="mt-1 text-sm text-mono-500" data-testid="review-take-back">
-              If it isn&apos;t claimed by {day(deadline)}, you can take it back.{keeps}
-            </p>
-          </div>
-        )}
+      <Section title="Recipient" onEdit={() => goForm('email')}>
+        <div data-testid="review-recipient">
+          <p className="break-all text-title font-semibold">{draft.delivery.email}</p>
+          <p className="mt-1 text-sm text-mono-500">
+            {isCode ? "We'll email them the code." : "We'll email a link to claim it."} They may need to check their spam folder.
+          </p>
+          <p className="mt-1 text-sm text-mono-500" data-testid="review-take-back">
+            {isCode
+              ? `Whatever isn't spent by ${expiry} comes back to you.`
+              : <>If it isn&apos;t claimed by {day(deadline)}, you can take it back.{keeps}</>}
+          </p>
+        </div>
       </Section>
 
       <Section title="Message" onEdit={() => goForm('message')}>
-        <p className="text-sm text-mono-500">{draft.from || form.from ? `From ${draft.from ?? form.from}` : 'Someone sent you a voucher'}</p>
+        <p className="text-sm text-mono-500">{draft.from || form.from ? `From ${draft.from ?? form.from}` : `Someone sent you a ${isCode ? 'shop code' : 'voucher'}`}</p>
         <p className="whitespace-pre-wrap">{draft.message ?? <span className="text-mono-500">No message</span>}</p>
       </Section>
 
@@ -527,12 +514,21 @@ function Review({
           lost on the way to Stripe cannot cost the buyer their way to take the gift back. */}
       {state.refundSecret && WALLET_ORIGIN && (
         <Section title="Your return link">
-          <p className="mb-2 text-sm text-mono-500">
-            If the gift isn&apos;t claimed by {day(deadline)}, open it to take the gift back into a wallet. We&apos;ll email it to {form.buyerEmail}{' '}
-            when you pay. Keep it private: it is yours, not the recipient&apos;s.
+          <p className="mb-2 text-sm text-mono-500" data-testid="review-return-copy">
+            {isCode ? (
+              <>
+                The code can&apos;t be taken back. Whatever isn&apos;t spent by {expiry} comes back to you: open this link after then to receive it
+                in a wallet. We&apos;ll email it to {form.buyerEmail} when you pay. Keep it private: it is yours, not the recipient&apos;s.
+              </>
+            ) : (
+              <>
+                If the gift isn&apos;t claimed by {day(deadline)}, open it to take the gift back into a wallet. We&apos;ll email it to {form.buyerEmail}{' '}
+                when you pay. Keep it private: it is yours, not the recipient&apos;s.
+              </>
+            )}
           </p>
           <a className="break-all text-sm underline" href={returnLink(WALLET_ORIGIN, state.refundSecret)} data-testid="review-return-link">
-            Take the gift back
+            {isCode ? 'Your unspent balance link' : 'Take the gift back'}
           </a>
         </Section>
       )}

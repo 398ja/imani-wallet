@@ -32,7 +32,7 @@ export type ProofState = 'SPENT' | 'UNSPENT' | 'PENDING' | 'UNKNOWN'
 
 export interface TrackedGift {
   draftId: string
-  kind: 'handle' | 'email'
+  kind: 'handle' | 'email' | 'code'
   mintUrl: string
   ys: string[]
   /** Unix ms. */
@@ -50,12 +50,17 @@ export interface TrackedGift {
   notified: { claimed?: number; expired?: number }
   /** Last time the mint was asked (rate limit), unix ms. */
   checkedAt?: number
+  /**
+   * #410 code gifts: the code (sealed like the email, AAD = draftId + ':code'), how the amounts are
+   * shown, and the last remaining value the public code-check reported (minor units).
+   */
+  codeGift?: { code: { iv: string; sealed: string }; decimals: number; unit: string; lastRemaining: number }
 }
 
 /** What discharge hands the tracker. Plain buyer email: sealed before it touches disk. */
 export interface TrackInput {
   draftId: string
-  kind: 'handle' | 'email'
+  kind: 'handle' | 'email' | 'code'
   token: string
   claimBy: number
   buyerEmail: string
@@ -66,6 +71,8 @@ export interface TrackInput {
   returnMailDate: string | null
   /** G17: the voucher's own expiry, unix ms; null when it never expires. */
   spendBy?: number | null
+  /** #410: a code gift, tracked through the public code-check instead of the mint. */
+  code?: { code: string; amountMinor: number; decimals: number; unit: string }
 }
 
 export interface TrackerStore {
@@ -79,6 +86,18 @@ export interface TrackerPorts {
   checkStates(mintUrl: string, ys: string[]): Promise<Map<string, ProofState>>
   sendMail(req: SendRequest): Promise<SendOutcome>
   now(): number
+  /** #410: the public `GET /v1/code-check/{code}`. Absent, code rows are kept but never checked. */
+  checkCode?(code: string): Promise<{ status: 'active' | 'in_use' | 'used' | 'expired'; remaining: number }>
+}
+
+/** Minor units as a currency, as discharge formats the gift amount. */
+export function formatMinor(minor: number, decimals: number, unit: string): string {
+  const major = (minor / 10 ** decimals).toFixed(decimals)
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency: unit }).format(Number(major))
+  } catch {
+    return `${major} ${unit}`
+  }
 }
 
 /** `Y = hash_to_curve(secret)`, compressed hex, exactly as the mint and wallet-api compute it. */
@@ -137,19 +156,19 @@ export class GiftTracker {
     return run
   }
 
-  private seal(draftId: string, email: string): { iv: string; sealed: string } {
+  private seal(draftId: string, email: string, aad = `imani-gift-tracker:${draftId}`): { iv: string; sealed: string } {
     const iv = randomBytes(12)
     const c = createCipheriv('aes-256-gcm', this.key, iv)
-    c.setAAD(Buffer.from(`imani-gift-tracker:${draftId}`))
+    c.setAAD(Buffer.from(aad))
     const ct = Buffer.concat([c.update(email, 'utf8'), c.final(), c.getAuthTag()])
     return { iv: iv.toString('base64'), sealed: ct.toString('base64') }
   }
 
-  private open(row: TrackedGift): string {
-    const iv = Buffer.from(row.buyerEmail.iv, 'base64')
-    const all = Buffer.from(row.buyerEmail.sealed, 'base64')
+  private open(row: TrackedGift, box = row.buyerEmail, aad = `imani-gift-tracker:${row.draftId}`): string {
+    const iv = Buffer.from(box.iv, 'base64')
+    const all = Buffer.from(box.sealed, 'base64')
     const d = createDecipheriv('aes-256-gcm', this.key, iv)
-    d.setAAD(Buffer.from(`imani-gift-tracker:${row.draftId}`))
+    d.setAAD(Buffer.from(aad))
     d.setAuthTag(all.subarray(all.length - 16))
     return Buffer.concat([d.update(all.subarray(0, all.length - 16)), d.final()]).toString('utf8')
   }
@@ -171,13 +190,25 @@ export class GiftTracker {
       guest: input.guest,
       returnMailDate: input.returnMailDate,
       ...(input.spendBy !== undefined ? { spendBy: input.spendBy } : {}),
+      ...(input.code
+        ? {
+            codeGift: {
+              code: this.seal(input.draftId, input.code.code, `imani-gift-tracker:${input.draftId}:code`),
+              decimals: input.code.decimals,
+              unit: input.code.unit,
+              lastRemaining: input.code.amountMinor,
+            },
+          }
+        : {}),
       notified: {},
     }
     return this.serial(async () => {
       const rows = await this.store.read()
       // A re-drive of the same draft keeps what was already notified.
       const prior = rows[input.draftId]
-      rows[input.draftId] = prior ? { ...row, notified: prior.notified } : row
+      rows[input.draftId] = prior
+        ? { ...row, notified: prior.notified, ...(prior.codeGift && row.codeGift ? { codeGift: { ...row.codeGift, lastRemaining: prior.codeGift.lastRemaining } } : {}) }
+        : row
       await this.store.write(rows)
     })
   }
@@ -199,6 +230,14 @@ export class GiftTracker {
         if (row.checkedAt !== undefined && now - row.checkedAt < (this.ports.sweepEveryMs ?? SWEEP_EVERY_MS)) continue
         row.checkedAt = now
         changed = true
+        if (row.kind === 'code') {
+          const done = await this.sweepCode(row, now, out)
+          if (done) {
+            delete rows[id]
+            out.dropped += 1
+          }
+          continue
+        }
         let states: Map<string, ProofState>
         try {
           states = await this.ports.checkStates(row.mintUrl, row.ys)
@@ -240,6 +279,83 @@ export class GiftTracker {
       if (changed) await this.store.write(rows)
       return out
     })
+  }
+
+  /**
+   * #410: one code gift. `gift-code-used` each time the public check reports less remaining than
+   * last seen (idempotency `<draftId>:code-used:<remaining>`), `gift-code-expired` once the code is
+   * expired with something left on it (`<draftId>:code-expired`). True when the row is finished.
+   */
+  private async sweepCode(row: TrackedGift, now: number, out: { claimed: number; expired: number }): Promise<boolean> {
+    const cg = row.codeGift
+    if (!cg || !this.ports.checkCode) return false
+    let code: string
+    try {
+      code = this.open(row, cg.code, `imani-gift-tracker:${row.draftId}:code`)
+    } catch {
+      countGiftSweepError()
+      return true
+    }
+    let check: { status: string; remaining: number }
+    try {
+      check = await this.ports.checkCode(code)
+    } catch {
+      countGiftSweepError()
+      return false
+    }
+    const money = (n: number) => formatMinor(n, cg.decimals, cg.unit)
+    // The store reports 0 remaining once a code is expired: what came back is the last value seen.
+    if (check.status === 'expired') {
+      if (cg.lastRemaining <= 0 || row.notified.expired !== undefined) return true
+      const sent = await this.send(row, 'gift-code-expired', `${row.draftId}:code-expired`, {
+        stall: row.stall,
+        amount: row.amount,
+        recipient: row.recipientDisplay,
+        expiresOn: displayDate(row.claimBy),
+        remaining: money(cg.lastRemaining),
+        returnMailDate: row.returnMailDate ?? displayDate(row.claimBy),
+      })
+      if (sent === 'retry') return false
+      if (sent === 'sent') {
+        row.notified.expired = now
+        out.expired += 1
+      }
+      return true
+    }
+    if (check.status === 'in_use' || check.remaining >= cg.lastRemaining) return false
+    const spent = cg.lastRemaining - check.remaining
+    const sent = await this.send(row, 'gift-code-used', `${row.draftId}:code-used:${check.remaining}`, {
+      stall: row.stall,
+      amount: row.amount,
+      spent: money(spent),
+      recipient: row.recipientDisplay,
+      expiresOn: displayDate(row.claimBy),
+      ...(check.remaining > 0 ? { remaining: money(check.remaining) } : {}),
+    })
+    if (sent === 'retry') return false
+    cg.lastRemaining = check.remaining
+    if (sent === 'sent') out.claimed += 1
+    return check.remaining === 0
+  }
+
+  private async send(row: TrackedGift, template: string, idempotencyKey: string, fields: Record<string, string>): Promise<'sent' | 'retry' | 'refused'> {
+    let to: string
+    try {
+      to = this.open(row)
+    } catch {
+      countGiftSweepError()
+      return 'refused'
+    }
+    let res: SendOutcome
+    try {
+      res = await this.ports.sendMail({ template, to, fields, idempotencyKey })
+    } catch {
+      countGiftSweepError()
+      return 'retry'
+    }
+    if (res.ok) return 'sent'
+    countGiftSweepError()
+    return res.retryable ? 'retry' : 'refused'
   }
 
   private async notify(row: TrackedGift, kind: 'claimed' | 'expired'): Promise<'sent' | 'retry' | 'refused'> {

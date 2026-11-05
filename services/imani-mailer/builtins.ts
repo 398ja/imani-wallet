@@ -167,4 +167,103 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       returnUrl: { type: 'url', required: true },
     },
   },
+  // #410 code gifts (owner, 2026-11-05). A code is a bearer instrument: never "take it back". What is
+  // left at expiry comes back to the buyer's return link. The code itself appears in the BODY only.
+  'gift-code': {
+    fromName: 'Imani gifts',
+    subject: '{{from}} sent you a {{stall}} shop code',
+    text: [
+      '{{from}} sent you a {{amount}} code to spend at {{shop}}.',
+      '{{#message}}',
+      '',
+      '{{message}}',
+      '{{/message}}',
+      '',
+      'Your code:',
+      '{{code}}',
+      '',
+      'Enter it at checkout on {{shopUrl}}',
+      'Use it by {{expiresOn}}. You can spend it over several orders: whatever you leave stays on the code until then.',
+      '',
+      'Check what is left on it:',
+      '{{balanceUrl}}',
+      '',
+      "Anyone with this code can spend it. Don't forward it.",
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      from: { type: 'line', max: 80, default: 'Someone' },
+      stall: { type: 'line', max: 120, required: true },
+      shop: { type: 'line', max: 253, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      code: { type: 'line', max: 24, required: true },
+      // A LINE, not a url: every shop has its own host, so MAILER_LINK_HOSTS cannot list them, and a
+      // url field would refuse every code gift. payment-adapter pins it from the stall's SIGNED
+      // `imani:merchant` record (https only, fail closed) and purchase-issuer re-checks it is https.
+      // The balance link below points at our own code store, so it stays an allow-listed url.
+      shopUrl: { type: 'line', max: 300, required: true },
+      expiresOn: { type: 'line', max: 60, required: true },
+      balanceUrl: { type: 'url', required: true },
+      message: { type: 'text', max: 280 },
+    },
+  },
+  'gift-code-return-link': {
+    fromName: 'Imani gifts',
+    subject: 'Your {{stall}} shop code gift',
+    text: [
+      "The code can't be taken back. Whatever isn't spent by {{expiresOn}} comes back to you.",
+      'After then, open this link to receive it in a wallet:',
+      '{{returnUrl}}',
+      '',
+      "Keep it private: it is yours, not the recipient's.",
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      expiresOn: { type: 'line', max: 60, required: true },
+      returnUrl: { type: 'url', required: true },
+    },
+  },
+  // The buyer's notices for a code gift. No url field: no link, no key, no code.
+  'gift-code-used': {
+    fromName: 'Imani gifts',
+    subject: 'Your {{stall}} shop code was used',
+    text: [
+      '{{recipient}} used {{spent}} of the {{amount}} code for {{stall}} you sent.',
+      '{{#remaining}}',
+      '{{remaining}} is left on the code, to spend until {{expiresOn}}.',
+      '{{/remaining}}',
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      spent: { type: 'line', max: 40, required: true },
+      recipient: { type: 'line', max: 320, required: true },
+      expiresOn: { type: 'line', max: 60, required: true },
+      remaining: { type: 'line', max: 40 },
+    },
+  },
+  'gift-code-expired': {
+    fromName: 'Imani gifts',
+    subject: 'Your {{stall}} shop code has expired',
+    text: [
+      'The {{amount}} code for {{stall}} you sent to {{recipient}} expired on {{expiresOn}}.',
+      '{{remaining}} was left on it, and it comes back to you.',
+      'Open the return link from our email of {{returnMailDate}} to receive it in a wallet.',
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      recipient: { type: 'line', max: 320, required: true },
+      expiresOn: { type: 'line', max: 60, required: true },
+      remaining: { type: 'line', max: 40, required: true },
+      returnMailDate: { type: 'line', max: 60, required: true },
+    },
+  },
 }

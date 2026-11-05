@@ -209,3 +209,27 @@ describe('return page helpers', () => {
     expect(returnStateOf(['UNKNOWN'], X, (X + 1) * 1000)).toBe('unknown')
   })
 })
+
+describe('#410 code gift helpers', async () => {
+  const { parseGiftSent, parseMineCodes, parsePartTokens, codeReturnStateOf } = await import('../lockedGifts')
+  it('parseGiftSent keeps gift: code and nothing else', () => {
+    const base = { type: 'imani_gift_sent', v: 1, token: 'cashuBx', stall: 's', to: null, claimBy: 5 }
+    expect(parseGiftSent(JSON.stringify({ ...base, gift: 'code' }))?.gift).toBe('code')
+    expect(parseGiftSent(JSON.stringify({ ...base, gift: 'cheque' }))).not.toHaveProperty('gift')
+  })
+  it('parseMineCodes drops malformed rows', () => {
+    const good = { code: 'IMANI-ABCD-2345-EFGH', status: 'reserved', amount: 10, remaining: 5, unit: 'eur', expires_at: 9, shop_key: 'AB'.repeat(32) }
+    expect(parseMineCodes([good, { ...good, amount: -1 }, { ...good, shop_key: 'x' }, null, 'x'])).toEqual([{ code: 'IMANIABCD2345EFGH', status: 'reserved', amount: 10, remaining: 5, unit: 'eur', expiresAt: 9, shopKey: 'ab'.repeat(32) }])
+    expect(parseMineCodes({})).toEqual([])
+  })
+  it('parsePartTokens keeps cashuB tokens only', () => {
+    expect(parsePartTokens({ parts: [{ token: 'cashuBa' }, { token: 'x' }, {}] })).toEqual(['cashuBa'])
+    expect(parsePartTokens(null)).toEqual([])
+  })
+  it('codeReturnStateOf: waiting before x whatever is left, ready after x with unspent parts', () => {
+    expect(codeReturnStateOf({ remaining: 5, expiresAt: 10, status: 'reserved' }, 1, 5_000)).toBe('waiting')
+    expect(codeReturnStateOf({ remaining: 0, expiresAt: 10, status: 'redeemed' }, 0, 5_000)).toBe('used')
+    expect(codeReturnStateOf({ remaining: 5, expiresAt: 10, status: 'expired' }, 1, 11_000)).toBe('ready')
+    expect(codeReturnStateOf({ remaining: 0, expiresAt: 10, status: 'expired' }, 0, 11_000)).toBe('returned')
+  })
+})

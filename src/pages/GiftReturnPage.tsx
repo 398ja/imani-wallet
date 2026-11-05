@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { formatDate, formatFace } from '../lib/format'
 import { parseReturnFragment } from '../lib/lockedGifts'
-import { readGiftReturn, takeBackGuestGift, type GiftReturnRead } from '../lib/lockedGiftsApp'
+import { readGiftReturn, takeBackCodeGift, takeBackGuestGift, type CodeReturnView, type GiftReturnRead } from '../lib/lockedGiftsApp'
 import { loadTrustedMints } from '../lib/trustedMint'
 import { Button } from '../components/ui'
 import { Centered } from '../components/ui/layout'
@@ -51,7 +51,7 @@ export function GiftReturnPage({ authed }: { authed: boolean }) {
   }, [link, checks])
 
   // A page left open past the date checks again then, rather than saying "not yet" for ever.
-  const waitingUntil = read?.kind === 'ok' && read.view.state === 'waiting' ? read.view.x : null
+  const waitingUntil = (read?.kind === 'ok' || read?.kind === 'code') && read.view.state === 'waiting' ? read.view.x : null
   useEffect(() => {
     if (waitingUntil === null) return
     const ms = Math.min(waitingUntil * 1000 - Date.now() + 1_000, 2_147_483_647)
@@ -60,10 +60,10 @@ export function GiftReturnPage({ authed }: { authed: boolean }) {
   }, [waitingUntil, checks])
 
   const takeBack = useCallback(async () => {
-    if (!link || read?.kind !== 'ok' || busy.current) return
+    if (!link || (read?.kind !== 'ok' && read?.kind !== 'code') || busy.current) return
     busy.current = true
     setStep('taking')
-    const out = await takeBackGuestGift(link.r, read.view.token)
+    const out = read.kind === 'code' ? await takeBackCodeGift(link.r, read.view) : await takeBackGuestGift(link.r, read.view.token)
     busy.current = false
     setStep(out.kind === 'returned' ? 'returned' : out.kind === 'claimed' ? 'claimed' : 'failed')
   }, [link, read])
@@ -74,6 +74,7 @@ export function GiftReturnPage({ authed }: { authed: boolean }) {
   if (read.kind === 'unreachable') return <Outcome tone="unavailable" title="Try again" body="We could not reach the voucher service. Try again in a moment." onDone={goHome} />
   if (read.kind === 'refused') return <Outcome tone="unavailable" title="Gift unavailable" body="This gift could not be verified, so it cannot be taken back here." onDone={goHome} />
   if (step === 'taking') return <Centered>Taking your gift back…</Centered>
+  if (read.kind === 'code') return <CodeReturn view={read.view} step={step} authed={authed} onTakeBack={() => void takeBack()} onDone={goHome} />
   if (step === 'returned') {
     return <Outcome tone="success" title="Gift taken back" body={`It is back in your wallet as a voucher. ${keepsExpiry(read.view.expiresAt)}`} onDone={goHome} />
   }
@@ -104,6 +105,44 @@ export function GiftReturnPage({ authed }: { authed: boolean }) {
         )}
         {step === 'failed' && <p className="mt-4 text-sm text-red-600">It could not be taken back this time. Try again in a moment.</p>}
         <Button size="lg" variant="ghost" className="mt-2 w-full" onClick={goHome}>
+          {authed ? 'Done' : 'Open my wallet'}
+        </Button>
+      </div>
+    </Centered>
+  )
+}
+
+/**
+ * #410: a shop-code gift. Never offers an early take-back (owner rule): the unspent balance stays on
+ * the code until its date, then the parts still unspent come back to this return link.
+ */
+function CodeReturn({ view, step, authed, onTakeBack, onDone }: { view: CodeReturnView; step: string; authed: boolean; onTakeBack: () => void; onDone: () => void }) {
+  const money = (minor: number) => formatFace(minor, { unit: view.unit, decimals: view.decimals })
+  const date = formatDate(view.x)
+  if (step === 'returned') return <Outcome tone="success" title="Balance received" body="What was left on the code is back in your wallet as a voucher." onDone={onDone} />
+  if (view.state === 'used') return <Outcome tone="unavailable" title="Code used" body={`Your recipient spent the whole ${money(view.amountMinor)} code.`} onDone={onDone} />
+  if (view.state === 'returned') return <Outcome tone="unavailable" title="Nothing left to receive" body="Nothing unspent is left on this code." onDone={onDone} />
+  return (
+    <Centered>
+      <div className="w-full max-w-sm text-center" data-testid="code-return">
+        <h1 className="text-xl font-semibold">{view.stall ? `Your shop code gift for ${view.stall}` : 'Your shop code gift'}</h1>
+        <p className="mt-2 text-2xl tabular-nums">{money(view.remainingMinor)}</p>
+        <p className="mt-1 text-sm text-mono-500">left of {money(view.amountMinor)}</p>
+        {view.state === 'waiting' && <p className="mt-4 text-sm text-mono-500">Whatever isn't spent by {date} comes back to you. Open this link again after then.</p>}
+        {view.state === 'ready' && (
+          <>
+            <p className="mt-4 text-sm text-mono-500">The code expired on {date}. What was left comes back to you.</p>
+            {authed ? (
+              <Button size="lg" className="mt-6 w-full" onClick={onTakeBack}>
+                Receive it in my wallet
+              </Button>
+            ) : (
+              <p className="mt-6 text-sm">Open or create your Imani wallet on this device, then open this return link again from where you saved it.</p>
+            )}
+          </>
+        )}
+        {step === 'failed' && <p className="mt-4 text-sm text-red-600">It could not be received this time. Try again in a moment.</p>}
+        <Button size="lg" variant="ghost" className="mt-2 w-full" onClick={onDone}>
           {authed ? 'Done' : 'Open my wallet'}
         </Button>
       </div>
