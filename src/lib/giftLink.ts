@@ -32,6 +32,7 @@ import { terminalCredentialFromToken } from './notMoney'
 import {
   creditableFaceValue,
   parseVoucherToken,
+  splitTokenByVoucher,
   tokenProofs,
   verifyVoucher,
   type ParsedVoucherToken,
@@ -318,14 +319,19 @@ export async function giftTokensFrom(secret: Uint8Array, wraps: GiftWrap[]): Pro
       content = offer.payload
     }
     const payload = asTransfer(content)
-    if (!payload || found.has(payload.token)) continue
-    found.set(payload.token, {
-      token: payload.token,
-      senderPubkey: typeof payload.sender_pubkey === 'string' && /^[0-9a-f]{64}$/.test(payload.sender_pubkey)
-        ? payload.sender_pubkey
-        : undefined,
-      sentAt: rumor.created_at,
-    })
+    if (!payload) continue
+    // A link armed by v0.55.2 or older can hold ONE locked token mixing several coupons, which
+    // every reader refused. Cut per voucher, so such a link is claimed and taken back like any.
+    for (const token of splitTokenByVoucher(payload.token)) {
+      if (found.has(token)) continue
+      found.set(token, {
+        token,
+        senderPubkey: typeof payload.sender_pubkey === 'string' && /^[0-9a-f]{64}$/.test(payload.sender_pubkey)
+          ? payload.sender_pubkey
+          : undefined,
+        sentAt: rumor.created_at,
+      })
+    }
   }
   return [...found.values()]
 }

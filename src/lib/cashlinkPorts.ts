@@ -75,11 +75,12 @@ async function keep(coupon: KeptCoupon): Promise<void> {
   await wallet.saveVoucher(row)
   // A claim is a receive and needs its History row. The legacy receive gets one from
   // TokenRedemption's atomic write; this path never ran it, so a claimed Cashlink left the coupon
-  // in the wallet and nothing in History. A take-back (`returned`) is told on the sent row's link
-  // record instead, so it gets no second row. A failed row write never undoes the kept coupon.
-  if (coupon.why === 'claimed') {
+  // in the wallet and nothing in History. A Cashlink take-back gets its own incoming row too
+  // (staging, 2026-11-05: the sent row's "Taken back" alone left the returned value unexplained in
+  // History, and the owner saw no record of it). A failed row write never undoes the kept coupon.
+  if (coupon.why === 'claimed' || coupon.takenBack) {
     try {
-      await wallet.addTransaction(claimedRow(row, coupon.token, Date.now(), coupon.bundleId))
+      await wallet.addTransaction(coupon.why === 'claimed' ? claimedRow(row, coupon.token, Date.now(), coupon.bundleId) : takenBackRow(row, coupon.token, Date.now(), coupon.bundleId))
     } catch (error) {
       console.warn('[cashlink] coupon kept but its History row was not written', error instanceof Error ? error.message : 'unknown')
     }
@@ -101,6 +102,16 @@ export function claimedRow(row: VoucherRow, token: string, at = Date.now(), bund
     bundleId,
     at,
   })
+}
+
+/**
+ * The History row for a Cashlink coupon back with its issuer. Its own id (`returned:`), so it never
+ * merges over the claim row of the same coupon on a wallet that both sent and claimed it.
+ */
+export function takenBackRow(row: VoucherRow, token: string, at = Date.now(), bundleId?: string) {
+  const received = claimedRow(row, token, at, bundleId) as unknown as Record<string, unknown>
+  const id = `returned:${String((row as unknown as Record<string, unknown>).token_id)}`
+  return { ...received, id, txId: id, memo: 'Taken back from Cashlink' } as unknown as ReturnType<typeof claimedRow>
 }
 
 export function appCashlinkPorts(): CashlinkPorts {

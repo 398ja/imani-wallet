@@ -184,11 +184,16 @@ describe('claiming a locked Cashlink', () => {
     expect(h.receipts).toHaveLength(0)
   })
 
-  it('a take-back writes no received row and tells nobody', async () => {
+  it('a take-back writes its own incoming "Taken back" row in the link bundle, and tells nobody', async () => {
+    // Staging, 2026-11-05 (bug 2): the owner took a Cashlink back and History showed nothing for
+    // the value that came back. Before the fix this row was deliberately not written (#528).
     const { k } = await sendLockedLink()
     await giftLinks.takeBack(k)
     await flush()
-    expect(h.rows.filter((r) => r.type === 'received')).toHaveLength(0)
+    const back = h.rows.filter((r) => r.type === 'received')
+    expect(back.length).toBeGreaterThan(0)
+    expect(back.every((r) => String(r.id).startsWith('returned:') && r.memo === 'Taken back from Cashlink')).toBe(true)
+    expect(h.rows.find((r) => r.type === 'sent')).toMatchObject({ link: { status: 'reclaimed' } })
     expect(h.receipts).toHaveLength(0)
   })
 })
