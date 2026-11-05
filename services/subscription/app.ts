@@ -27,6 +27,7 @@ import { LicenceIssuer, signCatalog, type LicenceOrder, type Seller } from './is
 import { Ledger, newSubscriptionId, type IssuedLicence, type SubscriptionRow } from './ledger.ts'
 import type { MerchantReader } from './merchantRole.ts'
 import { countStatusMessage, countTransition, renderMetrics } from './metrics.ts'
+import { renderSubscriptionBusinessMetrics } from './businessMetrics.ts'
 import type { StatusNotifier } from './statusNotifier.ts'
 import type { BadgePublisher } from './badgePublisher.ts'
 import { verifyStripeSignature, type StripeClient, type StripePrice } from './stripe.ts'
@@ -302,6 +303,26 @@ export function createApp(deps: AppDeps) {
     }
   }
 
+  /**
+   * The ledger is read once per scrape. If it cannot be read, the ledger-derived activity series
+   * are left out (no false zeros) and the business metrics keep their last values and count the
+   * failure (`imani_business_metrics_poll_failures_total{source="subscription"}`).
+   */
+  async function metricsBody(): Promise<string> {
+    let rows: SubscriptionRow[] | null = null
+    let error: unknown = null
+    try {
+      rows = await deps.ledger.all()
+    } catch (e) {
+      error = e
+    }
+    const business = await renderSubscriptionBusinessMetrics(async () => {
+      if (rows === null) throw error
+      return rows
+    }, now())
+    return (rows === null ? '' : renderMetrics(rows, now())) + business
+  }
+
   // ------------------------------------------------------------------ routes
 
   async function handle(req: Request): Promise<Response> {
@@ -315,7 +336,7 @@ export function createApp(deps: AppDeps) {
         // edge must not route it.
         return {
           status: 200,
-          body: renderMetrics(await deps.ledger.all(), now()),
+          body: await metricsBody(),
           headers: { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' },
         }
       case 'GET /v1/catalog':
