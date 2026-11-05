@@ -230,3 +230,14 @@ describe('claimedRow', () => {
     expect(row).toMatchObject({ id: 'received:t1', type: 'received', direction: 'in', amount: 250, unit: 'GBP', decimals: 2, voucherId: 'v1', merchantId: 'ab'.repeat(32), timestamp: 5 })
   })
 })
+
+describe('claimedRow bundle', () => {
+  it('carries the link bundle id so a several-coupon claim is one History entry', () => {
+    const row = claimedRow({ token_id: 't1', face_value: 1, face_unit: 'eur' } as never, 'cashuBx', 5, 'ef'.repeat(16)) as unknown as Record<string, unknown>
+    expect(row.bundleId).toBe('ef'.repeat(16))
+  })
+  it('a lone claim has no bundle id, never null', () => {
+    const row = claimedRow({ token_id: 't1', face_value: 1, face_unit: 'eur' } as never, 'cashuBx', 5) as unknown as Record<string, unknown>
+    expect(row.bundleId).toBeUndefined()
+  })
+})

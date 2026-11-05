@@ -43,6 +43,7 @@ import { deriveRefundSecret, readLinkLock, xOnlyPub } from './cashlinkLock'
 import {
   armGift,
   burntByThisWallet,
+  cashlinkBundleId,
   claimLockedGift,
   lockedLocktime,
   lockedOnLink,
@@ -836,9 +837,9 @@ export async function redeemGiftTokens(
       if (outcome.kind !== 'ok') return outcome
       tellIssuerClaimed(locked, account)
       const rest = tokens.filter((t) => !locked.includes(t))
-      return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption)
+      return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption, cashlinkBundleId(linkPubOf(linkSecret)))
     }
-    return await swapGiftTokens(tokens, source, redemption)
+    return await swapGiftTokens(tokens, source, redemption, linkSecret ? cashlinkBundleId(linkPubOf(linkSecret)) : undefined)
   } finally {
     endReceive()
   }
@@ -907,6 +908,8 @@ async function swapGiftTokens(
   tokens: GiftToken[],
   source: 'gift_link' | 'gift_link_reclaim',
   redemption: NonNullable<Window['TokenRedemption']>,
+  /** One id for every coupon off this link, so History folds a several-coupon claim into one entry. */
+  bundleId?: string,
 ): Promise<GiftRedeemOutcome> {
   let added = 0
   let spent = 0
@@ -916,7 +919,7 @@ async function swapGiftTokens(
     const { token } = gift
     try {
       const validation = cashbackValidation(token)
-      await withCorrelation(validation ? { validation: { ...validation } } : {}, (correlationId) =>
+      await withCorrelation({ ...(validation ? { validation: { ...validation } } : {}), ...(bundleId ? { bundleId } : {}) }, (correlationId) =>
         redemption.redeem(token, { source, metadata: { correlation_id: correlationId } }),
       )
       added += 1
@@ -1592,6 +1595,8 @@ async function adoptLink(
       voucherId: parsed.voucher.voucherId,
       link: { k, i, x, status: 'outstanding', ...(locked ? { arm: locked.arm } : {}) },
       at: sentAt * 1000,
+      // One link's coupons are one send: History folds them (the live send's random id is gone).
+      ...(tokens.length > 1 ? { bundleId: cashlinkBundleId(linkPubOf(secretFromText(k)!)) } : {}),
     })
     await wallet.addTransaction(row)
   }
