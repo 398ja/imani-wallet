@@ -10,8 +10,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const native = vi.hoisted(() => ({ value: false }))
 const fs = vi.hoisted(() => ({
-  writeFile: vi.fn(async () => ({ uri: 'file:///cache/imani-backup.json' })),
+  writeFile: vi.fn(async () => ({ uri: 'file:///cache/share/imani-backup.json' })),
   deleteFile: vi.fn(async () => {}),
+  rmdir: vi.fn(async () => {}),
 }))
 const share = vi.hoisted(() => ({ share: vi.fn(async () => ({})) }))
 
@@ -23,7 +24,7 @@ vi.mock('@capacitor/filesystem', () => ({
 }))
 vi.mock('@capacitor/share', () => ({ Share: share }))
 
-import { downloadText, mimeTypeFor } from '../download'
+import { downloadText, mimeTypeFor, SHARE_LINGER_MS, sweepSharedFiles } from '../download'
 import { backupFileAccept } from '../backupFileAccept'
 
 beforeEach(() => {
@@ -68,28 +69,55 @@ describe('downloadText in the app', () => {
     native.value = true
   })
 
-  it('writes to the cache, shares the file, deletes it, and never makes a blob URL', async () => {
+  it('writes to the share folder, shares the file, and never makes a blob URL', async () => {
     const create = vi.spyOn(URL, 'createObjectURL')
     await downloadText('imani-backup.json', 'secret')
     expect(fs.writeFile).toHaveBeenCalledWith(
-      expect.objectContaining({ path: 'imani-backup.json', data: 'secret', directory: 'CACHE' }),
+      expect.objectContaining({ path: 'share/imani-backup.json', data: 'secret', directory: 'CACHE' }),
     )
     expect(share.share).toHaveBeenCalledWith(
-      expect.objectContaining({ files: ['file:///cache/imani-backup.json'] }),
+      expect.objectContaining({ files: ['file:///cache/share/imani-backup.json'] }),
     )
-    expect(fs.deleteFile).toHaveBeenCalledWith({ path: 'imani-backup.json', directory: 'CACHE' })
     expect(create).not.toHaveBeenCalled()
   })
 
-  it('treats a dismissed share sheet as fine, and still deletes the file', async () => {
-    share.share.mockRejectedValueOnce(new Error('Share canceled'))
-    await expect(downloadText('k.txt', 'nsec1')).resolves.toBeUndefined()
-    expect(fs.deleteFile).toHaveBeenCalled()
+  it('keeps a shared file for its target to read, and removes it later', async () => {
+    // Android resolves the share when a target is PICKED; Drive or Gmail read the file after that.
+    vi.useFakeTimers()
+    try {
+      await downloadText('imani-backup.json', 'secret')
+      expect(fs.deleteFile).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(SHARE_LINGER_MS)
+      expect(fs.deleteFile).toHaveBeenCalledWith({ path: 'share/imani-backup.json', directory: 'CACHE' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('rejects visibly when sharing fails, and still deletes the file', async () => {
+  it('sweeps what an earlier save left before writing a new one', async () => {
+    await downloadText('imani-backup.json', 'secret')
+    expect(fs.rmdir).toHaveBeenCalledWith({ path: 'share', directory: 'CACHE', recursive: true })
+    expect(fs.rmdir.mock.invocationCallOrder[0]).toBeLessThan(fs.writeFile.mock.invocationCallOrder[0])
+  })
+
+  it('sweeps at start without throwing, and does nothing on the web', async () => {
+    fs.rmdir.mockRejectedValueOnce(new Error('does not exist'))
+    await expect(sweepSharedFiles()).resolves.toBeUndefined()
+    native.value = false
+    fs.rmdir.mockClear()
+    await sweepSharedFiles()
+    expect(fs.rmdir).not.toHaveBeenCalled()
+  })
+
+  it('treats a dismissed share sheet as fine, and deletes the file at once', async () => {
+    share.share.mockRejectedValueOnce(new Error('Share canceled'))
+    await expect(downloadText('k.txt', 'nsec1')).resolves.toBeUndefined()
+    expect(fs.deleteFile).toHaveBeenCalledWith({ path: 'share/k.txt', directory: 'CACHE' })
+  })
+
+  it('rejects visibly when sharing fails, and deletes the file at once', async () => {
     share.share.mockRejectedValueOnce(new Error('No activity found'))
     await expect(downloadText('k.txt', 'nsec1')).rejects.toThrow(/save options/)
-    expect(fs.deleteFile).toHaveBeenCalled()
+    expect(fs.deleteFile).toHaveBeenCalledWith({ path: 'share/k.txt', directory: 'CACHE' })
   })
 })
