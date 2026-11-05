@@ -79,7 +79,7 @@ async function keep(coupon: KeptCoupon): Promise<void> {
   // record instead, so it gets no second row. A failed row write never undoes the kept coupon.
   if (coupon.why === 'claimed') {
     try {
-      await wallet.addTransaction(claimedRow(row, coupon.token))
+      await wallet.addTransaction(claimedRow(row, coupon.token, Date.now(), coupon.bundleId))
     } catch (error) {
       console.warn('[cashlink] coupon kept but its History row was not written', error instanceof Error ? error.message : 'unknown')
     }
@@ -88,7 +88,7 @@ async function keep(coupon: KeptCoupon): Promise<void> {
 }
 
 /** The History row for a claimed coupon, from the voucher row just saved. Exported for tests. */
-export function claimedRow(row: VoucherRow, token: string, at = Date.now()) {
+export function claimedRow(row: VoucherRow, token: string, at = Date.now(), bundleId?: string) {
   const r = row as unknown as Record<string, unknown>
   return buildReceivedTransaction({
     tokenId: String(r.token_id),
@@ -98,6 +98,7 @@ export function claimedRow(row: VoucherRow, token: string, at = Date.now()) {
     merchantId: typeof r.issuer_id === 'string' ? r.issuer_id : undefined,
     voucherId: typeof r.voucher_id === 'string' ? r.voucher_id : undefined,
     validation: cashbackValidation(token),
+    bundleId,
     at,
   })
 }

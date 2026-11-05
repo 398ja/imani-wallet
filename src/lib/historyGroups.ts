@@ -1,3 +1,5 @@
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
 import type { WalletTransaction } from './transactions'
 import { hasValidationClaim, validationStatus, type ValidationStatus } from './validationStatus'
 import type { VoucherValidation } from './voucherToken'
@@ -51,9 +53,10 @@ export type HistoryEntry =
  * are part of the key so different parties' money is never folded together.
  */
 function groupKey(tx: WalletTransaction): string | undefined {
-  if (!tx.bundleId) return undefined
+  const bundle = tx.bundleId ?? linkBundle(tx)
+  if (!bundle) return undefined
   return [
-    tx.bundleId,
+    bundle,
     tx.direction,
     tx.type,
     tx.unit,
@@ -61,6 +64,16 @@ function groupKey(tx: WalletTransaction): string | undefined {
     tx.counterparty ?? '',
     tx.merchantId ?? '',
   ].join('\u0000')
+}
+
+/**
+ * Rows already stored without a bundle id still fold when they are the coupons of ONE Cashlink:
+ * a send adopted back from the relay wrote one row per coupon and no bundle id. Keyed on a hash of
+ * the link, never the link secret itself, since the key ends up in the entry id.
+ */
+function linkBundle(tx: WalletTransaction): string | undefined {
+  if (tx.type !== 'sent' || !tx.link?.k) return undefined
+  return 'link:' + bytesToHex(sha256(new TextEncoder().encode(tx.link.k))).slice(0, 32)
 }
 
 /** A stable, unique React key for any entry. */

@@ -830,6 +830,11 @@ export function buildReceivedTransaction(input: {
   counterparty?: string
   validation?: VoucherValidation
   memo?: string
+  /**
+   * Shared by every coupon claimed off one Cashlink, so History folds them into one entry the way
+   * it folds a multi-voucher send. Absent on a single-coupon claim.
+   */
+  bundleId?: string
   at: number
 }): TransactionRow {
   return {
@@ -846,7 +851,7 @@ export function buildReceivedTransaction(input: {
     counterparty: input.counterparty ?? null,
     voucherId: input.voucherId,
     tokenId: input.tokenId,
-    bundleId: null,
+    ...(input.bundleId ? { bundleId: input.bundleId } : {}),
     ...(input.validation ? { validation: input.validation } : {}),
     memo: input.memo || 'Received via Cashlink',
   } as unknown as TransactionRow
