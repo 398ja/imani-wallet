@@ -9,17 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **The free-tier thresholds come from imani-xrate** (#506, owner decision "Option A"), the same
-  hand-set fiat rates gateway-customer and gateway-core back vouchers with, instead of
-  open.er-api.com. xrate is internal only, so `scripts/free-tier-amounts.mts` no longer fetches
-  anything: it reads an export of xrate's `GET /v1/rates`, committed as
-  `services/subscription/xrate-rates.json` (version 154, the 2026-11-04 seed, which reproduces the
-  current thresholds exactly). An open.er-api.com response is refused.
-- `.github/workflows/free-tier-amounts.yml` is manual only: rates move when an operator changes
-  them in xrate, not on a calendar, and the runner cannot reach xrate.
-
 ### Added
 
 - **The stall hears when a customer claims its cashback** (#158, with
@@ -48,6 +37,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the missing route with 500, so a wallet shipped first logged "drain refused 500" every 10s
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
+
+## [0.53.2] - 2026-11-05
+
+### Changed
+
+- **The free-tier thresholds come from imani-xrate** (#519, #506, owner decision "Option A"). The
+  generator reads a committed export of xrate's `GET /v1/rates`
+  (`services/subscription/xrate-rates.json`, version 154) instead of open.er-api.com, and the
+  workflow is manual only. No threshold changed (catalog stays v5).
+
+### Fixed
+
+- **Android: a backup saved through the share sheet is no longer empty** (#517). The file was
+  deleted the moment the share sheet returned, but Drive or Gmail read it after that. It now stays
+  in a private `share/` folder in the app's cache for 10 minutes, and that folder is cleared before
+  the next save and at app start.
+- **Every issuing script sends the stall's merchant issuance warrant** (#518, #516): the k6 load
+  test, `seed-merchant.mjs`, `loadtest/stalls.mjs` and the new checkout-code load test. The portal
+  refuses coupons without one since 0.18.0. #516 also adds the checkout-code load test (generation,
+  validation and the redeem race).
 
 ## [0.53.1] - 2026-11-04
 
