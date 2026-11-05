@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.55.2] - 2026-11-05
+
+### Fixed
+
+- **History groups a several-voucher Cashlink again** (#530). 0.55.1's claim row had no bundle id,
+  so each coupon claimed off one Cashlink became its own History line. Every coupon off one link now
+  shares a bundle id derived from the link's public key, so a retry gets the same id. That covers
+  locked and unlocked claims, and sends recovered from the relay. Sent rows already stored without a
+  bundle id fold by their link. Ordinary multi-voucher sends were not affected.
+
 ## [0.55.1] - 2026-11-05
 
 ### Fixed
