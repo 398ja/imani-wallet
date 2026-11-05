@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.55.4] - 2026-11-05
+
+### Fixed
+
+- **The purchase-issuer image builds again** (#534). 0.55.3 gave `voucherToken.ts` an import of
+  `plainToken.ts`, which the purchase-issuer, subscription and wallet-api images do not copy, so the
+  purchase-issuer image failed its own load check and 0.55.3 never deployed. The split moves to
+  `tokenSplit.ts`. A new test fails when a wallet file a service image copies imports one it does not.
+  0.55.3's Cashlink fixes ship in this release.
+
 ## [0.55.3] - 2026-11-05
 
 ### Fixed
