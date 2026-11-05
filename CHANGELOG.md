@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nostr event size measurement** (#532). Every event the wallet publishes through
+  `relay.ts` `publish()` is measured (UTF-8 bytes of its JSON, once per publish, before sending)
+  and batched to gateway-customer's `POST /api/v1/telemetry/event-sizes` as `{kind, bytes, path}`
+  only, NIP-98 signed, flushed every 30 s, at 50 queued and when the page is hidden. Nothing is
+  sent while signed out or locked, and a failed batch is dropped. The gateway mirror
+  (`POST /api/v1/nostr/events`) is not measured here: the gateway records it. The subscription
+  service measures what it publishes to the relay and adds `imani_nostr_event_bytes`,
+  `imani_nostr_event_over_limit_total` and `imani_nostr_event_limit_bytes` to its `/metrics`,
+  with thresholds from `NOSTR_EVENT_SIZE_LIMITS` (default
+  `strfry_max_event=65536,wrap_budget=55121`). The shared recorder is
+  `src/lib/nostrEventSizeMetrics.ts`, copied into the subscription image.
 - **The stall hears when a customer claims its cashback** (#158, with
   imani-gateway-portal#59). The portal sends a `cashback_claimed` Web Push and keeps a
   drainable notice; `src/lib/cashbackClaimDrain.ts` collects the notice

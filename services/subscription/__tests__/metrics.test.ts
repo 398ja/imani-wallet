@@ -125,7 +125,7 @@ describe('GET /metrics on a service that has done nothing', () => {
     expect(text).not.toContain(STALL)
     // Only closed label NAMES, and no identifier among the values.
     const labelNames = new Set([...text.matchAll(/[{,]([a-z_]+)="/g)].map((m) => m[1]))
-    expect([...labelNames].sort()).toEqual(['day', 'event', 'result', 'status', 'term', 'tier'])
+    expect([...labelNames].sort()).toEqual(['day', 'event', 'limit', 'result', 'status', 'term', 'tier'])
     expect([...text.matchAll(/="([^"]*)"/g)].map((m) => m[1]).filter((v) => /^(sub_|cus_|in_)|^[0-9a-f]{64}$/.test(v))).toEqual([])
   })
 })
