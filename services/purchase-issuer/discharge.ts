@@ -225,6 +225,12 @@ export async function discharge(
   // could double: payment-adapter only sells these once `purchase.gifting.kinds` enables them,
   // which waits for arming (see giftLock.ts).
   const giftKind = obligation.gift && obligation.gift.kind !== 'self' ? obligation.gift.kind : null
+  // #410 code gifts (payment-adapter#314): minting locked to the shop key S and depositing at
+  // imani-checkout-codes is not built here yet (docs/superpowers/specs/2026-11-05-410-code-gift-issuer-plan.md).
+  // Refused BEFORE minting: read as an email gift it would mint and mail a VOUCHER for a code purchase.
+  if (obligation.gift?.delivery?.gift === 'code') {
+    return { kind: 'attention', reason: 'code gift: this issuer does not mint checkout-code gifts yet; nothing minted, refund or issue by hand' }
+  }
   if (giftKind !== null && !ports.gifts) {
     return {
       kind: 'blocked',
