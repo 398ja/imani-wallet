@@ -58,6 +58,8 @@ import {
 import { isUnverifiedClaim, unconfirmedClaimLinks, type GiftLinkArm } from './transactions'
 import { pendingSendsKey } from './inFlightMoney'
 import { loadMerchant } from './merchant'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
 
 // --- #295 phase 4 seams -----------------------------------------------------
 
@@ -832,6 +834,7 @@ export async function redeemGiftTokens(
       notifyWalletChanged()
       if (outcome.kind === 'own_coupon') return { kind: 'failed', message: OWN_COUPON_MESSAGE }
       if (outcome.kind !== 'ok') return outcome
+      tellIssuerClaimed(locked, account)
       const rest = tokens.filter((t) => !locked.includes(t))
       return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption)
     }
@@ -839,6 +842,57 @@ export async function redeemGiftTokens(
   } finally {
     endReceive()
   }
+}
+
+/**
+ * Tell whoever made and funded the Cashlink that it was claimed (the "claimed" notice).
+ *
+ * Reuses the payment-receipt channel rather than a new one: `POST /api/v1/payment-receipts` fires
+ * the issuer's `voucher_claimed` Web Push server-side (gateway-core `fireSettlementPush`), so the
+ * issuer's app need not be open, and their `paymentReceiptDrain` files the bell row and toast
+ * when it next runs. Observed here, by the claimer, because only the claim knows it happened at
+ * the moment it happens: the issuer learns of a spend only when its own wallet next settles the
+ * link, and the gateway's re-sign route cannot tell the issuer's key from a stranger's.
+ *
+ * The issuer is the wrap's `sender_pubkey` (a public key). The receipt id is derived from the
+ * locked proof's secret hash, never the secret or the link key, and is stable so a retry is a 409.
+ * Fire and forget: the coupon is already here, a lost receipt costs only the notice.
+ */
+export function tellIssuerClaimed(locked: GiftToken[], claimer: string | undefined): void {
+  const issuer = locked.map((t) => t.senderPubkey).find((p): p is string => typeof p === 'string' && /^[0-9a-f]{64}$/.test(p))
+  if (!issuer || issuer === claimer?.toLowerCase()) return
+  let faceValue = 0
+  let faceUnit: string | undefined
+  let faceDecimals: number | undefined
+  let voucherId: string | undefined
+  let verified = true
+  for (const { token } of locked) {
+    try {
+      const parsed = parseVoucherToken(token)
+      faceValue += creditableFaceValue(parsed).faceValue
+      faceUnit ??= parsed.voucher.unit
+      faceDecimals ??= parsed.voucher.faceDecimals
+      voucherId ??= parsed.voucher.voucherId
+      if (cashbackValidation(token)?.signatureValid !== true) verified = false
+    } catch {
+      verified = false
+    }
+  }
+  let anchor: string
+  try {
+    anchor = 'cashlink:' + tokenProofs(locked[0].token).map((p) => bytesToHex(sha256(new TextEncoder().encode(p.secret)))).join(',')
+  } catch {
+    return
+  }
+  void import('./paymentReceipt').then(({ postPaymentReceipt }) =>
+    postPaymentReceipt({
+      senderPubkeyHex: issuer,
+      deliveryEventId: bytesToHex(sha256(new TextEncoder().encode(anchor))),
+      voucherId,
+      // Amounts only from a verified voucher, as on the DM receive.
+      ...(verified && faceUnit ? { faceValue, faceUnit, faceDecimals } : {}),
+    }),
+  ).catch(() => undefined)
 }
 
 /** A stall opening a Cashlink of its own coupon (owner decision Q3: no self-swap). Nothing moved. */
@@ -857,13 +911,16 @@ async function swapGiftTokens(
   let added = 0
   let spent = 0
   let failure: string | undefined
-  for (const { token } of tokens) {
+  const claimed: GiftToken[] = []
+  for (const gift of tokens) {
+    const { token } = gift
     try {
       const validation = cashbackValidation(token)
       await withCorrelation(validation ? { validation: { ...validation } } : {}, (correlationId) =>
         redemption.redeem(token, { source, metadata: { correlation_id: correlationId } }),
       )
       added += 1
+      claimed.push(gift)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       // The server refused it under the same rule: nothing was swapped, and nothing else will pass.
@@ -880,6 +937,8 @@ async function swapGiftTokens(
     }
   }
   notifyWalletChanged()
+  // A recipient's claim (never the sender's own take-back) tells the issuer, one receipt per coupon.
+  if (source === 'gift_link') for (const gift of claimed) tellIssuerClaimed([gift], sessionAccount(getSigner))
   if (failure !== undefined) return { kind: 'failed', message: failure }
   if (added === 0 && spent > 0) return { kind: 'claimed' }
   return { kind: 'ok' }
