@@ -1,5 +1,5 @@
 /**
- * The secrets of an email or handle gift, made in this browser at review time (#410 §4c, G3, G4).
+ * The secrets of an email gift, made in this browser at review time (#410 §4c, G3, G4).
  *
  * - `ℓ` (link secret): the claim key of an email gift. Never shown to the buyer (G8). Sealed to
  *   the Purchase Issuer's key so delivery can run from the Stripe webhook with the tab gone (G4).
@@ -15,8 +15,8 @@ import { bytesToHex } from '@noble/hashes/utils'
 import { generateSecretKey, getPublicKey, nip44 } from 'nostr-tools'
 
 export interface GiftSecrets {
-  /** hex; email gifts only. */
-  linkSecret?: string
+  /** hex. */
+  linkSecret: string
   /** hex; guests only. */
   refundSecret?: string
   refundPubkey: string
@@ -29,8 +29,9 @@ export interface SealBinding {
   recipient: string
 }
 
-export function newGiftSecrets(kind: 'handle' | 'email', buyerPubkey: string | null): GiftSecrets {
-  const linkSecret = kind === 'email' ? bytesToHex(generateSecretKey()) : undefined
+/** Every gift goes to an email, so every gift has a link secret. */
+export function newGiftSecrets(buyerPubkey: string | null): GiftSecrets {
+  const linkSecret = bytesToHex(generateSecretKey())
   if (buyerPubkey) return { linkSecret, refundPubkey: buyerPubkey }
   const r = generateSecretKey()
   return { linkSecret, refundSecret: bytesToHex(r), refundPubkey: getPublicKey(r) }
