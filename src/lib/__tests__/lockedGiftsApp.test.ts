@@ -63,8 +63,8 @@ const FORGER = hexToBytes('77'.repeat(32))
 
 let w: ReturnType<typeof world>
 
-function minted(lock: Uint8Array, refund: Uint8Array): string {
-  return tokenOf([w.mint.issue(signLocked(linkLockProposal({ giftSecret: bearerSecret(), linkPub: xOnlyPub(lock), refundPub: xOnlyPub(refund), x: X, maxSats: 64, nonce: 'n1' })), 64)])
+function minted(lock: Uint8Array, refund: Uint8Array, nonce = 'n1'): string {
+  return tokenOf([w.mint.issue(signLocked(linkLockProposal({ giftSecret: bearerSecret(), linkPub: xOnlyPub(lock), refundPub: xOnlyPub(refund), x: X, maxSats: 64, nonce })), 64)])
 }
 const transfer = (token: string) => JSON.stringify({ type: 'cashu_token_transfer', version: '1.0', token })
 const sent = (token: string, to: string | null = 'bob@example.com') => JSON.stringify({ type: 'imani_gift_sent', v: 1, token, stall: 'Mama Put', to, claimBy: X })
@@ -253,5 +253,82 @@ describe('guest return page', () => {
     app.giftReturnSeam.wraps = async () => [wrapTo(FORGER, BUYER, sent(minted(ME, BUYER))) as never]
     expect((await app.readGiftReturn(BUYER, undefined, NOW * 1000)).kind).toBe('not_found')
     expect(await app.readGiftReturn(BUYER, minted(ME, FORGER), NOW * 1000)).toEqual({ kind: 'refused', why: 'wrong_key' })
+  })
+})
+
+const { parseVoucherToken } = await import('../voucherToken')
+const parseUnit = (t: string) => parseVoucherToken(t).voucher.unit
+describe('#410 code gift return (parts as R, after a rebalance)', () => {
+  const S = hexToBytes('88'.repeat(32))
+  const codeSent = (token: string) => JSON.stringify({ type: 'imani_gift_sent', v: 1, token, stall: 'Olive Grove', to: 'dan@example.com', claimBy: X, gift: 'code' })
+  function store(original: string, parts: string[], remaining: number, opts: { status?: string; shopKey?: string } = {}) {
+    const unit = parseUnit(original)
+    const calls: Array<{ signer: string; path: string }> = []
+    app.giftReturnSeam.storeAsR = async (r, path) => {
+      calls.push({ signer: xOnlyPub(r), path })
+      if (path === '/v1/checkout-codes/mine') {
+        return { status: 200, body: [{ code: 'IMANIABCD2345EFGH', status: opts.status ?? 'reserved', amount: 64, remaining, unit, expires_at: X, shop_key: opts.shopKey ?? xOnlyPub(S), stall_pubkey: 'aa'.repeat(32) }] }
+      }
+      if (path === '/v1/checkout-codes/IMANIABCD2345EFGH/parts') return { status: 200, body: { status: 'reserved', amount: remaining, parts: parts.map((token, idx) => ({ idx, token, amount: 1 })) } }
+      return { status: 404, body: null }
+    }
+    app.giftReturnSeam.wraps = async () => [wrapTo(ISSUER, BUYER, codeSent(original)) as never]
+    app.giftReturnSeam.states = async (t) => w.mint.states('http://mint.test', (await import('../voucherToken')).tokenProofs(t).map((p) => p.secret))
+    app.giftReturnSeam.codeGifts = () => true
+    return calls
+  }
+
+  it('reads /mine and /{code}/parts signed by R, and settles the unspent successor after x', async () => {
+    const { shopSpends, loadTokenReader } = await import('./cashlinkWorld')
+    await loadTokenReader()
+    const original = minted(S, BUYER)
+    const successor = minted(S, BUYER, 'n2')
+    shopSpends(w.mint, [original])
+    const calls = store(original, [successor], 40)
+    const before = await app.readGiftReturn(BUYER, undefined, NOW * 1000)
+    expect(before.kind).toBe('code')
+    if (before.kind !== 'code') return
+    expect(before.view).toMatchObject({ state: 'waiting', remainingMinor: 40, amountMinor: 64, stall: 'Olive Grove', parts: [successor] })
+    expect(calls.every((c) => c.signer === xOnlyPub(BUYER))).toBe(true)
+    expect(calls.map((c) => c.path)).toEqual(['/v1/checkout-codes/mine', '/v1/checkout-codes/IMANIABCD2345EFGH/parts'])
+    // No early take-back.
+    vi.spyOn(Date, 'now').mockReturnValue(NOW * 1000)
+    expect((await app.takeBackCodeGift(BUYER, before.view)).kind).toBe('waiting')
+    expect(w.mint.log.swaps).toHaveLength(0)
+    vi.restoreAllMocks()
+    at(w, X + 1)
+    const after = await app.readGiftReturn(BUYER, undefined, (X + 1) * 1000)
+    if (after.kind !== 'code') throw new Error(`expected a code read, got ${after.kind}`)
+    expect(after.view.state).toBe('ready')
+    vi.spyOn(Date, 'now').mockReturnValue((X + 1) * 1000)
+    expect((await app.takeBackCodeGift(BUYER, after.view)).kind).toBe('returned')
+    expect(w.kept).toHaveLength(1)
+    vi.restoreAllMocks()
+  })
+
+  it('a part that does not refund to R, or is locked to another S, is never settled', async () => {
+    const original = minted(S, BUYER)
+    store(original, [minted(S, FORGER), minted(ME, BUYER)], 64)
+    const read = await app.readGiftReturn(BUYER, undefined, (X + 1) * 1000)
+    expect(read.kind === 'code' && read.view.parts).toEqual([])
+  })
+
+  it('a code fully used reads as used; a /mine with no matching code is not found', async () => {
+    const { shopSpends, loadTokenReader } = await import('./cashlinkWorld')
+    await loadTokenReader()
+    const original = minted(S, BUYER)
+    shopSpends(w.mint, [original])
+    store(original, [], 0, { status: 'redeemed' })
+    expect(await app.readGiftReturn(BUYER, undefined, NOW * 1000)).toMatchObject({ kind: 'code', view: { state: 'used' } })
+    store(original, [], 0, { shopKey: 'ab'.repeat(32) })
+    expect((await app.readGiftReturn(BUYER, undefined, NOW * 1000)).kind).toBe('not_found')
+  })
+
+  it('VITE_GIFTING_CODE_GIFTS off: read as a plain locked gift, the store is never asked', async () => {
+    const original = minted(S, BUYER)
+    const calls = store(original, [], 64)
+    app.giftReturnSeam.codeGifts = () => false
+    expect((await app.readGiftReturn(BUYER, undefined, NOW * 1000)).kind).toBe('ok')
+    expect(calls).toHaveLength(0)
   })
 })

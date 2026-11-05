@@ -9,8 +9,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
  * #410 G14 /gift-return: R is read from the fragment and the URL scrubbed in the first render; the
  * state is shown; nothing is taken back on load, only on the button, and only after the date.
  */
-const m = vi.hoisted(() => ({ read: vi.fn(), take: vi.fn() }))
-vi.mock('../../lib/lockedGiftsApp', () => ({ readGiftReturn: m.read, takeBackGuestGift: m.take }))
+const m = vi.hoisted(() => ({ read: vi.fn(), take: vi.fn(), takeCode: vi.fn() }))
+vi.mock('../../lib/lockedGiftsApp', () => ({ readGiftReturn: m.read, takeBackGuestGift: m.take, takeBackCodeGift: m.takeCode }))
 vi.mock('../../lib/trustedMint', () => ({ loadTrustedMints: async () => {} }))
 
 import { GiftReturnPage } from '../GiftReturnPage'
@@ -33,6 +33,7 @@ function open(authed = true) {
 beforeEach(() => {
   m.read.mockReset()
   m.take.mockReset()
+  m.takeCode.mockReset()
 })
 afterEach(cleanup)
 
@@ -97,4 +98,24 @@ describe('GiftReturnPage', () => {
     expect(m.read).toHaveBeenCalledTimes(2)
     expect(m.take).not.toHaveBeenCalled()
   }, 10_000)
+})
+
+describe('GiftReturnPage: #410 shop code gift', () => {
+  const codeView = (state: string) => ({ kind: 'code', view: { stall: 'Olive Grove', amountMinor: 1500, remainingMinor: 900, unit: 'EUR', decimals: 2, x: 1_800_000_000, state, parts: ['cashuBp'] } })
+  it('waiting: shows what is left, never offers an early take-back', async () => {
+    m.read.mockResolvedValue(codeView('waiting'))
+    open()
+    expect(await screen.findByText(/comes back to you/i)).toBeTruthy()
+    expect(screen.getByTestId('code-return').textContent).toMatch(/9\.00/)
+    expect(screen.queryByRole('button', { name: /receive|take/i })).toBeNull()
+  })
+  it('ready: the button receives the unspent parts', async () => {
+    m.read.mockResolvedValue(codeView('ready'))
+    m.takeCode.mockResolvedValue({ kind: 'returned' })
+    open()
+    fireEvent.click(await screen.findByRole('button', { name: /receive it in my wallet/i }))
+    expect(await screen.findByText('Balance received')).toBeTruthy()
+    expect(m.takeCode).toHaveBeenCalledTimes(1)
+    expect(m.take).not.toHaveBeenCalled()
+  })
 })
