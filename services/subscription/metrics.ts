@@ -20,6 +20,10 @@
  *     30-day charts read these, which is why they do not depend on Prometheus' retention.
  */
 import type { SubscriptionRow } from './ledger.ts'
+import { createEventSizeRecorder } from '../../src/lib/nostrEventSizeMetrics.ts'
+
+/** Nostr event sizes this service publishes to the relay (#532); limits from NOSTR_EVENT_SIZE_LIMITS. */
+export const eventSizes = createEventSizeRecorder('subscription')
 
 /** Every tier a subscription can be on. `custom` is a hand grant; `other` catches anything new. */
 export const TIERS = ['basic', 'pro', 'custom', 'other'] as const
@@ -135,5 +139,5 @@ export function renderMetrics(rows: readonly SubscriptionRow[], nowSeconds: numb
   emit('imani_subscription_ledger_rows', 'gauge', 'Rows in the sales ledger. Zero with paying stalls means the ledger was lost.', [
     ['', rows.length],
   ])
-  return lines.join('\n') + '\n'
+  return lines.join('\n') + '\n' + eventSizes.render()
 }

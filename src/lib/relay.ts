@@ -1,4 +1,5 @@
 import { SimplePool, verifyEvent, type Event } from 'nostr-tools'
+import { recordRelayPublish } from './eventSizeTelemetry'
 import { gatewayAllEvents, gatewayQuery, GatewayUnreachableError, newestByD } from './gatewayNostr'
 
 /**
@@ -89,6 +90,14 @@ export async function publish(
   // So every publish also stores the event in the cache. Best effort, in parallel, never blocks or
   // changes the relay result.
   void cacheEvent(event)
+  // Event size telemetry (#532): once per publish call, before sending, whatever the outcome.
+  // Synchronous and never throws, so it cannot delay or fail the publish. The cacheEvent mirror
+  // above is measured by the gateway, not here.
+  try {
+    recordRelayPublish(event)
+  } catch {
+    // telemetry never fails a publish
+  }
   const pool = opts.connectMs ? new SimplePool({ maxWaitForConnection: opts.connectMs } as never) : new SimplePool()
   try {
     const results = await Promise.allSettled(pool.publish(relays, event))
