@@ -28,7 +28,8 @@
  */
 import { finalizeEvent, generateSecretKey, getPublicKey, nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils'
+import { schnorr } from '@noble/curves/secp256k1.js'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -148,6 +149,19 @@ function nip98(sk, url, method, body) {
   return `Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`
 }
 
+/**
+ * The stall's `merchant` issuance warrant for the whole sale (face value x quantity), as the
+ * wallet's Sell signs it (src/lib/warrantSigner.ts). The portal refuses a sale without one
+ * (since 2026-11-05), and every receiving wallet refuses a coupon without one.
+ */
+function merchantWarrant(merchant, saleTotalMinor, unit) {
+  const faceDecimals = new Intl.NumberFormat('en', { style: 'currency', currency: unit }).resolvedOptions().maximumFractionDigits
+  const nonce = bytesToHex(randomBytes(16))
+  const preimage = [merchant.pk, String(saleTotalMinor), String(faceDecimals), unit, nonce].join('\u001f')
+  const sig = bytesToHex(schnorr.sign(sha256(new TextEncoder().encode(preimage)), merchant.sk))
+  return JSON.stringify({ form: 'merchant', sale_total: saleTotalMinor, face_decimals: faceDecimals, unit, nonce, sig })
+}
+
 async function issue(merchant, { quantity, faceValueMinor, currency, memo }) {
   const url = `${PORTAL}/api/v1/portal/vouchers`
   const body = JSON.stringify({
@@ -156,6 +170,7 @@ async function issue(merchant, { quantity, faceValueMinor, currency, memo }) {
     quantity,
     expiry_days: 90,
     memo,
+    issuance_warrant: merchantWarrant(merchant, faceValueMinor * quantity, currency),
   })
 
   const response = await fetch(url, {
