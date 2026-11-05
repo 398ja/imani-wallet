@@ -146,6 +146,16 @@ export interface KeptCoupon {
   faceValue?: number
   /** Why it is being kept, for the History row. */
   why: 'claimed' | 'returned'
+  /** Shared by every coupon claimed off one link, so History shows the claim as one entry. */
+  bundleId?: string
+}
+
+/**
+ * The bundle id every coupon claimed off one Cashlink shares: a hash of the link's PUBLIC key, so
+ * it is the same on a retry or a start-up finish and reveals nothing about the link secret.
+ */
+export function cashlinkBundleId(linkPub: string): string {
+  return bytesToHex(sha256(new TextEncoder().encode('imani-cashlink-bundle:' + linkPub.toLowerCase()))).slice(0, 32)
 }
 
 export const LOCK_PATH = '/api/v1/wallet/vouchers/cashlink/lock'
@@ -367,9 +377,9 @@ const tokenOf = (mintUrl: string, proofs: UnblindedProof[]): string => encodePla
  * proofs of one gift kept under the same token would leave only the last proof's sats
  * (rev-wallet377 H1).
  */
-async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenProof, proofs: UnblindedProof[], why: KeptCoupon['why'], faceValue?: number): Promise<void> {
+async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenProof, proofs: UnblindedProof[], why: KeptCoupon['why'], faceValue?: number, bundleId?: string): Promise<void> {
   const couponToken = tokenOf(mintUrl, [{ amount: source.amount, id: source.id, secret: source.secret, C: source.C }])
-  await ports.keep({ token: couponToken, satsToken: tokenOf(mintUrl, proofs), sats: proofs.reduce((n, p) => n + p.amount, 0), why, ...faceOf(faceValue) })
+  await ports.keep({ token: couponToken, satsToken: tokenOf(mintUrl, proofs), sats: proofs.reduce((n, p) => n + p.amount, 0), why, ...faceOf(faceValue), ...(bundleId ? { bundleId } : {}) })
 }
 
 // --- Sending: arming --------------------------------------------------------
@@ -1504,6 +1514,7 @@ const PARTLY = 'It is only partly added. Try again in a moment.'
 /** 'ok', 'gone' (someone else spent it first), or a failure message (the claim is kept unless nothing moved). */
 async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uint8Array, claim: CashlinkClaim): Promise<'ok' | 'gone' | string> {
   const { proof, mintUrl, outputs } = claim
+  const bundleId = cashlinkBundleId(linkPubOf(linkSecret))
   const forget = () => saveClaims(pubkey, loadClaims(pubkey).filter((c) => !sameClaim(c, proof.secret)))
 
   // 1. Burn with the link key, or find our earlier burn.
@@ -1554,13 +1565,13 @@ async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uin
       minted = done.kind === 'proofs' ? done.proofs[0] : undefined
     }
     if (!minted) return PARTLY
-    await ports.keep({ token: tokenOf(mintUrl, [minted]), why: 'claimed', ...faceOf(claim.faceValue) })
+    await ports.keep({ token: tokenOf(mintUrl, [minted]), why: 'claimed', ...faceOf(claim.faceValue), bundleId })
     forget()
     return 'ok'
   }
   if (notYet(answer.status)) return PARTLY
   // A definite refusal after the burn: the value is kept as sats, in this wallet. Never lost.
-  await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue)
+  await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue, bundleId)
   forget()
   return 'ok'
 }
