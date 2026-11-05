@@ -255,9 +255,11 @@ function GiftFlow({
         <Field id="buyerEmail" label="Your email" error={show('buyerEmail')}>
           <input id="buyerEmail" type="email" autoComplete="email" className={inputClass} value={form.buyerEmail} onChange={(e) => set({ buyerEmail: e.target.value })} />
           <p className="mt-1 text-xs text-mono-500">
-            {signedIn
-              ? 'For your receipt, and to tell you when it is claimed or if it is not.'
-              : 'For your receipt, your link to take the gift back, and to tell you when it is claimed or if it is not.'}
+            {form.gift === 'code'
+              ? 'For your receipt, your link for whatever is left unspent at expiry, and to tell you when the code is used or expires.'
+              : signedIn
+                ? 'For your receipt, and to tell you when it is claimed or if it is not.'
+                : 'For your receipt, your link to take the gift back, and to tell you when it is claimed or if it is not.'}
           </p>
         </Field>
 
@@ -362,7 +364,7 @@ function Review({
       const previous = recall(shop.canonical)?.draftId
       // Editing invalidates the old draft (§3). Best effort: an orphan simply expires.
       if (previous) void api.invalidate(previous)
-      const secrets = newGiftSecrets(sessionKey)
+      const secrets = newGiftSecrets(sessionKey, { freshRefund: form.gift === 'code' })
       const issuer = await api.issuerKey()
       // G4: ONLY ℓ is sealed to the issuer, bound to this stall, amount and address. R never
       // leaves this browser except in the guest's own return link (G-R3).
@@ -512,12 +514,21 @@ function Review({
           lost on the way to Stripe cannot cost the buyer their way to take the gift back. */}
       {state.refundSecret && WALLET_ORIGIN && (
         <Section title="Your return link">
-          <p className="mb-2 text-sm text-mono-500">
-            If the gift isn&apos;t claimed by {day(deadline)}, open it to take the gift back into a wallet. We&apos;ll email it to {form.buyerEmail}{' '}
-            when you pay. Keep it private: it is yours, not the recipient&apos;s.
+          <p className="mb-2 text-sm text-mono-500" data-testid="review-return-copy">
+            {isCode ? (
+              <>
+                The code can&apos;t be taken back. Whatever isn&apos;t spent by {expiry} comes back to you: open this link after then to receive it
+                in a wallet. We&apos;ll email it to {form.buyerEmail} when you pay. Keep it private: it is yours, not the recipient&apos;s.
+              </>
+            ) : (
+              <>
+                If the gift isn&apos;t claimed by {day(deadline)}, open it to take the gift back into a wallet. We&apos;ll email it to {form.buyerEmail}{' '}
+                when you pay. Keep it private: it is yours, not the recipient&apos;s.
+              </>
+            )}
           </p>
           <a className="break-all text-sm underline" href={returnLink(WALLET_ORIGIN, state.refundSecret)} data-testid="review-return-link">
-            Take the gift back
+            {isCode ? 'Your unspent balance link' : 'Take the gift back'}
           </a>
         </Section>
       )}

@@ -30,9 +30,11 @@ export interface SealBinding {
 }
 
 /** Every gift goes to an email, so every gift has a link secret. */
-export function newGiftSecrets(buyerPubkey: string | null): GiftSecrets {
+export function newGiftSecrets(buyerPubkey: string | null, opts: { freshRefund?: boolean } = {}): GiftSecrets {
   const linkSecret = bytesToHex(generateSecretKey())
-  if (buyerPubkey) return { linkSecret, refundPubkey: buyerPubkey }
+  // A code gift (owner, 2026-11-05; contract §2): R is per code and never an identity key, so a
+  // signed-in buyer gets a fresh R too, sent home by the same return link as a guest's.
+  if (buyerPubkey && !opts.freshRefund) return { linkSecret, refundPubkey: buyerPubkey }
   const r = generateSecretKey()
   return { linkSecret, refundSecret: bytesToHex(r), refundPubkey: getPublicKey(r) }
 }
