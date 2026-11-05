@@ -5,10 +5,19 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { FREE_TIER_AMOUNTS } from '@imani/licence'
 
-import { parseXrateExport } from '../../../scripts/xrate-rates.mts'
+// Imported dynamically, like the other tests that load a script (licenceIssue, expiryNotice): the
+// wallet image's .dockerignore leaves scripts/ out (it holds key-material tooling), and a static
+// import made the image's `tsc -b` fail on a file that is not there. Vitest runs from the repo.
+type Parse = (text: string) => { rates: Record<string, number>; version: number; asOf: string }
+const parseXrateExport: Parse = (text) => parse(text)
+let parse: Parse
+beforeAll(async () => {
+  const path = '../../../scripts/xrate-rates.mts'
+  parse = ((await import(/* @vite-ignore */ path)) as { parseXrateExport: Parse }).parseXrateExport
+})
 
 const EXPORT = readFileSync(join(__dirname, '../../../services/subscription/xrate-rates.json'), 'utf8')
 
