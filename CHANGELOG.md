@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.54.1] - 2026-11-05
+
+### Fixed
+
+- **The wallet image can turn shop-code gift returns on.** The Dockerfile now declares
+  `VITE_GIFTING_CODE_GIFTS`, so a deploy's build arg reaches the gift return page. Before, it was
+  silently ignored and the return page always read a code gift as a plain gift.
+
 ## [0.54.0] - 2026-11-05
 
 ### Changed
