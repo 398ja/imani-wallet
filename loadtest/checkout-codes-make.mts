@@ -57,6 +57,9 @@ import { startCheckoutCode, type CheckoutPorts } from '../src/lib/checkoutCodeFl
 import { httpCashlinkMint } from '../src/lib/cashlinkFlow'
 import { creditableFaceValue, parseVoucherToken } from '../src/lib/voucherToken'
 import { latestLockX } from '../src/lib/cashlinkLock'
+import { warrantSaleDigest } from '../src/lib/issuanceWarrant'
+import { currencyDecimals } from '../src/lib/format'
+import { schnorr } from '@noble/curves/secp256k1.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
@@ -215,13 +218,37 @@ type Stage = 'issue' | 'mint_wait' | 'lock_and_deposit'
 type Made = { ok: true; code: string; amount: number; unit: string; x: number; ms: Record<Stage, number> }
 type NotMade = { ok: false; stage: Stage | 'rate_limited'; why: string; ms: Partial<Record<Stage, number>> }
 
+/**
+ * The stall's `merchant` issuance warrant for one sale, signed as the wallet's Sell does
+ * (src/lib/warrantSigner.ts `buildIssuanceWarrant`). The portal still ACCEPTS a sale with no warrant
+ * (migration policy, IssuanceWarrantGate), but a coupon without one is refused by every receiving
+ * wallet and shows up as `voucher_issuance_warrant_total{outcome="absent"}`. The 2026-11-05 smoke of
+ * this script minted three such coupons before this was added. A load test must issue what a real
+ * stall issues.
+ */
+function merchantWarrant(stall: Identity, saleTotalMinor: number, unit: string): string {
+  const faceDecimals = currencyDecimals(unit)
+  const nonce = bytesToHex(randomBytes(16))
+  const digest = warrantSaleDigest(stall.pubHex, saleTotalMinor, faceDecimals, unit, nonce)
+  const sig = bytesToHex(schnorr.sign(digest, hexToBytes(stall.privHex)))
+  return JSON.stringify({ form: 'merchant', sale_total: saleTotalMinor, face_decimals: faceDecimals, unit, nonce, sig })
+}
+
 async function makeOne(stall: Identity, cookie: string, customer: Identity, shopKey: string, depositTimes: number[]): Promise<Made | NotMade> {
   const ms: Partial<Record<Stage, number>> = {}
   let t = performance.now()
   const created = await fetch(`${PORTAL}/api/v1/portal/vouchers`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ face_value_minor: FACE_MINOR, currency: CURRENCY, quantity: 1, expiry_days: 90, memo: 'checkout-codes load test' }),
+    body: JSON.stringify({
+      face_value_minor: FACE_MINOR,
+      currency: CURRENCY,
+      quantity: 1,
+      expiry_days: 90,
+      memo: 'checkout-codes load test',
+      // quantity is 1, so the sale total is the one coupon's face value.
+      issuance_warrant: merchantWarrant(stall, FACE_MINOR, CURRENCY),
+    }),
     signal: AbortSignal.timeout(30_000),
   })
   ms.issue = performance.now() - t
