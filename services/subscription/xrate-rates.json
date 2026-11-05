@@ -1,0 +1,1239 @@
+{
+  "base": "USD",
+  "version": 154,
+  "as_of": "2026-11-04T00:02:31Z",
+  "rates": {
+    "AED": {
+      "name": "United Arab Emirates Dirham",
+      "decimals": 2,
+      "units_per_usd": 3.6725,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "AFN": {
+      "name": "Afghan Afghani",
+      "decimals": 0,
+      "units_per_usd": 65.087183,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ALL": {
+      "name": "Albanian Lek",
+      "decimals": 0,
+      "units_per_usd": 81.344524,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "AMD": {
+      "name": "Armenian Dram",
+      "decimals": 2,
+      "units_per_usd": 360.236164,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ANG": {
+      "name": "Netherlands Antillean Guilder",
+      "decimals": 2,
+      "units_per_usd": 1.79,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "AOA": {
+      "name": "Angolan Kwanza",
+      "decimals": 2,
+      "units_per_usd": 917.302058,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ARS": {
+      "name": "Argentine Peso",
+      "decimals": 2,
+      "units_per_usd": 1549.7194,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "AUD": {
+      "name": "Australian Dollar",
+      "decimals": 2,
+      "units_per_usd": 1.434205,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "AWG": {
+      "name": "Aruban Florin",
+      "decimals": 2,
+      "units_per_usd": 1.79,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "AZN": {
+      "name": "Azerbaijani Manat",
+      "decimals": 2,
+      "units_per_usd": 1.700835,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BAM": {
+      "name": "Bosnia-Herzegovina Convertible Mark",
+      "decimals": 2,
+      "units_per_usd": 1.747547,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BBD": {
+      "name": "Barbadian Dollar",
+      "decimals": 2,
+      "units_per_usd": 2,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BDT": {
+      "name": "Bangladeshi Taka",
+      "decimals": 2,
+      "units_per_usd": 124.496963,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BGN": {
+      "name": "Bulgarian Lev",
+      "decimals": 2,
+      "units_per_usd": 1.747547,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BHD": {
+      "name": "Bahraini Dinar",
+      "decimals": 3,
+      "units_per_usd": 0.376,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BIF": {
+      "name": "Burundian Franc",
+      "decimals": 0,
+      "units_per_usd": 3002.306789,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BMD": {
+      "name": "Bermudan Dollar",
+      "decimals": 2,
+      "units_per_usd": 1,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BND": {
+      "name": "Brunei Dollar",
+      "decimals": 2,
+      "units_per_usd": 1.2812,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BOB": {
+      "name": "Bolivian Boliviano",
+      "decimals": 2,
+      "units_per_usd": 12.101634,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BRL": {
+      "name": "Brazilian Real",
+      "decimals": 2,
+      "units_per_usd": 5.48609,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BSD": {
+      "name": "Bahamian Dollar",
+      "decimals": 2,
+      "units_per_usd": 1,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BTN": {
+      "name": "Bhutanese Ngultrum",
+      "decimals": 2,
+      "units_per_usd": 94.831893,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BWP": {
+      "name": "Botswanan Pula",
+      "decimals": 2,
+      "units_per_usd": 14.093377,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BYN": {
+      "name": "Belarusian Ruble",
+      "decimals": 2,
+      "units_per_usd": 2.974195,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "BZD": {
+      "name": "Belize Dollar",
+      "decimals": 2,
+      "units_per_usd": 2,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "CAD": {
+      "name": "Canadian Dollar",
+      "decimals": 2,
+      "units_per_usd": 1.399422,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "CDF": {
+      "name": "Congolese Franc",
+      "decimals": 2,
+      "units_per_usd": 2311.770652,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "CHF": {
+      "name": "Swiss Franc",
+      "decimals": 2,
+      "units_per_usd": 0.820009,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "CLP": {
+      "name": "Chilean Peso",
+      "decimals": 0,
+      "units_per_usd": 978.112665,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "CNY": {
+      "name": "Chinese Yuan",
+      "decimals": 2,
+      "units_per_usd": 6.684036,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "COP": {
+      "name": "Colombian Peso",
+      "decimals": 2,
+      "units_per_usd": 3221.311219,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "CRC": {
+      "name": "Costa Rican Colón",
+      "decimals": 2,
+      "units_per_usd": 454.238941,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "CUP": {
+      "name": "Cuban Peso",
+      "decimals": 2,
+      "units_per_usd": 24,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "CVE": {
+      "name": "Cape Verdean Escudo",
+      "decimals": 2,
+      "units_per_usd": 98.522513,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "CZK": {
+      "name": "Czech Koruna",
+      "decimals": 2,
+      "units_per_usd": 21.757265,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "DJF": {
+      "name": "Djiboutian Franc",
+      "decimals": 0,
+      "units_per_usd": 177.721,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "DKK": {
+      "name": "Danish Krone",
+      "decimals": 2,
+      "units_per_usd": 6.680451,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "DOP": {
+      "name": "Dominican Peso",
+      "decimals": 2,
+      "units_per_usd": 60.357433,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "DZD": {
+      "name": "Algerian Dinar",
+      "decimals": 2,
+      "units_per_usd": 135.980297,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "EGP": {
+      "name": "Egyptian Pound",
+      "decimals": 2,
+      "units_per_usd": 55.370618,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ERN": {
+      "name": "Eritrean Nakfa",
+      "decimals": 2,
+      "units_per_usd": 15,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ETB": {
+      "name": "Ethiopian Birr",
+      "decimals": 2,
+      "units_per_usd": 161.660165,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "EUR": {
+      "name": "Euro",
+      "decimals": 2,
+      "units_per_usd": 0.893426,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "FJD": {
+      "name": "Fijian Dollar",
+      "decimals": 2,
+      "units_per_usd": 2.249972,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "FKP": {
+      "name": "Falkland Islands Pound",
+      "decimals": 2,
+      "units_per_usd": 0.745435,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "GBP": {
+      "name": "British Pound",
+      "decimals": 2,
+      "units_per_usd": 0.745418,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "GEL": {
+      "name": "Georgian Lari",
+      "decimals": 2,
+      "units_per_usd": 2.595476,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "GHS": {
+      "name": "Ghanaian Cedi",
+      "decimals": 2,
+      "units_per_usd": 11.67886,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "GIP": {
+      "name": "Gibraltar Pound",
+      "decimals": 2,
+      "units_per_usd": 0.745435,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "GMD": {
+      "name": "Gambian Dalasi",
+      "decimals": 2,
+      "units_per_usd": 74.672224,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "GNF": {
+      "name": "Guinean Franc",
+      "decimals": 0,
+      "units_per_usd": 8837.707387,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "GTQ": {
+      "name": "Guatemalan Quetzal",
+      "decimals": 2,
+      "units_per_usd": 7.648876,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "GYD": {
+      "name": "Guyanaese Dollar",
+      "decimals": 2,
+      "units_per_usd": 209.553955,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "HKD": {
+      "name": "Hong Kong Dollar",
+      "decimals": 2,
+      "units_per_usd": 7.845778,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "HNL": {
+      "name": "Honduran Lempira",
+      "decimals": 2,
+      "units_per_usd": 26.894853,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "HTG": {
+      "name": "Haitian Gourde",
+      "decimals": 2,
+      "units_per_usd": 131.032857,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "HUF": {
+      "name": "Hungarian Forint",
+      "decimals": 2,
+      "units_per_usd": 325.892843,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "IDR": {
+      "name": "Indonesian Rupiah",
+      "decimals": 2,
+      "units_per_usd": 18140.247665,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ILS": {
+      "name": "Israeli New Shekel",
+      "decimals": 2,
+      "units_per_usd": 3.164114,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "INR": {
+      "name": "Indian Rupee",
+      "decimals": 2,
+      "units_per_usd": 94.834253,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "IQD": {
+      "name": "Iraqi Dinar",
+      "decimals": 3,
+      "units_per_usd": 1517.439548,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "IRR": {
+      "name": "Iranian Rial",
+      "decimals": 0,
+      "units_per_usd": 1778990.843571,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ISK": {
+      "name": "Icelandic Króna",
+      "decimals": 0,
+      "units_per_usd": 121.706697,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "JMD": {
+      "name": "Jamaican Dollar",
+      "decimals": 2,
+      "units_per_usd": 158.763334,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "JOD": {
+      "name": "Jordanian Dinar",
+      "decimals": 3,
+      "units_per_usd": 0.709,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "JPY": {
+      "name": "Japanese Yen",
+      "decimals": 0,
+      "units_per_usd": 158.39919,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "KES": {
+      "name": "Kenyan Shilling",
+      "decimals": 2,
+      "units_per_usd": 129.975909,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "KGS": {
+      "name": "Kyrgystani Som",
+      "decimals": 2,
+      "units_per_usd": 87.453978,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "KHR": {
+      "name": "Cambodian Riel",
+      "decimals": 2,
+      "units_per_usd": 4106.921228,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "KMF": {
+      "name": "Comorian Franc",
+      "decimals": 0,
+      "units_per_usd": 439.576464,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "KRW": {
+      "name": "South Korean Won",
+      "decimals": 0,
+      "units_per_usd": 1343.930997,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "KWD": {
+      "name": "Kuwaiti Dinar",
+      "decimals": 3,
+      "units_per_usd": 0.311167,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "KYD": {
+      "name": "Cayman Islands Dollar",
+      "decimals": 2,
+      "units_per_usd": 0.833333,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "KZT": {
+      "name": "Kazakhstani Tenge",
+      "decimals": 2,
+      "units_per_usd": 452.700572,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "LAK": {
+      "name": "Laotian Kip",
+      "decimals": 0,
+      "units_per_usd": 22329.604611,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "LBP": {
+      "name": "Lebanese Pound",
+      "decimals": 0,
+      "units_per_usd": 89500,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "LKR": {
+      "name": "Sri Lankan Rupee",
+      "decimals": 2,
+      "units_per_usd": 332.444906,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "LRD": {
+      "name": "Liberian Dollar",
+      "decimals": 2,
+      "units_per_usd": 169.78581,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "LSL": {
+      "name": "Lesotho Loti",
+      "decimals": 2,
+      "units_per_usd": 16.617183,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "LYD": {
+      "name": "Libyan Dinar",
+      "decimals": 3,
+      "units_per_usd": 6.415873,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MAD": {
+      "name": "Moroccan Dirham",
+      "decimals": 2,
+      "units_per_usd": 9.822838,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MDL": {
+      "name": "Moldovan Leu",
+      "decimals": 2,
+      "units_per_usd": 18.02933,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MGA": {
+      "name": "Malagasy Ariary",
+      "decimals": 0,
+      "units_per_usd": 4586.415602,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MKD": {
+      "name": "Macedonian Denar",
+      "decimals": 2,
+      "units_per_usd": 55.304824,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MMK": {
+      "name": "Myanmar Kyat",
+      "decimals": 0,
+      "units_per_usd": 2099.818442,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MNT": {
+      "name": "Mongolian Tugrik",
+      "decimals": 2,
+      "units_per_usd": 3623.011805,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MOP": {
+      "name": "Macanese Pataca",
+      "decimals": 2,
+      "units_per_usd": 8.081192,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MRU": {
+      "name": "Mauritanian Ouguiya",
+      "decimals": 2,
+      "units_per_usd": 40.54197,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MUR": {
+      "name": "Mauritian Rupee",
+      "decimals": 2,
+      "units_per_usd": 47.579002,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MVR": {
+      "name": "Maldivian Rufiyaa",
+      "decimals": 2,
+      "units_per_usd": 15.463868,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MWK": {
+      "name": "Malawian Kwacha",
+      "decimals": 2,
+      "units_per_usd": 1743.262358,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MXN": {
+      "name": "Mexican Peso",
+      "decimals": 2,
+      "units_per_usd": 18.737449,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MYR": {
+      "name": "Malaysian Ringgit",
+      "decimals": 2,
+      "units_per_usd": 4.076971,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "MZN": {
+      "name": "Mozambican Metical",
+      "decimals": 2,
+      "units_per_usd": 63.75147,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "NAD": {
+      "name": "Namibian Dollar",
+      "decimals": 2,
+      "units_per_usd": 16.617183,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "NGN": {
+      "name": "Nigerian Naira",
+      "decimals": 2,
+      "units_per_usd": 1346.069771,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "NIO": {
+      "name": "Nicaraguan Córdoba",
+      "decimals": 2,
+      "units_per_usd": 36.82044,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "NOK": {
+      "name": "Norwegian Krone",
+      "decimals": 2,
+      "units_per_usd": 9.280833,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "NPR": {
+      "name": "Nepalese Rupee",
+      "decimals": 2,
+      "units_per_usd": 151.731029,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "NZD": {
+      "name": "New Zealand Dollar",
+      "decimals": 2,
+      "units_per_usd": 1.783786,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "OMR": {
+      "name": "Omani Rial",
+      "decimals": 3,
+      "units_per_usd": 0.384497,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "PAB": {
+      "name": "Panamanian Balboa",
+      "decimals": 2,
+      "units_per_usd": 1,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "PEN": {
+      "name": "Peruvian Sol",
+      "decimals": 2,
+      "units_per_usd": 3.464766,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "PGK": {
+      "name": "Papua New Guinean Kina",
+      "decimals": 2,
+      "units_per_usd": 4.484133,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "PHP": {
+      "name": "Philippine Peso",
+      "decimals": 2,
+      "units_per_usd": 63.519923,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "PKR": {
+      "name": "Pakistani Rupee",
+      "decimals": 2,
+      "units_per_usd": 276.527777,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "PLN": {
+      "name": "Polish Zloty",
+      "decimals": 2,
+      "units_per_usd": 3.945126,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "PYG": {
+      "name": "Paraguayan Guarani",
+      "decimals": 0,
+      "units_per_usd": 5921.440394,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "QAR": {
+      "name": "Qatari Riyal",
+      "decimals": 2,
+      "units_per_usd": 3.64,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "RON": {
+      "name": "Romanian Leu",
+      "decimals": 2,
+      "units_per_usd": 4.772099,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "RSD": {
+      "name": "Serbian Dinar",
+      "decimals": 0,
+      "units_per_usd": 105.127831,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "RUB": {
+      "name": "Russian Ruble",
+      "decimals": 2,
+      "units_per_usd": 81.415956,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "RWF": {
+      "name": "Rwandan Franc",
+      "decimals": 0,
+      "units_per_usd": 1478.505259,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SAR": {
+      "name": "Saudi Riyal",
+      "decimals": 2,
+      "units_per_usd": 3.75,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SBD": {
+      "name": "Solomon Islands Dollar",
+      "decimals": 2,
+      "units_per_usd": 8.039129,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SCR": {
+      "name": "Seychellois Rupee",
+      "decimals": 2,
+      "units_per_usd": 14.264838,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SDG": {
+      "name": "Sudanese Pound",
+      "decimals": 2,
+      "units_per_usd": 449.495398,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SEK": {
+      "name": "Swedish Krona",
+      "decimals": 2,
+      "units_per_usd": 9.79114,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SGD": {
+      "name": "Singapore Dollar",
+      "decimals": 2,
+      "units_per_usd": 1.281123,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SHP": {
+      "name": "St. Helena Pound",
+      "decimals": 2,
+      "units_per_usd": 0.745435,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SLE": {
+      "name": "Sierra Leonean Leone",
+      "decimals": 2,
+      "units_per_usd": 22.869551,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SOS": {
+      "name": "Somali Shilling",
+      "decimals": 0,
+      "units_per_usd": 571.509188,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SRD": {
+      "name": "Surinamese Dollar",
+      "decimals": 2,
+      "units_per_usd": 37.640923,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SSP": {
+      "name": "South Sudanese Pound",
+      "decimals": 2,
+      "units_per_usd": 6101.720331,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "STN": {
+      "name": "São Tomé & Príncipe Dobra",
+      "decimals": 2,
+      "units_per_usd": 21.890913,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SYP": {
+      "name": "Syrian Pound",
+      "decimals": 0,
+      "units_per_usd": 121.78692,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "SZL": {
+      "name": "Swazi Lilangeni",
+      "decimals": 2,
+      "units_per_usd": 16.617183,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "THB": {
+      "name": "Thai Baht",
+      "decimals": 2,
+      "units_per_usd": 33.757532,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "TJS": {
+      "name": "Tajikistani Somoni",
+      "decimals": 2,
+      "units_per_usd": 9.207997,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "TMT": {
+      "name": "Turkmenistani Manat",
+      "decimals": 2,
+      "units_per_usd": 3.499979,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "TND": {
+      "name": "Tunisian Dinar",
+      "decimals": 3,
+      "units_per_usd": 3.004012,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "TOP": {
+      "name": "Tongan Paʻanga",
+      "decimals": 2,
+      "units_per_usd": 2.390814,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "TRY": {
+      "name": "Turkish Lira",
+      "decimals": 2,
+      "units_per_usd": 50.042701,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "TTD": {
+      "name": "Trinidad & Tobago Dollar",
+      "decimals": 2,
+      "units_per_usd": 6.741204,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "TWD": {
+      "name": "New Taiwan Dollar",
+      "decimals": 2,
+      "units_per_usd": 32.770816,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "TZS": {
+      "name": "Tanzanian Shilling",
+      "decimals": 2,
+      "units_per_usd": 2640.198891,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "UAH": {
+      "name": "Ukrainian Hryvnia",
+      "decimals": 2,
+      "units_per_usd": 45.680667,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "UGX": {
+      "name": "Ugandan Shilling",
+      "decimals": 0,
+      "units_per_usd": 4092.234077,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "USD": {
+      "name": "US Dollar",
+      "decimals": 2,
+      "units_per_usd": 1,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "UYU": {
+      "name": "Uruguayan Peso",
+      "decimals": 2,
+      "units_per_usd": 40.228274,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "UZS": {
+      "name": "Uzbekistani Som",
+      "decimals": 2,
+      "units_per_usd": 11910.623586,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "VES": {
+      "name": "Venezuelan Bolívar",
+      "decimals": 2,
+      "units_per_usd": 893.2173,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "VND": {
+      "name": "Vietnamese Dong",
+      "decimals": 0,
+      "units_per_usd": 25769.065289,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "VUV": {
+      "name": "Vanuatu Vatu",
+      "decimals": 0,
+      "units_per_usd": 119.156309,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "WST": {
+      "name": "Samoan Tala",
+      "decimals": 2,
+      "units_per_usd": 2.745239,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "XAF": {
+      "name": "Central African CFA Franc",
+      "decimals": 0,
+      "units_per_usd": 586.049038682,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "655.957 per EUR (fixed peg) x EUR 0.893426, 2026-11-04T00:02:31.000Z"
+    },
+    "XCD": {
+      "name": "East Caribbean Dollar",
+      "decimals": 2,
+      "units_per_usd": 2.7,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "XCG": {
+      "name": "Caribbean guilder",
+      "decimals": 2,
+      "units_per_usd": 1.79,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "XOF": {
+      "name": "West African CFA Franc",
+      "decimals": 0,
+      "units_per_usd": 586.049038682,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "655.957 per EUR (fixed peg) x EUR 0.893426, 2026-11-04T00:02:31.000Z"
+    },
+    "XPF": {
+      "name": "CFP Franc",
+      "decimals": 0,
+      "units_per_usd": 106.623938,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "YER": {
+      "name": "Yemeni Rial",
+      "decimals": 0,
+      "units_per_usd": 236.378316,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ZAR": {
+      "name": "South African Rand",
+      "decimals": 2,
+      "units_per_usd": 16.617144,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ZMW": {
+      "name": "Zambian Kwacha",
+      "decimals": 2,
+      "units_per_usd": 20.263163,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    },
+    "ZWG": {
+      "name": "Zimbabwean Gold",
+      "decimals": 2,
+      "units_per_usd": 26.5638,
+      "updated_at": "2026-11-04T00:02:31Z",
+      "updated_by": "seed",
+      "note": "open.er-api.com USD snapshot 2026-11-04T00:02:31.000Z"
+    }
+  }
+}
