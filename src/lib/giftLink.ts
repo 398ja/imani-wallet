@@ -32,11 +32,11 @@ import { terminalCredentialFromToken } from './notMoney'
 import {
   creditableFaceValue,
   parseVoucherToken,
-  splitTokenByVoucher,
   tokenProofs,
   verifyVoucher,
   type ParsedVoucherToken,
 } from './voucherToken'
+import { splitTokenByVoucher } from './tokenSplit'
 
 // ─── Link keys ──────────────────────────────────────────────────────────────
 
