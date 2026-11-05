@@ -12,6 +12,7 @@ import { RestoringVouchers, WalletOpening } from './components/WalletOpening'
 import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
 import { startCatalogRefresh } from './lib/entitlement'
+import { sweepSharedFiles } from './lib/download'
 import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
 import { startCashbackClaims, stopCashbackClaims } from './lib/cashbackClaimDrain'
 import { startPushListener, stopPushListener } from './lib/notifications/listener'
@@ -184,6 +185,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // The signed tier catalog, now and daily (#506): a stall that never opens Settings ›
         // Subscription still gets a newer limit. Same for every account, so started once.
         startCatalogRefresh()
+
+        // A backup saved through the share sheet last session may still sit in the app's cache
+        // (it is kept until the target app has read it). Clear it now. Native only, never throws.
+        void sweepSharedFiles()
 
         // The other half of the same idea, for when the app is NOT open: a
         // push the service worker (or the native plugin) received is posted
