@@ -366,3 +366,81 @@ describe('owner: notices go to EVERY sender, signed in or guest', () => {
     expect(h2.mails[0].fields!.howBack).toBe('Open your Imani wallet: it takes it back for you.')
   })
 })
+
+describe('#410 code gift row (public code-check, no secret)', () => {
+  const CODE = 'IMANIABCD2345EFGH'
+  function codeHarness(answers: Array<{ status: 'active' | 'in_use' | 'used' | 'expired'; remaining: number } | Error>) {
+    let now = T0
+    const store = memStore()
+    const mails: SendRequest[] = []
+    const asked: string[] = []
+    const tracker = new GiftTracker(KEY, store, {
+      now: () => now,
+      sweepEveryMs: 1,
+      checkStates: async () => {
+        throw new Error('a code row never asks the mint')
+      },
+      checkCode: async (code) => {
+        asked.push(code)
+        const a = answers.shift() ?? new Error('no answer')
+        if (a instanceof Error) throw a
+        return a
+      },
+      sendMail: async (req) => (mails.push(req), { ok: true, status: 202, messageId: 'm', duplicate: false, sandboxed: true }),
+    })
+    return { tracker, store, mails, asked, tick: () => void (now += 1000), at: (ms: number) => void (now = ms) }
+  }
+  const codeInput = () => input({ kind: 'code', guest: true, returnMailDate: '05 Nov 2026', code: { code: CODE, amountMinor: 2000, decimals: 2, unit: 'EUR' } })
+
+  it('the code is sealed at rest', async () => {
+    const h = codeHarness([])
+    await h.tracker.track(codeInput(), 'https://mint.example')
+    expect(JSON.stringify(h.store.rows)).not.toContain(CODE)
+  })
+
+  it('mails gift-code-used each time remaining drops, and gift-code-expired with what was left', async () => {
+    const h = codeHarness([
+      { status: 'active', remaining: 2000 },
+      { status: 'in_use', remaining: 2000 },
+      { status: 'active', remaining: 1200 },
+      new Error('down'),
+      { status: 'expired', remaining: 0 },
+    ])
+    await h.tracker.track(codeInput(), 'https://mint.example')
+    for (let i = 0; i < 5; i++) {
+      h.tick()
+      await h.tracker.sweep()
+    }
+    expect(h.asked.every((c) => c === CODE)).toBe(true)
+    expect(h.mails.map((m) => [m.template, m.idempotencyKey])).toEqual([
+      ['gift-code-used', `${DRAFT}:code-used:1200`],
+      ['gift-code-expired', `${DRAFT}:code-expired`],
+    ])
+    expect(h.mails[0].fields).toMatchObject({ spent: '€8.00', remaining: '€12.00', recipient: 'bob@example.com' })
+    expect(h.mails[1].fields).toMatchObject({ remaining: '€12.00', returnMailDate: '05 Nov 2026' })
+    for (const m of h.mails) {
+      const t = compile(m.template, BUILTIN_TEMPLATES[m.template])
+      expect(() => render(t, resolveFields(t, m.fields!, { hosts: [], allowHttp: false }))).not.toThrow()
+    }
+    expect(h.store.rows[DRAFT]).toBeUndefined()
+  })
+
+  it('fully used: one used notice with no remaining, then the row is done', async () => {
+    const h = codeHarness([{ status: 'used', remaining: 0 }])
+    await h.tracker.track(codeInput(), 'https://mint.example')
+    h.tick()
+    await h.tracker.sweep()
+    expect(h.mails).toHaveLength(1)
+    expect(h.mails[0].fields).toMatchObject({ spent: '€20.00' })
+    expect(h.mails[0].fields).not.toHaveProperty('remaining')
+    expect(h.store.rows[DRAFT]).toBeUndefined()
+  })
+
+  it('expired with nothing left: no expired notice', async () => {
+    const h = codeHarness([{ status: 'used', remaining: 0 }])
+    await h.tracker.track(codeInput(), 'https://mint.example')
+    h.tick()
+    await h.tracker.sweep()
+    expect(h.mails.map((m) => m.template)).toEqual(['gift-code-used'])
+  })
+})

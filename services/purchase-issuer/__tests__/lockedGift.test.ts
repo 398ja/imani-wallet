@@ -459,7 +459,7 @@ describe('config: G15 tracker', () => {
   })
 })
 
-describe('#410 code gift (not minted yet: parked before minting)', () => {
+describe('#410 code gift with PURCHASE_CODE_GIFTS off (parked before minting)', () => {
   it('a code gift is never minted as a voucher', async () => {
     const g = fakeGifts()
     const bodies = fakeGateway(honestMint)

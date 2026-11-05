@@ -32,10 +32,11 @@ import type { StallValidity } from './stallValidity'
 import { DeliveredUnconfirmed, DeliveryRefused, deliver, type Recipient } from './delivery'
 import type { CardSale } from './saleRecord'
 import { formatGiftLink, giftLockFor, openSeal, SealRefused, verifyLockedGift, type GiftLock } from './giftLock'
-import { handBuyerTheGift, publishLinkWrap, sendClaimEmail, type GiftPorts } from './giftDelivery'
+import { handBuyerTheGift, publishLinkWrap, sendClaimEmail, sendCodeEmail, type GiftPorts } from './giftDelivery'
 import type { GiftDelivery } from './purchasesApi'
 import { getPublicKey } from 'nostr-tools'
 import { displayDate, tokenMintUrl } from './giftTracker'
+import { balanceUrl, codeLockFor, depositBody, depositCode, depositorOf, displayCode, verifyCodePart } from './codeGift'
 import { hexToBytes } from '@noble/hashes/utils'
 
 /** One coupon a stall owes because a card payment cleared. */
@@ -225,11 +226,13 @@ export async function discharge(
   // could double: payment-adapter only sells these once `purchase.gifting.kinds` enables them,
   // which waits for arming (see giftLock.ts).
   const giftKind = obligation.gift && obligation.gift.kind !== 'self' ? obligation.gift.kind : null
-  // #410 code gifts (payment-adapter#314): minting locked to the shop key S and depositing at
-  // imani-checkout-codes is not built here yet (docs/superpowers/specs/2026-11-05-410-code-gift-issuer-plan.md).
-  // Refused BEFORE minting: read as an email gift it would mint and mail a VOUCHER for a code purchase.
-  if (obligation.gift?.delivery?.gift === 'code') {
-    return { kind: 'attention', reason: 'code gift: this issuer does not mint checkout-code gifts yet; nothing minted, refund or issue by hand' }
+  // #410 code gifts (payment-adapter#314, plan option 1(a)): minted locked to the shop key S and
+  // deposited at imani-checkout-codes, only when `PURCHASE_CODE_GIFTS=true` wired the code store.
+  // Otherwise refused BEFORE minting: read as an email gift it would mint and mail a VOUCHER for a
+  // code purchase.
+  const isCode = obligation.gift?.delivery?.gift === 'code'
+  if (isCode && !ports.gifts?.codes) {
+    return { kind: 'attention', reason: 'code gift: this issuer does not mint checkout-code gifts (PURCHASE_CODE_GIFTS is off); nothing minted, refund or issue by hand' }
   }
   if (giftKind !== null && !ports.gifts) {
     return {
@@ -250,6 +253,12 @@ export async function discharge(
         return { kind: 'blocked', reason: 'handle gift with no pinned recipient key; nothing minted' }
       }
       lockPubkey = obligation.recipient.pubkey.toLowerCase()
+    } else if (isCode) {
+      // The link secret is unused for a code: the seal is never opened, only scrubbed after delivery.
+      if (!giftDelivery.recipientEmail || !obligation.gift?.draftId || !giftDelivery.shopKey || !giftDelivery.shopUrl || !giftDelivery.codeExpiresAt) {
+        return { kind: 'attention', reason: 'code gift: no recipient email, draft, shop key, shop url or code expiry pinned; nothing minted' }
+      }
+      lockPubkey = giftDelivery.shopKey.toLowerCase()
     } else {
       if (!giftDelivery.sealed || !giftDelivery.recipientEmail || !obligation.gift?.draftId) {
         return { kind: 'attention', reason: 'email gift: no sealed link secret, recipient email or draft (already scrubbed?); nothing minted' }
@@ -316,7 +325,22 @@ export async function discharge(
   // like the idempotency key and the warrant nonce: two Stripe events for one payment intent (or a
   // reconciler re-drive) are one mint and must ask for one locktime.
   let giftLock: GiftLock | null = null
-  if (giftKind !== null) {
+  if (isCode) {
+    // x is pinned by payment-adapter (the same on every retry), so no anchor is needed: checked
+    // against the store's window from NOW and the coupon's expiry, else nothing is minted.
+    const lock = codeLockFor({
+      shopKey: lockPubkey!,
+      refundPubkey: giftDelivery!.refundPubkey,
+      depositorPubkey: depositorOf(ports.gifts!.sealSecretHex),
+      locktime: giftDelivery!.codeExpiresAt!,
+      nowMs: mintedAt,
+      couponExpiresAtMs: couponExpiresAtMs(mintedAt, expiresInDays),
+    })
+    if ('problem' in lock) {
+      return { kind: 'attention', reason: `code gift cannot be locked (${lock.problem}); nothing minted, refund or issue by hand` }
+    }
+    giftLock = lock
+  } else if (giftKind !== null) {
     let anchor: number
     try {
       anchor = await ports.gifts!.anchor(purchaseIdempotencyKey(obligation.processorReference!), mintedAt)
@@ -454,6 +478,7 @@ export async function discharge(
     // G17 (C): the voucher's own expiry, which a gift taken back unclaimed keeps (the gateway counts
     // `expires_in_days` from its mint instant, as the sale record above does).
     const spendByMs = couponExpiresAtMs(mintedAt, expiresInDays)
+    if (isCode) return deliverCodeGift(obligation, coupon.voucherId, token, giftLock, ports, minted)
     return deliverGift(baseUrl, credential, obligation, coupon.voucherId, token, giftLock, linkSecret, ports, minted, spendByMs)
   }
 
@@ -574,21 +599,112 @@ async function deliverGift(
 }
 
 /**
+ * Deliver a minted code gift (#410, plan steps 2 and 3): verify the part shape, deposit it as a
+ * code, mail the recipient the code, hand the buyer their copy, scrub the seal, track it.
+ * Every step is idempotent, so a retry after a crash anywhere re-runs them all safely.
+ */
+async function deliverCodeGift(
+  obligation: Obligation,
+  voucherId: string,
+  token: string,
+  lock: GiftLock,
+  ports: Ports,
+  minted: Minted,
+): Promise<Outcome> {
+  const gifts = ports.gifts!
+  const codes = gifts.codes!
+  const delivery = obligation.gift!.delivery!
+  const draftId = obligation.gift!.draftId!
+  const undelivered = (reason: string, park = false): Outcome => ({ kind: 'gift_undelivered', voucherId, reason, park, ...minted })
+
+  // Never deposit a part that is not exactly contract §2's shape for S, R and x.
+  const wrong = verifyCodePart(token, lock)
+  if (wrong !== null) return undelivered(`minted code part is not locked as asked: ${wrong}; NOT deposited`, true)
+
+  const tooMany = obligation.attempts + 1 >= GIFT_MAX_ATTEMPTS
+  const failed = (reason: string, permanent: boolean) => undelivered(reason, permanent || tooMany)
+
+  let body
+  try {
+    body = depositBody({ draftId, stallPubkey: obligation.stallPubkey, lock, unit: obligation.faceUnit, tokens: [token] })
+  } catch {
+    return undelivered('the minted code part could not be read; NOT deposited', true)
+  }
+  const deposited = await depositCode(codes, hexToBytes(gifts.sealSecretHex), body)
+  if (!deposited.ok) return failed(deposited.reason, deposited.permanent)
+
+  const stall = (await gifts.stallName(obligation.stallPubkey)) ?? 'a local stall'
+  let shop: string
+  try {
+    shop = new URL(delivery.shopUrl!).hostname
+  } catch {
+    return failed('the pinned shop url is not a url', true)
+  }
+  const amount = formatAmount(deposited.amount, obligation.faceDecimals, obligation.faceUnit)
+  const expiresOn = new Date(lock.locktime * 1000).toUTCString().slice(0, 16)
+  const mailed = await sendCodeEmail(gifts, {
+    to: delivery.recipientEmail!,
+    idempotencyKey: `${draftId}:code-mail`,
+    fields: {
+      ...(delivery.from ? { from: delivery.from } : {}),
+      stall,
+      shop,
+      amount,
+      code: displayCode(deposited.code),
+      shopUrl: delivery.shopUrl!,
+      expiresOn,
+      balanceUrl: balanceUrl(codes.publicBaseUrl, deposited.code),
+      ...(delivery.message ? { message: delivery.message } : {}),
+    },
+  })
+  if (!mailed.ok) return failed(mailed.reason, mailed.permanent)
+
+  // The buyer's copy, a wrap to R, for the return page: after x it settles what is left.
+  const handed = await handBuyerTheGift(gifts, {
+    refundPubkey: lock.refundPubkey,
+    token,
+    stall,
+    to: delivery.recipientEmail ?? null,
+    claimBy: lock.locktime,
+    gift: 'code',
+  })
+  if (!handed.ok) return failed(handed.reason, handed.permanent)
+
+  let scrubbed = false
+  try {
+    scrubbed = await gifts.scrubSeal(obligation.id)
+  } catch {
+    scrubbed = false
+  }
+  if (!scrubbed) console.warn(JSON.stringify({ event: 'gift_seal_not_scrubbed', event_id: obligation.id }))
+
+  await trackGift(gifts, obligation, token, lock, null, { code: deposited.code, amountMinor: deposited.amount, decimals: obligation.faceDecimals, unit: obligation.faceUnit })
+  return { kind: 'discharged', voucherId, ...minted }
+}
+
+/**
  * G15 §4.3: remember the delivered gift so the buyer hears when it is claimed or expires. Best
  * effort: the gift is delivered, and failing the discharge here would only re-deliver it. Logged
  * with no address, draft id or amount.
  */
-async function trackGift(gifts: GiftPorts, obligation: Obligation, token: string, lock: GiftLock, spendByMs: number | null): Promise<void> {
+async function trackGift(
+  gifts: GiftPorts,
+  obligation: Obligation,
+  token: string,
+  lock: GiftLock,
+  spendByMs: number | null,
+  code?: { code: string; amountMinor: number; decimals: number; unit: string },
+): Promise<void> {
   if (!gifts.track) return
   const delivery = obligation.gift!.delivery!
   const draftId = obligation.gift!.draftId
-  const kind = obligation.gift!.kind as 'handle' | 'email'
+  const kind = code ? 'code' : (obligation.gift!.kind as 'handle' | 'email')
   if (!draftId || !delivery.buyerEmail) {
     console.warn(JSON.stringify({ event: 'gift_not_tracked', kind, reason: draftId ? 'no buyer email' : 'no draft' }))
     return
   }
   const recipientDisplay =
-    kind === 'email'
+    kind !== 'handle'
       ? delivery.recipientEmail ?? 'the recipient'
       : delivery.recipientHandle
         ? delivery.recipientHandle.includes('@') ? delivery.recipientHandle : `@${delivery.recipientHandle}`
@@ -610,6 +726,7 @@ async function trackGift(gifts: GiftPorts, obligation: Obligation, token: string
         guest,
         returnMailDate: guest && delivery.draftCreatedAt ? displayDate(delivery.draftCreatedAt) : null,
         spendBy: spendByMs,
+        ...(code ? { code } : {}),
       },
       mintUrl,
     )
