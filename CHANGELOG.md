@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
 
+## [0.53.3] - 2026-11-05
+
+### Fixed
+
+- **The wallet image builds again.** 0.53.2's `xrateRates.test.ts` imported
+  `scripts/xrate-rates.mts` statically, and the image leaves `scripts/` out (`.dockerignore`), so
+  the image's `tsc -b` failed. The test now loads the script dynamically, as the other script tests
+  do. No app change.
+
 ## [0.53.2] - 2026-11-05
 
 ### Changed
