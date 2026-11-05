@@ -67,9 +67,12 @@ rounded down to 2 significant figures (100 face in USD, EUR, GBP, CHF, CAD and A
 and XAF). There is no exchange-rate table and no rate feed at runtime. The amounts live in
 `packages/licence/src/freeTierAmounts.ts`, which the wallet's bundled catalog uses, and are copied
 into `catalog.json`. The onboarding currency picker offers exactly these codes. Do not edit them by
-hand. **The quarterly workflow** `.github/workflows/free-tier-amounts.yml` (06:00 UTC on 2 Jan, Apr,
-Jul and Oct, or on demand from the Actions tab) runs `scripts/free-tier-amounts.mts` against that
-day's rates and opens a `chore/free-tier-amounts` PR listing every changed threshold. The PR is
+hand. **The rates are imani-xrate's** (owner decision "Option A"), the hand-set table the gateways
+back vouchers with, so a threshold and its backing agree. xrate is internal, so the rates are an
+export of its `GET /v1/rates` committed as `xrate-rates.json` here (taken on the host, see the
+script's header). After an operator changes rates in xrate, re-export, then run
+`scripts/free-tier-amounts.mts` locally or the manual workflow `.github/workflows/free-tier-amounts.yml`
+on that branch, which opens a `chore/free-tier-amounts` PR listing every changed threshold. The PR is
 opened only if something changed, and the version is bumped only then. A threshold moving more
 than 50 % fails the run instead of opening a PR: check the rate by hand, then re-run it with
 `force`. Merging is not enough: redeploy this service so it serves the new version.
