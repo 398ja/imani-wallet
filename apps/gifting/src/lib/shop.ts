@@ -85,6 +85,36 @@ export async function loadShop(raw: string | undefined, deps: ShopDeps): Promise
   return { kind: 'ok', shop }
 }
 
+/**
+ * Build-time switch for code gifts (`VITE_GIFTING_CODE_GIFTS=on`). Off until payment-adapter and
+ * purchase-issuer can deliver a code gift (docs/superpowers/specs/2026-11-04-410-code-gifts.md):
+ * until then the choice is never shown, so no buyer can pay for something nobody can deliver.
+ */
+export function codeGiftsEnabled(raw: unknown = import.meta.env?.VITE_GIFTING_CODE_GIFTS): boolean {
+  return String(raw ?? '').trim().toLowerCase() === 'on'
+}
+
+/**
+ * Can this stall's gift be a checkout code for its online shop? The real signal is the stall's own
+ * `online_shop` field (contract §4), read fail-closed by `parseOnlineShop`: it is published only while
+ * the shop's redeem-only terminal is in service, so its presence means the shop takes codes at
+ * checkout. Absent or malformed, there is no choice to show.
+ */
+export function codeGiftAvailable(shop: Pick<Shop, 'record'>, enabled = codeGiftsEnabled()): boolean {
+  return enabled && shop.record.onlineShop !== undefined
+}
+
+/** "olive.example": the shop as a buyer reads it, never the key. */
+export function shopHost(shop: Pick<Shop, 'record'>): string | null {
+  const url = shop.record.onlineShop?.url
+  if (!url) return null
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return null
+  }
+}
+
 /** G1: drop `noindex` only for a stall that published `giftingIndexable: true`. */
 export function robotsFor(state: ShopState): 'index' | 'noindex' {
   return state.kind === 'ok' && state.shop.record.giftingIndexable === true ? 'index' : 'noindex'

@@ -34,6 +34,8 @@ const movedBob = getPublicKey(generateSecretKey())
 const plainSk = generateSecretKey()
 const plain = getPublicKey(plainSk)
 const issuerSk = generateSecretKey()
+const oliveSk = generateSecretKey()
+const olive = getPublicKey(oliveSk)
 const issuer = getPublicKey(issuerSk)
 
 /** handle → pubkey, as the gateway's resolver answers. Mutable: Bob's handle moves mid-test. */
@@ -41,6 +43,7 @@ const handles: Record<string, string> = {
   'alice@imani.casa': stall,
   'bob@example.com': bob,
   'plain@imani.casa': plain,
+  'olive@imani.casa': olive,
 }
 
 const now = () => Math.floor(Date.now() / 1000)
@@ -53,6 +56,12 @@ const events = [
   record(plainSk, { active: true, categories: [], issuanceCurrency: 'EUR', voucherValidityDays: 90 }),
   kind0(plainSk, { name: 'Plain Stall' }),
   kind0(bobSk, { name: 'Bob' }),
+  // A stall whose online shop takes checkout codes (contract §4).
+  record(oliveSk, {
+    active: true, categories: [], issuanceCurrency: 'EUR', voucherValidityDays: 90, acceptsCards: true,
+    online_shop: { url: 'https://olive.example', redeem_key: getPublicKey(generateSecretKey()), platform: 'woocommerce', since: now() - 86400 },
+  }),
+  kind0(oliveSk, { name: 'Olive Grove' }),
 ]
 
 interface Draft {
@@ -65,6 +74,7 @@ interface Draft {
   message?: string
   from?: string
   sealed?: string
+  gift?: string
   session?: string
   invalidated?: boolean
 }
@@ -113,8 +123,9 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise
       message?: string
       from?: string
       buyerEmail?: string
+      gift?: string
     }
-    if (r.stallPubkey !== stall) return send(409, { error: 'this stall cannot accept card payments yet' }), true
+    if (r.stallPubkey !== stall && r.stallPubkey !== olive) return send(409, { error: 'this stall cannot accept card payments yet' }), true
     if (!req.headers.authorization && !r.buyerEmail) return send(422, { error: 'We need your email for the receipt and the return link.' }), true
     const delivery: Record<string, unknown> = { kind: r.delivery.kind, refundPubkey: r.delivery.refundPubkey, claimWindowDays: 30 }
     if (r.delivery.kind === 'handle') {
@@ -134,6 +145,7 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise
       message: r.message,
       from: r.from,
       sealed: r.delivery.sealed,
+      gift: r.gift,
     }
     drafts.set(d.draftId, d)
     return send(201, { ...d, sealed: undefined }), true
@@ -150,7 +162,8 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise
   }
   if (path === '/api/v1/checkout/purchase') {
     const { draftId, ...rest } = JSON.parse(body) as { draftId: string }
-    check('Pay sends the draft id and nothing else', Object.keys(rest).length === 0, JSON.stringify(rest))
+    // G15: a guest also sends their own return link, to be mailed before Stripe. Nothing else.
+    check('Pay sends the draft id (and a guest\'s return link) only', Object.keys(rest).every((k) => k === 'returnLink'), JSON.stringify(rest))
     const d = drafts.get(draftId)
     if (!d) return send(404, { error: 'no such gift' }), true
     if (d.invalidated) return send(409, { error: 'DRAFT_INVALIDATED' }), true
@@ -226,17 +239,12 @@ async function main() {
     await page.getByRole('heading', { name: 'Alice Bakery' }).waitFor()
     check('the shop is named from its profile', /Bread and cakes/.test(await text()))
     check('noindex by default (G1)', (await page.locator('meta[name=robots]').getAttribute('content')) === 'noindex')
-    check('"Myself" needs sign-in for a guest', /Sign in to send to yourself/.test(await text()))
+    check('there is no way to send to a handle (#410 rework)', (await page.getByLabel(/handle/i).count()) === 0 && !/Deliver to/.test(await text()))
+    check('a stall with no online shop shows no voucher/code choice', (await page.getByRole('radiogroup').count()) === 0)
 
-    // ── Guest, to a handle ─────────────────────────────────────────────────
+    // ── Guest, to an email ─────────────────────────────────────────────────
     await page.getByLabel('Amount (EUR)').fill('20')
-    await page.getByLabel("Someone's handle").check()
-    await page.getByLabel('Their handle').fill('nobody@example.com')
-    await page.getByText("We couldn't find that handle.").waitFor()
-    check('an unknown recipient handle is caught inline', true)
-    await page.getByLabel('Their handle').fill('Bob@Example.com')
-    await page.getByTestId('resolved-recipient').waitFor()
-    check('the resolved recipient is shown by name and handle, never a key', /Bob/.test(await page.getByTestId('resolved-recipient').innerText()) && !/[0-9a-f]{8}…|npub1/.test(await page.getByTestId('resolved-recipient').innerText()))
+    await page.getByLabel('Their email address').fill('bob@example.com')
     await page.getByLabel('Message (optional)').fill('see https://evil.example')
     await page.getByLabel('Your email').fill('buyer@example.com')
     await page.getByRole('button', { name: 'Review' }).click()
@@ -249,25 +257,21 @@ async function main() {
     await page.getByRole('heading', { name: 'Check your gift' }).waitFor()
     const review = await text()
     check('review shows the amount in the stall currency', /€20\.00/.test(review), review.slice(0, 400))
-    check('review shows the recipient by handle, never by key', /bob@example\.com/.test(review) && !review.includes(bob.slice(0, 8)) && !/npub1/.test(review))
-    check('review says it comes back if not taken (G7)', /it comes back to you/.test(review))
+    check('review shows the recipient email', /bob@example\.com/.test(review))
     check('review names the merchant of record and the refund terms', /Paid to Alice Bakery via Stripe/.test(review) && /refunds are Alice Bakery/.test(review))
     const firstDraft = [...drafts.values()].at(-1)!
-    check('the draft pinned Bob\'s key, with a guest refund key', firstDraft.delivery.recipientPubkey === bob && /^[0-9a-f]{64}$/.test(String(firstDraft.delivery.refundPubkey)))
+    check('the draft is an email voucher with a guest refund key and no gift field', firstDraft.delivery.kind === 'email' && firstDraft.gift === undefined && /^[0-9a-f]{64}$/.test(String(firstDraft.delivery.refundPubkey)))
 
     // Edit keeps the rest of the form.
     await page.getByRole('button', { name: 'Edit message' }).click()
     await page.waitForURL(/\/shop\/alice#message$/)
-    check('Edit keeps every other field', (await page.getByLabel('Amount (EUR)').inputValue()) === '20' && (await page.getByLabel('Their handle').inputValue()) === 'Bob@Example.com')
+    check('Edit keeps every other field', (await page.getByLabel('Amount (EUR)').inputValue()) === '20' && (await page.getByLabel('Their email address').inputValue()) === 'bob@example.com')
     await page.getByLabel('Message (optional)').fill('Happy birthday, Bob')
     await page.getByRole('button', { name: 'Review' }).click()
     await page.getByRole('heading', { name: 'Check your gift' }).waitFor()
     check('editing invalidated the old draft', firstDraft.invalidated === true)
     const draft = [...drafts.values()].at(-1)!
     check('the new draft carries the edited message', draft.message === 'Happy birthday, Bob')
-
-    // The handle moves after review: delivery still goes to the reviewed key.
-    handles['bob@example.com'] = movedBob
 
     // Double Pay → one Stripe session. Two clicks in the same task, as a double tap delivers them.
     await page.getByRole('button', { name: /^Pay / }).waitFor()
@@ -282,7 +286,7 @@ async function main() {
     await page.getByRole('heading', { name: 'Thank you' }).waitFor()
     check('one Checkout Session for the draft', stripeSessions === 1, String(stripeSessions))
     check('Stripe metadata is the draft id only (G9)', JSON.stringify(stripeMetadata) === JSON.stringify([{ draft_id: draft.draftId }]))
-    check('the paid gift goes to the key reviewed, not the moved handle', paid.length === 1 && paid[0].delivery.recipientPubkey === bob)
+    check('the paid gift goes to the email reviewed', paid.length === 1 && paid[0].delivery.email === 'bob@example.com')
     check('the return page shows no claim link (G8)', !/#k=|\/claim#/.test(await text()))
     const back = await page.getByTestId('return-link').locator('a').getAttribute('href')
     check('a guest gets the return link to their own refund key R (option D)', /\/gift-return#r=[0-9a-f]{64}$/.test(back ?? ''), back ?? '')
@@ -293,7 +297,6 @@ async function main() {
 
     // ── Guest, to an email: ℓ and R are sealed to the issuer, never sent in the clear ───
     await page.goto(`${ORIGIN}/shop/alice`)
-    await page.getByLabel('An email address').check()
     await page.getByLabel('Their email address').fill('carol@example.com')
     await page.getByRole('button', { name: 'Review' }).click()
     await page.getByRole('heading', { name: 'Check your gift' }).waitFor()
@@ -307,6 +310,22 @@ async function main() {
     )
     check('the seal carries the link secret only, never the refund secret (G-R3)', !('refundSecret' in opened))
     check('the draft never echoes the seal back to the page', !(await page.evaluate(() => document.body.innerHTML)).includes('v1.'))
+
+    // ── A stall with an online shop: voucher or shop code (VITE_GIFTING_CODE_GIFTS=on) ──
+    await page.goto(`${ORIGIN}/shop/olive`)
+    await page.getByRole('radiogroup', { name: 'What to send' }).waitFor()
+    check('voucher is chosen by default', await page.getByRole('radio', { name: 'Voucher' }).isChecked())
+    await page.getByText('Shop code').click()
+    check('the shop code can be chosen', await page.getByRole('radio', { name: 'Shop code' }).isChecked())
+    check('the choice says where the code is used', /checkout on olive\.example/.test(await page.getByTestId('gift-kind-hint').innerText()))
+    await page.getByLabel('Amount (EUR)').fill('15')
+    await page.getByLabel('Their email address').fill('dan@example.com')
+    await page.getByLabel('Your email').fill('buyer@example.com')
+    await page.getByRole('button', { name: 'Review' }).click()
+    await page.getByRole('heading', { name: 'Check your gift' }).waitFor()
+    const codeDraft = [...drafts.values()].at(-1)!
+    check('a code gift asks for gift: code, to an email', codeDraft.gift === 'code' && codeDraft.delivery.email === 'dan@example.com')
+    check('review calls it a shop code for the online shop', /Shop code/.test(await text()) && /checkout on olive\.example/.test(await page.getByTestId('review-kind').innerText()))
 
     check('no page errors', errors.length === 0, errors.join(' | '))
   } finally {
