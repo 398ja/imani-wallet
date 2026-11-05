@@ -32,7 +32,6 @@ import { displayHandle } from '../lib/handle'
 import { newGiftSecrets, returnLink, seal } from '../lib/gift'
 import { codeGiftAvailable, loadShop, robotsFor, SHOP_COPY, shopHost, type Shop, type ShopState } from '../lib/shop'
 import { WALLET_ORIGIN } from '../lib/signer'
-import type { Account } from '../lib/session'
 
 const api = giftingApi()
 
@@ -74,7 +73,7 @@ function useHead(state: ShopState | null) {
   }, [state])
 }
 
-export function ShopPage({ session, step }: { session: Account | null; step: 'form' | 'review' }) {
+export function ShopPage({ step }: { step: 'form' | 'review' }) {
   const { handle = '' } = useParams()
   const navigate = useNavigate()
   const [attempt, setAttempt] = useState(0)
@@ -112,7 +111,6 @@ export function ShopPage({ session, step }: { session: Account | null; step: 'fo
     <GiftFlow
       key={state.shop.pubkey}
       shop={state.shop}
-      session={session}
       step={step}
       goReview={() => navigate(`/shop/${state.shop.canonical}/review`)}
       goForm={(field) => navigate(`/shop/${state.shop.canonical}${field ? `#${field}` : ''}`)}
@@ -162,13 +160,11 @@ function ShopHeader({ shop, children }: { shop: Shop; children?: React.ReactNode
 
 function GiftFlow({
   shop,
-  session,
   step,
   goReview,
   goForm,
 }: {
   shop: Shop
-  session: Account | null
   step: 'form' | 'review'
   goReview: () => void
   goForm: (field?: string) => void
@@ -181,23 +177,16 @@ function GiftFlow({
     return f.gift === 'code' && !codes ? { ...f, gift: 'voucher' } : f
   })
   const [touched, setTouched] = useState(false)
-  const signedIn = session !== null
   const decimals = safeDecimals(shop.record.issuanceCurrency)
-  const errors = validate(form, { signedIn, decimals, codeGifts: codes })
+  const errors = validate(form, { decimals, codeGifts: codes })
 
   useEffect(() => keep(shop.canonical, { ...(recall(shop.canonical) ?? {}), form }), [shop.canonical, form])
-  // "From" defaults to nothing for a guest; prefilled from the profile once signed in.
-  useEffect(() => {
-    if (!session || form.from) return
-    merchantBranding(session.pubkey).then((b) => b.organizationName && setForm((f) => (f.from ? f : { ...f, from: b.organizationName ?? '' })), () => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session])
 
   const canReview = Object.keys(errors).length === 0
 
   if (step === 'review') {
     if (!canReview) return <RedirectTo to={`/shop/${shop.canonical}`} />
-    return <Review shop={shop} form={form} session={session} goForm={goForm} />
+    return <Review shop={shop} form={form} goForm={goForm} />
   }
 
   const set = (patch: Partial<GiftForm>) => setForm((f) => ({ ...f, ...patch }))
@@ -249,7 +238,7 @@ function GiftFlow({
         </Field>
 
         <Field id="from" label="From (optional)" error={show('from')}>
-          <input id="from" maxLength={FROM_MAX} className={inputClass} value={form.from} placeholder={signedIn ? '' : 'Your name, or leave blank'} onChange={(e) => set({ from: e.target.value })} />
+          <input id="from" maxLength={FROM_MAX} className={inputClass} value={form.from} placeholder="Your name, or leave blank" onChange={(e) => set({ from: e.target.value })} />
         </Field>
 
         <Field id="buyerEmail" label="Your email" error={show('buyerEmail')}>
@@ -257,9 +246,7 @@ function GiftFlow({
           <p className="mt-1 text-xs text-mono-500">
             {form.gift === 'code'
               ? 'For your receipt, your link for whatever is left unspent at expiry, and to tell you when the code is used or expires.'
-              : signedIn
-                ? 'For your receipt, and to tell you when it is claimed or if it is not.'
-                : 'For your receipt, your link to take the gift back, and to tell you when it is claimed or if it is not.'}
+              : 'For your receipt, your link to take the gift back, and to tell you when it is claimed or if it is not.'}
           </p>
         </Field>
 
@@ -344,18 +331,15 @@ type ReviewState =
 function Review({
   shop,
   form,
-  session,
   goForm,
 }: {
   shop: Shop
   form: GiftForm
-  session: Account | null
   goForm: (field?: string) => void
 }) {
   const [state, setState] = useState<ReviewState>({ kind: 'preparing' })
   const [round, setRound] = useState(0)
   const [notice, setNotice] = useState<string | null>(null)
-  const sessionKey = session?.pubkey ?? null
 
   useEffect(() => {
     let live = true
@@ -364,7 +348,9 @@ function Review({
       const previous = recall(shop.canonical)?.draftId
       // Editing invalidates the old draft (§3). Best effort: an orphan simply expires.
       if (previous) void api.invalidate(previous)
-      const secrets = newGiftSecrets(sessionKey, { freshRefund: form.gift === 'code' })
+      // Every buyer is a guest (the site is public): a fresh refund key R per gift, returned to the
+      // buyer as the return link.
+      const secrets = newGiftSecrets()
       const issuer = await api.issuerKey()
       // G4: ONLY ℓ is sealed to the issuer, bound to this stall, amount and address. R never
       // leaves this browser except in the guest's own return link (G-R3).
@@ -381,9 +367,7 @@ function Review({
         decimals: safeDecimals(shop.record.issuanceCurrency),
         refundPubkey: secrets.refundPubkey,
         sealed,
-        signedIn: sessionKey !== null,
       })
-      // A signed-in buyer's draft rides the session cookie; nothing is signed per request.
       const draft = await api.createDraft(req)
       if (!draftMatches(draft, req) || isExpired(draft)) throw new ApiError('Something changed while we checked. Please review again.', 409)
       // Only the LIVE run's draft is kept. A superseded run (an edit, a re-render, React's double
@@ -404,9 +388,8 @@ function Review({
     return () => {
       live = false
     }
-    // session object identity changes on every render of App; the key is what matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shop, form, sessionKey, round])
+  }, [shop, form, round])
 
   const pay = async (draft: Draft) => {
     // Never charge an expired draft: check again first (§Edge cases).
@@ -417,7 +400,7 @@ function Review({
     }
     setState({ kind: 'paying', draft, refundSecret: state.kind === 'ready' ? state.refundSecret : undefined })
     try {
-      // G15: a guest's return link goes to their email before Stripe, so a lost tab can't lose it.
+      // G15: the return link goes to the buyer's email before Stripe, so a lost tab can't lose it.
       const refund = state.kind === 'ready' ? state.refundSecret : undefined
       const link = refund && WALLET_ORIGIN ? returnLink(WALLET_ORIGIN, refund) : undefined
       const { checkoutUrl } = await api.pay(draft.draftId, link)
