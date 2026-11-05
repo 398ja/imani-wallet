@@ -295,6 +295,11 @@ describe('gift secrets (G3, G4, G8)', () => {
     expect(getPublicKey(hexToBytes(g.refundSecret!))).toBe(g.refundPubkey)
     expect(g.linkSecret).toMatch(/^[0-9a-f]{64}$/)
   })
+  it('code gift: a signed-in buyer gets a fresh R too, never the wallet key (contract §2)', () => {
+    const c = newGiftSecrets(BOB, { freshRefund: true })
+    expect(c.refundPubkey).not.toBe(BOB)
+    expect(getPublicKey(hexToBytes(c.refundSecret!))).toBe(c.refundPubkey)
+  })
   it('seals to the issuer only, bound to the purchase', () => {
     const issuer = generateSecretKey()
     const sealed = seal(getPublicKey(issuer), { stallPubkey: STALL, amountMinor: 2000, recipient: 'bob@example.com' }, { linkSecret: 'ff'.repeat(32) })

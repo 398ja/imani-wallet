@@ -30,7 +30,6 @@ const stallSk = generateSecretKey()
 const stall = getPublicKey(stallSk)
 const bobSk = generateSecretKey()
 const bob = getPublicKey(bobSk)
-const movedBob = getPublicKey(generateSecretKey())
 const plainSk = generateSecretKey()
 const plain = getPublicKey(plainSk)
 const issuerSk = generateSecretKey()
@@ -325,6 +324,10 @@ async function main() {
     await page.getByRole('heading', { name: 'Check your gift' }).waitFor()
     const codeDraft = [...drafts.values()].at(-1)!
     check('a code gift asks for gift: code, to an email', codeDraft.gift === 'code' && codeDraft.delivery.email === 'dan@example.com')
+    const TAKE_BACK = /take (the gift|it) back/i
+    check('a code gift review never offers to take the gift back', !TAKE_BACK.test(await text()))
+    check('a code gift says the unspent balance comes back at expiry', /isn't spent by .* comes back to you/.test(await page.getByTestId('review-take-back').innerText()))
+    check('a code gift return link is for the unspent balance', /unspent balance/i.test(await page.getByTestId('review-return-link').innerText()) && /comes back to you/.test(await page.getByTestId('review-return-copy').innerText()))
     check('review calls it a shop code for the online shop', /Shop code/.test(await text()) && /checkout on olive\.example/.test(await page.getByTestId('review-kind').innerText()))
 
     check('no page errors', errors.length === 0, errors.join(' | '))
