@@ -51,7 +51,7 @@
 import { check, sleep } from 'k6'
 import exec from 'k6/execution'
 import crypto from 'k6/crypto'
-import { Counter, Trend } from 'k6/metrics'
+import { Counter, Rate, Trend } from 'k6/metrics'
 import { requireSigner, napLogin } from './lib/signed-request.js'
 import { abortIfInvalid } from './lib/abort.js'
 import {
@@ -85,6 +85,13 @@ const coupons_acquired = new Counter('coupons_acquired')
 // customer got. Counted apart so a gateway that mints but cannot deliver is
 // visible rather than averaged away.
 const coupons_delivered = new Counter('coupons_delivered')
+// One sample per sale ATTEMPTED, true only when the coupon reached the
+// customer. Includes the sales this file calls "limited": on 2026-11-06 a
+// gateway-customer that had run out of heap answered the voucher poll with 504,
+// the loop filed those sales as throttled, and the run passed with 18 of ~100
+// sales delivered (imani-gateway-customer#298). outcome_verified could not see
+// it either, because thousands of healthy drains outvoted the failed sales.
+const sale_delivered = new Rate('sale_delivered')
 // How long the seller waits for the mint. Measured on staging at ~7s, which is
 // the bulk of a sale and was entirely unmeasured before.
 const mint_wait_ms = new Trend('mint_wait_ms', true)
@@ -267,6 +274,20 @@ export const options = {
     // could defend, and this run's whole point is that its curve makes
     // run-to-run comparison weak anyway.
     outcome_verified: ['rate>0.90'],
+    // These two are correctness too, not latency. outcome_verified pools the
+    // sales with every drain, and drains outnumber sales by two orders of
+    // magnitude, so a day that delivered 18 of ~100 coupons still cleared it.
+    // Each gate below watches the sales alone. Both pass vacuously when no
+    // sale was attempted (acquiring refused in setup), which the summary
+    // already reports as its own finding.
+    //
+    // Coupons delivered over sales attempted.
+    sale_delivered: ['rate>0.95'],
+    // The voucher poll alone (tagged `name: read coupon` in lib/gateway.js).
+    // On 2026-11-06 it returned 730 x 499 and 141 x 504. k6 counts 4xx, 5xx
+    // and transport errors (status 0) as failed. A mint still working answers
+    // 200 with a non-ISSUED status, so a healthy wait does not count here.
+    'http_req_failed{name:read coupon}': ['rate<0.05'],
   },
 }
 
@@ -617,6 +638,9 @@ export function customer(data) {
 
       if (sale.limited) {
         rate_limited.add(1)
+        // Still a sale attempted and not delivered. Leaving it out of the rate
+        // is how a broken gateway read as a throttled one (see sale_delivered).
+        sale_delivered.add(false)
         // Back off rather than hammering a closed door. Per ADR 0013 this run
         // REPORTS the limit as its finding rather than raising it, so pacing
         // is the difference between a finding and tens of thousands of
@@ -641,6 +665,7 @@ export function customer(data) {
         }
       }
       if (sale.delivered) coupons_delivered.add(1)
+      sale_delivered.add(sale.delivered)
 
       // The sale is verified by DELIVERY, not by the mint. A coupon minted and
       // never delivered is a sale the customer did not get, and counting the
@@ -961,6 +986,27 @@ export function handleSummary(data) {
       '',
     )
   }
+
+  // The verdict, said in words. This summary replaces k6's own, which is where
+  // the threshold table lives, so without this a failed run printed only
+  // numbers and an exit code. The 2026-11-06 run is the reason: it passed, and
+  // nothing on the screen said 18 of ~100 sales had been delivered.
+  const sales = m.sale_delivered?.values
+  const pollFailed = m['http_req_failed{name:read coupon}']?.values
+  lines.push(
+    '    Gates',
+    `      sales delivered   ${sales ? `${sales.passes} of ${sales.passes + sales.fails} (${(sales.rate * 100).toFixed(1)}%)` : 'no sale attempted'}`,
+    `      voucher poll      ${pollFailed ? `${(pollFailed.rate * 100).toFixed(1)}% failed (${pollFailed.passes} of ${pollFailed.passes + pollFailed.fails})` : 'never polled'}`,
+  )
+  const crossed = Object.entries(m)
+    .filter(([, metric]) => metric.thresholds && Object.values(metric.thresholds).some((t) => !t.ok))
+    .map(([name]) => name)
+  lines.push(
+    crossed.length > 0
+      ? `      FAILED: ${crossed.join(', ')}. This run exits non-zero.`
+      : '      all thresholds held',
+    '',
+  )
 
   return {
     stdout: lines.join('\n'),

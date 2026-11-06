@@ -633,6 +633,44 @@ That last one matters more than it looks. A counter at zero reads identically
 for "polled and found nothing" and "never ran", and only one of those is a
 measurement.
 
+### A day that did not deliver now fails
+
+The 2026-11-06 staging run passed while gateway-customer was out of heap
+(imani-gateway-customer#298): the voucher poll answered 730 × 499 and 141 × 504,
+and only 18 of ~100 sales were delivered. `outcome_verified` could not see it,
+because it pools sales with drains and drains outnumber sales a hundred to one.
+The sale loop also filed a sale whose polls all failed as **rate limited**, so it
+never counted as a failure at all.
+
+Two thresholds now watch the sales on their own:
+
+| Threshold | Gate | What it catches |
+|---|---|---|
+| `sale_delivered` | `rate>0.95` | coupons delivered over sales attempted, rate-limited sales included |
+| `http_req_failed{name:read coupon}` | `rate<0.05` | the voucher poll answering 4xx, 5xx or nothing (k6 status 0) |
+
+Both pass vacuously when acquiring is refused in setup, which the summary
+already reports as its own finding. The summary ends with a **Gates** block that
+says which thresholds failed, since it replaces the k6 summary where the
+threshold table normally appears.
+
+Proven against a stub gateway (`loadtest/stub/market-day-gateway.mjs`, which
+answers only the calls a market day makes and checks no signature):
+
+    node loadtest/signer.mjs &
+    node loadtest/stub/market-day-gateway.mjs &               # or BROKEN=504, BROKEN=hang
+    GATEWAY_URL=http://127.0.0.1:18082 DAY_DURATION=40s CUSTOMER_PEAK=6 STALL_COUNT=2 \
+      MINT_POLL_SECONDS=0.5 MINT_POLL_ATTEMPTS=6 k6 run loadtest/market-day.js
+
+| Stub | Before | After |
+|---|---|---|
+| healthy | exit 0 | exit 0, 6 of 6 sales delivered, all thresholds held |
+| `BROKEN=504`, every voucher poll 504s | **exit 0**, 0 delivered | exit 99, `sale_delivered` and `http_req_failed{name:read coupon}` crossed |
+| `BROKEN=hang`, every voucher poll times out | not run | exit 99, both crossed, plus `outcome_verified` |
+
+The "before" row is the point: the unchanged script passed a day that delivered
+nothing.
+
 ### It ran against staging, and now acquires there too
 
 The first runs reported **0 coupons acquired**, and the reason recorded for it
