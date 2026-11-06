@@ -165,6 +165,8 @@ describe('sendGift picks the path before anything moves', () => {
     expect(logged()).toEqual(['[cashlink] path=direct'])
     expect(h.legacySends).toBe(0)
     expect(out).toMatchObject({ delivered: true, returnsOnItsOwn: true })
+    // #543 review: the result names the send by its bundle, never by the link's bearer secret.
+    expect(JSON.stringify(out.result)).not.toContain(linkOf().k)
     expect(linkOf()).toMatchObject({ i: 0, x: X, status: 'outstanding', arm: { s: 'armed' } })
     const onLink = h.wraps.get(linkPubOf(L0()))!
     expect(onLink).toHaveLength(1)
@@ -193,6 +195,25 @@ describe('sendGift picks the path before anything moves', () => {
     await send(1_000_000)
     expect(logged()).toEqual(['[cashlink] path=legacy why=no_plan'])
     expect(h.legacySends).toBe(1)
+  })
+
+  it('#543 review: the direct path is a counted spend, so logout waits for it (#335)', async () => {
+    const { spendsInFlight } = await import('../receiveGate')
+    const { face } = couponRow([64], 'g')
+    const seen: number[] = []
+    const ports = await giftLinks.cashlinkSeam.directPorts()
+    const publish = ports.publish
+    vi.mocked(giftLinks.cashlinkSeam.directPorts).mockResolvedValue({
+      ...ports,
+      publish: async (s, t) => {
+        seen.push(spendsInFlight())
+        return publish(s, t)
+      },
+    })
+    await send(face)
+    expect(logged()).toEqual(['[cashlink] path=direct'])
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every((n) => n >= 1)).toBe(true)
   })
 })
 

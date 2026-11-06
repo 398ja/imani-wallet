@@ -38,7 +38,7 @@ import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } 
 import { getWallet, notifyWalletChanged } from './wallet'
 import type { Merchant } from './merchants'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
-import { beginReceive, isReceiveDeferred } from './receiveGate'
+import { beginReceive, isReceiveDeferred, withSpend } from './receiveGate'
 import { deriveRefundSecret, readLinkLock, xOnlyPub } from './cashlinkLock'
 import {
   armGift,
@@ -650,11 +650,14 @@ export async function sendGift({
   try {
   // #543: locked from the start when it can be, decided before anything moves; otherwise the
   // legacy path below (atomic send, bearer gift, then arm), exactly as before.
-  const direct = await tryDirect({ payer, merchant, unit, amount, memo, x, i: allocated.i, nowMs })
+  // #543 review: a counted spend (#335), as the legacy send is through `deliver`. Logout closes spends
+  // and waits for one running, so it can never wipe the wallet between a burn and its intent's save.
+  const direct = await withSpend(() => tryDirect({ payer, merchant, unit, amount, memo, x, i: allocated.i, nowMs }))
   if (direct.kind === 'made') {
     console.info('[cashlink] path=direct')
     return {
-      result: { id: k, requested: amount, delivered: direct.delivered, parts: direct.parts, ...(direct.delivered < amount ? { shortfall: 'part of it could not be locked; its value is kept in your wallet' } : {}) },
+      // #543 review: the bundle id the rows share, never `k` (the link's bearer secret).
+      result: { id: cashlinkBundleId(allocated.linkPub), requested: amount, delivered: direct.delivered, parts: direct.parts, ...(direct.delivered < amount ? { shortfall: 'part of it could not be locked; its value is kept in your wallet' } : {}) },
       link,
       x,
       delivered: direct.published,

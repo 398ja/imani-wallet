@@ -228,6 +228,33 @@ describe('the direct path makes a locked Cashlink', () => {
     expect(recorded.at(-1)!.arm.s).toBe('armed')
     expect(intents.loadCashlinkIntents(ME)).toHaveLength(0)
   })
+
+  it('#543 review: a part is recorded as arming BEFORE its burn reaches the mint', async () => {
+    // A page that dies between the burn and the next save must resume the part (NUT-09 finds the
+    // burn), never re-run its pre-check, which would read our own burn as a stranger's claim.
+    const c = coupon([64], 'q')
+    const swap = w.ports.mint.swap.bind(w.ports.mint)
+    const statesAtBurn: string[] = []
+    w.ports.mint.swap = async (m, inputs, outputs) => {
+      if (inputs.some((p) => p.secret === tokenProofs(c.token)[0].secret)) {
+        statesAtBurn.push(...intents.loadCashlinkIntents(ME).flatMap((i) => i.parts.map((p) => p.state)))
+      }
+      return swap(m, inputs, outputs)
+    }
+    await start([c])
+    expect(statesAtBurn).toEqual(['arming'])
+  })
+
+  it('#543 review: an intent whose refunds are armed but a wrap is not on the link is kept', async () => {
+    // Armed at the relay is not "on the link": until every wrap is published the next run must
+    // republish, so the intent (and logout's hold) stays.
+    publishOk = () => false
+    const c = coupon([64], 'r')
+    const out = await start([c])
+    expect(out).toMatchObject({ kind: 'made', published: false })
+    expect(intents.loadCashlinkIntents(ME)).toHaveLength(1)
+    expect(intents.loadCashlinkIntents(ME)[0].parts[0].armed).toBe(true)
+  })
 })
 
 describe('crash recovery: finishCashlinkIntents (spec section 5)', () => {
