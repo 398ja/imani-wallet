@@ -89,6 +89,20 @@ describe('arming a Cashlink (burn with R, lock, mint, deposit)', () => {
     expect(armState[0]).toMatch(/^arming:/)
   })
 
+  it('#540 F4: reads the gift states once (the preflight\u2019s), not again before the burn', async () => {
+    const gift = giftOn(w, [32, 32])
+    const real = w.ports.mint.states.bind(w.ports.mint)
+    const asked: string[][] = []
+    w.ports.mint.states = async (m, secrets) => {
+      asked.push(secrets)
+      return real(m, secrets)
+    }
+    expect((await armGift(armCtx(gift))).kind).toBe('armed')
+    const giftSecrets = tokenProofs(gift.token).map((p) => p.secret)
+    const ofGift = asked.filter((s) => s.length === giftSecrets.length && s.every((x, n) => x === giftSecrets[n]))
+    expect(ofGift).toHaveLength(1)
+  })
+
   it('burns with a witness by R over the burn outputs, so the lock route can attribute it', async () => {
     // The lock route reads the burn's recorded witness from NUT-07 and refuses unless R signed the
     // SIG_ALL message over those exact outputs. A burn without it would leave the gift unlockable.

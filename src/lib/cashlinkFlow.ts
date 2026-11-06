@@ -581,16 +581,21 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   const resuming = ctx.resuming === true || ctx.burnKeyset !== undefined
 
   // 0. Before anything moves. A resumed arm has already passed these and may have burnt.
+  // #540 F4: a preflight that passed has just read every proof UNSPENT (it refuses on anything
+  // else), so the arm does not ask the mint again. A refusal we carry on past (our own burn) has
+  // not, and the states are read below as before.
+  let preflightUnspent = false
   if (!resuming) {
     const refusal = await preflight(ctx, proofs, mintUrl, linkPub, refundPub)
     // #379: a gift spent into OUR burn outputs was burnt by this wallet (another run of this arm
     // whose record is not visible here), never claimed. It is finished like a resumed arm.
     if (refusal && !(refusal.kind === 'claimed' && (await burntByUs(ports, ctx.refundSecret, mintUrl, proofs)))) return refusal
+    preflightUnspent = refusal === null
   }
 
   const [burnKeyset, giftStates] = await Promise.all([
     ctx.burnKeyset ?? ports.mint.activeKeysetId(mintUrl),
-    ctx.preChecked
+    ctx.preChecked || preflightUnspent
       ? Promise.resolve(proofs.map(() => 'UNSPENT' as ProofState))
       : ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret)).catch(() => undefined),
   ])

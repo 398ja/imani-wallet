@@ -89,7 +89,10 @@ import {
   nextLinkIndex,
   reconcileGiftLinks,
   resetLinkSettlesForTests,
+  RESTORE_PROBE_BATCH,
+  RESTORE_SCAN_EVERY_MS,
   restoreScan,
+  restoreScanIfDue,
   sendGift,
   takeBack,
   tooManyLinksMessage,
@@ -583,5 +586,115 @@ describe('second check of #367', () => {
     await reconcileGiftLinks(NOW, async () => 'SPENT')
     expect((h.rows[0].link as { status: string }).status).toBe('reclaimed')
     expect(h.redeemed).toHaveLength(1)
+  })
+})
+
+describe('#540 F1: one settle per Send screen', () => {
+  const token = buildVoucherToken({ expiresAt: 1_900_000_000 }, [8]).token
+  const NOW = 1_850_000_000_000
+
+  it('sendGift does not settle again when the screen settled moments ago', async () => {
+    h.rows = [linkRow(0, 'outstanding', 1_900_000_000)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [token])
+    await settleAndCountLinks(NOW, async () => 'UNSPENT')
+    h.deliverTo = linkPubOf(deriveLinkSecret(ID, 1))
+    let asked = 0
+    await sendGift({
+      payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: 1_900_000_000, nowMs: NOW,
+      state: async () => {
+        asked++
+        return 'UNSPENT'
+      },
+    })
+    expect(asked).toBe(0)
+    expect(h.sent).toHaveLength(1)
+  })
+
+  it('still judges the limit from fresh rows after a recent settle', async () => {
+    await settleAndCountLinks(NOW, async () => 'UNSPENT')
+    h.rows = Array.from({ length: MAX_OUTSTANDING_LINKS }, (_, i) => linkRow(i, 'outstanding', 1_900_000_000))
+    await expect(
+      sendGift({ payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: 1_900_000_000, nowMs: NOW, state: async () => 'UNSPENT' }),
+    ).rejects.toThrow(tooManyLinksMessage())
+  })
+
+  it('settles again once the screen\'s settle is more than a minute old', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(NOW)
+      h.rows = [linkRow(0, 'outstanding', 1_900_000_000)]
+      h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [token])
+      await settleAndCountLinks(NOW, async () => 'UNSPENT')
+      vi.setSystemTime(NOW + 61_000)
+      h.deliverTo = linkPubOf(deriveLinkSecret(ID, 1))
+      let asked = 0
+      await sendGift({
+        payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: 1_900_000_000, nowMs: NOW,
+        state: async () => {
+          asked++
+          return 'UNSPENT'
+        },
+      })
+      expect(asked).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('#540 F8: the restore scan runs when it can find something', () => {
+  const token = buildVoucherToken({}, [8]).token
+  const NOW = 1_800_000_000_000
+
+  it('probes four indices at a time', async () => {
+    let inFlight = 0
+    let peak = 0
+    const probe = async () => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 1))
+      inFlight--
+      return []
+    }
+    await restoreScan(PUB, probe, async () => 'UNSPENT', NOW)
+    expect(RESTORE_PROBE_BATCH).toBe(4)
+    expect(peak).toBe(RESTORE_PROBE_BATCH)
+  })
+
+  it('still slides the window and adopts in a batched scan', async () => {
+    const seen: number[] = []
+    const probe = async (secret: Uint8Array) => {
+      for (let i = 0; i < 200; i++) {
+        if (linkPubOf(deriveLinkSecret(ID, i)) === linkPubOf(secret)) {
+          seen.push(i)
+          return i === 15 ? [{ token, sentAt: 1_800_000_000 }] : []
+        }
+      }
+      return []
+    }
+    expect(await restoreScan(PUB, probe, async () => 'UNSPENT', NOW)).toBe(1)
+    expect(Math.max(...seen)).toBe(15 + RESTORE_GAP)
+    expect(new Set(seen).size).toBe(seen.length)
+  })
+
+  it('scans on a fresh device, then not again the same day, then again a day later', async () => {
+    const scan = vi.fn(async () => 0)
+    await restoreScanIfDue(PUB, NOW, scan)
+    expect(scan).toHaveBeenCalledTimes(1)
+    await restoreScanIfDue(PUB, NOW + 60_000, scan)
+    await restoreScanIfDue(PUB, NOW + RESTORE_SCAN_EVERY_MS - 1, scan)
+    expect(scan).toHaveBeenCalledTimes(1)
+    await restoreScanIfDue(PUB, NOW + RESTORE_SCAN_EVERY_MS, scan)
+    expect(scan).toHaveBeenCalledTimes(2)
+  })
+
+  it('scans at once after logout or a wipe (the stamp is gone with the storage), and per account', async () => {
+    const scan = vi.fn(async () => 0)
+    await restoreScanIfDue(PUB, NOW, scan)
+    await restoreScanIfDue('b'.repeat(64), NOW, scan)
+    expect(scan).toHaveBeenCalledTimes(2)
+    store.clear()
+    await restoreScanIfDue(PUB, NOW + 60_000, scan)
+    expect(scan).toHaveBeenCalledTimes(3)
   })
 })

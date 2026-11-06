@@ -1724,7 +1724,9 @@ async function deliverCounted(
   amount: number,
   unitLabel?: string,
 ): Promise<SendResult> {
-  await refuseIfWrongMerchant(ctx.recipient.pubkey, ctx.merchant.pubkey)
+  // #540 F5: a gift link's recipient is a key derived for this one link, never a stall, so the
+  // merchant lookup (one relay round trip) is skipped.
+  if (!ctx.link) await refuseIfWrongMerchant(ctx.recipient.pubkey, ctx.merchant.pubkey)
   // Ask the gateway about anything still pending BEFORE refusing: a send that has finished since
   // the wallet stopped waiting would otherwise block this person until the next login.
   await reconcilePendingSends(ctx.payer)
