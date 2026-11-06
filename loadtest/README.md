@@ -726,12 +726,23 @@ customer takes. So this is a Node driver around the wallet's own
 
 Each code is a whole sale first: a stall (`stalls.mjs`) issues a coupon on its
 NAP session, the mint backs it (polled as market-day.js polls), and a pool
-customer makes a code from it for that stall's shop. The shop key is derived
-from the stall's pubkey, so the same stall always has the same shop.
+customer makes a code from it for that stall's shop. By default the shop key is
+a test key derived from the stall's private key, so the same stall always has
+the same shop and the k6 half can sign as it.
+
+With `--shops published`, the code is made for the shop the stall really
+advertises: `online_shop.redeem_key` and `url` read from its own
+`imani:merchant` record on the relay. That is how a real stall's online shop
+gets codes it can redeem, for example a market day with a real stall in the
+pool. The run never holds that shop's key, so `checkout-codes.js` refuses such
+a file (it signs as the shop), and `--cleanup` only reads each code's public
+balance. Redeem those codes at the shop itself.
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--stalls` | 2 | stalls, the pool's first identities, as everywhere |
+| `--stall-index` | none | comma-separated pool indices to use as the stalls instead, e.g. `1` for slot 1 |
+| `--shops` | `derived` | `derived`: a test shop per stall. `published`: the stall's advertised online shop |
 | `--codes` | 3 | codes to make |
 | `--rate-start` / `--rate-end` | 1 / same | codes per minute, linear ramp between them |
 | `--concurrency` | 4 | codes in flight at once |
