@@ -20,6 +20,7 @@ import { carryExpiryReminders } from './expiryReminders'
 import { withSpend } from './receiveGate'
 import { PENDING_SEND_LIFETIME_MS as SEND_LIFETIME, pendingSendsKey } from './inFlightMoney'
 import { checkoutHeldTokenIds } from './checkoutCodeRecords'
+import { cashlinkHeldTokenIds } from './cashlinkIntents'
 import { forgetSendIntent, gatewayAnswered, keyForSend, pendingIntentVoucher } from './sendIntent'
 import {
   RequestAlreadyPaidError,
@@ -982,6 +983,8 @@ export function withoutInFlight(rows: VoucherRow[], payer: string): VoucherRow[]
   const held = new Set(inFlightSends(payer).map((send) => send.tokenId))
   // #402: and every coupon behind a checkout code still outstanding.
   for (const id of checkoutHeldTokenIds(payer)) held.add(id)
+  // #543: and every coupon a Cashlink being made on the direct path still draws on.
+  for (const id of cashlinkHeldTokenIds(payer)) held.add(id)
   return held.size === 0 ? rows : rows.filter((row) => !held.has(row.token_id))
 }
 
