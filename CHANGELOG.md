@@ -9,6 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-11-06
+
+### Changed
+
+- **A Cashlink is locked from the start** (#543, #544). On staging, "Make Cashlink" to "Cashlink
+  ready" drops from 14.5 to 19.4 s to a median of 6.1 s for a whole coupon, and 9.5 s when a coupon
+  is split. Nothing goes through gateway-core's atomic send.
+  - The Cashlink is built like a checkout code (#402), with the link key in place of the shop key:
+    1. plan the parts (carve or bearer-split);
+    2. write an intent;
+    3. pre-check every part with nothing burnt;
+    4. arm every part with `lockPub = linkPub` and `R_i`;
+    5. publish the locked wraps.
+  - The publish runs beside the refund deposits. A wrap counts as delivered when the relay says OK
+    and the gateway mirror answers 2xx, with no read-back. A relay that could not be reached is
+    tried up to 3 times. A wrap still not on the link is republished after 5, 20 and 60 s, and
+    again on the next start.
+  - There is no bearer copy on the link any more, so the windows #379 and #396 worked around are
+    gone.
+  - Making a Cashlink is a counted spend, so logout waits for it.
+  - The old path (atomic send, bearer gift, then arm) stays as the fallback. It is chosen before
+    anything moves, for:
+    - merchant accounts;
+    - remote signers;
+    - coupons without a DLEQ;
+    - the relay off, or the routes unavailable;
+    - lock window problems;
+    - any other pre-check refusal.
+  - The wallet logs `[cashlink] path=direct` or `path=legacy why=<reason>`.
+  - `finishCashlinkIntents` finishes, on the next start, a Cashlink a page left part way.
+- **Fewer round trips around a Cashlink** (#540, #542):
+  - **One settle per Send screen.** `sendGift` does not settle again within 60 s of the screen's
+    completed settle.
+  - **No merchant lookup for a link key.**
+  - **One NUT-07 read for the arm.** It reuses the preflight's.
+  - **The arm reuses the tokens the delivery check read.**
+  - **Spent coupons are tombstoned by `#d`.** This replaces reading every kind 7375 event, which
+    was 1.5 MB per spend on a large account.
+  - **The spent set stays warm.** It learns local tombstones and is topped up with a `since` read.
+  - **The restore scan runs less often.** It runs only on a fresh device or once a day, probing 4
+    indices at a time.
+
+### Added
+
+- `e2e/profile-cashlink.mts` (#541): phase times and a per-request timeline of Cashlink creation
+  against staging. `PROFILE_BUNDLE_DIR` serves a local build on the staging origin, and
+  `PROFILE_AMOUNT` sets the amount.
+
 ## [0.56.0] - 2026-11-06
 
 ### Added
