@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   signerKey: null as Uint8Array | null,
   merchant: false,
   redeemed: [] as string[],
+  /** #540 F3: every wrap read, by link pubkey. */
+  reads: [] as string[],
 }))
 
 vi.mock('../wallet', () => ({
@@ -63,7 +65,10 @@ vi.mock('../giftLink', async (orig) => {
   const real = await orig<typeof import('../giftLink')>()
   return {
     ...real,
-    fetchGiftWraps: async (secret: Uint8Array) => ((h.wraps.get(real.linkPubOf(secret)) ?? []).length ? [{ id: 'w' }] : []),
+    fetchGiftWraps: async (secret: Uint8Array) => {
+      h.reads.push(real.linkPubOf(secret))
+      return (h.wraps.get(real.linkPubOf(secret)) ?? []).length ? [{ id: 'w' }] : []
+    },
     giftTokensFrom: async (secret: Uint8Array) => (h.wraps.get(real.linkPubOf(secret)) ?? []).map((token) => ({ token, sentAt: 1_800_000_000 })),
     tokenState: async () => 'UNSPENT',
   }
@@ -102,6 +107,7 @@ beforeEach(() => {
   h.signerKey = ID
   h.merchant = false
   h.redeemed = []
+  h.reads = []
   w = world(NOW)
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout'], shouldAdvanceTime: true })
   vi.setSystemTime(NOW * 1000)
@@ -125,6 +131,14 @@ const link = () => h.rows[0].link as { status: string; arm?: { s: string; ks?: s
 const send = () => giftLinks.sendGift({ payer: PUB, merchant: { pubkey: PUB } as never, unit: 'GBP', amount: 1000, x: X, settleBudgetMs: 10 })
 
 describe('Send by link arms the Cashlink when the voucher service can', () => {
+  it('#540 F3: reads the new link once after the send; the arm reuses that read', async () => {
+    const out = await send()
+    expect(out.returnsOnItsOwn).toBe(true)
+    const pub = linkPubOf(deriveLinkSecret(ID, 0))
+    // One free-key probe before the send, one delivery read after it, and none by the arm.
+    expect(h.reads.filter((p) => p === pub)).toHaveLength(2)
+  })
+
   it('arms it: the History row says it comes back on its own', async () => {
     const out = await send()
     expect(out.returnsOnItsOwn).toBe(true)

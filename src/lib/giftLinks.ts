@@ -372,9 +372,18 @@ export async function settleAndCountLinks(
   state: (token: string) => Promise<ProofState> = tokenState,
   budgetMs = SETTLE_BUDGET_MS,
 ): Promise<LinkCounts> {
-  await settleWithin(nowMs, state, budgetMs)
+  if (await settleWithin(nowMs, state, budgetMs)) lastSettledAt = Date.now()
   return linkCounts(nowMs)
 }
+
+/**
+ * #540 F1: when the Send by link screen last finished its settle (wall clock, ms). `sendGift` does
+ * not settle again within `RECENT_SETTLE_MS` of it: the same links were checked seconds ago, and
+ * the limit is still judged from freshly read rows. Only a settle that finished counts; one cut
+ * short by the budget is still running and proves nothing yet.
+ */
+let lastSettledAt: number | undefined
+export const RECENT_SETTLE_MS = 60_000
 
 /**
  * How long Send waits for the settle before counting what is stored (review of #367). Each link is a
@@ -384,13 +393,17 @@ export async function settleAndCountLinks(
  */
 export const SETTLE_BUDGET_MS = 8_000
 
-async function settleWithin(nowMs: number, state: (token: string) => Promise<ProofState>, budgetMs: number): Promise<void> {
+/** Settle, waiting at most `budgetMs`. True when the settle finished within it. */
+async function settleWithin(nowMs: number, state: (token: string) => Promise<ProofState>, budgetMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    await Promise.race([
-      reconcileGiftLinks(nowMs, state),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, budgetMs)
+    return await Promise.race([
+      reconcileGiftLinks(nowMs, state).then(
+        () => true,
+        () => false,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), budgetMs)
       }),
     ])
   } finally {
@@ -593,8 +606,10 @@ export async function sendGift({
   }
   // #295 phase 0: settle every link first. A link that was claimed is marked, and one past its
   // expiry is taken back, so neither blocks this send. Never throws, and waits at most
-  // `settleBudgetMs`.
-  await settleWithin(nowMs, state, settleBudgetMs)
+  // `settleBudgetMs`. #540 F1: skipped when the Send screen finished the same settle moments ago.
+  if (lastSettledAt === undefined || Date.now() - lastSettledAt > RECENT_SETTLE_MS) {
+    await settleWithin(nowMs, state, settleBudgetMs)
+  }
   const rows = await linkRows()
   const refusal = linkLimitMessage(countLinks(rows, nowMs))
   if (refusal) throw new Error(refusal)
@@ -627,14 +642,18 @@ export async function sendGift({
 
   // The delivery check (spec 3.3 send step 3). A miss is reported, not fatal: the gift wrap can
   // reach the gateway's cache a moment after COMPLETED, and the recipient's wallet queries again.
+  // #540 F3: the tokens this read found are handed to the arm, which used to read the link a second
+  // time straight after. A hit costs no sleep; only a miss waits and reads again.
   let delivered = false
+  let onLink: GiftToken[] = []
   for (let attempt = 0; attempt < 5 && !delivered; attempt++) {
     try {
-      delivered = (await giftTokensFrom(allocated.secret, await fetchGiftWraps(allocated.secret))).length > 0
+      onLink = await giftTokensFrom(allocated.secret, await fetchGiftWraps(allocated.secret))
+      delivered = onLink.length > 0
     } catch {
       delivered = false
     }
-    if (!delivered) await new Promise((r) => setTimeout(r, 1500))
+    if (!delivered && attempt < 4) await new Promise((r) => setTimeout(r, 1500))
   }
   // #295 phase 4: lock the gift to its link and leave its take-back with the voucher service, so it
   // comes back on its own. Only once it is on the link, only for an account whose key this wallet
@@ -642,7 +661,7 @@ export async function sendGift({
   // expired Cashlinks lapse). Anything that stops it leaves the link exactly as it is.
   let returnsOnItsOwn = false
   if (delivered && allocated.i !== undefined && !cashlinkSeam.isMerchant(payer)) {
-    returnsOnItsOwn = (await armLink(payer, k, allocated.secret, allocated.i, x)).kind === 'armed'
+    returnsOnItsOwn = (await armLink(payer, k, allocated.secret, allocated.i, x, onLink)).kind === 'armed'
   }
   return { result, link, x, delivered, returnsOnItsOwn }
   } finally {
@@ -668,6 +687,7 @@ const linkSettles = new Map<string, Promise<void>>()
 /** Tests only: forget settles a previous test left pending. */
 export function resetLinkSettlesForTests(): void {
   linkSettles.clear()
+  lastSettledAt = undefined
 }
 /**
  * #401: how many links one reconcile run checks at once. Two, so one slow take-back never holds up
@@ -681,7 +701,15 @@ const newestOf = (parts: LinkRow[]): number => Math.max(...parts.map((p) => Numb
 /**
  * Arm (or resume arming) one link, recording each step on its row. Never throws.
  */
-async function armLink(pubkey: string, k: string, linkSecret: Uint8Array, i: number, x: number): Promise<ArmOutcome> {
+async function armLink(
+  pubkey: string,
+  k: string,
+  linkSecret: Uint8Array,
+  i: number,
+  x: number,
+  /** #540 F3: the link's tokens, read by the caller just now; read here when not given. */
+  onLink?: GiftToken[],
+): Promise<ArmOutcome> {
   const refundSecret = refundSecretFor({ i })
   if (!refundSecret) return { kind: 'unarmed', why: 'not_lockable' }
   linksInFlight.add(k)
@@ -690,7 +718,7 @@ async function armLink(pubkey: string, k: string, linkSecret: Uint8Array, i: num
     const rows = await rowsNow()
     if (rows.length === 0) return { kind: 'unarmed', why: 'no_gift' }
     const id = rows[0].id
-    const tokens = giftCandidates(await giftTokensForSecret(linkSecret))
+    const tokens = giftCandidates(onLink ?? (await giftTokensForSecret(linkSecret)))
     const ports = await cashlinkSeam.ports()
     // #379: resumed whenever any row of the link says `arming`, with or without its keyset. A resume
     // never re-runs the pre-check, which would read our own burn as a claim.
@@ -1532,15 +1560,22 @@ export async function restoreScan(
     for (const k of [...linksInFlight, ...pendingSendLinks(pubkey)]) known.add(k)
     let last = Math.max(-1, ...rows.map((r) => r.link.i ?? -1), nextLinkIndex(pubkey) - 1)
     let adopted = 0
+    // #540 F8: probed RESTORE_PROBE_BATCH indices at a time, each batch handled in index order
+    // afterwards, so every #379 guard below runs exactly as it did one by one.
+    let probed: Promise<GiftToken[] | null>[] = []
+    let batchStart = 0
     for (let i = 0; i <= last + RESTORE_GAP; i++) {
+      if (i >= batchStart + probed.length) {
+        batchStart = i
+        const end = Math.min(i + RESTORE_PROBE_BATCH - 1, last + RESTORE_GAP)
+        probed = []
+        for (let j = i; j <= end; j++) probed.push(probe(deriveLinkSecret(id, j)).catch(() => null))
+      }
       const secret = deriveLinkSecret(id, i)
       const k = secretToText(secret)
-      let tokens: GiftToken[]
-      try {
-        tokens = await probe(secret)
-      } catch {
-        continue
-      }
+      const answer = await probed[i - batchStart]
+      if (answer === null) continue
+      let tokens: GiftToken[] = answer
       if (tokens.length === 0) continue
       if (i > last) last = i
       advanceLinkIndex(pubkey, i)
@@ -1582,6 +1617,39 @@ export async function restoreScan(
   } finally {
     id.fill(0)
   }
+}
+
+/** #540 F8: how many link keys the restore scan asks about at once. */
+export const RESTORE_PROBE_BATCH = 4
+/** #540 F8: the start-up restore scan runs at most this often on a device that kept its history. */
+export const RESTORE_SCAN_EVERY_MS = 24 * 60 * 60 * 1000
+const restoreScanKey = (pubkey: string) => `imani-wallet:gift-restore-scan:${pubkey}`
+
+/**
+ * #540 F8: the start-up restore scan, only when it can find something. The stamp lives under the
+ * `imani-wallet:` prefix, so logout's sweep (and a new device, or wiped storage) removes it and
+ * the next start scans at once; otherwise at most once a day. The scan only adopts links this
+ * device's rows do not know, and a device that kept its rows already knows every link it made.
+ */
+export async function restoreScanIfDue(
+  pubkey: string,
+  nowMs = Date.now(),
+  scan: (pubkey: string) => Promise<number> = restoreScan,
+): Promise<number> {
+  let stamp = NaN
+  try {
+    stamp = Number(localStorage.getItem(restoreScanKey(pubkey)))
+  } catch {
+    // No storage: scan, as before.
+  }
+  if (Number.isFinite(stamp) && stamp > 0 && nowMs - stamp >= 0 && nowMs - stamp < RESTORE_SCAN_EVERY_MS) return 0
+  const adopted = await scan(pubkey)
+  try {
+    localStorage.setItem(restoreScanKey(pubkey), String(nowMs))
+  } catch {
+    // Scans again next start.
+  }
+  return adopted
 }
 
 /** A link this wallet has a pending send for (its row is written only once the send settles). */

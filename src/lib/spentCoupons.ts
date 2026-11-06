@@ -28,7 +28,7 @@
 
 import type { Event } from 'nostr-tools'
 
-import { allEvents } from './relay'
+import { allEvents, eventsSince } from './relay'
 import { NIP60_TOKEN_KIND } from './voucherRecords'
 
 /**
@@ -55,6 +55,9 @@ const CACHE_TTL_MS = 2 * 60 * 1000
  */
 const READ_TIMEOUT_MS = 2_500
 
+/** #540 F7: how far before the last read an incremental refresh starts, for skewed clocks. */
+const SINCE_SLACK_S = 60
+
 /**
  * The answer, with "could not tell" kept DISTINCT from "nothing is spent".
  *
@@ -79,6 +82,16 @@ let cached: { pubkey: string; at: number; value: SpentIds } | null = null
 /** Drop the cache. For tests, and for a wallet changing identity. */
 export function forgetSpentIds(): void {
   cached = null
+}
+
+/**
+ * #540 F7: this device just tombstoned `tokenId`. A warm set for the account learns it at once, so
+ * a send straight after another neither offers that coupon nor needs a fresh full read. Only adds
+ * (a tombstone is final), and never creates a set: one id is not "everything that is spent".
+ */
+export function noteSpentLocally(pubkey: string, tokenId: string): void {
+  if (!tokenId || !cached || cached.pubkey !== pubkey || !cached.value.known) return
+  cached.value.ids.add(tokenId)
 }
 
 /**
@@ -166,6 +179,18 @@ export async function spentTokenIds(pubkey: string): Promise<SpentIds> {
   }
 
   try {
+    // #540 F7: a set read before for this account is topped up with what was written since it was
+    // read (a minute of slack for clocks), not read again from scratch. A tombstone is final, so the
+    // union is exact. A full read is still the first one, and the fallback for anything odd.
+    if (cached && cached.pubkey === pubkey && cached.value.known) {
+      const since = Math.floor(cached.at / 1000) - SINCE_SLACK_S
+      const fresh = await withTimeout<Event[] | null>(eventsSince(pubkey, NIP60_TOKEN_KIND, since), null)
+      if (fresh !== null) {
+        const value: SpentIds = { ids: new Set([...cached.value.ids, ...tombstonedIds(fresh)]), known: true }
+        cached = { pubkey, at: now, value }
+        return value
+      }
+    }
     const value = await readSpentIds(pubkey)
     if (value.known) cached = { pubkey, at: now, value }
     return value

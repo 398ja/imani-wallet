@@ -79,7 +79,7 @@ import { refreshOwnBadge, setVerificationOwner } from './lib/verificationReader'
 import { SUBSCRIPTION_STATUS_EVENT } from './lib/subscriptionStatusStore'
 import { GiftLandingPage } from './pages/GiftLandingPage'
 import { GiftReturnPage } from './pages/GiftReturnPage'
-import { finishPendingCashlinkClaims, reconcileGiftLinks, restoreScan } from './lib/giftLinks'
+import { finishPendingCashlinkClaims, reconcileGiftLinks, restoreScanIfDue } from './lib/giftLinks'
 import { runCashlinkExpiryNoticesAfterReconcile } from './lib/cashlinkExpiryNotice'
 import { BuyPage } from './pages/BuyPage'
 import { BuyCancelledPage, BuyDonePage } from './pages/BuyReturnPages'
@@ -369,7 +369,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           // from another device is known by its row. The restore scan adopts any outstanding link
           // this device's history does not know (a lost phone), then every outstanding link is
           // checked by NUT-07: spent is claimed, and past its expiry it is taken back. Never throws.
-          .then(() => restoreScan(pubkey))
+          .then(() => restoreScanIfDue(pubkey))
           // #295 phase 4: a Cashlink this wallet started to claim and did not finish (the page
           // died after the burn) is finished first, from the factors it wrote down. Never throws.
           .then(async (adopted) => {

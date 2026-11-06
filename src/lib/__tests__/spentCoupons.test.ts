@@ -19,10 +19,14 @@ import type { Event } from 'nostr-tools'
 const relayEvents = vi.fn<(pubkey: string, kind: number) => Promise<Event[]>>()
 const gatewayQuery = vi.fn<(pubkey: string, kind: number) => Promise<Event[]>>()
 
-vi.mock('../relay', () => ({ allEvents: (p: string, k: number) => relayEvents(p, k) }))
+const sinceEvents = vi.fn<(pubkey: string, kind: number, since: number) => Promise<Event[] | null>>()
+vi.mock('../relay', () => ({
+  allEvents: (p: string, k: number) => relayEvents(p, k),
+  eventsSince: (p: string, k: number, since: number) => sinceEvents(p, k, since),
+}))
 vi.mock('../gatewayNostr', () => ({ gatewayEvents: (p: string, k: number) => gatewayQuery(p, k) }))
 
-const { spentTokenIds, withoutSpent, forgetSpentIds } = await import('../spentCoupons')
+const { spentTokenIds, withoutSpent, forgetSpentIds, noteSpentLocally } = await import('../spentCoupons')
 
 const PK = 'a'.repeat(64)
 
@@ -49,6 +53,7 @@ beforeEach(() => {
   forgetSpentIds()
   relayEvents.mockReset()
   gatewayQuery.mockReset()
+  sinceEvents.mockReset()
 })
 afterEach(() => forgetSpentIds())
 
@@ -220,5 +225,51 @@ describe('caching', () => {
 
     expect(other.ids.has('t1')).toBe(false)
     expect(other.ids.has('other')).toBe(true)
+  })
+})
+
+describe('#540 F7: a warm set stays warm', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('learns this device\'s own tombstone at once, with no new read', async () => {
+    relayEvents.mockResolvedValue([tombstone('t1')])
+    await spentTokenIds(PK)
+    noteSpentLocally(PK, 't2')
+    const spent = await spentTokenIds(PK)
+    expect(spent.ids.has('t2')).toBe(true)
+    expect(relayEvents).toHaveBeenCalledTimes(1)
+  })
+
+  it('never makes a set from one id, nor adds to another account\'s', async () => {
+    noteSpentLocally(PK, 't2')
+    relayEvents.mockResolvedValue([])
+    expect((await spentTokenIds(PK)).ids.has('t2')).toBe(false)
+    noteSpentLocally('b'.repeat(64), 't3')
+    expect((await spentTokenIds(PK)).ids.has('t3')).toBe(false)
+  })
+
+  it('tops an expired set up with a since read, not a full re-read', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_800_000_000_000)
+    relayEvents.mockResolvedValue([tombstone('t1')])
+    await spentTokenIds(PK)
+    vi.setSystemTime(1_800_000_000_000 + 3 * 60 * 1000)
+    sinceEvents.mockResolvedValue([tombstone('t9')])
+    const spent = await spentTokenIds(PK)
+    expect([...spent.ids].sort()).toEqual(['t1', 't9'])
+    expect(relayEvents).toHaveBeenCalledTimes(1)
+    expect(sinceEvents.mock.calls[0][2]).toBeLessThanOrEqual(1_800_000_000)
+  })
+
+  it('falls back to a full read when the since page is full or fails', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_800_000_000_000)
+    relayEvents.mockResolvedValue([tombstone('t1')])
+    await spentTokenIds(PK)
+    vi.setSystemTime(1_800_000_000_000 + 3 * 60 * 1000)
+    sinceEvents.mockResolvedValue(null)
+    relayEvents.mockResolvedValue([tombstone('t1'), tombstone('t2')])
+    expect((await spentTokenIds(PK)).ids.has('t2')).toBe(true)
+    expect(relayEvents).toHaveBeenCalledTimes(2)
   })
 })
