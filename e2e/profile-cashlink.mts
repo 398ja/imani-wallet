@@ -18,6 +18,8 @@ import { registerCustomer, registerMerchant } from './register.mts'
 const BASE = (process.env.E2E_BASE ?? 'https://wallet.staging.398ja.xyz').replace(/\/+$/, '')
 const LINKS = Number(process.env.PROFILE_LINKS ?? 4)
 const SALES = Number(process.env.PROFILE_SALES ?? 3)
+/** The Cashlink amount. 0.50 of a 3.00 coupon needs a bearer split; 3.00 sends a whole coupon (#543). */
+const AMOUNT = process.env.PROFILE_AMOUNT ?? '0.50'
 const OUT = process.env.PROFILE_OUT ?? '/tmp/cashlink-profile.json'
 /**
  * A local `vite build` to profile instead of the deployed bundle. Its static files are served on the
@@ -130,7 +132,7 @@ async function main(): Promise<void> {
     await c.waitForFunction(() => /Which voucher\?|How much\?/.test(document.body.innerText), undefined, { timeout: 120_000 })
     const tAmount = Date.now()
     if (/Which voucher\?/.test(await text(c))) await c.locator('main button, button').filter({ hasText: /€/ }).first().click()
-    await c.locator('input[placeholder="0.00"]').fill('0.50')
+    await c.locator('input[placeholder="0.00"]').fill(AMOUNT)
     await c.getByRole('button', { name: 'Continue' }).click()
     await c.getByRole('button', { name: 'Make Cashlink' }).waitFor({ timeout: 60_000 })
     const tConfirm = Date.now()
