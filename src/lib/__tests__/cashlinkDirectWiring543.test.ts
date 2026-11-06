@@ -197,6 +197,23 @@ describe('sendGift picks the path before anything moves', () => {
     expect(h.legacySends).toBe(1)
   })
 
+  it('#543 review: a wrap the relay could not take is republished in the background, not only at the next start', async () => {
+    const { face } = couponRow([64], 'p')
+    const ports = await giftLinks.cashlinkSeam.directPorts()
+    let refuse = true
+    vi.mocked(giftLinks.cashlinkSeam.directPorts).mockResolvedValue({
+      ...ports,
+      publish: async (s, t) => (refuse ? false : ports.publish(s, t)),
+    })
+    const out = await send(face)
+    expect(out.delivered).toBe(false)
+    expect(linkOf().arm?.s).toBe('arming')
+    refuse = false
+    await vi.advanceTimersByTimeAsync(giftLinks.INTENT_RETRY_DELAYS_MS[0] + 50)
+    await vi.waitFor(() => expect(linkOf().arm?.s).toBe('armed'))
+    expect(h.wraps.get(linkPubOf(L0()))).toHaveLength(1)
+  })
+
   it('#543 review: the direct path is a counted spend, so logout waits for it (#335)', async () => {
     const { spendsInFlight } = await import('../receiveGate')
     const { face } = couponRow([64], 'g')

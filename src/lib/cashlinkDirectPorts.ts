@@ -19,11 +19,30 @@ import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import { getWallet, notifyWalletChanged } from './wallet'
 
 /**
+ * #543 review: how often a wrap's relay publish is tried when the relay could not be REACHED. On
+ * staging a send fires several publishes at once (records, history, wraps), each on its own socket,
+ * and some lose nostr-tools' 3 s connect race; one such loss left a link `arming` until the next
+ * start. A relay that answered `OK false` (too large, #532) is never retried: it will refuse again.
+ */
+export const WRAP_RELAY_ATTEMPTS = 3
+const WRAP_CONNECT_MS = 8_000
+const unreachable = (errors: string[]) => errors.length > 0 && errors.every((e) => /connection failure|timed out|could not connect/i.test(e))
+
+async function relayWrap(wrap: Parameters<typeof publish>[0], sleep: (ms: number) => Promise<void>): Promise<boolean> {
+  for (let attempt = 1; ; attempt++) {
+    const result = await publish(wrap, undefined, { connectMs: WRAP_CONNECT_MS }).catch(() => ({ ok: 0, total: 1, errors: ['connection failure: threw'] }))
+    if (result.ok > 0) return true
+    if (attempt >= WRAP_RELAY_ATTEMPTS || !unreachable(result.errors)) return false
+    await sleep(400 * attempt)
+  }
+}
+
+/**
  * One locked wrap onto its link, to the relay and the gateway's cache at once. Delivered means the
  * relay said OK and the gateway mirror answered 2xx (#532 follow-up): the claimer reads the gateway,
  * so a relay-only copy is not yet "on the link". Nothing is read back.
  */
-async function publishWrap(linkSecret: Uint8Array, token: string): Promise<boolean> {
+export async function publishWrap(linkSecret: Uint8Array, token: string, sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<boolean> {
   let me: string | undefined
   try {
     me = getSigner().pubkey?.toLowerCase()
@@ -31,7 +50,7 @@ async function publishWrap(linkSecret: Uint8Array, token: string): Promise<boole
     me = undefined
   }
   const wrap = wrapForLink(linkSecret, token, me)
-  const [relayed, mirrored] = await Promise.all([publish(wrap).then((r) => r.ok > 0, () => false), mirrorToGateway(wrap)])
+  const [relayed, mirrored] = await Promise.all([relayWrap(wrap, sleep), mirrorToGateway(wrap)])
   return relayed && mirrored
 }
 

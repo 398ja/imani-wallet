@@ -655,6 +655,9 @@ export async function sendGift({
   const direct = await withSpend(() => tryDirect({ payer, merchant, unit, amount, memo, x, i: allocated.i, nowMs }))
   if (direct.kind === 'made') {
     console.info('[cashlink] path=direct')
+    // #543 review: a wrap still not on the link (the relay out of reach through every try) is tried
+    // again in the background within the minute the screen promises, not only at the next start.
+    if (!direct.published) scheduleIntentRetry(payer)
     return {
       // #543 review: the bundle id the rows share, never `k` (the link's bearer secret).
       result: { id: cashlinkBundleId(allocated.linkPub), requested: amount, delivered: direct.delivered, parts: direct.parts, ...(direct.delivered < amount ? { shortfall: 'part of it could not be locked; its value is kept in your wallet' } : {}) },
@@ -1112,6 +1115,24 @@ export async function giftTokensForSecret(secret: Uint8Array): Promise<GiftToken
  * Start-up (#295 phase 4): finish every Cashlink claim this wallet began and did not finish (the
  * page died after the burn). Behind the receive gate, like every receive. Never throws.
  */
+/**
+ * #543 review: when a direct Cashlink is made with a wrap not yet on its link, its intent is run
+ * again after these delays (each run republishes only what is missing, under the intent's lock).
+ */
+export const INTENT_RETRY_DELAYS_MS = [5_000, 20_000, 60_000]
+
+function scheduleIntentRetry(pubkey: string, delays: readonly number[] = INTENT_RETRY_DELAYS_MS): void {
+  const [first, ...rest] = delays
+  if (first === undefined) return
+  setTimeout(() => {
+    // Only for the account that made it: the run derives R from the signed-in key.
+    if (sessionAccount(getSigner) !== pubkey) return
+    void finishCashlinkIntentsNow(pubkey).then(() => {
+      if (movingCashlinkLinkKeys(pubkey).size > 0) scheduleIntentRetry(pubkey, rest)
+    })
+  }, first)
+}
+
 /**
  * #543: every Cashlink a page left part way on the direct path, finished from its intent (spec
  * section 5), beside `finishPendingCashlinkClaims` at start-up. Never throws.
