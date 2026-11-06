@@ -167,6 +167,16 @@ export function setup() {
     )
   }
   if (LOOKUP_CODES.length === 0) throw new Error('every live code went to the race; make more or lower RACE_ROUNDS')
+  // `--shops published` codes are locked to a stall's real shop, whose key only its plugin holds.
+  // This run signs as the shop, so it cannot drive them; the real shop's checkout does.
+  const unsignable = (SHOPS || []).filter((s) => !s.privHex)
+  if (unsignable.length > 0) {
+    throw new Error(
+      `${unsignable.length} shop(s) in .loadtest-codes.json are a stall's published shop (${unsignable.map((s) => s.url).join(', ')}).\n` +
+        '  This run signs as the shop and holds no key for them. Validate those codes at the shop itself,\n' +
+        '  or generate test codes with the default --shops derived.',
+    )
+  }
 
   // Prove a real code answers before load, so a 404 during the ramp means a miss, not a routing slip.
   const probe = LOOKUP_CODES[0]
