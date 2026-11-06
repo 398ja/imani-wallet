@@ -24,6 +24,8 @@ const relay = vi.hoisted(() => ({
   /** Drop the n-th accepted publish (0-based) without storing it. */
   dropIndex: -1,
   publishes: 0,
+  /** #540 F6: every full read of the kind (`allEvents`). */
+  fullReads: 0,
 }))
 
 vi.mock('../nap', () => ({
@@ -35,8 +37,14 @@ vi.mock('../nap', () => ({
   }),
 }))
 vi.mock('../relay', () => ({
-  allEvents: async () => relay.events,
+  allEvents: async () => {
+    relay.fullReads++
+    return relay.events
+  },
   allEventsWithGateway: async () => relay.events,
+  // #540 F6: a `#d` read, filtered as the gateway filters it.
+  eventsByD: async (_pk: string, kind: number, ds: string[]) =>
+    relay.events.filter((e) => e.kind === kind && e.tags.some(([n, v]) => n === 'd' && ds.includes(v))),
   publish: async (event: Event) => {
     const size = new TextEncoder().encode(JSON.stringify(event)).length
     if (size > 65_536) {
@@ -444,6 +452,32 @@ describe('NIP-09 cleanup of dead chunks (review L2)', () => {
     expect([...deleted()].sort()).toEqual([...chunkIds].sort())
     expect(deletions().every((e) => e.tags.some(([n, v]) => n === 'k' && v === '7375'))).toBe(true)
     expect(await restoreVouchers(pk)).toBe(0)
+  })
+
+  it('#540 F7: a tombstone this device writes is in the warm spent set at once', async () => {
+    const { spentTokenIds, forgetSpentIds } = await import('../spentCoupons')
+    forgetSpentIds()
+    const coupon = row('cashuB' + noise(10))
+    await publishVoucher(coupon)
+    expect((await spentTokenIds(pk)).ids.has(coupon.token_id!)).toBe(false)
+    const reads = relay.fullReads
+    await tombstoneVoucher(coupon.token_id!)
+    expect((await spentTokenIds(pk)).ids.has(coupon.token_id!)).toBe(true)
+    expect(relay.fullReads).toBe(reads)
+    forgetSpentIds()
+  })
+
+  it('#540 F6: finds the chunks by their d tags, never by reading every 7375 event', async () => {
+    const coupon = row('cashuB' + noise(90_000))
+    const other = row('cashuB' + noise(90_000), 'e2'.repeat(32))
+    await publishVoucher(coupon)
+    const chunkIds = relay.events.map((e) => e.id)
+    await publishVoucher(other)
+    relay.fullReads = 0
+    await tombstoneVoucher(coupon.token_id!)
+    expect(relay.fullReads).toBe(0)
+    // Only this coupon's chunks, not the other coupon's.
+    expect([...deleted()].sort()).toEqual([...chunkIds].sort())
   })
 
   it('back-fill deletes superseded snapshots and keeps the newest complete one', async () => {

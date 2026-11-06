@@ -1,6 +1,6 @@
 import { SimplePool, verifyEvent, type Event } from 'nostr-tools'
 import { recordRelayPublish } from './eventSizeTelemetry'
-import { gatewayAllEvents, gatewayQuery, GatewayUnreachableError, newestByD } from './gatewayNostr'
+import { GATEWAY_PAGE_LIMIT, gatewayAllEvents, gatewayQuery, GatewayUnreachableError, newestByD } from './gatewayNostr'
 
 /**
  * The wallet's Nostr I/O: WRITES go to the relay, READS go through the cache.
@@ -172,6 +172,28 @@ function authentic(events: Event[], author: string, kind: number): Event[] {
 export async function allEvents(pubkey: string, kind: number): Promise<Event[]> {
   const events = await gatewayAllEvents(pubkey, kind)
   if (events === null) throw new GatewayUnreachableError('nostr/query did not answer')
+  return authentic(events, pubkey, kind)
+}
+
+/**
+ * #540 F6: the events of one kind for a pubkey whose `d` is one of `dTags`, in ONE gateway query
+ * (`#d`, which the gateway honours on the wire). For a lookup of a few known records, where
+ * `allEvents` would read the whole kind. Throws `GatewayUnreachableError` when it did not answer.
+ */
+export async function eventsByD(pubkey: string, kind: number, dTags: string[]): Promise<Event[]> {
+  if (dTags.length === 0) return []
+  const events = await gatewayQuery({ kinds: [kind], authors: [pubkey], tags: { '#d': dTags }, limit: 500 })
+  return authentic(events, pubkey, kind)
+}
+
+/**
+ * #540 F7: the events of one kind for a pubkey created at or after `since` (unix s), in ONE query.
+ * Null when the page came back full (there may be more): the caller does its full read instead.
+ * Throws `GatewayUnreachableError` when the gateway did not answer.
+ */
+export async function eventsSince(pubkey: string, kind: number, since: number): Promise<Event[] | null> {
+  const events = await gatewayQuery({ kinds: [kind], authors: [pubkey], since, limit: GATEWAY_PAGE_LIMIT })
+  if (events.length >= GATEWAY_PAGE_LIMIT) return null
   return authentic(events, pubkey, kind)
 }
 

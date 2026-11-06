@@ -3,7 +3,8 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 import { isRedeemed, spendable } from './merchants'
 import { getSigner } from './nap'
-import { allEvents, allEventsWithGateway, publish, type PublishResult } from './relay'
+import { allEventsWithGateway, eventsByD, publish, type PublishResult } from './relay'
+import { noteSpentLocally } from './spentCoupons'
 import {
   buildRecordEvents,
   isChunkEvent,
@@ -170,17 +171,36 @@ export async function tombstoneVoucher(tokenId: string): Promise<void> {
     console.error('[voucherRecords] spent coupon not tombstoned on the relay', error)
     return
   }
+  // #540 F7: this device's own tombstone goes into the warm spent set at once, so the next send
+  // neither offers the coupon nor re-reads every record to learn it.
+  try {
+    noteSpentLocally(getSigner().pubkey, tokenId)
+  } catch {
+    // No signer: nothing cached for it either.
+  }
   // Only once the tombstone is ON the relay: the chunks of a spent coupon are
   // dead weight from here on (#206 review L2).
   try {
     const signer = getSigner()
-    const chunks = (await allEvents(signer.pubkey, NIP60_TOKEN_KIND)).filter(
+    // #540 F6: only this coupon's chunks, by their `d` tags, never every 7375 event of the
+    // account (1.5 MB per spend on a large one). The chunk filter stays as a check.
+    const chunks = (await eventsByD(signer.pubkey, NIP60_TOKEN_KIND, chunkDTags(tokenId))).filter(
       (e) => isChunkEvent(e) && recordIdOf(e) === tokenId,
     )
     await requestDeletion(chunks.map((e) => e.id))
   } catch (error) {
     console.warn('[voucherRecords] spent coupon chunks not cleaned up', error)
   }
+}
+
+/**
+ * #540 F6: every `d` a chunk of one record can carry: `<id>-state` for a record of one chunk and
+ * `<id>-chunk-<n>` otherwise (nostr-chunked-events). A coupon record is at most about 66 KB, a
+ * couple of chunks, so `MAX_RECORD_CHUNKS` is far above any real one.
+ */
+export const MAX_RECORD_CHUNKS = 64
+export function chunkDTags(tokenId: string): string[] {
+  return [`${tokenId}-state`, ...Array.from({ length: MAX_RECORD_CHUNKS }, (_, n) => `${tokenId}-chunk-${n}`)]
 }
 
 /**
