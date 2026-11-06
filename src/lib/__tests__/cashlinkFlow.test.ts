@@ -19,7 +19,7 @@ vi.mock('../trustedMint', () => ({ checkTokenBacking: () => ({ outcome: 'accept'
 vi.mock('../issuerAllowlist', () => ({ checkIssuer: () => 'ok' }))
 
 const { armGift, claimLockedGift, settleLockedGift, retryDeposit, restoreFinding, recoverOrphanBurn, cashlinkClaimsInFlight, loadClaims, finishCashlinkClaims, LOCK_PATH, REFUNDS_PATH, RESIGN_PATH } = await import('../cashlinkFlow')
-const { readLinkLock, isOpenAfterLocktime, secretHash } = await import('../cashlinkLock')
+const { readLinkLock, isOpenAfterLocktime, secretHash, derivedOutputs, sigAllWitness } = await import('../cashlinkLock')
 const { linkPubOf, secretToText, giftCandidates } = await import('../giftLink')
 const { parseVoucherToken, tokenProofs } = await import('../voucherToken')
 const { MINT_URL, bearerSecret, tokenOf, world, at } = await import('./cashlinkWorld')
@@ -101,6 +101,24 @@ describe('arming a Cashlink (burn with R, lock, mint, deposit)', () => {
     const giftSecrets = tokenProofs(gift.token).map((p) => p.secret)
     const ofGift = asked.filter((s) => s.length === giftSecrets.length && s.every((x, n) => x === giftSecrets[n]))
     expect(ofGift).toHaveLength(1)
+  })
+
+  it('#540 F4 review: a gift our own earlier burn spent is read again, not taken as UNSPENT', async () => {
+    // Preflight answers "claimed" (every proof SPENT), and burntByUs says the spend was ours. That is
+    // not a preflight that saw every proof unspent, so the arm must ask the mint again and resume
+    // from the burn. Taking the gift as UNSPENT would try to burn a spent proof.
+    const gift = giftOn(w)
+    const [proof] = tokenProofs(gift.token)
+    const outs = derivedOutputs(REFUND, 'burn', proof.secret, proof.amount, proof.id)
+    expect((await w.mint.swap('', [{ ...proof, witness: sigAllWitness(REFUND, proof.secret, proof.C, outs) }], outs)).kind).toBe('signed')
+    const real = w.ports.mint.states.bind(w.ports.mint)
+    let giftReads = 0
+    w.ports.mint.states = async (m, secrets) => {
+      if (secrets.length === 1 && secrets[0] === proof.secret) giftReads++
+      return real(m, secrets)
+    }
+    expect((await armGift(armCtx(gift))).kind).toBe('armed')
+    expect(giftReads).toBeGreaterThanOrEqual(2)
   })
 
   it('burns with a witness by R over the burn outputs, so the lock route can attribute it', async () => {

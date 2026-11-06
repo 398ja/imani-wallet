@@ -610,6 +610,29 @@ describe('#540 F1: one settle per Send screen', () => {
     expect(h.sent).toHaveLength(1)
   })
 
+  it('a screen settle cut short by its budget does not count: sendGift settles itself', async () => {
+    h.rows = [linkRow(0, 'outstanding', 1_900_000_000)]
+    h.wraps.set(linkPubOf(deriveLinkSecret(ID, 0)), [token])
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    // The screen's settle is still waiting on the mint when its budget (1 ms) runs out.
+    await settleAndCountLinks(NOW, async () => {
+      await held
+      return 'UNSPENT'
+    }, 1)
+    release()
+    h.deliverTo = linkPubOf(deriveLinkSecret(ID, 1))
+    let asked = 0
+    await sendGift({
+      payer: PUB, merchant: {} as never, unit: 'EUR', amount: 100, x: 1_900_000_000, nowMs: NOW,
+      state: async () => {
+        asked++
+        return 'UNSPENT'
+      },
+    })
+    expect(asked).toBeGreaterThan(0)
+  })
+
   it('still judges the limit from fresh rows after a recent settle', async () => {
     await settleAndCountLinks(NOW, async () => 'UNSPENT')
     h.rows = Array.from({ length: MAX_OUTSTANDING_LINKS }, (_, i) => linkRow(i, 'outstanding', 1_900_000_000))
