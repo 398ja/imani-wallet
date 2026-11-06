@@ -19,7 +19,7 @@ import {
   giftExpiry,
   type GiftExclusion,
 } from '../lib/giftLink'
-import { linkLimitMessage, sendGift, settleAndCountLinks, type LinkCounts } from '../lib/giftLinks'
+import { linkLimitMessage, sendGift, settleAndCountLinks, warmCashlinkPath, type LinkCounts } from '../lib/giftLinks'
 import { useMerchantLabel } from '../lib/identity'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { SendOutcomeUnknownError, splitObstacle, withoutInFlight } from '../lib/pay'
@@ -118,6 +118,9 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
     // #295 phase 0: take back expired links and mark claimed ones BEFORE counting, so links that
     // have expired never block a new one.
     void settleAndCountLinks().then(setCounts, () => setCounts({ waiting: 0, expiredUnreturned: 0 }))
+    // #543: while the amount is typed, open the mint connection, read its keyset and load the
+    // direct path's code, so "Make Cashlink" does not wait for any of it (as Use online does, #477).
+    void warmCashlinkPath()
   }, [pubkey])
 
   if (merchants === null || counts === null) return <Centered>Checking your vouchers…</Centered>

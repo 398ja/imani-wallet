@@ -289,12 +289,11 @@ async function runLocked(ports: DirectPorts, pubkey: string, id: string, fresh: 
       save()
       await settle(ports, part, save)
     }
-    const order = intent.parts.map((part) => () => armOne(part))
-    // The first part alone: a failure there still leaves every other coupon untouched.
-    const head = await inParallel(order.slice(0, 1), 1)
-    const headStopped = !head[0]?.ok || pending !== undefined || intent.parts[0].state === 'unarmed'
-    const rest = headStopped && intent.parts[0].state !== 'locked' ? [] : await inParallel(order.slice(1), PART_CONCURRENCY)
-    for (const r of [...head, ...rest]) if (!r.ok) pending ??= r.error instanceof Error ? r.error.message : String(r.error)
+    // Every part was just checked together, so all are armed side by side (one burn round, one
+    // lock-batch round, one mint round: section 2's round trips). A part refused after its burn is
+    // kept as sats and dropped; the link holds what was locked.
+    const done = await inParallel(intent.parts.map((part) => () => armOne(part)), PART_CONCURRENCY)
+    for (const r of done) if (!r.ok) pending ??= r.error instanceof Error ? r.error.message : String(r.error)
     await Promise.all(publishing)
 
     const locked = intent.parts.filter((p) => p.state === 'locked')
@@ -302,11 +301,6 @@ async function runLocked(ports: DirectPorts, pubkey: string, id: string, fresh: 
     if (pending !== undefined) {
       if (locked.length > 0) await writeRows(ports, intent, save)
       return { kind: 'pending', why: pending }
-    }
-    if (headStopped && intent.parts.some((p) => p.state === 'new')) {
-      // The first part was refused before anything of it moved: the rest never started.
-      for (const p of intent.parts) if (p.state === 'new') p.state = 'unarmed'
-      save()
     }
     if (locked.length === 0) {
       forgetCashlinkIntent(pubkey, id)

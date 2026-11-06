@@ -830,6 +830,19 @@ const sendsRunning = new Map<string, Promise<void>>()
  */
 export const TAKE_BACK_WAITS_FOR_SEND_MS = 90_000
 
+/**
+ * #543: what Send by link warms while the amount is typed: the mint (its keyset and keys) and the
+ * modules the direct path loads on demand. Never throws, never blocks.
+ */
+export async function warmCashlinkPath(): Promise<void> {
+  try {
+    const [{ warmMint }, { trustedMintUrls }] = await Promise.all([import('./cashlinkFlow'), import('./trustedMint'), import('./cashlinkDirect'), import('./cashlinkDirectPorts'), import('./voucherSplit'), import('./checkoutCodePorts')])
+    for (const url of trustedMintUrls()) warmMint(url)
+  } catch {
+    // Only a cold cache.
+  }
+}
+
 type DirectTry =
   | { kind: 'made'; delivered: number; parts: number; published: boolean; armed: boolean }
   | { kind: 'legacy'; why: string }
