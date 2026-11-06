@@ -50,6 +50,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { finalizeEvent, getPublicKey } from 'nostr-tools'
+import { Relay } from 'nostr-tools/relay'
+import WebSocket from 'ws'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils'
 
@@ -59,6 +61,7 @@ import { creditableFaceValue, parseVoucherToken } from '../src/lib/voucherToken'
 import { latestLockX } from '../src/lib/cashlinkLock'
 import { warrantSaleDigest } from '../src/lib/issuanceWarrant'
 import { currencyDecimals } from '../src/lib/format'
+import { parseOnlineShop } from '../src/lib/onlineShop'
 import { schnorr } from '@noble/curves/secp256k1.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -76,6 +79,13 @@ const GATEWAY = (process.env.GATEWAY_URL ?? 'https://wallet.staging.398ja.xyz').
 const PORTAL = (process.env.PORTAL_URL ?? GATEWAY).replace(/\/$/, '')
 const CODES = (process.env.CODES_URL ?? GATEWAY).replace(/\/$/, '')
 const STALLS = Number(arg('stalls', '2'))
+/** Comma-separated pool indices to use as the stalls instead of the first --stalls. */
+const STALL_INDEXES = arg('stall-index', '').split(',').filter((v) => v.trim() !== '').map(Number)
+/** `derived` (default): a test shop key per stall. `published`: the stall's own advertised shop. */
+const SHOP_MODE = arg('shops', 'derived')
+const RELAY_URL = process.env.RELAY_URL ?? 'wss://relay.staging.398ja.xyz'
+// nostr-tools' Relay expects a browser WebSocket; Node 20 has none.
+if (typeof globalThis.WebSocket === 'undefined') (globalThis as { WebSocket?: unknown }).WebSocket = WebSocket
 const TOTAL = Number(arg('codes', '3'))
 /** Codes per minute at the start and end of the ramp, linear between them. */
 const RATE_START = Number(arg('rate-start', '1'))
@@ -234,7 +244,7 @@ function merchantWarrant(stall: Identity, saleTotalMinor: number, unit: string):
   return JSON.stringify({ form: 'merchant', sale_total: saleTotalMinor, face_decimals: faceDecimals, unit, nonce, sig })
 }
 
-async function makeOne(stall: Identity, cookie: string, customer: Identity, shopKey: string, depositTimes: number[]): Promise<Made | NotMade> {
+async function makeOne(stall: Identity, cookie: string, customer: Identity, shopKey: string, shopUrl: string, depositTimes: number[]): Promise<Made | NotMade> {
   const ms: Partial<Record<Stage, number>> = {}
   let t = performance.now()
   const created = await fetch(`${PORTAL}/api/v1/portal/vouchers`, {
@@ -286,7 +296,7 @@ async function makeOne(stall: Identity, cookie: string, customer: Identity, shop
     ports: customerPorts(customer, depositTimes),
     pubkey: customer.pubHex,
     stall: stall.pubHex,
-    shop: { url: 'https://shop.loadtest.example', redeemKey: shopKey, platform: 'woocommerce', since: nowS },
+    shop: { url: shopUrl, redeemKey: shopKey, platform: 'woocommerce', since: nowS },
     unit: parsed.voucher.unit,
     decimals: parsed.voucher.faceDecimals ?? 2,
     amount: face,
@@ -316,9 +326,43 @@ const stats = (xs: number[]) => ({ count: xs.length, avg: xs.length ? xs.reduce(
  * Derived from the stall's PRIVATE key. A derivation from its public key would let anyone who
  * reads the stall's profile recompute S and redeem the run's codes, which hold real (if test) value.
  */
-function shopFor(stall: Identity) {
+type Shop = { privHex?: string; pubHex: string; stall: string; url: string; published: boolean }
+
+function shopFor(stall: Identity): Shop {
   const privHex = bytesToHex(sha256(new TextEncoder().encode(`imani-loadtest-shop/v2/${stall.privHex}`)))
-  return { privHex, pubHex: getPublicKey(hexToBytes(privHex)), stall: stall.pubHex }
+  return { privHex, pubHex: getPublicKey(hexToBytes(privHex)), stall: stall.pubHex, url: 'https://shop.loadtest.example', published: false }
+}
+
+/**
+ * `--shops published`: the shop a stall really advertises, read from its own `imani:merchant`
+ * record (`online_shop.redeem_key`), so the codes land at that stall's real online shop.
+ *
+ * The run never holds S's secret (the shop's plugin does), so `privHex` is absent: the k6 half and
+ * `--cleanup` cannot sign as this shop, and say so. A stall that advertises no shop is skipped.
+ */
+async function publishedShopFor(stall: Identity): Promise<Shop | null> {
+  const relay = await Relay.connect(RELAY_URL)
+  const events: Array<{ created_at: number; content: string }> = []
+  try {
+    await new Promise<void>((ok) => {
+      const sub = relay.subscribe([{ kinds: [30078], authors: [stall.pubHex], '#d': ['imani:merchant'] }], {
+        onevent: (e) => { events.push(e) },
+        oneose: () => { sub.close(); ok() },
+      })
+    })
+  } finally {
+    relay.close()
+  }
+  events.sort((a, b) => b.created_at - a.created_at)
+  if (events.length === 0) return null
+  let field: unknown
+  try {
+    field = (JSON.parse(events[0].content) as Record<string, unknown>).online_shop
+  } catch {
+    return null
+  }
+  const shop = parseOnlineShop(field)
+  return shop ? { pubHex: shop.redeemKey, stall: stall.pubHex, url: shop.url, published: true } : null
 }
 
 /**
@@ -338,6 +382,15 @@ async function cleanup() {
   const keep = new Set<string>()
   for (const c of all) {
     const shop = file.shops[c.shop]
+    if (!shop.privHex) {
+      // A stall's real shop: only its plugin can sign as S, so look at the public balance instead.
+      const pub = await fetch(`${CODES}/v1/code-check/${c.code}`)
+      const status = pub.ok ? `public ${pub.status}` : `public http ${pub.status}`
+      counts[status] = (counts[status] ?? 0) + 1
+      keep.add(c.code)
+      await new Promise((ok) => setTimeout(ok, 6500)) // under the public check's 10/min zone
+      continue
+    }
     const look = await signedCall(CODES, shop.privHex, 'GET', `/v1/checkout-codes/${c.code}`)
     const status = look.status === 200 ? String(look.body?.status) : `http ${look.status}`
     if (status === 'held' && typeof look.body?.held_by === 'string') {
@@ -359,8 +412,17 @@ async function main() {
   if (!existsSync(POOL_FILE)) throw new Error(`no ${POOL_FILE}; run \`node loadtest/pool.mjs --size 20\``)
   const identities = (Object.values(JSON.parse(readFileSync(POOL_FILE, 'utf8'))) as Identity[]).sort((a, b) => a.index - b.index)
   // Stalls from the top, customers below them, as market-day.js and stalls.mjs split the pool.
-  const stalls = identities.slice(0, STALLS)
-  const customers = identities.slice(STALLS)
+  // --stall-index picks specific stalls (e.g. one with a real shop) and keeps them out of the customers.
+  const picked = STALL_INDEXES.length > 0
+    ? STALL_INDEXES.map((i) => {
+        const found = identities.find((x) => x.index === i)
+        if (!found) throw new Error(`no pool identity at index ${i}`)
+        return found
+      })
+    : identities.slice(0, STALLS)
+  const stalls = picked
+  const reservedStalls = Math.max(STALLS, ...STALL_INDEXES.map((i) => i + 1))
+  const customers = identities.filter((x) => x.index >= reservedStalls)
   if (customers.length === 0) throw new Error(`the pool needs more than ${STALLS} identities; run \`node loadtest/pool.mjs --size ${STALLS + 10}\``)
 
   const info = await fetch(`${CODES}/v1/checkout-codes/info`).catch(() => null)
@@ -375,7 +437,19 @@ async function main() {
     }
     sessions.push(s.cookie)
   }
-  const shops = stalls.map(shopFor)
+  const shops: Shop[] = []
+  if (SHOP_MODE === 'published') {
+    for (const stall of stalls) {
+      const shop = await publishedShopFor(stall)
+      if (shop === null) throw new Error(`stall #${stall.index} advertises no online shop (no online_shop in its imani:merchant record); --shops published needs one`)
+      shops.push(shop)
+    }
+  } else {
+    for (const stall of stalls) shops.push(shopFor(stall))
+  }
+  for (const [i, shop] of shops.entries()) {
+    console.log(`shop     #${stalls[i].index} ${shop.published ? 'published' : 'derived'} ${shop.url} S=${shop.pubHex.slice(0, 12)}...`)
+  }
   // A refund key R is derived from the customer's key and a per-wallet index. This process starts
   // with an empty localStorage, so without a run-specific base every run would reuse R0, R1... for
   // the same pool customer. Harmless on a test deployment, but the wallet never does it, so neither
@@ -398,9 +472,9 @@ async function main() {
     const rate = TOTAL > 1 ? RATE_START + ((RATE_END - RATE_START) * n) / (TOTAL - 1) : RATE_START
     if (n > 0) await new Promise((ok) => setTimeout(ok, 60_000 / Math.max(rate, 0.001)))
     while (inFlight.size >= CONCURRENCY) await Promise.race(inFlight)
-    const s = n % STALLS
+    const s = n % stalls.length
     const customer = customers[n % customers.length]
-    const p = makeOne(stalls[s], sessions[s], customer, shops[s].pubHex, depositTimes)
+    const p = makeOne(stalls[s], sessions[s], customer, shops[s].pubHex, shops[s].url, depositTimes)
       .then((r) => {
         results.push(r)
         const tag = r.ok === true ? `made ${r.code}` : `NOT made at ${(r as NotMade).stage}: ${(r as NotMade).why}`
