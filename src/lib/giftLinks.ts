@@ -58,6 +58,13 @@ import {
 } from './cashlinkFlow'
 import { isUnverifiedClaim, unconfirmedClaimLinks, type GiftLinkArm } from './transactions'
 import { pendingSendsKey } from './inFlightMoney'
+import { cashlinkIntentLinkKeys, movingCashlinkLinkKeys } from './cashlinkIntents'
+
+/** #543: links a direct Cashlink of this account is still moving value onto. */
+function directIntentLinks(): Set<string> {
+  const pubkey = sessionAccount(getSigner)
+  return pubkey ? movingCashlinkLinkKeys(pubkey) : new Set()
+}
 import { loadMerchant } from './merchant'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
@@ -75,6 +82,17 @@ export const cashlinkSeam = {
   clearMoving: async (pubkey: string, id: string): Promise<void> => (await import('./cashlinkPorts')).clearMoving(pubkey, id),
   /** #381: the mint gift coupons live at, for a NUT-07 check with no token in hand. */
   mintUrl: async (): Promise<string> => (await (await import('./config')).gatewayMintConfig()).mintUrl.trim().replace(/\/+$/, ''),
+  /** #543: the direct path's ports, the coupon rows it plans over, and the bearer split for a split part. */
+  directPorts: async (): Promise<import('./cashlinkDirect').DirectPorts> => (await import('./cashlinkDirectPorts')).appDirectPorts(),
+  vouchers: async (): Promise<import('@imani/wallet-storage').VoucherRow[]> => getWallet().getAllVouchers(),
+  split: async (pubkey: string, req: { tokenId: string; token: string; amount: number }): Promise<import('./voucherSplit').SplitOutcome> => {
+    const [{ splitVoucher }, { appCheckoutPorts }] = await Promise.all([import('./voucherSplit'), import('./checkoutCodePorts')])
+    return splitVoucher(appCheckoutPorts(), pubkey, req)
+  },
+  /** #543: a split's change is locked to this wallet's own key: made an ordinary coupon again. */
+  unlockSelfLocked: async (pubkey: string): Promise<void> => {
+    await (await import('./selfLockedCouponsApp')).unlockSelfLockedCouponsNow(pubkey)
+  },
   isMerchant: (pubkey: string): boolean => {
     try {
       return loadMerchant(pubkey) !== null
@@ -630,6 +648,20 @@ export async function sendGift({
   let sendDone!: () => void
   sendsRunning.set(k, new Promise<void>((r) => (sendDone = r)))
   try {
+  // #543: locked from the start when it can be, decided before anything moves; otherwise the
+  // legacy path below (atomic send, bearer gift, then arm), exactly as before.
+  const direct = await tryDirect({ payer, merchant, unit, amount, memo, x, i: allocated.i, nowMs })
+  if (direct.kind === 'made') {
+    console.info('[cashlink] path=direct')
+    return {
+      result: { id: k, requested: amount, delivered: direct.delivered, parts: direct.parts, ...(direct.delivered < amount ? { shortfall: 'part of it could not be locked; its value is kept in your wallet' } : {}) },
+      link,
+      x,
+      delivered: direct.published,
+      returnsOnItsOwn: direct.armed,
+    }
+  }
+  console.info(`[cashlink] path=legacy why=${direct.why}`)
   const result = await sendVouchers({
     payer,
     recipient: { pubkey: allocated.linkPub, name: 'Link' },
@@ -797,6 +829,70 @@ const sendsRunning = new Map<string, Promise<void>>()
  * only stops a hung send from holding the tap forever.
  */
 export const TAKE_BACK_WAITS_FOR_SEND_MS = 90_000
+
+type DirectTry =
+  | { kind: 'made'; delivered: number; parts: number; published: boolean; armed: boolean }
+  | { kind: 'legacy'; why: string }
+
+/**
+ * #543: make the Cashlink locked from the start (`cashlinkDirect.ts`), or say why not while nothing
+ * has moved, so the caller takes the legacy path. Throws only once value has moved and no link can
+ * be shown (all of it kept as sats, or part way: the next start finishes it).
+ */
+async function tryDirect(req: { payer: string; merchant: Merchant; unit: string; amount: number; memo?: string; x: number; i: number | undefined; nowMs: number }): Promise<DirectTry> {
+  if (cashlinkSeam.isMerchant(req.payer)) return { kind: 'legacy', why: 'merchant' }
+  if (req.i === undefined) return { kind: 'legacy', why: 'remote_signer' }
+  let rows: import('@imani/wallet-storage').VoucherRow[]
+  try {
+    rows = await cashlinkSeam.vouchers()
+  } catch {
+    return { kind: 'legacy', why: 'no_plan' }
+  }
+  if (rows.length === 0) return { kind: 'legacy', why: 'no_plan' }
+  const direct = await import('./cashlinkDirect')
+  const nowS = Math.floor(req.nowMs / 1000)
+  let plan
+  try {
+    plan = direct.planDirectParts({ rows, payer: req.payer, stall: req.merchant.pubkey, unit: req.unit, amount: req.amount, x: req.x, nowS })
+  } catch {
+    plan = null
+  }
+  if (!plan) return { kind: 'legacy', why: 'no_plan' }
+  const ports = await cashlinkSeam.directPorts()
+  // A part no subset of proofs can make is split first (its own crash-safe intent, #402).
+  const splitting = plan.find((p) => p.needsSplit)
+  let made: Array<{ tokenId: string; token: string; amount: number; faceValue: number }> = []
+  if (splitting) {
+    const out = await cashlinkSeam.split(req.payer, { tokenId: splitting.row.token_id, token: splitting.row.token, amount: splitting.amount })
+    if (out.kind === 'refused') return { kind: 'legacy', why: 'split_refused' }
+    if (out.kind === 'kept_as_sats') throw new Error('Your voucher could not be split. Its value is still in your wallet, now as sats. Nothing was sent.')
+    if (out.kind === 'pending') throw new Error('Your voucher is being split. It is safe, and it finishes the next time Imani opens. Try again in a moment.')
+    made = out.parts
+  }
+  const parts = plan.flatMap((p) => (p.needsSplit ? made : [{ tokenId: p.row.token_id, token: p.row.token, amount: p.amount, faceValue: p.faceValue }]))
+  const out = await direct.startDirectCashlink({
+    ports,
+    pubkey: req.payer,
+    i: req.i,
+    x: req.x,
+    stall: req.merchant.pubkey,
+    ...(req.merchant.name && req.merchant.name !== req.merchant.pubkey ? { merchantName: req.merchant.name } : {}),
+    unit: req.unit,
+    decimals: plan[0].row.face_decimals ?? 2,
+    amount: req.amount,
+    ...(req.memo ? { memo: req.memo } : {}),
+    parts,
+  })
+  if (splitting) {
+    // The legacy send cannot spend a coupon locked to this wallet's own key: unlocked first then.
+    const unlocking = cashlinkSeam.unlockSelfLocked(req.payer).catch(() => undefined)
+    if (out.kind === 'legacy') await unlocking
+  }
+  if (out.kind === 'legacy') return out
+  if (out.kind === 'made') return { kind: 'made', delivered: out.delivered, parts: parts.length, published: out.published, armed: out.armed }
+  if (out.kind === 'nothing') throw new Error('The Cashlink could not be made. Its value is still in your wallet, now as sats.')
+  throw new Error('Your Cashlink is still being made. It is safe, and it finishes the next time Imani opens.')
+}
 
 async function refuseForeignIssuerForGift(issuer: string, payer: string): Promise<void> {
   try {
@@ -1000,6 +1096,20 @@ export async function giftTokensForSecret(secret: Uint8Array): Promise<GiftToken
  * Start-up (#295 phase 4): finish every Cashlink claim this wallet began and did not finish (the
  * page died after the burn). Behind the receive gate, like every receive. Never throws.
  */
+/**
+ * #543: every Cashlink a page left part way on the direct path, finished from its intent (spec
+ * section 5), beside `finishPendingCashlinkClaims` at start-up. Never throws.
+ */
+export async function finishCashlinkIntentsNow(pubkey: string): Promise<number> {
+  try {
+    if (cashlinkIntentLinkKeys(pubkey).size === 0) return 0
+    const [{ finishCashlinkIntents }, ports] = await Promise.all([import('./cashlinkDirect'), cashlinkSeam.directPorts()])
+    return await finishCashlinkIntents(ports, pubkey)
+  } catch {
+    return 0
+  }
+}
+
 export async function finishPendingCashlinkClaims(pubkey: string): Promise<number> {
   const { finishCashlinkClaims, loadClaims } = await import('./cashlinkFlow')
   if (loadClaims(pubkey).length === 0) return 0
@@ -1345,8 +1455,9 @@ export async function reconcileGiftLinks(
       }
     }
     const one = async ([k, snapshot]: (typeof ordered)[number]): Promise<void> => {
-      // #379: a link this tab is sending, arming or (#401) taking back is left to that run.
-      if (linksInFlight.has(k)) return
+      // #379: a link this tab is sending, arming or (#401) taking back is left to that run. #543: and
+      // one still being made on the direct path, which `finishCashlinkIntents` finishes.
+      if (linksInFlight.has(k) || directIntentLinks().has(k)) return
       const before = linkSettles.get(k)
       const mine = (async () => {
         if (before) await before
@@ -1557,7 +1668,7 @@ export async function restoreScan(
     const known = new Set(rows.map((r) => r.link.k))
     // #379: a link this wallet is sending right now (this tab, or a send whose row is not written
     // yet) is the send's, never adopted as a second row with a guessed expiry.
-    for (const k of [...linksInFlight, ...pendingSendLinks(pubkey)]) known.add(k)
+    for (const k of [...linksInFlight, ...pendingSendLinks(pubkey), ...cashlinkIntentLinkKeys(pubkey)]) known.add(k)
     let last = Math.max(-1, ...rows.map((r) => r.link.i ?? -1), nextLinkIndex(pubkey) - 1)
     let adopted = 0
     // #540 F8: probed RESTORE_PROBE_BATCH indices at a time, each batch handled in index order

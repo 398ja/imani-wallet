@@ -56,7 +56,7 @@ import {
   type CheckoutPartRecord,
 } from './checkoutCodeRecords'
 import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret, type TokenProof } from './voucherToken'
-import { withWebLock } from './webLock'
+import { withQueuedLock } from './webLock'
 
 const { mintOf, proofBody, burnOutputsBody, restoreMine, swapOrRestore, signRoute, notYet, tokenOf, mintCarrier } = cashlinkSteps
 
@@ -184,18 +184,8 @@ const find = (pubkey: string, id: string) => loadCheckoutCodes(pubkey).find((r) 
  * a page without the Locks API); across tabs, a Web Lock. Not re-entrant: nothing called under it
  * takes it again.
  */
-const codeQueues = new Map<string, Promise<unknown>>()
-
 export function withCheckoutCodeLock<T>(pubkey: string, id: string, fn: () => Promise<T>): Promise<T> {
-  const name = `imani-checkout-code:${pubkey}:${id}`
-  const prior = codeQueues.get(name) ?? Promise.resolve()
-  const run = prior.catch(() => undefined).then(() => withWebLock(name, fn))
-  const tail = run.catch(() => undefined)
-  codeQueues.set(name, tail)
-  void tail.then(() => {
-    if (codeQueues.get(name) === tail) codeQueues.delete(name)
-  })
-  return run
+  return withQueuedLock(`imani-checkout-code:${pubkey}:${id}`, fn)
 }
 
 /** Run (or resume) one code. Never throws once the record exists. */

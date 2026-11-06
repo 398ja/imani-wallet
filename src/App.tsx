@@ -79,7 +79,7 @@ import { refreshOwnBadge, setVerificationOwner } from './lib/verificationReader'
 import { SUBSCRIPTION_STATUS_EVENT } from './lib/subscriptionStatusStore'
 import { GiftLandingPage } from './pages/GiftLandingPage'
 import { GiftReturnPage } from './pages/GiftReturnPage'
-import { finishPendingCashlinkClaims, reconcileGiftLinks, restoreScanIfDue } from './lib/giftLinks'
+import { finishCashlinkIntentsNow, finishPendingCashlinkClaims, reconcileGiftLinks, restoreScanIfDue } from './lib/giftLinks'
 import { runCashlinkExpiryNoticesAfterReconcile } from './lib/cashlinkExpiryNotice'
 import { BuyPage } from './pages/BuyPage'
 import { BuyCancelledPage, BuyDonePage } from './pages/BuyReturnPages'
@@ -375,6 +375,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           .then(async (adopted) => {
             const done = await finishPendingCashlinkClaims(pubkey)
             if (done > 0) console.info(`[app] finished ${done} Cashlink claim(s)`)
+            // #543: a Cashlink made on the direct path that a page left part way.
+            const made = await finishCashlinkIntentsNow(pubkey)
+            if (made > 0) console.info(`[app] finished ${made} Cashlink(s) being made`)
             return adopted
           })
           .then((adopted) => {
