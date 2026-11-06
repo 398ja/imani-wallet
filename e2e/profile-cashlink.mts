@@ -10,14 +10,33 @@
  *   "Cashlink ready", and "ready" to the link row being armed.
  * The JSON goes to $PROFILE_OUT (default /tmp/cashlink-profile.json).
  */
-import { writeFileSync } from 'node:fs'
-import { chromium, type Page } from 'playwright'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { extname, join } from 'node:path'
+import { chromium, type BrowserContext, type Page } from 'playwright'
 import { registerCustomer, registerMerchant } from './register.mts'
 
 const BASE = (process.env.E2E_BASE ?? 'https://wallet.staging.398ja.xyz').replace(/\/+$/, '')
 const LINKS = Number(process.env.PROFILE_LINKS ?? 4)
 const SALES = Number(process.env.PROFILE_SALES ?? 3)
 const OUT = process.env.PROFILE_OUT ?? '/tmp/cashlink-profile.json'
+/**
+ * A local `vite build` to profile instead of the deployed bundle. Its static files are served on the
+ * staging origin (so NIP-98 URLs and the API are staging's); `/api`, `/v1` and every other host go
+ * to staging as usual. For a branch not yet deployed.
+ */
+const BUNDLE_DIR = process.env.PROFILE_BUNDLE_DIR
+const TYPES: Record<string, string> = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2' }
+
+async function serveBundle(context: BrowserContext): Promise<void> {
+  if (!BUNDLE_DIR) return
+  await context.route(`${BASE}/**`, (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path.startsWith('/api/') || path.startsWith('/v1/') || path.startsWith('/download/')) return route.continue()
+    const file = join(BUNDLE_DIR, path)
+    const hit = path !== '/' && existsSync(file) ? file : join(BUNDLE_DIR, 'index.html')
+    return route.fulfill({ status: 200, body: readFileSync(hit), headers: { 'content-type': TYPES[extname(hit)] ?? 'application/octet-stream' } })
+  })
+}
 
 type Req = { t: number; ms: number; status: number; method: string; path: string; bytes: number; filter?: string; signer?: string }
 
@@ -68,14 +87,22 @@ async function linkArm(p: Page): Promise<{ count: number; arm?: string }> {
 
 async function main(): Promise<void> {
   const browser = await chromium.launch()
-  const mc = await browser.newContext()
-  const cc = await browser.newContext()
+  const mc = await browser.newContext({ serviceWorkers: 'block' })
+  const cc = await browser.newContext({ serviceWorkers: 'block' })
+  await serveBundle(mc)
+  await serveBundle(cc)
   const m = await mc.newPage()
   const c = await cc.newPage()
   await registerMerchant(m, BASE)
   const to = await registerCustomer(c, BASE)
   console.log('customer', to)
-  for (let i = 0; i < SALES; i++) await sell(m, to, '3.00')
+  for (let i = 0; i < SALES; i++) {
+    await sell(m, to, '3.00').catch(async (e) => {
+      console.log(`sale ${i} did not finish: ${(await text(m)).slice(0, 300).replace(/\s+/g, ' ')}`)
+      throw e
+    })
+    console.log(`sale ${i} done`)
+  }
   await c.goto(`${BASE}/`, { waitUntil: 'load' })
   await c.waitForTimeout(15_000)
 
