@@ -70,3 +70,5 @@ e2e/.probe-cashback-spend/
 
 # Local npm cache (npm ci --cache .npm in containers/CI).
 .npm
+# real-day.mts writes its k6 crowd summary here per run; the dated real-day report is what is kept.
+loadtest/results/.real-day-k6-*.json

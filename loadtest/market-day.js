@@ -61,6 +61,8 @@ import {
   deploymentRelayUrl,
   drainNotifications,
   ackNotifications,
+  sendCoupons,
+  signed,
   envelopesFrom,
   envelopeIds,
   resolve,
@@ -148,7 +150,10 @@ const DAY_SECONDS = durationSeconds(DAY)
 // and a stall index never collide. The pool is indexed by position and stable
 // across runs, which is what makes that assignment reproducible.
 const STALLS = IDENTITIES.slice(0, STALL_COUNT)
-const CUSTOMERS = IDENTITIES.slice(STALL_COUNT)
+// real-day.mts (#550) gives the first BROWSER customers of the pool to the real
+// app and the rest to this crowd, so no identity is driven by both at once.
+const CUSTOMER_OFFSET = Number(__ENV.CUSTOMER_OFFSET || 0)
+const CUSTOMERS = IDENTITIES.slice(STALL_COUNT + CUSTOMER_OFFSET)
 
 // The stalls' combined poll rate, expressed as "STALL_COUNT polls per poll
 // period" rather than as a per-second figure.
@@ -570,6 +575,97 @@ function sellCoupon(session, stall, recipientPubkey, relayUrl) {
     mintWaitMs,
     mintWaitBoundMs,
     polls,
+    voucher,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Spending what was acquired (#550). The crowd used to acquire and then only
+// poll; now a share of it spends its coupon through the gateway's one public
+// send path, `/api/v1/atomic-send` (account tier), exactly as the wallet's
+// `deliver` (src/lib/pay.ts buildSendParams) does, in the snake_case the
+// gateway binds (see send.js for why not camelCase). Two flavours:
+//
+//   c2c   to another crowd customer (a person-to-person send)
+//   pay   to the stall that issued it (a payment at the stall; the issuer
+//         receives and burns it)
+//
+// A payment at a stall made from the till's NUT-18V request also carries
+// `payment_request_id`; that half needs the stall's device to have made the
+// request and is driven in the browser layer (real-day.mts, journey `pay`).
+// ---------------------------------------------------------------------------
+
+const SPEND_SHARE = Number(__ENV.SPEND_SHARE || 0.5)
+const PAY_STALL_SHARE = Number(__ENV.PAY_STALL_SHARE || 0.5)
+const atomic_send_c2c = new Rate('atomic_send_c2c')
+const atomic_send_pay = new Rate('atomic_send_pay')
+const atomic_send_ms = new Trend('atomic_send_ms', true)
+const receipt_drains = new Counter('receipt_drains')
+const receipts_drained = new Counter('receipts_drained')
+const receipt_drain_ok = new Rate('receipt_drain_ok')
+
+/** The coupon this VU acquired and has not spent yet. Per VU, like the stall session. */
+let heldVoucher = null
+let heldFrom = null
+
+function spendHeld(me) {
+  if (!heldVoucher) return
+  const toStall = Math.random() < PAY_STALL_SHARE
+  const others = CUSTOMERS.filter((c) => c.pubHex !== me.pubHex)
+  const recipient = toStall ? heldFrom : others[Math.floor(Math.random() * others.length)]
+  if (!recipient) return
+  const v = heldVoucher
+  const started = Date.now()
+  const res = sendCoupons(me, {
+    token: v.token,
+    amount: v.face_value,
+    recipient_pubkey: recipient.pubHex,
+    memo: toStall ? 'market day: pay at stall' : 'market day: to a friend',
+    face_value: v.face_value,
+    face_unit: v.face_unit || CURRENCY,
+    face_decimals: v.face_decimals != null ? v.face_decimals : 2,
+    voucher_id: v.voucher_id,
+    issuer_id: heldFrom.pubHex,
+  })
+  atomic_send_ms.add(Date.now() - started)
+  if (res.status === 429) {
+    rate_limited.add(1)
+    return
+  }
+  let accepted = false
+  try {
+    const body = JSON.parse(res.body)
+    accepted = res.status < 300 && Boolean(body.send_id || body.sendId || body.status)
+  } catch {
+    accepted = false
+  }
+  ;(toStall ? atomic_send_pay : atomic_send_c2c).add(accepted)
+  outcome_verified.add(accepted)
+  // Spent or refused, the token is not tried twice: a refused token is the
+  // finding, and retrying it would double-count the gateway's answer.
+  heldVoucher = null
+}
+
+/**
+ * The stall's payment-receipt drain, as src/lib/paymentReceiptDrain.ts runs it:
+ * POST drain { limit }, then ack { nonce, consumeTokens } for what came back.
+ */
+function drainReceipts(stall) {
+  const res = signed(ACCOUNT, '/api/v1/payment-receipts/drain', 'POST', { limit: 50 }, stall, 'drain receipts')
+  receipt_drains.add(1)
+  receipt_drain_ok.add(res.status === 200)
+  if (res.status !== 200) return
+  let body = {}
+  try {
+    body = JSON.parse(res.body)
+  } catch {
+    return
+  }
+  const receipts = Array.isArray(body.receipts) ? body.receipts : []
+  receipts_drained.add(receipts.length)
+  const consumeTokens = receipts.map((r) => r.consumeToken).filter(Boolean)
+  if (body.nonce && consumeTokens.length > 0) {
+    signed(ACCOUNT, '/api/v1/payment-receipts/ack', 'POST', { nonce: body.nonce, consumeTokens }, stall, 'ack receipts')
   }
 }
 
@@ -666,6 +762,10 @@ export function customer(data) {
       }
       if (sale.delivered) coupons_delivered.add(1)
       sale_delivered.add(sale.delivered)
+      if (sale.delivered && sale.voucher && sale.voucher.token && Math.random() < SPEND_SHARE) {
+        heldVoucher = sale.voucher
+        heldFrom = stallForThisVu()
+      }
 
       // The sale is verified by DELIVERY, not by the mint. A coupon minted and
       // never delivered is a sale the customer did not get, and counting the
@@ -687,6 +787,9 @@ export function customer(data) {
     hidden_ticks.add(1)
     return finishCustomer(me, started)
   }
+
+  // Spend what this visit acquired, one iteration after acquiring it (#550).
+  if (!firstIteration && heldVoucher) spendHeld(me)
 
   // The poll the wallet makes every ten seconds.
   const drained = drainNotifications(me)
@@ -745,6 +848,10 @@ export function stall() {
     const ids = envelopeIds(envelopes)
     if (ids.length > 0) ackNotifications(me, ids)
   }
+
+  // The till's second poll: payment receipts (paymentReceiptDrain.ts), on the
+  // same tick as the takings drain in the wallet.
+  drainReceipts(me)
 
   const elapsed = Date.now() - started
   stall_ms.add(elapsed)
@@ -812,6 +919,10 @@ export function handleSummary(data) {
   const share = signingShare(data)
   const n = (metric, key = 'count') => m[metric]?.values?.[key] ?? 0
   const ms = (metric, key) => (m[metric]?.values?.[key] ?? 0).toFixed(0)
+  const rateOf = (metric) => {
+    const v = m[metric]?.values
+    return v ? `${v.passes}/${v.passes + v.fails}` : 'none'
+  }
 
   const lines = [
     '',
@@ -832,8 +943,11 @@ export function handleSummary(data) {
     `                        ${n('boot_ticks')} boot ticks, ${n('hidden_ticks')} skipped as hidden`,
     `      per iteration     avg ${ms('customer_ms', 'avg')}ms   p95 ${ms('customer_ms', 'p(95)')}ms`,
     '',
+    `      atomic sends      c2c ${rateOf('atomic_send_c2c')}   pay-at-stall ${rateOf('atomic_send_pay')}   p95 ${ms('atomic_send_ms', 'p(95)')}ms`,
+    '',
     '    Stalls',
     `      takings drains    ${n('stall_drains')}, ${n('stall_envelopes')} envelopes`,
+    `      receipt drains    ${n('receipt_drains')}, ${n('receipts_drained')} receipts, ${rateOf('receipt_drain_ok')} answered`,
     `      per iteration     avg ${ms('stall_ms', 'avg')}ms   p95 ${ms('stall_ms', 'p(95)')}ms`,
     '',
     '    Purchase Issuer',
@@ -873,9 +987,9 @@ export function handleSummary(data) {
   lines.push(
     '',
     '    THIS IS THE GATEWAY\'S SHARE OF A DAY, NOT A DAY.',
-    '    Sending and redemption have no gateway path (ADR 0003, 0004), so a',
-    '    customer here acquires and polls and does neither. The device-side',
-    '    halves live in perf/, on their own clock.',
+    '    A customer here acquires, spends through /api/v1/atomic-send (to a',
+    '    friend or back to the issuing stall) and polls. The device-side work',
+    '    (receive, split, NUT-18V redeem) runs in the real app: real-day.mts.',
     '',
     '    A regression here names a SUSPECT, not a cause. Confirm it with the',
     '    isolated scenarios: issuance.js, drain.js, receive.js.',
@@ -1010,6 +1124,6 @@ export function handleSummary(data) {
 
   return {
     stdout: lines.join('\n'),
-    'loadtest/results/market-day-summary.json': JSON.stringify(data, null, 2),
+    [__ENV.SUMMARY_FILE || 'loadtest/results/market-day-summary.json']: JSON.stringify(data, null, 2),
   }
 }

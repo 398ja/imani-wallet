@@ -41,6 +41,14 @@ export default defineConfig([
     rules: { 'react-hooks/rules-of-hooks': 'off' },
   },
   {
+    // The real-day load test (#550) and the browser recipes it shares with the staging suites:
+    // Node + Playwright, no React. Only these .mts files: the older e2e probes keep their own
+    // conventions and are not linted here.
+    files: ['loadtest/real-day.mts', 'loadtest/real-day/**/*.mts', 'e2e/lib/**/*.mts', 'e2e/postdeploy-staging.e2e.mts'],
+    extends: [js.configs.recommended, tseslint.configs.recommended],
+    languageOptions: { ecmaVersion: 2022, globals: { ...globals.node, ...globals.browser } },
+  },
+  {
     // The push service worker is plain JS served as-is from public/. It runs in
     // a ServiceWorkerGlobalScope (self, clients, registration), not a window,
     // so it gets those globals here. This replaces the `/* eslint-env

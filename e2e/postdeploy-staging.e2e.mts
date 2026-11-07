@@ -18,13 +18,14 @@
  *   E2E_BASE=https://wallet.staging.398ja.xyz npx tsx e2e/postdeploy-staging.e2e.mts
  */
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
-import { finalizeEvent, generateSecretKey, getPublicKey, nip19, nip98 } from 'nostr-tools'
-import { registerCustomer, registerMerchant, TEST_PASSPHRASE, TEST_STALL_NAME } from './register.mts'
+import { finalizeEvent, generateSecretKey, getPublicKey, nip98 } from 'nostr-tools'
+import { registerCustomer, registerMerchant } from './register.mts'
+import {
+  BROWSER_LOCALE, FAILURE_WORDS, SALE_DELIVERED, UNSAVED_RECEIVE, cents, createUi, goto, handleOf, oneLine, pubkeyOf,
+  screenText, visibleToasts,
+} from './lib/ui.mts'
 
 const BASE = (process.env.E2E_BASE ?? 'https://wallet.staging.398ja.xyz').replace(/\/+$/, '')
-const PASSPHRASE = TEST_PASSPHRASE
-/** Amounts are read off the screen, so the browser's locale is pinned to the one they are parsed in. */
-const BROWSER_LOCALE = 'en-GB'
 const SINGLE_SALE = process.env.E2E_SINGLE_SALE ?? '7.00'
 /**
  * Coupons A is sold for T8, on top of the T4 sale. A then sends EVERYTHING it holds: a payment
@@ -41,8 +42,6 @@ const BUNDLE_WINDOW_MS = 13 * 60_000
 const POLL_MS = 10_000
 /** A balance unchanged for this long is taken as final. */
 const SETTLED_AFTER_MS = 90_000
-/** Matches every path in shared/tokenRedemption.js that leaves a settled receive unsaved. */
-const UNSAVED_RECEIVE = /needs reconciliation|RECEIVE_SETTLED_NOT_SAVED|ReceiveSettledNotSaved|settled but not saved|not saved here/i
 const EVIDENCE_FILTER = /PAGEERROR|error|redemption|settled|429|receive_id/i
 
 type Check = { step: string; ok: boolean; detail: string }
@@ -53,35 +52,14 @@ const failedRequests: string[] = []
 let runContext: Record<string, string> | null = null
 /** Every time a wallet was found locked mid-run (its NAP session had lapsed). */
 const sessionLapses: string[] = []
+const { relogin, unlockIfLocked, balance, balanceInPlace, sell, send, notificationRows, importKey } = createUi({
+  base: BASE,
+  onLapse: (at) => sessionLapses.push(at),
+})
 
 function record(step: string, ok: boolean, detail: string): void {
   checks.push({ step, ok, detail })
   console.log(JSON.stringify({ step, ok, detail: detail.slice(0, 700) }))
-}
-
-async function screenText(page: Page, limit = 1500): Promise<string> {
-  return (await page.locator('body').innerText()).replace(/\n{2,}/g, '\n').slice(0, limit)
-}
-
-function oneLine(text: string): string {
-  return text.replace(/\n/g, ' | ')
-}
-
-/**
- * Navigates, retrying a navigation the BROWSER aborted. Docker creating or removing a bridge
- * on the machine running the suite makes Chromium fail in-flight loads with
- * ERR_NETWORK_CHANGED; that is the test host, not staging (same helper as terminals.e2e.ts).
- */
-async function goto(page: Page, url: string): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await page.goto(url, { waitUntil: 'load', timeout: 60_000 })
-      return
-    } catch (e) {
-      if (attempt === 4 || !/ERR_NETWORK_CHANGED|ERR_NETWORK_IO_SUSPENDED|net::ERR_ABORTED/.test(String(e))) throw e
-      await page.waitForTimeout(2000)
-    }
-  }
 }
 
 function watch(who: string, page: Page): void {
@@ -89,20 +67,6 @@ function watch(who: string, page: Page): void {
   page.on('pageerror', (e) => consoleLines.push(`[${who} PAGEERROR] ${e.message}`))
   page.on('response', (r) => {
     if (r.status() >= 400) failedRequests.push(`[${who}] ${r.status()} ${r.request().method()} ${new URL(r.url()).pathname}`)
-  })
-}
-
-async function handleOf(page: Page): Promise<string> {
-  return page.evaluate(() => document.body.innerText.match(/@((?:cust|till)\d+)/)?.[1] ?? '')
-}
-
-async function pubkeyOf(page: Page): Promise<string> {
-  return page.evaluate(() => {
-    for (let i = 0; i < localStorage.length; i++) {
-      const match = /^imani-wallet:profile:([0-9a-f]{64})$/.exec(localStorage.key(i) ?? '')
-      if (match) return match[1]
-    }
-    return ''
   })
 }
 
@@ -123,15 +87,6 @@ async function withRetry<T>(label: string, page: Page, attempt: () => Promise<T>
   }
 }
 
-/** A fresh session, for a merchant whose session lapsed mid-run. */
-async function relogin(context: BrowserContext, page: Page): Promise<void> {
-  await context.clearCookies()
-  await goto(page, `${BASE}/`)
-  await page.locator('input[placeholder="Passphrase"]').fill(PASSPHRASE)
-  await page.getByRole('button', { name: /unlock/i }).first().click()
-  await page.waitForTimeout(6000)
-}
-
 /** Hard reload that bypasses the HTTP cache, then reports the bundle actually served (T0+). */
 async function servedBundle(page: Page): Promise<string> {
   await goto(page, `${BASE}/`)
@@ -140,46 +95,6 @@ async function servedBundle(page: Page): Promise<string> {
     const script = document.querySelector('script[type="module"][src*="/assets/index-"]') as HTMLScriptElement | null
     return script?.src ?? ''
   })
-}
-
-async function balance(page: Page): Promise<string> {
-  // `load`, not `networkidle`: the wallet holds a relay subscription open, and on a busy
-  // relay networkidle never arrives (the first staging run timed out here).
-  await goto(page, `${BASE}/`)
-  await unlockIfLocked(page)
-  const home = page.getByText('Total balance')
-  await home.waitFor({ timeout: 30_000 })
-  await page.waitForTimeout(3000)
-  return (await screenText(page, 800)).match(/Total balance\s*\n?([^\n]+)/)?.[1]?.trim() ?? '?'
-}
-
-/**
- * Unlocks the wallet if it is showing its lock screen, and says whether it had to.
- *
- * A session can lapse mid-run: the merchant's did twice, after a 401 on /auth/session. The
- * wallet then shows "Unlock" on any route, which is the product working, not the check failing.
- * Each lapse is recorded so a run that keeps locking wallets out is visible.
- */
-async function unlockIfLocked(page: Page): Promise<boolean> {
-  const lock = page.locator('input[placeholder="Passphrase"]')
-  const unlocked = page.getByText(/Total balance|Scan the customer's code|Amount \(/)
-  await Promise.race([lock.waitFor({ timeout: 30_000 }), unlocked.first().waitFor({ timeout: 30_000 })]).catch(() => {})
-  if (!(await lock.isVisible().catch(() => false))) return false
-  sessionLapses.push(`${new Date().toISOString()} ${page.url()}`)
-  await lock.fill(PASSPHRASE)
-  await page.getByRole('button', { name: /unlock/i }).first().click()
-  await page.waitForTimeout(5000)
-  return true
-}
-
-/**
- * Reads the balance on the page as it stands, without navigating. Used while toasts are being
- * watched: a reload wipes them, and interrupts whatever receive the wallet is in the middle of.
- */
-async function balanceInPlace(page: Page): Promise<string> {
-  if (new URL(page.url()).pathname !== '/') return balance(page)
-  await unlockIfLocked(page)
-  return (await screenText(page, 800)).match(/Total balance\s*\n?([^\n]+)/)?.[1]?.trim() ?? '?'
 }
 
 type BalanceReader = (page: Page) => Promise<string>
@@ -212,15 +127,6 @@ async function waitForBalanceToSettle(page: Page, windowMs: number, read: Balanc
   return last
 }
 
-/**
- * An amount as shown by the wallet in the pinned en-GB locale ("€1,234.56"), in whole cents so
- * amounts compare exactly. Anything that is not an amount ("?", an empty balance) is NaN.
- */
-function cents(text: string): number {
-  const digits = text.replace(/[^\d.-]/g, '')
-  return digits ? Math.round(Number.parseFloat(digits) * 100) : Number.NaN
-}
-
 function sumOfCents(amounts: string[]): number {
   return amounts.reduce((sum, amount) => sum + cents(amount), 0)
 }
@@ -228,10 +134,6 @@ function sumOfCents(amounts: string[]): number {
 function asEuros(amountInCents: number): string {
   return (amountInCents / 100).toFixed(2)
 }
-
-const FAILURE_WORDS = /failed|error|could not|NOT been delivered|never finished|refused/i
-/** The only screen that means a sale landed: anything short of it is still pending, or failed. */
-const SALE_DELIVERED = /It is in their wallet now/
 
 /**
  * Sells until the sale lands, re-logging-in once if the session lapsed. A setup sale that
@@ -244,60 +146,6 @@ async function sellForSetup(context: BrowserContext, merchant: Page, to: string,
     sold = await sell(merchant, to, amount).catch((e) => `ERR ${e}`)
   }
   return sold
-}
-
-async function sell(merchant: Page, customerHandle: string, amount: string): Promise<string> {
-  await goto(merchant, `${BASE}/sell`)
-  if (await unlockIfLocked(merchant)) await goto(merchant, `${BASE}/sell`)
-  if (!merchant.url().includes('/sell')) return `redirected to ${merchant.url()} (no coupon:issue?)`
-  await merchant.locator('input[placeholder="name"]').fill(customerHandle, { timeout: 30_000 })
-  await merchant.getByRole('button', { name: /^Continue$/ }).click()
-  await merchant.locator('input[placeholder="0.00"]').waitFor({ timeout: 30_000 })
-  await merchant.locator('input[placeholder="0.00"]').fill(amount)
-  await merchant.getByRole('button', { name: /Send voucher/i }).click()
-  for (let i = 0; i < 60; i++) {
-    await merchant.waitForTimeout(5000)
-    const text = await screenText(merchant, 900)
-    if (SALE_DELIVERED.test(text) || FAILURE_WORDS.test(text)) return text
-  }
-  return screenText(merchant, 900)
-}
-
-/**
- * Sends `amount` to `recipient` from the Send screen and returns the result screen.
- *
- * A multi-voucher payment is not something to construct: the wallet draws several
- * coupons whenever no single one covers the amount (`deliver` in src/lib/pay.ts), so
- * holding N small coupons and sending more than any one of them makes a bundle.
- */
-async function send(sender: Page, recipientPubkey: string, amount: string): Promise<string> {
-  await goto(sender, `${BASE}/send?to=${recipientPubkey}`)
-  const amountField = sender.locator('input[placeholder="0.00"]')
-  if (!(await amountField.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
-    await sender.getByRole('button').filter({ hasText: TEST_STALL_NAME }).first().click()
-    await amountField.waitFor({ timeout: 30_000 })
-  }
-  await amountField.fill(amount)
-  await sender.getByRole('button', { name: /^Continue$/ }).click()
-  await sender.getByRole('button', { name: /^(Pay|Send)$/ }).last().click()
-  for (let i = 0; i < 180; i++) {
-    await sender.waitForTimeout(5000)
-    const text = await screenText(sender, 900)
-    if (/^(Sent|Paid|Partly sent)$/m.test(text) || FAILURE_WORDS.test(text)) return text
-  }
-  return screenText(sender, 900)
-}
-
-async function notificationRows(page: Page): Promise<string[]> {
-  await goto(page, `${BASE}/`)
-  // The bell is a <details>/<summary>, not a button: its rows are the buttons in its <nav>.
-  const bell = page.locator('summary[aria-label^="Notifications"]')
-  if (!(await bell.first().waitFor({ timeout: 15_000 }).then(() => true, () => false))) return []
-  await bell.first().click()
-  await page.waitForTimeout(1500)
-  const rows = await page.locator('details[open] nav li').allInnerTexts()
-  await bell.first().click()
-  return rows.map((r) => r.replace(/\n+/g, ' ').trim()).filter(Boolean)
 }
 
 /**
@@ -347,10 +195,6 @@ async function transactionCount(page: Page, stallPubkey: string): Promise<number
   return count
 }
 
-function visibleToasts(page: Page): Promise<string[]> {
-  return page.locator('[data-sonner-toast], [role="status"]').allInnerTexts()
-}
-
 /** Every token the wallet itself POSTed to /wallet/receive, in order, with the answer. */
 type ObservedReceive = { token: string; idempotencyKey: string; status: number }
 const observedReceives: ObservedReceive[] = []
@@ -369,39 +213,6 @@ function captureReceives(page: Page): void {
 }
 
 type ReplayAnswer = { status: number; code: string; receiveId: string; body: string }
-
-/**
- * Onboards customer A by importing a key the suite generated ("Log in" with a backup key),
- * so the suite can later sign requests as A from Node. Returns A's npub, which Sell accepts
- * in place of a handle.
- */
-async function importCustomer(page: Page, secretKey: Uint8Array): Promise<string> {
-  // Retried once: a browser-side network change during the import (ERR_NETWORK_CHANGED on
-  // the test host) left run 6 on /onboarding with nothing to show for it.
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    await goto(page, `${BASE}/onboarding`)
-    if (!page.url().includes('onboarding')) break
-    await page.getByRole('button', { name: /^Log in$/ }).first().click()
-    // #325: Log in opens the backup chooser; the key form is the secondary link.
-    await page.getByRole('button', { name: 'Use your backup key instead' }).click()
-    await page.locator('input[aria-label="Backup key"]').fill(nip19.nsecEncode(secretKey))
-    await page.locator('input[placeholder="Choose a passphrase"]').fill(PASSPHRASE)
-    await page.locator('input[placeholder="Confirm passphrase"]').fill(PASSPHRASE)
-    await page.getByRole('button', { name: /^Log in$/ }).last().click()
-    // Since #338/#357 a key with no profile must claim a handle (and accept the Terms) before it
-    // is let in; the suite's key is always fresh, so A always lands here. Missing this step left
-    // the whole browser suite timing out on its retry from 2026-10-21 on.
-    const finish = page.getByRole('button', { name: 'Finish and log in' })
-    if (await finish.waitFor({ timeout: 15_000 }).then(() => true, () => false)) {
-      await page.locator('input[aria-label="Handle"]').fill('pd' + Date.now().toString().slice(-8))
-      await page.getByRole('checkbox', { name: /I accept the Terms and Conditions/ }).check()
-      await finish.click()
-    }
-    for (let i = 0; i < 30 && page.url().includes('onboarding'); i++) await page.waitForTimeout(1000)
-    if (!page.url().includes('onboarding')) break
-  }
-  return nip19.npubEncode(getPublicKey(secretKey))
-}
 
 /**
  * Re-submits a token the wallet already received, signed as its recipient with NIP-98,
@@ -471,7 +282,7 @@ async function registerWallets(browser: Browser): Promise<Wallets> {
   // A logs in with a key the suite holds (so it can sign the T4+ replay as A); B registers
   // through the ordinary onboarding, which is what T2 is about.
   const customerKey = generateSecretKey()
-  const customerHandle = await importCustomer(a.page, customerKey)
+  const customerHandle = await importKey(a.page, customerKey)
   const landedOnWallet = await a.page.getByText('Total balance').waitFor({ timeout: 30_000 }).then(() => true, () => false)
   record('T2 customer A logs in with a backup key, lands on wallet', landedOnWallet && !a.page.url().includes('onboarding'),
     `npub=${customerHandle.slice(0, 20)}… url=${a.page.url()}`)
