@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-11-07
+
+### Added
+
+- **Google Drive backup and restore work in the Android app** (#510, #513). The app gets its Drive
+  token from Play services `AuthorizationClient` through a small native plugin (`DriveAuth`)
+  instead of Google Identity Services, which Google refuses inside an app WebView. That refusal is
+  what showed "Google Drive backup is not available in the Android app yet". The web wallet keeps
+  GIS. Only the `drive.appdata` scope is asked for, and the token goes from the device to
+  googleapis.com and nowhere else. A Drive 401 on Android clears the cached token and retries once.
+  Needs an Android OAuth client (package `xyz.tcheeric.imani.wallet`, the release signing SHA-1) in
+  the same Google Cloud project as the web client.
+
+### Changed
+
+- Load testing (#547, #548, #549, #550, #553, #554, #555): `loadtest/real-day.mts` drives the
+  deployed wallet through every user flow with browser personas, on one clock with the k6 crowd.
+
 ## [0.57.0] - 2026-11-06
 
 ### Changed
