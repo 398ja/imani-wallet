@@ -208,6 +208,10 @@ export type RunResult = {
 export function buildResult(input: Omit<RunResult, 'stats' | 'gates' | 'pass' | 'timeline'> & { pageErrors: string[]; unsavedReceives: string[]; startMs: number }): RunResult {
   const stats = journeyStats(input.attempts)
   const g = gates(stats, input)
+  // A run the harness itself invalidated (egress address changed, so per-address limits came back)
+  // must never read as a PASS, whatever the journeys did before.
+  const invalid = input.notes.filter((n) => n.startsWith('HARNESS: the egress address changed'))
+  g.push({ name: 'the run stayed on the exempted address', ok: invalid.length === 0, detail: invalid[0] ?? 'egress address unchanged' })
   const { pageErrors: _p, unsavedReceives: _u, startMs, ...rest } = input
   void _p
   void _u
