@@ -84,4 +84,14 @@ describe('changing the passphrase', () => {
     await rotate()
     expect(await screen.findByText(/still needs your old passphrase/)).toBeTruthy()
   })
+
+  it('says before the change that it rewrites Drive, and that the write replaces any other account there (#559)', () => {
+    render(
+      <MemoryRouter>
+        <SecurityPage onLogout={() => {}} pubkey={'a'.repeat(64)} />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText(/also updates your Google Drive backup/)).toBeTruthy()
+    expect(screen.getByText(/one wallet backup per Google account/).textContent).toMatch(/another Imani account/)
+  })
 })

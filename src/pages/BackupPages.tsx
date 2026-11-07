@@ -7,6 +7,8 @@ import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../co
 import { backupFilename, createBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
 import { useDriveBackup } from '../lib/useDriveBackup'
+import { DriveOverwriteWarning } from '../components/DriveOverwriteWarning'
+import { handleOf } from '../lib/format'
 import { keyStore } from '../lib/nap'
 import { type Profile } from '../lib/profile'
 import { userMessage } from '../lib/userMessage'
@@ -118,6 +120,10 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
             <Cloud className="h-4 w-4" />
             <span className="mt-1">{drive.busy ? 'Saving…' : 'Google Drive'}</span>
           </Button>
+        </div>
+
+        <div className="mt-3">
+          <DriveOverwriteWarning who={handleOf(profile.nip05)} />
         </div>
 
         {drive.done && (

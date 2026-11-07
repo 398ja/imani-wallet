@@ -8,6 +8,7 @@ import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommis
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { userMessage } from '../lib/userMessage'
 import { ConnectedSites } from '../components/ConnectedSites'
+import { DriveOverwriteWarning } from '../components/DriveOverwriteWarning'
 import {
   passphraseStrength,
   validateConfirmation,
@@ -217,6 +218,14 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
   return (
     <ListSection title="Passphrase">
       <div className="space-y-3 p-4">
+        {/* #559: the change below rewrites the Google Drive copy too, and that write replaces any
+            backup already in the Google account, another Imani account's included. */}
+        {drive.configured && (
+          <>
+            <p className="text-xs text-mono-500">Changing your passphrase also updates your Google Drive backup.</p>
+            <DriveOverwriteWarning />
+          </>
+        )}
         <Input
           type="password"
           placeholder="Current passphrase"
