@@ -14,7 +14,7 @@ const putBackup = vi.fn<(json: string) => Promise<void>>(async () => {})
 vi.mock('../../lib/drive', () => ({
   driveConfigured: () => true,
   putBackup,
-  getBackup: async () => null,
+  listBackups: async () => [],
 }))
 
 vi.mock('../../lib/backup', async (importOriginal) => ({

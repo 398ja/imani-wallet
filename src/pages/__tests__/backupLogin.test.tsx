@@ -24,14 +24,20 @@ const NSEC = nip19.nsecEncode(hexToBytes(PRIV))
 const KEY_SLOT = 'imani-wallet-key'
 const PASSPHRASE = 'correct horse battery'
 
-const drive = vi.hoisted(() => ({ text: null as string | null }))
+const drive = vi.hoisted(() => ({ text: null as string | null, list: null as unknown[] | null }))
 // The directory as staging behaves: the account's kind-0 names a handle, and
 // that handle resolves forwards to this same key. `status: 404` = no kind-0 and
 // no handle (an account that never finished its profile).
 const directory = vi.hoisted(() => ({ status: 200 as number, nip05: 'amina@imani.africa' }))
 const claimHandle = vi.hoisted(() => vi.fn(async () => {}))
 
-vi.mock('../../lib/drive', () => ({ getBackup: async () => drive.text }))
+vi.mock('../../lib/drive', () => ({
+  listBackups: async () =>
+    drive.list ??
+    (drive.text === null
+      ? []
+      : [{ id: 'f1', fileId: 'f1', legacy: false, pubkey: null, npub: null, nip05: 'amina@imani.africa', modifiedTime: '2026-10-18T00:00:00Z', text: drive.text }]),
+}))
 
 // The keystore, as nap's behaves: it opens whatever envelope sits in the slot,
 // and only with the passphrase that envelope was sealed with.
@@ -134,6 +140,7 @@ beforeEach(() => {
   // Review of #358: Finish your profile claims the first handle, so it asks for the terms.
   vi.stubEnv('VITE_WEBSITE_BASE_URL', 'https://www.imani.casa')
   drive.text = null
+  drive.list = null
   directory.status = 200
   directory.nip05 = 'amina@imani.africa'
   claimHandle.mockClear()
@@ -172,6 +179,7 @@ describe('logging in from a backup', () => {
     const { container } = openLogIn()
 
     fireEvent.click(screen.getByRole('button', { name: /Google Drive/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /@amina/ }))
     await screen.findByText('Amina')
     expect(screen.getByRole('img', { name: 'Amina' }).getAttribute('src')).toBe('https://example.com/amina.png')
     expect(screen.getByText('@amina')).toBeTruthy()
@@ -221,6 +229,43 @@ describe('logging in from a backup', () => {
     expect(localStorage.getItem(KEY_SLOT)).toBeNull()
     expect(Object.keys(localStorage).filter((k) => k.startsWith('imani-wallet:profile:'))).toEqual([])
     expect(onUnlock).not.toHaveBeenCalled()
+  })
+
+  // #559: Drive holds one file per account, so the customer always picks one,
+  // named by handle or a short account code with its saved date, and the
+  // chosen one (not the newest) is the one that opens.
+  it('Drive lists every account backup and opens the one chosen', async () => {
+    drive.list = [
+      { id: 'b', fileId: 'b', legacy: false, pubkey: null, npub: 'npub1zzzzzzzzzzzzqqqq', nip05: null, modifiedTime: '2026-11-07T10:00:00Z', text: '{}' },
+      { id: 'a', fileId: 'a', legacy: false, pubkey: PUBKEY, npub: NPUB, nip05: 'amina@imani.africa', modifiedTime: '2026-11-01T10:00:00Z', text: backupText() },
+      { id: 'l@r1', fileId: 'l', revisionId: 'r1', legacy: true, pubkey: null, npub: null, nip05: null, modifiedTime: '2026-10-01T10:00:00Z', text: '{}' },
+    ]
+    openLogIn()
+    fireEvent.click(screen.getByRole('button', { name: /Google Drive/ }))
+
+    await screen.findByText('Which account?')
+    const rows = screen.getAllByRole('listitem').map((li) => li.textContent)
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toMatch(/^zzzzzz…qqqqSaved/)
+    expect(rows[1]).toMatch(/^@aminaSaved/)
+    expect(rows[2]).toMatch(/Older backup, saved/)
+    expect(screen.queryByLabelText('Passphrase')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /@amina/ }))
+    await screen.findByText('Amina')
+    await logInWith(PASSPHRASE)
+    await screen.findByText('Home screen')
+    expect(onUnlock).toHaveBeenCalledWith(PRIV)
+  })
+
+  // Even one backup is a choice, so the account is seen before the passphrase.
+  it('Drive asks which account even when there is only one', async () => {
+    drive.text = backupText()
+    openLogIn()
+    fireEvent.click(screen.getByRole('button', { name: /Google Drive/ }))
+    await screen.findByText('Which account?')
+    expect(screen.getAllByRole('listitem')).toHaveLength(1)
+    expect(screen.queryByLabelText('Passphrase')).toBeNull()
   })
 
   // A Google account with no backup in it says so, and the two choices are
@@ -493,6 +538,7 @@ describe('wording', () => {
 
     clean()
     fireEvent.click(screen.getByRole('button', { name: /Google Drive/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /@amina/ }))
     await screen.findByText('Amina')
     clean()
     expect(placeholders()).not.toMatch(/npub|nsec|nostr/i)
