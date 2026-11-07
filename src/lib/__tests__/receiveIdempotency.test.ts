@@ -775,3 +775,81 @@ describe('second review of #111', () => {
     expect(REDEMPTION_SOURCE).toMatch(/TODO\(imani-gateway-customer#121\/#119\)/)
   })
 })
+
+describe('#560: a replay of an ACKNOWLEDGED receive is already received, not a loss', () => {
+  const replayWith = (receiveId: string, status?: string) => ({
+    ...replayReceive(receiveId),
+    ...(status ? { receive_status: status } : {}),
+  })
+  const run = async (result: Record<string, unknown>) => {
+    const acknowledgeReceive = vi.fn(async () => {})
+    const atomicallyWrite = vi.fn(async () => {})
+    const r = loadRedemption({
+      api: { receive: async () => result, acknowledgeReceive, _nostrPublicKey: PUBKEY },
+      walletStorageIntegration: { atomicallyWrite },
+      localStorage: memoryStorage(),
+    })
+    const err = await r
+      ._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true, source: 'dm-poll' })
+      .catch((e: unknown) => e)
+    return { r, err, atomicallyWrite, acknowledgeReceive }
+  }
+
+  it('ACKNOWLEDGED replay: "already redeemed", nothing saved, ledger marks it acked', async () => {
+    const { r, err, atomicallyWrite, acknowledgeReceive } = await run(replayWith('9f729968', 'ACKNOWLEDGED'))
+    expect(err).not.toBeInstanceOf(r.ReceiveSettledNotSavedError)
+    expect((err as Error).message).toMatch(/already been redeemed/)
+    expect(atomicallyWrite).not.toHaveBeenCalled()
+    expect(acknowledgeReceive).not.toHaveBeenCalled()
+    expect(r.ReceiveLedger.settledUnsaved()).toEqual([])
+    expect(r.ReceiveLedger.list()[0]).toMatchObject({ receiveId: '9f729968', state: 'acked' })
+  })
+
+  it('HELD replay without a token still raises settled-not-saved', async () => {
+    const { r, err } = await run(replayWith('0c707915', 'HELD'))
+    expect(err).toBeInstanceOf(r.ReceiveSettledNotSavedError)
+    expect((err as { reason?: string }).reason).toBe('replay-without-token')
+  })
+
+  it('older gateway, no status: unchanged, still settled-not-saved', async () => {
+    const { r, err } = await run(replayWith('0c707915'))
+    expect(err).toBeInstanceOf(r.ReceiveSettledNotSavedError)
+    expect((err as { reason?: string }).reason).toBe('replay-without-token')
+  })
+
+  it('409 RECEIVE_ALREADY_SETTLED whose details say ACKNOWLEDGED is already received', async () => {
+    const r = loadRedemption({
+      api: {
+        receive: async () => {
+          throw httpError(409, 'Conflict', {
+            code: 'RECEIVE_ALREADY_SETTLED',
+            data: { error: { code: 'RECEIVE_ALREADY_SETTLED', details: 'receive_id=8f823a74 status=ACKNOWLEDGED' } },
+          })
+        },
+        _nostrPublicKey: PUBKEY,
+      },
+      localStorage: memoryStorage(),
+    })
+    const err = await r
+      ._doRedeem(TOKEN, { fingerprint: FP_A, skipDuplicateCheck: true })
+      .catch((e: unknown) => e)
+    expect(err).not.toBeInstanceOf(r.ReceiveSettledNotSavedError)
+    expect((err as Error).message).toMatch(/already been redeemed/)
+    expect(r.ReceiveLedger.settledUnsaved()).toEqual([])
+  })
+
+  it('api.js surfaces X-Receive-Status as receive_status on a 200', async () => {
+    const { api } = loadApi(async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (k: string) =>
+          ({ 'content-type': 'application/json', 'x-receive-status': 'ACKNOWLEDGED' } as Record<string, string>)[k.toLowerCase()] ?? null,
+      },
+      json: async () => ({ receive_id: '9f729968', token: null }),
+    }))
+    api.setNostrCredentials('a'.repeat(64), '1'.repeat(64))
+    const res = (await api.receive('cashuAx')) as { receive_status?: string }
+    expect(res.receive_status).toBe('ACKNOWLEDGED')
+  })
+})

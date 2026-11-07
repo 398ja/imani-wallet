@@ -1297,6 +1297,17 @@ class GatewayAPI {
   }
 
   /**
+   * #560: escrow status of this account's own receives, by id. Answers
+   * `{ statuses: { [receiveId]: 'HELD' | 'ACKNOWLEDGED' | ... } }`; unknown ids
+   * are left out. A gateway without the route answers 404.
+   * @param {string[]} receiveIds - At most 50 ids
+   * @returns {Promise<{statuses: Object<string, string>}>}
+   */
+  async getReceiveStatuses(receiveIds) {
+    return this.requestWithHeaders('POST', '/api/v1/wallet/receive/statuses', { receive_ids: receiveIds });
+  }
+
+  /**
    * Make a request with additional custom headers
    * @param {string} method - HTTP method
    * @param {string} path - API path
@@ -1393,6 +1404,17 @@ class GatewayAPI {
       // #110: the 409 RECEIVE_ALREADY_SETTLED names its escrow in X-Receive-Id.
       error.headers = response.headers;
       throw error;
+    }
+
+    // #560: a same-key receive replay names its escrow status in
+    // X-Receive-Status (ACKNOWLEDGED: saved before, here or on another device).
+    // Surfaced as `receive_status` so tokenRedemption can branch on it. Absent
+    // on an older gateway, and then nothing is added.
+    if (data && typeof data === 'object' && !Array.isArray(data) && data.receive_status === undefined) {
+      const receiveStatus = response.headers && typeof response.headers.get === 'function'
+        ? response.headers.get('x-receive-status')
+        : null;
+      if (receiveStatus) data.receive_status = receiveStatus;
     }
 
     return data;

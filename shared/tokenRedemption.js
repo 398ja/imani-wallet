@@ -790,6 +790,28 @@ function _settledReceiveIdFrom(err) {
 }
 
 /**
+ * #560: did the gateway say this receive was ACKNOWLEDGED, i.e. saved once by
+ * this account (on this device before a logout, or on another device)? Read
+ * from a same-key replay's `receive_status` (X-Receive-Status) or a 409
+ * RECEIVE_ALREADY_SETTLED's `details: "receive_id=... status=..."`. An older
+ * gateway sends neither, and this answers false: the warning stays.
+ */
+function _gatewaySaysAcknowledged(resultOrErr) {
+    if (!resultOrErr) return false;
+    try {
+        const direct = resultOrErr.receive_status || resultOrErr.receiveStatus || resultOrErr.status;
+        if (typeof direct === 'string' && direct.toUpperCase() === 'ACKNOWLEDGED') return true;
+        const data = resultOrErr.data || {};
+        const details = [data.details, data.error && data.error.details, resultOrErr.details]
+            .find((d) => typeof d === 'string');
+        const m = details && /(?:^|[\s,;])status=([A-Za-z_]+)/.exec(details);
+        return !!m && m[1].toUpperCase() === 'ACKNOWLEDGED';
+    } catch (_) {
+        return false;
+    }
+}
+
+/**
  * A fingerprint safe to key a receive on: 64 hex characters, i.e. a SHA-256
  * of the whole token. TokenSecurity's `_fallbackFingerprint` is
  * `fallback_<first 50 chars>_<length>`, and two different tokens can share it;
@@ -1602,6 +1624,16 @@ const TokenRedemption = {
                 // reconciliation and is never acked from here.
                 if (_isAlreadySettledReceive(receiveErr, knownReceiveId)) {
                     const settledId = _settledReceiveIdFrom(receiveErr) || knownReceiveId;
+                    // #560: acknowledged means saved once, here or on another
+                    // device; the coupon comes back via NIP-60. Not a loss.
+                    if (settledId && _gatewaySaysAcknowledged(receiveErr)) {
+                        ReceiveLedger.recordSaved(settledId, fingerprint);
+                        ReceiveLedger.markAcked(settledId);
+                        console.info('[tokenRedemption] receive already settled and acknowledged elsewhere, treated as received', {
+                            fp: _fpTag(fingerprint), receiveId: settledId,
+                        });
+                        throw _alreadyRedeemedHere();
+                    }
                     ReceiveLedger.recordSettled(settledId, fingerprint);
                     console.error('[tokenRedemption] receive settled at the gateway, not saved here — needs reconciliation', {
                         fp: _fpTag(fingerprint), receiveId: settledId,
@@ -1643,6 +1675,17 @@ const TokenRedemption = {
             // proofs this wallet does not have: never saved, never acked.
             //
             if (!result.token && !result.change_token && settledReceiveId) {
+                // #560: an ACKNOWLEDGED replay is a receive this account saved
+                // before (another device, or before a logout). Already received,
+                // not a loss: same path as a coupon held here.
+                if (_gatewaySaysAcknowledged(result)) {
+                    ReceiveLedger.recordSaved(settledReceiveId, fingerprint);
+                    ReceiveLedger.markAcked(settledReceiveId);
+                    console.info('[tokenRedemption] replay of an acknowledged receive, already received elsewhere', {
+                        fp: _fpTag(fingerprint), receiveId: settledReceiveId,
+                    });
+                    throw _alreadyRedeemedHere();
+                }
                 console.error('[tokenRedemption] receive replayed without a fresh token — not saved, needs reconciliation', {
                     fp: _fpTag(fingerprint), receiveId: settledReceiveId,
                 });
@@ -2874,6 +2917,7 @@ TokenRedemption.ProvenanceVerificationError = ProvenanceVerificationError;
 // #110 — terminal "this receive already settled" error, and the ledger, for
 // callers (dmPoll) and tests.
 TokenRedemption.ReceiveSettledNotSavedError = ReceiveSettledNotSavedError;
+TokenRedemption._gatewaySaysAcknowledged = _gatewaySaysAcknowledged;
 TokenRedemption.ReceiveLedger = ReceiveLedger;
 
 // Export for use in other modules

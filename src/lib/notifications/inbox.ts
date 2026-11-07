@@ -251,6 +251,16 @@ export function markAllRead(pubkey: string): void {
   )
 }
 
+/** Remove one row by id (#560: a false "Voucher not saved"). No-op if absent. */
+export function removeNotification(pubkey: string, id: string): void {
+  const items = read(pubkey)
+  if (!items.some((item) => item.id === id)) return
+  write(
+    pubkey,
+    items.filter((item) => item.id !== id),
+  )
+}
+
 /**
  * Empty one account's inbox.
  *
