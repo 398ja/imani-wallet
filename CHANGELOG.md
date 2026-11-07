@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-11-07
+
+### Changed
+
+- **The Android app targets Android 16 (API 36) and runs on Capacitor 8** (#558, #561). Google
+  Play has required target API 36 for new apps and updates since 31 August 2026. compileSdk and
+  targetSdk are 36, and minSdk is 24 (Capacitor 8's minimum, so Android 6 is no longer supported).
+  AGP is 8.13, Gradle 8.14. Every Capacitor plugin is on 8.
+- **Edge to edge on every Android version.** At API 36 the app always draws under the status and
+  navigation bars. `@capacitor/status-bar` is gone: core `SystemBars` sets the icon style, and
+  `insetsHandling: 'css'` keeps `env(safe-area-inset-*)` right on WebViews older than Chromium 140.
+  `MainActivity` enables edge to edge on older Android too, so there is one inset model
+  everywhere. The header and the toasts keep their existing safe-area padding.
+- The build image (imani-deploy) is on Node 22 and SDK 36, and also produces the signed app bundle
+  (`.aab`) for Google Play, kept privately next to the APK build.
+
 ## [0.59.0] - 2026-11-07
 
 ### Added
