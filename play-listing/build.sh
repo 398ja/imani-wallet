@@ -18,9 +18,25 @@ magick -size 512x512 xc:'#fafafa' "$HERE/.mark.png" -gravity center -composite \
   -alpha on -depth 8 -define png:color-type=6 "$HERE/icon-512.png"
 rm -f "$HERE/.mark.svg" "$HERE/.mark.png"
 
-# 2. Feature graphic: site cream background, mark in site accent, wordmark and tagline, centred.
+# 1b. The Android launcher icon PNGs, for Android 7 (API 24 and 25), which has no adaptive icons.
+#     API 26+ uses the vector drawable/ic_launcher_foreground.xml through mipmap-anydpi-v26.
+#     Same mark and colours; legacy launchers do not mask, so the square one has its own rounded
+#     corners and the round one is a circle. The template ic_launcher_foreground.png files are gone.
+sed 's/@media[^}]*}[^}]*}//' "$REPO/public/imani.svg" > "$HERE/.mark.svg"
+for pair in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+  d="${pair%%:*}"; s="${pair##*:}"; m=$(( s * 58 / 100 )); r=$(( s * 18 / 100 ))
+  magick -background none -density 1200 "$HERE/.mark.svg" -resize "${m}x${m}" "$HERE/.m.png"
+  magick -size "${s}x${s}" xc:none -fill '#fafafa' -draw "roundrectangle 0,0 $((s-1)),$((s-1)) $r,$r" \
+    "$HERE/.m.png" -gravity center -composite "$RES/mipmap-$d/ic_launcher.png"
+  magick -size "${s}x${s}" xc:none -fill '#fafafa' -draw "circle $((s/2)),$((s/2)) $((s/2)),0" \
+    "$HERE/.m.png" -gravity center -composite "$RES/mipmap-$d/ic_launcher_round.png"
+done
+rm -f "$HERE/.mark.svg" "$HERE/.m.png"
+
+# 2. Feature graphic: site cream background, the app's rounded mark (public/imani.svg, owner choice)
+#    in the site accent, wordmark and tagline, centred.
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-sed "s/currentColor/$ACCENT/" "$WWW/mark.svg" > "$TMP/mark.svg"
+sed -e 's/@media[^}]*}[^}]*}//' -e "s/#171717/$ACCENT/g" "$REPO/public/imani.svg" > "$TMP/mark.svg"
 magick -background none -density 600 "$TMP/mark.svg" -resize 150x150 "$TMP/mark.png"
 magick -size 1024x500 xc:"$CREAM" \
   "$TMP/mark.png" -gravity center -geometry -205-55 -composite \
