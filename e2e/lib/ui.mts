@@ -260,14 +260,15 @@ export function createUi(options: UiOptions) {
   }
 
   /**
-   * What a stall holds of its OWN coupons, read once off its merchant page (BALANCE). A page with
-   * no balance panel is zero. postdeploy's `ownCouponsHeld` polls this until it settles.
+   * What a stall holds of its OWN coupons, read once off its merchant page: the pass's amount
+   * (`.text-amount`; the "BALANCE" label was dropped in #419). No pass is zero.
    */
   async function stallOwnBalance(page: Page, stallPubkey: string): Promise<string> {
     await goto(page, `${BASE}/merchants/${stallPubkey}`)
     await unlockIfLocked(page)
     await page.waitForTimeout(4000)
-    return /BALANCE\s*\n?([^\n]+)/i.exec(await screenText(page, 1200))?.[1]?.trim() ?? '€0.00'
+    const amount = page.locator('.text-amount').first()
+    return (await amount.count()) ? (await amount.innerText()).trim() : '€0.00'
   }
 
   return { BASE, stallOwnBalance, relogin, unlockIfLocked, balance, balancePanel, balanceInPlace, sell, send, notificationRows, importKey, scanText }

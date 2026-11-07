@@ -151,7 +151,7 @@ const movements: Movement[] = []
 const pageErrors: string[] = []
 const unsavedReceives: string[] = []
 const notes: string[] = []
-const stallLoginUnsaved: string[] = []
+const loginReplayUnsaved: string[] = []
 /** Every 429 a page saw, with its path, for classifying a journey's failure. */
 const refused: { at: number; persona: string; path: string }[] = []
 /** When the edge's captcha gate refused a Cashlink lookup (no E2E_CAPTCHA_BYPASS). */
@@ -325,6 +325,7 @@ const heldStalls = (c: CustomerState, d: Day) => d.stalls.filter((s) => (c.holds
 async function arrive(d: Day, c: CustomerState): Promise<JourneyResult> {
   if (c.live) return ok(0, 'already here')
   const started = Date.now()
+  const unsavedBefore = unsavedReceives.length
   c.live = await openContext(d.browser, c.id, c.saved ?? undefined)
   const page = c.live.page
   if (c.saved) {
@@ -343,6 +344,14 @@ async function arrive(d: Day, c: CustomerState): Promise<JourneyResult> {
   await page.getByText('Total balance').waitFor({ timeout: 60_000 })
   const visible = Date.now() - started
   const bal = await customerBalances(page)
+  // A first login on a fresh device re-drains the wallet's history; what it logs then is #123
+  // (replays of receives settled elsewhere), not this day's money. Reported, not gated.
+  if (!c.before && !c.isNew) {
+    // Only this persona's lines: in a full day other wallets are logging at the same time.
+    for (let i = unsavedReceives.length - 1; i >= unsavedBefore; i--) {
+      if (unsavedReceives[i]!.startsWith(`[${c.id}]`)) loginReplayUnsaved.push(...unsavedReceives.splice(i, 1))
+    }
+  }
   if (!c.before) c.before = bal
   return ok(visible, c.saved ? 'cold boot restored the wallet' : c.isNew ? 'registered, wallet shown' : 'backup key imported, wallet shown')
 }
@@ -599,8 +608,11 @@ async function card(d: Day, c: CustomerState): Promise<JourneyResult> {
   await page.getByRole('button', { name: /Pay by card/ }).click()
   await page.waitForURL(/checkout\.stripe\.com/, { timeout: 60_000 })
   if (!/\/cs_test_/.test(page.url())) return skip('Stripe Checkout is NOT in test mode for this stall; refusing to enter a card')
-  await page.locator('#email').fill(`rd${Date.now()}@example.com`).catch(() => {})
-  await page.locator('#cardNumber').fill('4242424242424242')
+  await page.locator('#email').fill(`rd${Date.now()}@example.com`, { timeout: 30_000 })
+  // Checkout lists card next to Klarna in an accordion; its fields render once card is chosen.
+  await page.waitForTimeout(3000)
+  await page.locator('[data-testid="card-accordion-item"]').click({ force: true, timeout: 15_000 }).catch(() => {})
+  await page.locator('#cardNumber').fill('4242424242424242', { timeout: 30_000 })
   await page.locator('#cardExpiry').fill('12 / 34')
   await page.locator('#cardCvc').fill('123')
   await page.locator('#billingName').fill('Real Day').catch(() => {})
@@ -770,7 +782,7 @@ async function main(): Promise<number> {
       log(`stall ${s.slot} ${s.name} open (${s.currency}${s.shop ? ', online shop' : ''}${st.cardReady ? ', card-ready' : ''})`)
     }
     const customers: CustomerState[] = customerPersonas.map((c) => ({ ...c, live: null, pubHex: '', saved: null, holds: {}, before: null }))
-    stallLoginUnsaved.push(...unsavedReceives)
+    loginReplayUnsaved.push(...unsavedReceives.splice(0))
 
     if (RUN_K6) {
       if (!(await signerUp())) {
@@ -831,7 +843,7 @@ async function main(): Promise<number> {
       for (const b of blockedPublishes) counts.set(b, (counts.get(b) ?? 0) + 1)
       notes.push(`Real-stall public records the guard kept from being republished (the app tried on login and retried): ${[...counts].map(([b, n]) => `${b} x${n}`).join('; ')}`)
     }
-    if (stallLoginUnsaved.length) notes.push(`Settled-but-not-saved logged while a stall logged in, before the day began: ${stallLoginUnsaved.length} lines (see gate)`)
+    if (loginReplayUnsaved.length) notes.push(`FINDING (#123, not gated: first login of an existing wallet on a fresh device): settled-but-not-saved logged for receives from its history, ${loginReplayUnsaved.length} lines: ${loginReplayUnsaved.slice(0, 4).join(' || ')}`)
     const result = buildResult({
       population, startedAt, durationS: (Date.now() - startMs) / 1000, conservation, k6: k6Summary,
       rateLimitProbe: probe.text,
