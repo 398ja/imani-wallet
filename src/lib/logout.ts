@@ -586,6 +586,9 @@ export async function attemptLogout(
   //
   // And the settled-but-unsaved record (#112): its receive id exists nowhere
   // else, and it is keyed by pubkey so only that account reads it.
+  //
+  // And where each account was backed up (backupRecord.ts): logout deletes no
+  // backup, so forgetting them would make the next passphrase change skip one.
   carryPendingClaimsAcrossLogout(() => sweepAppStorage(isKeptAcrossLogout))
 
   // And the coupons, the transaction history and the issued-coupon records.

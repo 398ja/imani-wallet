@@ -6,6 +6,7 @@ import { Check, Cloud, Copy, Download } from 'lucide-react'
 import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
 import { backupFilename, createBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
+import { recordBackup } from '../lib/backupRecord'
 import { useDriveBackup } from '../lib/useDriveBackup'
 import { DriveOverwriteWarning } from '../components/DriveOverwriteWarning'
 import { handleOf } from '../lib/format'
@@ -33,6 +34,7 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
     setError(null)
     try {
       await downloadText(backupFilename(profile), createBackup(profile.pubkey))
+      recordBackup(profile.pubkey, 'file')
       setDownloaded(true)
     } catch (e) {
       setError(userMessage(e))

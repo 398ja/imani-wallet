@@ -81,6 +81,7 @@ vi.mock('../../components/ParkedClaimBanner', () => ({ ParkedClaimBanner: () => 
 
 const { OnboardingPage, RestoreRedirect } = await import('../OnboardingPage')
 const { LoginPage } = await import('../LoginPage')
+const { loadBackupRecord } = await import('../../lib/backupRecord')
 
 const backupText = (profile: unknown = {
   pubkey: PUBKEY,
@@ -190,6 +191,8 @@ describe('logging in from a backup', () => {
     await screen.findByText('Home screen')
     expect(onUnlock).toHaveBeenCalledWith(PRIV)
     expect(localStorage.getItem(KEY_SLOT)).toContain(`sealed:${PASSPHRASE}`)
+    // A restore from Drive proves a Drive backup exists (passphrase change rewrites it).
+    expect(loadBackupRecord(PUBKEY)).toEqual({ drive: expect.any(Number) })
   })
 
   // The same path from a file chosen off disk.
@@ -204,6 +207,7 @@ describe('logging in from a backup', () => {
 
     await screen.findByText('Home screen')
     expect(onUnlock).toHaveBeenCalledWith(PRIV)
+    expect(loadBackupRecord(PUBKEY)).toEqual({ file: expect.any(Number) })
   })
 
   // The account's name appears once, in the profile row, not again in a

@@ -88,6 +88,9 @@ describe('the record across logout', () => {
     expect(isKeptAcrossLogout('imani-wallet:unsaved-receipts:')).toBe(false)
     expect(isKeptAcrossLogout(`imani-wallet:receive-ledger:${ALICE}`)).toBe(false)
     expect(isKeptAcrossLogout(`imani-wallet:notifications:${ALICE}`)).toBe(false)
+    expect(isKeptAcrossLogout(`imani-wallet:backup-record:${ALICE}`)).toBe(true)
+    expect(isKeptAcrossLogout('imani-wallet:backup-record:')).toBe(false)
+    expect(isKeptAcrossLogout(`imani-wallet:backup-records:${ALICE}`)).toBe(false)
   })
 
   it('is keyed by account: another account on the device sees nothing', () => {
