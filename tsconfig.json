@@ -5,6 +5,7 @@
     { "path": "./tsconfig.node.json" },
     { "path": "./tsconfig.services.json" },
     { "path": "./tsconfig.sdk.json" },
+    { "path": "./tsconfig.loadtest.json" },
     { "path": "./apps/gifting/tsconfig.json" }
   ]
 }
