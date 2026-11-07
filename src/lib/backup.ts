@@ -39,8 +39,19 @@ const KEYSTORE_STORAGE_KEY = 'imani-wallet-key'
 const FORMAT = 'imani-wallet-backup'
 const VERSION = 1
 
-/** The name the file takes in Drive's appDataFolder. One per Google account. */
+/**
+ * The old fixed name in Drive's appDataFolder, one per Google account. Never
+ * written since #559 (it let a second account overwrite the first), only read.
+ */
 export const DRIVE_FILENAME = 'imani-wallet-account.json'
+
+/**
+ * The Drive file for one account (#559). By pubkey, not handle: a handle can
+ * change, and two keys must never share a file.
+ */
+export function driveFilename(pubkey: string): string {
+  return `imani-wallet-account-${pubkey}.json`
+}
 
 export interface BackupFile {
   format: typeof FORMAT
