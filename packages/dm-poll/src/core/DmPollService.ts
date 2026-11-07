@@ -645,7 +645,21 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
    */
   private isSettledNotSavedError(error: unknown): boolean {
     const code = (error as { code?: unknown } | null | undefined)?.code;
+    if (code === 'RECEIVE_ALREADY_SETTLED' && this.isAcknowledgedSettle(error)) return false;
     return code === 'RECEIVE_SETTLED_NOT_SAVED' || code === 'RECEIVE_ALREADY_SETTLED';
+  }
+
+  /**
+   * #560: a raw 409 RECEIVE_ALREADY_SETTLED whose details say
+   * `status=ACKNOWLEDGED` is a receive this account saved before (another
+   * device, or before a logout). Already received, not a loss.
+   */
+  private isAcknowledgedSettle(error: unknown): boolean {
+    const e = error as { data?: { details?: unknown; error?: { details?: unknown } }; details?: unknown } | null;
+    const details = [e?.data?.details, e?.data?.error?.details, e?.details].find(
+      (d): d is string => typeof d === 'string',
+    );
+    return !!details && /(?:^|[\s,;])status=ACKNOWLEDGED\b/i.test(details);
   }
 
   /** A receive the wallet deferred itself (pacer reset, per-token budget spent). */
@@ -659,6 +673,8 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
     // for money this wallet does not hold turns a loss silent. See
     // isSettledNotSavedError, checked first.
     if (this.isSettledNotSavedError(error)) return false;
+    const code = (error as { code?: unknown } | null | undefined)?.code;
+    if (code === 'RECEIVE_ALREADY_SETTLED' && this.isAcknowledgedSettle(error)) return true;
     const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
     return (
       message.includes('already redeemed') ||

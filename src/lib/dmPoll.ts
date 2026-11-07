@@ -24,7 +24,13 @@ import {
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
 import { gatesSealed, receivesOpen } from './receiveGate'
 import { announceRefusal } from './refusalToast'
-import { announceUnsaved, resumeUnsavedReceipts } from './unsavedReceipt'
+import {
+  announceUnsaved,
+  dropAcknowledgedReceipts,
+  listUnsavedReceipts,
+  type ReceiveStatusLookup,
+  resumeUnsavedReceipts,
+} from './unsavedReceipt'
 import { recordRefusal } from './refusedCoupons'
 import { heldCoupons, recordHeld, releaseHeld } from './heldCoupons'
 import { clearReceiveTrouble, fromRedemptionError, fromRedemptionUnsaved } from './receiveTrouble'
@@ -1821,6 +1827,17 @@ export function startDmPoll(pubkey: string): DmPollService {
 
   // Settled-but-unsaved vouchers (#112) survive logout; the bell rows do not.
   resumeUnsavedReceipts(pubkey)
+  // #560: then drop the ones the gateway reports ACKNOWLEDGED (saved on
+  // another device or before a logout). Off the startup path, never throws,
+  // and only when there is a record to check.
+  if (listUnsavedReceipts(pubkey).some((r) => r.receiveId)) {
+    void legacyApi()
+      .then((api) => {
+        const lookup = (api as unknown as { getReceiveStatuses?: ReceiveStatusLookup }).getReceiveStatuses
+        return typeof lookup === 'function' ? dropAcknowledgedReceipts(pubkey, lookup.bind(api)) : 0
+      })
+      .catch((e: unknown) => console.warn('[unsaved-receipt] acknowledged check skipped:', e))
+  }
 
   // Before the poller reads its processed set, not after: coupons abandoned by
   // a build that could not reassemble chunks are recoverable only if their

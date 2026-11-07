@@ -77,6 +77,8 @@ vi.mock('../refusalToast', () => ({
 vi.mock('../unsavedReceipt', () => ({
   announceUnsaved: (pubkey: string, event: unknown) => stubs.unsaved.push({ pubkey, event }),
   resumeUnsavedReceipts: () => {},
+  listUnsavedReceipts: () => [],
+  dropAcknowledgedReceipts: async () => 0,
 }))
 
 import { startDmPoll, stopDmPoll } from '../dmPoll'
