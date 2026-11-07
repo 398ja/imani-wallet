@@ -19,6 +19,7 @@ import { carryPendingClaimsAcrossLogout } from './pendingClaim'
 import { moneyInFlight } from './inFlightMoney'
 import { strandedCashlinks } from './transactions'
 import { confirmStashBackup, stashFingerprint, type StashCheck } from './cashbackStash'
+import { codesFingerprint, confirmCheckoutCodeBackup, stopCheckoutCodesPublish, type BlockingCode, type CodesCheck } from './checkoutCodeBackup'
 import {
   closeReceives,
   closeSpends,
@@ -101,6 +102,13 @@ export const LOGOUT_BLOCKED_COPY = {
   inFlight:
     'A payment or a Cashlink is still going through. Logging out now could lose it, so ' +
     'logging out stays off until it finishes. Nothing has been erased. Try again in a moment.',
+  checkoutCode: (shop: string, amount: string, back: string) =>
+    `Your checkout code for ${shop} worth ${amount} is still being made. Logging out now could lose it, ` +
+    `so logging out stays off until it is ready. If it cannot be finished, its value comes back to this wallet on ${back}. ` +
+    'Nothing has been erased. Keep Imani open and try again in a moment.',
+  checkoutCodeUnconfirmed: (shop: string, amount: string) =>
+    `Backing up your checkout code for ${shop} worth ${amount}. Logging out stays off until the backup is ` +
+    'confirmed, so the code comes back when you log in again. Nothing has been erased. Check your connection and try again.',
   otherTab:
     'This wallet is open in another tab or window, and it could not be paused safely. ' +
     'Close the other tabs of this wallet, or wait for them to finish, then try again. Nothing has been erased.',
@@ -121,10 +129,14 @@ export type LogoutOutcome =
         | 'changed'
         | 'in-flight'
         | 'cashback-unconfirmed'
+        | 'checkout-code'
+        | 'checkout-code-unconfirmed'
         | 'other-tab'
       unconfirmed: UnconfirmedCoupon[]
       /** For 'cashback-unconfirmed': how many stashed cashback tokens are not confirmed. */
       cashback?: number
+      /** For the checkout-code reasons: the code that holds logout off (#557). */
+      code?: BlockingCode
     }
 
 export interface LogoutDeps {
@@ -142,13 +154,20 @@ export interface LogoutDeps {
    * Live entries in the pending-send and swap-intent ledgers, which hold value
    * no coupon row describes and which the sweep below would delete.
    */
-  inFlight?: (pubkey: string) => { sends: number; swaps: number; cashlinks?: number }
+  inFlight?: (pubkey: string) => { sends: number; swaps: number; cashlinks?: number; codes?: number }
   /** Try to finish pending sends first, so a settled one does not block. Bounded, never throws. */
   settleInFlight?: (pubkey: string) => Promise<void>
   /** The read-back check of the cashback stash (#331). Must never answer ok on a failure. */
   checkStash?: (pubkey: string) => Promise<StashCheck>
   /** The stash's current identity, for the race check. */
   stashNow?: () => string
+  /**
+   * #557: the read-back check of the checkout-code backup. An outstanding code lets logout through
+   * only once this answers ok. Must never answer ok on a failure.
+   */
+  checkCodes?: (pubkey: string) => Promise<CodesCheck>
+  /** The outstanding codes' identity, for the race check. */
+  codesNow?: (pubkey: string) => string
   /**
    * #379: Cashlinks whose value only this wallet can still bring back (an unconfirmed "claimed", one
    * being locked or on its way back, one locked to its expired link). Must count unreadable as one.
@@ -188,8 +207,10 @@ async function defaultSettleInFlight(pubkey: string): Promise<void> {
   }
 }
 
-function hasMoneyInFlight(read: (pubkey: string) => { sends: number; swaps: number; cashlinks?: number }, pubkey: string): boolean {
+function hasMoneyInFlight(read: NonNullable<LogoutDeps['inFlight']>, pubkey: string): boolean {
   try {
+    // #557: `codes` is not read here. An outstanding checkout code is checked on its own, by the
+    // read-back of its relay backup (`codesBlocked`).
     const { sends, swaps, cashlinks } = read(pubkey)
     // #295 phase 4: a Cashlink claim part way, or a Cashlink whose value is moving, is value no
     // coupon row describes yet, and the sweep below would delete its only record.
@@ -262,6 +283,25 @@ async function safeStash(check: NonNullable<LogoutDeps['checkStash']>, pubkey: s
   }
 }
 
+async function safeCodes(check: NonNullable<LogoutDeps['checkCodes']>, pubkey: string): Promise<CodesCheck> {
+  try {
+    return await check(pubkey)
+  } catch {
+    return { ok: false, reason: 'store-unreadable', fingerprint: '\u0000unreadable' }
+  }
+}
+
+function codesBlocked(check: Extract<CodesCheck, { ok: false }>): LogoutOutcome {
+  if (check.reason === 'locked') return { status: 'blocked', reason: 'locked', unconfirmed: [] }
+  if (check.reason === 'store-unreadable') return { status: 'blocked', reason: 'store-unreadable', unconfirmed: [] }
+  return {
+    status: 'blocked',
+    reason: check.reason === 'moving' ? 'checkout-code' : 'checkout-code-unconfirmed',
+    unconfirmed: [],
+    ...(check.code ? { code: check.code } : {}),
+  }
+}
+
 function blocked(check: Extract<BackupCheck, { ok: false }>): LogoutOutcome {
   return { status: 'blocked', reason: check.reason, unconfirmed: check.unconfirmed }
 }
@@ -300,6 +340,8 @@ export async function attemptLogout(
   const settleInFlight = deps.settleInFlight ?? defaultSettleInFlight
   const checkStash = deps.checkStash ?? confirmStashBackup
   const stashNow = deps.stashNow ?? stashFingerprint
+  const checkCodes = deps.checkCodes ?? confirmCheckoutCodeBackup
+  const codesNow = deps.codesNow ?? codesFingerprint
   const drainOthers = deps.drainReceives ?? defaultDrainReceives
   const receivesNow = deps.receivesNow ?? defaultReceivesNow
   const pauseTabs = deps.pauseTabs ?? (() => pauseOtherTabs())
@@ -315,6 +357,10 @@ export async function attemptLogout(
   // 2026-10-19). Claimed cashback not yet banked is money too.
   const firstStash = await safeStash(checkStash, pubkey)
   if (!firstStash.ok) return stashBlocked(firstStash)
+  // 1c. #557: checkout codes. One still being made blocks; one that is made blocks only until its
+  // relay backup is read back, so the next login brings it back.
+  const firstCodes = await safeCodes(checkCodes, pubkey)
+  if (!firstCodes.ok) return codesBlocked(firstCodes)
   // A send or swap still in flight holds value outside every coupon row, and
   // the sweep below would delete its only record (second check of #326).
   if (hasMoneyInFlight(inFlight, pubkey)) return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
@@ -377,6 +423,8 @@ export async function attemptLogout(
   // A debounced roster publish must not fire after the key is gone (#160 phase 6).
   stopRosterSync()
   stopOnlineShopSync()
+  // And the debounced checkout-code backup publish (#557): the check above publishes what it needs.
+  stopCheckoutCodesPublish()
   // Same reason: the drain loop signs NIP-98 with the session key and would keep
   // polling for payments addressed to the account being torn down.
   stopIncomingNotifications()
@@ -401,6 +449,13 @@ export async function attemptLogout(
     if (stashNow() !== finalStash.fingerprint) {
       return { status: 'blocked', reason: 'changed', unconfirmed: [] }
     }
+  }
+
+  // 4c. The checkout codes (#557): one saved since step 1c is checked again.
+  if (codesNow(pubkey) !== firstCodes.fingerprint) {
+    const finalCodes = await safeCodes(checkCodes, pubkey)
+    if (!finalCodes.ok) return codesBlocked(finalCodes)
+    if (codesNow(pubkey) !== finalCodes.fingerprint) return { status: 'blocked', reason: 'changed', unconfirmed: [] }
   }
 
   // 4. Re-verify only if the held set changed since step 1.

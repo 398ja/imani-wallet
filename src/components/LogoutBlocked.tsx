@@ -38,6 +38,15 @@ export function LogoutBlockedDialog({
         <p id="logout-blocked-body" className="mt-2 text-[13px] leading-snug text-mono-600 dark:text-mono-300">
           {blockedMessage(outcome)}
         </p>
+        {(outcome.reason === 'checkout-code' || outcome.reason === 'checkout-code-unconfirmed') && outcome.code && (
+          <a
+            href={`/online/code/${encodeURIComponent(outcome.code.id)}`}
+            className="mt-2 inline-block text-[13px] font-medium text-mono-900 underline underline-offset-4 dark:text-mono-50"
+            data-testid="logout-code-link"
+          >
+            See your code
+          </a>
+        )}
         <div className="mt-5 space-y-2">
           <Button size="lg" className="w-full" disabled={busy} onClick={onRetry}>
             {busy ? 'Checking your vouchers…' : LOGOUT_BLOCKED_COPY.retry}

@@ -26,6 +26,14 @@ export function unconfirmedValue(coupons: UnconfirmedCoupon[]): string {
   return parts.length > 0 ? parts.join(' + ') : 'an unknown amount'
 }
 
+function shopName(url: string): string {
+  try {
+    return new URL(url).hostname || 'the shop'
+  } catch {
+    return url || 'the shop'
+  }
+}
+
 /** The refusal in plain words, with the count and the value where there are any. */
 export function blockedMessage(outcome: BlockedLogout): string {
   switch (outcome.reason) {
@@ -39,6 +47,15 @@ export function blockedMessage(outcome: BlockedLogout): string {
       return LOGOUT_BLOCKED_COPY.inFlight
     case 'other-tab':
       return LOGOUT_BLOCKED_COPY.otherTab
+    case 'checkout-code':
+    case 'checkout-code-unconfirmed': {
+      const c = outcome.code
+      const shop = c ? shopName(c.shopUrl) : 'the shop'
+      const amount = c ? formatFace(c.amount, { unit: c.unit, decimals: c.decimals }) : 'an unknown amount'
+      if (outcome.reason === 'checkout-code-unconfirmed') return LOGOUT_BLOCKED_COPY.checkoutCodeUnconfirmed(shop, amount)
+      const back = c ? new Date(c.x * 1000).toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'its expiry date'
+      return LOGOUT_BLOCKED_COPY.checkoutCode(shop, amount, back)
+    }
     case 'cashback-unconfirmed':
       return LOGOUT_BLOCKED_COPY.cashbackUnconfirmed(outcome.cashback ?? 1)
     default:

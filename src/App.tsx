@@ -30,6 +30,7 @@ import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
 import { startOnlineShopSync } from './lib/onlineShopPublisher'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
 import { restoreCashbackStash } from './lib/cashbackStash'
+import { restoreCheckoutCodes, startCheckoutCodeBackup } from './lib/checkoutCodeBackup'
 import { useLogout } from './lib/useLogout'
 import { LogoutBlockedDialog } from './components/LogoutBlocked'
 import { emptyProfile, loadProfile, refreshProfile, type Profile } from './lib/profile'
@@ -286,6 +287,12 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // redeem screen's replay as before. Never throws.
         void restoreCashbackStash(pubkey).then((n) => {
           if (n > 0) console.info(`[app] restored ${n} pending cashback token(s)`)
+        })
+        // #557: the checkout codes logout backed up, merged back with the refund counter lifted past
+        // every restored index. dm-poll's /mine pass then carries each one on. Never throws.
+        startCheckoutCodeBackup()
+        void restoreCheckoutCodes(pubkey).then((n) => {
+          if (n > 0) console.info(`[app] restored ${n} checkout code record(s)`)
         })
         setRestoring(true)
         void restoreVouchers(pubkey)
