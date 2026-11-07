@@ -7,7 +7,7 @@ import { Alert, Button, IdentityInline, Input, Panel } from './ui'
 import { applyBackup, parseBackup, type ParsedBackup } from '../lib/backup'
 import { refuseIfAnotherWallet } from '../lib/keySlotGuard'
 import { userMessage } from '../lib/userMessage'
-import { getBackup } from '../lib/drive'
+import { listBackups, type DriveBackup } from '../lib/drive'
 import { backupFileAccept } from '../lib/backupFileAccept'
 import { keyStore } from '../lib/nap'
 import { claimProfile, ProfileMissingError, rememberHandle, requireProfile } from '../lib/profileGate'
@@ -29,7 +29,9 @@ import { FinishProfileStep } from './FinishProfileStep'
  *
  * Nothing here is new crypto. `parseBackup` validates without writing,
  * `applyBackup` installs the key only if the passphrase opens it and rolls
- * back otherwise, and `getBackup` is the Drive read the Settings side writes.
+ * back otherwise, and `listBackups` is the Drive read the Settings side writes.
+ * Drive holds one file per account (#559), so Drive always asks which account
+ * first, even when there is only one: the customer sees whose key comes back.
  * Choosing a backup touches nothing on the device: only a passphrase that
  * opens it does.
  */
@@ -46,6 +48,7 @@ export function BackupLogin({
   const fileInput = useRef<HTMLInputElement>(null)
   const [parsed, setParsed] = useState<ParsedBackup | null>(null)
   const [source, setSource] = useState<'drive' | 'file' | null>(null)
+  const [found, setFound] = useState<DriveBackup[] | null>(null)
   const [loading, setLoading] = useState<'drive' | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   // The key opened but its account has no profile: held only in memory, and
@@ -57,13 +60,12 @@ export function BackupLogin({
     setLoading('drive')
     setProblem(null)
     try {
-      const text = await getBackup()
-      if (text === null) {
+      const backups = await listBackups()
+      if (backups.length === 0) {
         setProblem('That Google account has no wallet backup. Try another Google account, or a backup file.')
         return
       }
-      setParsed(parseBackup(text))
-      setSource('drive')
+      setFound(backups)
     } catch (e) {
       setProblem(userMessage(e))
     } finally {
@@ -93,8 +95,19 @@ export function BackupLogin({
     }
   }
 
+  const pickDrive = (backup: DriveBackup) => {
+    setProblem(null)
+    try {
+      setParsed(parseBackup(backup.text))
+      setSource('drive')
+    } catch (e) {
+      setProblem(userMessage(e))
+    }
+  }
+
   const chooseAgain = () => {
     setParsed(null)
+    setFound(null)
     setSource(null)
     setProblem(null)
     setMissing(null)
@@ -151,6 +164,33 @@ export function BackupLogin({
           }
         }}
       />
+    )
+  }
+
+  if (found) {
+    return (
+      <div className="space-y-4">
+        <div className="text-center">
+          <h2 className="text-lg font-semibold text-mono-900 dark:text-mono-50">Which account?</h2>
+          <p className="mt-0.5 text-sm text-mono-500">Your Google Drive holds these backups.</p>
+        </div>
+        <ul className="space-y-2" aria-label="Backups in Google Drive">
+          {found.map((backup) => (
+            <li key={backup.id}>
+              <Choice
+                icon={<CloudDownload className="h-5 w-5" aria-hidden />}
+                title={accountLabel(backup)}
+                caption={savedLabel(backup)}
+                onClick={() => pickDrive(backup)}
+              />
+            </li>
+          ))}
+        </ul>
+        {problem && <Alert>{problem}</Alert>}
+        <Button variant="ghost" className="w-full" onClick={chooseAgain}>
+          Back
+        </Button>
+      </div>
     )
   }
 
@@ -254,6 +294,23 @@ function Choice({
       )}
     </button>
   )
+}
+
+/** A Drive backup named by its handle, else a short account code, never a full key. */
+function accountLabel(backup: DriveBackup): string {
+  if (backup.nip05) return `@${backup.nip05.split('@')[0]}`
+  // The account code without its protocol prefix, shortened: enough to tell two apart.
+  if (backup.npub) return `${backup.npub.slice(5, 11)}…${backup.npub.slice(-4)}`
+  return 'Your account'
+}
+
+function savedLabel(backup: DriveBackup): string {
+  const date = backup.modifiedTime ? new Date(backup.modifiedTime) : null
+  const when =
+    date && !Number.isNaN(date.getTime())
+      ? date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      : 'an unknown date'
+  return backup.revisionId ? `Older backup, saved ${when}` : `Saved ${when}`
 }
 
 /** The backup's account as a hex pubkey: from the verified npub, else the profile. */

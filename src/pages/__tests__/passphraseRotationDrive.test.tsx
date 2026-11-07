@@ -14,7 +14,7 @@ const putBackup = vi.fn<(json: string) => Promise<void>>(async () => {})
 vi.mock('../../lib/drive', () => ({
   driveConfigured: () => true,
   putBackup,
-  getBackup: async () => null,
+  listBackups: async () => [],
 }))
 
 vi.mock('../../lib/backup', async (importOriginal) => ({
@@ -85,13 +85,13 @@ describe('changing the passphrase', () => {
     expect(await screen.findByText(/still needs your old passphrase/)).toBeTruthy()
   })
 
-  it('says before the change that it rewrites Drive, and that the write replaces any other account there (#559)', () => {
+  it('says before the change that it rewrites Drive, and what that write replaces (#559)', () => {
     render(
       <MemoryRouter>
         <SecurityPage onLogout={() => {}} pubkey={'a'.repeat(64)} />
       </MemoryRouter>,
     )
     expect(screen.getByText(/also updates your Google Drive backup/)).toBeTruthy()
-    expect(screen.getByText(/one wallet backup per Google account/).textContent).toMatch(/another Imani account/)
+    expect(screen.getByText(/Saving to Google Drive replaces/).textContent).toMatch(/keep their own backups/)
   })
 })

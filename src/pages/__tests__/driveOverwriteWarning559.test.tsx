@@ -12,9 +12,9 @@ const { DriveOverwriteWarning } = await import('../../components/DriveOverwriteW
 const { handleOf } = await import('../../lib/format')
 
 /**
- * #559: a Drive backup replaces whatever wallet backup the Google account already holds, another
- * Imani account's included. A user lost account duran's key that way (restore brought back
- * cruchot). Until each account has its own Drive file, the backup screen says so beside the button.
+ * #559: a Drive backup replaces only its own account's earlier Drive copy. Before each account had its
+ * own file, a backup replaced whatever the Google account held, and a user lost account duran's key
+ * that way. The backup screen says what a Drive backup replaces, beside the button.
  */
 const profile = {
   pubkey: 'b'.repeat(64),
@@ -36,11 +36,10 @@ describe('the Drive overwrite warning (#559)', () => {
         <BackupPage profile={profile} />
       </MemoryRouter>,
     )
-    const note = screen.getByText(/one wallet backup per Google account/i)
-    expect(note.textContent).toMatch(/replaces any backup already there/i)
-    expect(note.textContent).toMatch(/another Imani account/i)
-    expect(note.textContent).toMatch(/with duran's/)
-    expect(note.textContent).toMatch(/Download file/)
+    const note = screen.getByText(/Saving to Google Drive replaces/i)
+    expect(note.textContent).toMatch(/replaces duran's earlier Drive backup/)
+    expect(note.textContent).toMatch(/Other Imani accounts in the same Google account keep their own backups/)
+    expect(note.textContent).toMatch(/update every device/)
   })
 
   it('stays on a terminal, which still backs up to Drive', () => {
@@ -49,12 +48,12 @@ describe('the Drive overwrite warning (#559)', () => {
         <BackupPage profile={profile} terminal />
       </MemoryRouter>,
     )
-    expect(screen.getByText(/one wallet backup per Google account/i)).toBeTruthy()
+    expect(screen.getByText(/Saving to Google Drive replaces/i)).toBeTruthy()
   })
 
   it('says "this account" when there is no handle', () => {
     render(<DriveOverwriteWarning who={null} />)
-    expect(screen.getByRole('status').textContent).toMatch(/with this account's/)
+    expect(screen.getByRole('status').textContent).toMatch(/replaces this account's earlier/)
   })
 
   it('reads the handle out of a nip05', () => {

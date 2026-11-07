@@ -1,22 +1,21 @@
 import { Notice } from './ui'
 
 /**
- * #559: Google Drive keeps ONE wallet backup per Google account (`DRIVE_FILENAME` in backup.ts), and
- * every Drive backup replaces it, whichever Imani account wrote it. A user who backed up a second
- * account to the same Google account lost the first one's key that way: restore brought back the
- * other account. Until each account gets its own Drive file, every screen that writes to Drive says
- * so, next to the button, in words that name what is lost.
+ * #559: until v0.58.0, Google Drive kept ONE wallet backup per Google account, and every Drive backup
+ * replaced it, whichever Imani account wrote it. A user lost an account's key that way. Each account
+ * now has its own Drive file (`driveFilename` in backup.ts), so a backup replaces only this
+ * account's own earlier copy. Every screen that writes to Drive says so, and warns that an app on
+ * an older version may still overwrite the shared file.
  *
- * `who` is this account's handle when known, so the sentence says whose backup goes in.
+ * `who` is this account's handle when known, so the sentence says whose backup it is.
  */
 export function DriveOverwriteWarning({ who }: { who?: string | null }) {
   const account = who ? `${who}'s` : "this account's"
   return (
     <Notice tone="warning">
-      Google Drive holds one wallet backup per Google account. Saving here replaces any backup already
-      there, including another Imani account&apos;s, with {account}. If you use more than one Imani
-      account, back up the others with Download file instead, or use a different Google account for
-      each.
+      Saving to Google Drive replaces {account} earlier Drive backup. Other Imani accounts in the same
+      Google account keep their own backups. An app older than this version still writes one shared
+      backup that replaces any other, so update every device before backing up there.
     </Notice>
   )
 }
