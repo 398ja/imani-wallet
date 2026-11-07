@@ -20,6 +20,10 @@
  *     30-day charts read these, which is why they do not depend on Prometheus' retention.
  */
 import type { SubscriptionRow } from './ledger.ts'
+import { createEventSizeRecorder } from '../../src/lib/nostrEventSizeMetrics.ts'
+
+/** Nostr event sizes this service publishes to the relay (#532); limits from NOSTR_EVENT_SIZE_LIMITS. */
+export const eventSizes = createEventSizeRecorder('subscription')
 
 /** Every tier a subscription can be on. `custom` is a hand grant; `other` catches anything new. */
 export const TIERS = ['basic', 'pro', 'custom', 'other'] as const
@@ -92,8 +96,6 @@ export function renderMetrics(rows: readonly SubscriptionRow[], nowSeconds: numb
   )
 
   // ---- From the ledger: the world, recomputed on every scrape.
-  const current = new Map<string, number>()
-  for (const t of TIERS) for (const s of STATUSES) current.set(key(t, s), 0)
   const byDay = new Map<string, number>()
   const today = dayStart(nowSeconds)
   // The last 30 UTC days as ISO dates, oldest first: the chart's x-axis, sorted as text = by date.
@@ -108,8 +110,6 @@ export function renderMetrics(rows: readonly SubscriptionRow[], nowSeconds: numb
   }
   for (const r of rows) {
     const t = tierOf(r.tier)
-    const s = (STATUSES as readonly string[]).includes(r.status) ? r.status : 'active'
-    current.set(key(t, s), (current.get(key(t, s)) ?? 0) + 1)
     const c = dayOf(r.createdAt)
     if (c !== null) byDay.set(key('created', t, c), (byDay.get(key('created', t, c)) ?? 0) + 1)
     if (r.status === 'cancelled') {
@@ -118,12 +118,8 @@ export function renderMetrics(rows: readonly SubscriptionRow[], nowSeconds: numb
     }
   }
 
-  emit(
-    'imani_subscriptions',
-    'gauge',
-    'Subscriptions in the ledger now, by tier and status (cancelled = will not renew, still paid for).',
-    TIERS.flatMap((t) => STATUSES.map((s): [string, number] => [`{tier="${t}",status="${s}"}`, current.get(key(t, s)) ?? 0])),
-  )
+  // `imani_subscriptions` (now by tier, term, grant_kind and status) is rendered by
+  // businessMetrics.ts, with the other business-metric families.
   emit(
     'imani_subscription_events_by_day',
     'gauge',
@@ -135,5 +131,5 @@ export function renderMetrics(rows: readonly SubscriptionRow[], nowSeconds: numb
   emit('imani_subscription_ledger_rows', 'gauge', 'Rows in the sales ledger. Zero with paying stalls means the ledger was lost.', [
     ['', rows.length],
   ])
-  return lines.join('\n') + '\n'
+  return lines.join('\n') + '\n' + eventSizes.render()
 }

@@ -27,6 +27,8 @@ interface ImportMetaEnv {
   readonly VITE_WEBSITE_BASE_URL?: string
   /** #402: `on` shows "Use online" (checkout codes). Off by default, so the feature ships dark. */
   readonly VITE_CHECKOUT_CODES?: string
+  /** #410: the wallet's return page reads shop-code gifts (`on`), off by default. */
+  readonly VITE_GIFTING_CODE_GIFTS?: string
   /** The imani-deploy release this build shipped in (Settings → About). Unset: shown as "dev". */
   readonly VITE_DEPLOY_VERSION?: string
   /** The imani-wallet release tag this build is (Settings → About). Unset: package.json + "dev". */

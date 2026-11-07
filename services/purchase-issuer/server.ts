@@ -37,13 +37,14 @@
  * becomes two coupons. A person restarts it once payment-adapter is back.
  */
 
+import { httpCodeCheck, httpDeposit } from './codeGift'
 import { createServer, type IncomingMessage } from 'node:http'
 
 import { tokenFor, FileCredentialStore } from './adapters'
 import { confirmAll, CredentialConfirmer, retryUnconfirmed } from './confirmation'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
-import { fileAnchors, httpPublishEvent, httpQueryWraps, httpScrub, httpStallName, type GiftPorts } from './giftDelivery'
+import { fileAnchors, httpPublishEvent, httpQueryWraps, httpReportOutcome, httpScrub, httpStallName, type GiftPorts } from './giftDelivery'
 import { mailerClient } from '../imani-mailer/client.ts'
 import { countPass, renderMetrics } from './metrics'
 import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPass } from './outbox'
@@ -97,6 +98,7 @@ function giftPortsFor(config: IssuerConfig, g: NonNullable<IssuerConfig['gifts']
     anchor: fileAnchors(g.anchorsPath),
     stallName: httpStallName(config.gatewayUrl, fetchImpl),
     track: (input, mintUrl) => giftTrackerFor(config, fetchImpl).track(input, mintUrl),
+    ...(g.checkoutCodesUrl ? { codes: { deposit: httpDeposit(g.checkoutCodesUrl, fetchImpl), publicBaseUrl: g.checkoutCodesUrl } } : {}),
   }
 }
 
@@ -112,6 +114,8 @@ export function giftTrackerFor(config: IssuerConfig, fetchImpl: typeof fetch = f
       sendMail: (req) => mailer.send(req),
       now: () => Date.now(),
       ...(g.sweepEveryMs ? { sweepEveryMs: g.sweepEveryMs } : {}),
+      ...(g.checkoutCodesUrl ? { checkCode: httpCodeCheck(g.checkoutCodesUrl, fetchImpl) } : {}),
+      reportOutcome: httpReportOutcome(config.purchasesUrl, config.purchasesToken, fetchImpl),
     })
     trackers.set(config, t)
   }

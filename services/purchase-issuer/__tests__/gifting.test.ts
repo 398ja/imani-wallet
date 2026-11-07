@@ -164,3 +164,21 @@ describe('the claim email (G-R4)', () => {
     expect(mail.text).toMatch(/Don't forward it/)
   })
 })
+
+describe('#410 code gift delivery parsing', () => {
+  const base = () => ({ ...row().delivery, kind: 'email', recipientEmail: 'bob@example.com', sealed: 'v1.a.b' })
+  it('absent or voucher is a voucher', () => {
+    expect(parseGiftDelivery(base())!.gift).toBe('voucher')
+    expect(parseGiftDelivery({ ...base(), gift: 'voucher' })!.gift).toBe('voucher')
+  })
+  it('a code carries S and x, lower-cased', () => {
+    const d = parseGiftDelivery({ ...base(), gift: 'code', shopKey: 'E'.repeat(64), shopUrl: 'https://olive.example', codeExpiresAt: 1767000000 })!
+    expect(d).toMatchObject({ gift: 'code', shopKey: 'e'.repeat(64), shopUrl: 'https://olive.example', codeExpiresAt: 1767000000 })
+  })
+  it('an unknown kind, or a code without S or x, drops the row', () => {
+    expect(parseGiftDelivery({ ...base(), gift: 'cheque' })).toBeNull()
+    expect(parseGiftDelivery({ ...base(), gift: 'code', codeExpiresAt: 1767000000 })).toBeNull()
+    expect(parseGiftDelivery({ ...base(), gift: 'code', shopKey: 'e'.repeat(64) })).toBeNull()
+    expect(parseGiftDelivery({ ...base(), kind: 'handle', gift: 'code', shopKey: 'e'.repeat(64), codeExpiresAt: 1 })).toBeNull()
+  })
+})

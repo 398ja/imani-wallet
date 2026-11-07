@@ -6,15 +6,25 @@
  * server: what the server pinned is what the review page shows and what gets delivered (G-R1).
  */
 
-import { isNip05, normaliseRecipientHandle } from './handle'
+import { isNip05 } from './handle'
 
-/** Who a gift goes to. There is no "to myself" (owner, 2026-10-29): the wallet's Buy page does that. */
-export type DeliveryKind = 'handle' | 'email'
+/**
+ * Who a gift goes to: an email address, and nothing else (#410 rework, 2026-11-04). Sending to an
+ * Imani handle was removed from the site. `'handle'` stays in {@link IssuedDeliveryKind} only so a
+ * draft issued before the change still reads correctly on the return page.
+ */
+export type DeliveryKind = 'email'
+export type IssuedDeliveryKind = DeliveryKind | 'handle'
+
+/**
+ * What a gift is: a voucher for the stall (always), or a checkout code for the stall's online shop
+ * (only where `codeGiftAvailable` says so).
+ */
+export type GiftKind = 'voucher' | 'code'
 
 export interface GiftForm {
   amount: string
-  deliver: DeliveryKind
-  handle: string
+  gift: GiftKind
   email: string
   message: string
   from: string
@@ -23,8 +33,7 @@ export interface GiftForm {
 
 export const EMPTY_FORM: GiftForm = {
   amount: '',
-  deliver: 'handle',
-  handle: '',
+  gift: 'voucher',
   email: '',
   message: '',
   from: '',
@@ -62,21 +71,18 @@ export function messageProblem(message: string): string | null {
 
 export function validate(
   form: GiftForm,
-  ctx: { signedIn: boolean; decimals?: number; stallNip05?: string },
+  ctx: { decimals?: number; codeGifts?: boolean },
 ): FormErrors {
   const errors: FormErrors = {}
   if (toMinorUnits(form.amount, ctx.decimals) === null) errors.amount = 'Enter an amount like 25.00.'
-  if (form.deliver === 'handle') {
-    const h = normaliseRecipientHandle(form.handle)
-    if (!h) errors.handle = 'Enter a handle like name@domain.'
-    else if (ctx.stallNip05 && h === ctx.stallNip05) errors.handle = "You can't send a voucher to the stall that sells it."
-  }
-  if (form.deliver === 'email' && !isEmail(form.email)) errors.email = 'Enter an email address.'
+  if (!isEmail(form.email)) errors.email = 'Enter an email address.'
+  // A kept form from a shop that has since dropped its online shop must not send a code.
+  if (form.gift === 'code' && !ctx.codeGifts) errors.gift = "This shop doesn't take codes online right now."
   const m = messageProblem(form.message)
   if (m) errors.message = m
   if (form.from.length > FROM_MAX) errors.from = `Keep the name to ${FROM_MAX} characters.`
-  // G15: every gift needs the sender's email (the receipt, a guest's return link, and the claimed /
-  // not-claimed notices), signed in or not.
+  // G15: every gift needs the sender's email (the receipt, the return link, and the claimed /
+  // not-claimed notices).
   if (!isEmail(form.buyerEmail)) errors.buyerEmail = "We need your email to tell you when it's claimed."
 
   return errors
@@ -90,10 +96,11 @@ export interface DraftRequest {
   amountMinor: number
   currency: string
   termsVersion: string
+  /** Only sent for a code gift. Absent means a voucher, as on every draft before the rework. */
+  gift?: 'code'
   delivery: {
     kind: DeliveryKind
-    handle?: string
-    email?: string
+    email: string
     refundPubkey?: string
     sealed?: string
   }
@@ -108,8 +115,10 @@ export interface Draft {
   stallPubkey: string
   amountMinor: number
   currency: string
+  /** Absent on every voucher draft, including those issued before codes existed. */
+  gift?: GiftKind
   delivery: {
-    kind: DeliveryKind
+    kind: IssuedDeliveryKind
     recipientPubkey?: string
     email?: string
     refundPubkey?: string
@@ -134,22 +143,18 @@ export function draftRequest(
     decimals?: number
     refundPubkey?: string
     sealed?: string
-    signedIn: boolean
   },
 ): DraftRequest {
   const amountMinor = toMinorUnits(form.amount, ctx.decimals)
   if (amountMinor === null) throw new Error('amount')
-  const delivery: DraftRequest['delivery'] = { kind: form.deliver }
-  if (form.deliver === 'handle') delivery.handle = normaliseRecipientHandle(form.handle) ?? undefined
-  if (form.deliver === 'email') delivery.email = form.email.trim()
-  delivery.refundPubkey = ctx.refundPubkey
-  if (form.deliver === 'email') delivery.sealed = ctx.sealed
+  const delivery: DraftRequest['delivery'] = { kind: 'email', email: form.email.trim(), refundPubkey: ctx.refundPubkey, sealed: ctx.sealed }
   return {
     stallPubkey: ctx.stallPubkey,
     stallHandle: ctx.stallHandle,
     amountMinor,
     currency: ctx.currency.toUpperCase(),
     termsVersion: ctx.terms,
+    ...(form.gift === 'code' ? { gift: 'code' as const } : {}),
     delivery,
     message: form.message.trim() || undefined,
     from: form.from.trim() || undefined,
@@ -161,13 +166,14 @@ export function draftRequest(
  * Does this draft deliver what the buyer reviewed? Checked when the server answers, so a server
  * (or a proxy) that pinned something else is caught before Pay is ever shown.
  */
-export function draftMatches(draft: Draft, req: DraftRequest, expectedRecipient?: string): boolean {
+export function draftMatches(draft: Draft, req: DraftRequest): boolean {
   if (draft.stallPubkey !== req.stallPubkey || draft.amountMinor !== req.amountMinor) return false
   if (draft.currency.toUpperCase() !== req.currency) return false
   if (draft.delivery.kind !== req.delivery.kind) return false
-  if (req.delivery.kind === 'email' && draft.delivery.email?.toLowerCase() !== req.delivery.email?.toLowerCase()) return false
+  if (draft.delivery.email?.toLowerCase() !== req.delivery.email.toLowerCase()) return false
   if (draft.delivery.refundPubkey !== req.delivery.refundPubkey) return false
-  if (expectedRecipient && draft.delivery.recipientPubkey !== expectedRecipient) return false
+  // A server that does not know codes pins a voucher: a code must never be paid as one, or back.
+  if ((draft.gift ?? 'voucher') !== (req.gift ?? 'voucher')) return false
   return true
 }
 
@@ -216,9 +222,26 @@ export function recall(shop: string, storage: Pick<Storage, 'getItem'> | undefin
     const raw = storage?.getItem(key(shop))
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<Kept>
-    return { ...parsed, form: { ...EMPTY_FORM, ...(parsed.form ?? {}) } }
+    return { ...parsed, form: keptForm(parsed.form) }
   } catch {
     return null
+  }
+}
+
+/**
+ * A form kept by an older version of the page may be a handle gift (`deliver: 'handle'`). It comes
+ * back as an email gift with the email as it was (usually empty), so the buyer is asked for one.
+ */
+function keptForm(raw: unknown): GiftForm {
+  const f = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const str = (k: 'amount' | 'email' | 'message' | 'from' | 'buyerEmail') => (typeof f[k] === 'string' ? (f[k] as string) : EMPTY_FORM[k])
+  return {
+    amount: str('amount'),
+    gift: f.gift === 'code' ? 'code' : 'voucher',
+    email: str('email'),
+    message: str('message'),
+    from: str('from'),
+    buyerEmail: str('buyerEmail'),
   }
 }
 

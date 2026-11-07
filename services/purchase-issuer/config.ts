@@ -79,6 +79,11 @@ export interface IssuerConfig {
     sweepEveryMs: number | null
     /** TEST MODE ONLY: the claim window in seconds instead of the draft's days. */
     testWindowSeconds: number | null
+    /**
+     * #410 code gifts: imani-checkout-codes, or null when `PURCHASE_CODE_GIFTS` is not `true` (the
+     * default). Off, every code gift is parked before minting.
+     */
+    checkoutCodesUrl: string | null
   } | null
 }
 
@@ -178,7 +183,16 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
         missing.push('PURCHASE_TEST_CLAIM_WINDOW_SECONDS: test mode only, never with PURCHASE_LIVEMODE=true')
       }
     }
-    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, mintTransportUrl, sweepEveryMs, testWindowSeconds }
+    // #410 code gifts: off unless exactly `true`, and then the code store is REQUIRED.
+    let checkoutCodesUrl: string | null = null
+    const codeGifts = (env.PURCHASE_CODE_GIFTS ?? '').trim()
+    if (codeGifts !== '' && codeGifts !== 'true' && codeGifts !== 'false') missing.push('PURCHASE_CODE_GIFTS: true or false')
+    if (codeGifts === 'true') {
+      const raw = (env.PURCHASE_CHECKOUT_CODES_URL ?? '').trim()
+      checkoutCodesUrl = origin(raw) === null ? null : raw.replace(/\/+$/, '')
+      if (checkoutCodesUrl === null) missing.push('PURCHASE_CHECKOUT_CODES_URL: imani-checkout-codes base URL (required with PURCHASE_CODE_GIFTS=true)')
+    }
+    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, mintTransportUrl, sweepEveryMs, testWindowSeconds, checkoutCodesUrl }
   }
 
   if (missing.length > 0) throw new ConfigError(missing)

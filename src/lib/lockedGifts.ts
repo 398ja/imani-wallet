@@ -34,6 +34,11 @@ export interface GiftSentMessage {
   /** The recipient's email for an email gift, null for a handle gift. Never a key. */
   to: string | null
   claimBy: number
+  /**
+   * #410: `code` when the gift is a checkout code. Its parts sit at the code store and may have been
+   * replaced by balance successors, so the return page reads the code's parts rather than `token`.
+   */
+  gift?: 'code'
 }
 
 /** The `imani_gift_sent` rumor content, or null for anything else. */
@@ -47,7 +52,15 @@ export function parseGiftSent(content: string): GiftSentMessage | null {
   if (!m || m.type !== GIFT_SENT_TYPE || m.v !== 1 || typeof m.token !== 'string') return null
   if (typeof m.claimBy !== 'number' || !Number.isSafeInteger(m.claimBy) || m.claimBy <= 0) return null
   const to = typeof m.to === 'string' && m.to.trim() !== '' && !/^[0-9a-f]{64}$/i.test(m.to) && !/^npub1/i.test(m.to) ? m.to.trim() : null
-  return { type: GIFT_SENT_TYPE, v: 1, token: m.token, stall: typeof m.stall === 'string' ? m.stall.slice(0, 80) : '', to, claimBy: m.claimBy }
+  return {
+    type: GIFT_SENT_TYPE,
+    v: 1,
+    token: m.token,
+    stall: typeof m.stall === 'string' ? m.stall.slice(0, 80) : '',
+    to,
+    claimBy: m.claimBy,
+    ...(m.gift === 'code' ? { gift: 'code' as const } : {}),
+  }
 }
 
 export type LockedRefusal = 'unreadable' | 'not_locked' | 'open_after_locktime' | 'wrong_key' | 'bad_signature' | 'untrusted_mint' | 'wrong_issuer'
@@ -201,4 +214,51 @@ export function parseReturnFragment(hash: string): { r: Uint8Array; t?: string }
   if (bytes.every((b) => b === 0)) return null
   const t = params.get('t') ?? undefined
   return { r: bytes, ...(t ? { t } : {}) }
+}
+
+// --- #410 code gifts: the return page reads the code's parts as R --------------
+
+/** One of R's codes, from the store's `GET /v1/checkout-codes/mine` (contract). */
+export interface ReturnCode {
+  code: string
+  status: string
+  /** What was deposited and what is left now, minor units. */
+  amount: number
+  remaining: number
+  unit: string
+  expiresAt: number
+  /** S, x-only lower case. */
+  shopKey: string
+}
+
+/** The rows of `/mine` that are well formed. Anything else is skipped, never guessed. */
+export function parseMineCodes(body: unknown): ReturnCode[] {
+  if (!Array.isArray(body)) return []
+  const out: ReturnCode[] = []
+  for (const row of body as Array<Record<string, unknown>>) {
+    if (!row || typeof row !== 'object') continue
+    const { code, status, amount, remaining, unit, expires_at: expiresAt, shop_key: shopKey } = row
+    if (typeof shopKey !== 'string' || !/^[0-9a-f]{64}$/i.test(shopKey)) continue
+    if (typeof code !== 'string' || !/^IMANI[0-9A-Z]{12}$/.test(code.replace(/-/g, ''))) continue
+    if (typeof status !== 'string' || typeof unit !== 'string') continue
+    if (![amount, remaining, expiresAt].every((n) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0)) continue
+    out.push({ code: code.replace(/-/g, ''), status, amount: amount as number, remaining: remaining as number, unit, expiresAt: expiresAt as number, shopKey: shopKey.toLowerCase() })
+  }
+  return out
+}
+
+/** The tokens of `/{code}/parts` (`{"parts":[{"idx","token","amount"}]}`), unchecked. */
+export function parsePartTokens(body: unknown): string[] {
+  const parts = (body as { parts?: unknown } | null)?.parts
+  if (!Array.isArray(parts)) return []
+  return parts.map((p) => (p as { token?: unknown })?.token).filter((t): t is string => typeof t === 'string' && t.startsWith('cashuB'))
+}
+
+/** A code gift's state for the return page: by the store's answer and the clock. */
+export type CodeReturnState = 'used' | 'waiting' | 'ready' | 'returned'
+
+export function codeReturnStateOf(code: Pick<ReturnCode, 'remaining' | 'expiresAt' | 'status'>, unspentParts: number, nowMs: number): CodeReturnState {
+  if (nowMs / 1000 < code.expiresAt) return code.remaining === 0 && code.status === 'redeemed' ? 'used' : 'waiting'
+  if (unspentParts > 0) return 'ready'
+  return code.remaining === 0 && code.status === 'redeemed' ? 'used' : 'returned'
 }

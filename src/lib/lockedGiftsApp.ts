@@ -18,17 +18,24 @@ import {
   acceptGiftSent,
   asLockedGiftRecord,
   checkLockedGift,
+  codeReturnStateOf,
   lockedGiftMemo,
+  parseMineCodes,
+  parsePartTokens,
   lockedGiftRow,
   lockedGiftRowId,
   parseGiftSent,
   returnStateOf,
   settleIncoming,
   takeBackLockedGift,
+  type CodeReturnState,
   type GiftSentMessage,
   type LockedGiftRecord,
+  type ReturnCode,
   type ReturnState,
 } from './lockedGifts'
+import { finalizeEvent } from 'nostr-tools'
+import { nip98Header } from './nip98'
 
 export const lockedGiftSeam = {
   ports: async (): Promise<CashlinkPorts> => (await import('./cashlinkPorts')).appCashlinkPorts(),
@@ -203,11 +210,118 @@ export interface GiftReturnView {
   state: ReturnState
 }
 
-export type GiftReturnRead = { kind: 'ok'; view: GiftReturnView } | { kind: 'not_found' } | { kind: 'refused'; why: string } | { kind: 'unreachable' }
+/**
+ * #410: a code gift's return view. What is left on the code is the store's `remaining`; after x
+ * the unspent parts (the original or its balance successors) come back to R.
+ */
+export interface CodeReturnView {
+  stall: string
+  /** Deposited and left now, minor units. */
+  amountMinor: number
+  remainingMinor: number
+  unit: string
+  decimals: number
+  x: number
+  state: CodeReturnState
+  /** The parts still locked to S with refund R, as `/{code}/parts` answered and checked. */
+  parts: string[]
+}
+
+export type GiftReturnRead =
+  | { kind: 'ok'; view: GiftReturnView }
+  | { kind: 'code'; view: CodeReturnView }
+  | { kind: 'not_found' }
+  | { kind: 'refused'; why: string }
+  | { kind: 'unreachable' }
+
+/** The code store, NIP-98 signed by R (contract: `/mine` and `/{code}/parts` answer the depositor or the refund key). */
+export type CodeStoreAsR = (r: Uint8Array, path: string) => Promise<{ status: number; body: unknown }>
 
 export const giftReturnSeam = {
   wraps: async (r: Uint8Array): Promise<GiftWrap[]> => fetchGiftWraps(r),
   states: async (token: string): Promise<ProofState[]> => tokenStates(await lockedGiftSeam.ports(), token),
+  /** #410 code gifts: off unless the build says `VITE_GIFTING_CODE_GIFTS=on`. */
+  codeGifts: (): boolean => String(import.meta.env.VITE_GIFTING_CODE_GIFTS ?? '').trim().toLowerCase() === 'on',
+  /** GET a code-store path as R. R signs the NIP-98 event in memory and is never sent. */
+  storeAsR: (async (r, path) => {
+    const signer = { signEvent: async (t: Parameters<typeof finalizeEvent>[0]) => finalizeEvent(t, r) }
+    const res = await fetch(path, { method: 'GET', headers: { Authorization: await nip98Header(path, 'GET', undefined, signer) }, credentials: 'omit', referrerPolicy: 'no-referrer' })
+    return { status: res.status, body: await res.json().catch(() => null) }
+  }) as CodeStoreAsR,
+}
+
+const CODES_PATH = '/v1/checkout-codes'
+
+/**
+ * #410: a code gift, read as R. The code is found on `/mine` (the store lists codes whose parts
+ * refund to the caller), and its CURRENT parts on `/{code}/parts`: after a partial spend the
+ * original token is spent and the rest sits in balance successors the buyer never saw. Every part
+ * is checked as a locked gift refunding to R before it is shown or settled.
+ */
+async function readCodeReturn(r: Uint8Array, msg: GiftSentMessage, nowMs: number): Promise<GiftReturnRead> {
+  const own = xOnlyPub(r)
+  const first = checkLockedGift(msg.token, 'refund', own)
+  if (!first.ok) return { kind: 'refused', why: first.why }
+  let mine: ReturnCode[]
+  try {
+    const res = await giftReturnSeam.storeAsR(r, `${CODES_PATH}/mine`)
+    if (res.status !== 200) return { kind: 'unreachable' }
+    mine = parseMineCodes(res.body)
+  } catch {
+    return { kind: 'unreachable' }
+  }
+  const parsed = parseVoucherToken(msg.token)
+  // One gift, one code: the code locked to this gift's S whose expiry is this gift's x. R is fresh
+  // per code gift, so /mine as R lists only this gift's code.
+  const code = mine.find((c) => c.shopKey === first.linkPub.toLowerCase() && c.expiresAt === first.x && c.unit.toLowerCase() === parsed.voucher.unit.toLowerCase())
+  if (!code) return { kind: 'not_found' }
+  let parts: string[] = []
+  try {
+    const res = await giftReturnSeam.storeAsR(r, `${CODES_PATH}/${encodeURIComponent(code.code)}/parts`)
+    if (res.status === 200) parts = parsePartTokens(res.body)
+    else if (res.status !== 404 && res.status !== 409) return { kind: 'unreachable' }
+  } catch {
+    return { kind: 'unreachable' }
+  }
+  // A code whose parts list is gone (expired at the store) still has the original token, which
+  // after x only R can spend: settle that if it is still unspent.
+  if (parts.length === 0) parts = [msg.token]
+  const checked = parts.filter((t) => {
+    const c = checkLockedGift(t, 'refund', own)
+    return c.ok && c.linkPub === first.linkPub && c.x === first.x
+  })
+  const unspent: string[] = []
+  for (const t of checked) {
+    const states = await giftReturnSeam.states(t)
+    if (states.some((st) => st === 'UNSPENT')) unspent.push(t)
+  }
+  return {
+    kind: 'code',
+    view: {
+      stall: msg.stall,
+      amountMinor: code.amount,
+      remainingMinor: code.remaining,
+      unit: parsed.voucher.unit,
+      decimals: parsed.voucher.faceDecimals,
+      x: first.x,
+      state: codeReturnStateOf(code, unspent.length, nowMs),
+      parts: unspent,
+    },
+  }
+}
+
+/**
+ * #410: take back every unspent part of a code gift after x. Never throws. `returned` once every
+ * part came back (or was already settled), else the first part's outcome that was not.
+ */
+export async function takeBackCodeGift(r: Uint8Array, view: CodeReturnView): Promise<ReturnOutcome> {
+  if (Date.now() / 1000 < view.x) return { kind: 'waiting' }
+  let worst: ReturnOutcome = { kind: 'returned' }
+  for (const token of view.parts) {
+    const out = await takeBackGuestGift(r, token)
+    if (out.kind !== 'returned' && out.kind !== 'claimed' && worst.kind === 'returned') worst = out
+  }
+  return worst
 }
 
 /**
@@ -233,6 +347,7 @@ export async function readGiftReturn(r: Uint8Array, t: string | undefined, nowMs
         if (!msg) continue
         const ok = acceptGiftSent(msg, xOnlyPub(r), sealAuthorOf(wrap as never, r), issuerKey)
         if (!ok.ok) continue
+        if (msg.gift === 'code' && giftReturnSeam.codeGifts()) return await readCodeReturn(r, msg, nowMs)
         token = msg.token
         stall = msg.stall
         break

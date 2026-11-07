@@ -458,3 +458,15 @@ describe('config: G15 tracker', () => {
     expect(readConfig({ ...gifts, PURCHASE_GIFT_TRACKER_PATH: '/tmp/t.json', PURCHASE_MINT_TRANSPORT_URL: 'http://localhost:27777/' }).gifts?.mintTransportUrl).toBe('http://localhost:27777')
   })
 })
+
+describe('#410 code gift with PURCHASE_CODE_GIFTS off (parked before minting)', () => {
+  it('a code gift is never minted as a voucher', async () => {
+    const g = fakeGifts()
+    const bodies = fakeGateway(honestMint)
+    const d = { ...emailDelivery(), gift: 'code' as const, shopKey: 'e'.repeat(64), shopUrl: 'https://olive.example', codeExpiresAt: X }
+    const out = await discharge('http://gw', obligation('email', d), portsWith(g.ports))
+    expect(out.kind).toBe('attention')
+    expect(bodies.some((b) => b.url.endsWith('/wallet/vouchers'))).toBe(false)
+    expect(g.mails).toHaveLength(0)
+  })
+})

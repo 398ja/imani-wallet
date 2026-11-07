@@ -21,3 +21,21 @@ export async function withWebLock<T>(name: string, fn: () => Promise<T>): Promis
 interface LockManagerLike {
   request(name: string, callback: () => Promise<unknown>): Promise<unknown>
 }
+
+const queues = new Map<string, Promise<unknown>>()
+
+/**
+ * `withWebLock`, plus an in-tab queue on the same name: calls in this tab run one after another
+ * even where the Locks API is missing. Not re-entrant: nothing run under it may take it again.
+ * Shared by checkout codes (#402) and Cashlinks made on the direct path (#543).
+ */
+export function withQueuedLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const prior = queues.get(name) ?? Promise.resolve()
+  const run = prior.catch(() => undefined).then(() => withWebLock(name, fn))
+  const tail = run.catch(() => undefined)
+  queues.set(name, tail)
+  void tail.then(() => {
+    if (queues.get(name) === tail) queues.delete(name)
+  })
+  return run
+}

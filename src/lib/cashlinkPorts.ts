@@ -9,15 +9,24 @@ import { httpCashlinkGateway, httpCashlinkMint, wrapForLink, type CashlinkPorts,
 import { fetchGiftWraps, giftTokensFrom } from './giftLink'
 import { mirrorToGateway } from './transferSignature'
 import { publish } from './relay'
+import { getSigner } from './nap'
 import { parseVoucherToken, creditableFaceValue } from './voucherToken'
 import { SWAPPED_TO_SATS_STATUS } from './swapBack'
 import { getWallet, notifyWalletChanged } from './wallet'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { cashlinkMovingKey } from './inFlightMoney'
+import { buildReceivedTransaction } from './transactions'
+import { cashbackValidation } from './cashbackValidation'
 
 /** Put the locked gift on its link, then read it back: delivered only once a copy is found there. */
 async function deliver(linkSecret: Uint8Array, token: string): Promise<boolean> {
-  const wrap = wrapForLink(linkSecret, token)
+  let me: string | undefined
+  try {
+    me = getSigner().pubkey?.toLowerCase()
+  } catch {
+    me = undefined
+  }
+  const wrap = wrapForLink(linkSecret, token, me)
   const [relayed, mirrored] = await Promise.all([
     publish(wrap).then((r) => r.ok > 0, () => false),
     mirrorToGateway(wrap),
@@ -62,8 +71,47 @@ async function keep(coupon: KeptCoupon): Promise<void> {
     created_at: now,
     updated_at: now,
   } as unknown as VoucherRow
-  await getWallet().saveVoucher(row)
+  const wallet = getWallet()
+  await wallet.saveVoucher(row)
+  // A claim is a receive and needs its History row. The legacy receive gets one from
+  // TokenRedemption's atomic write; this path never ran it, so a claimed Cashlink left the coupon
+  // in the wallet and nothing in History. A Cashlink take-back gets its own incoming row too
+  // (staging, 2026-11-05: the sent row's "Taken back" alone left the returned value unexplained in
+  // History, and the owner saw no record of it). A failed row write never undoes the kept coupon.
+  if (coupon.why === 'claimed' || coupon.takenBack) {
+    try {
+      await wallet.addTransaction(coupon.why === 'claimed' ? claimedRow(row, coupon.token, Date.now(), coupon.bundleId) : takenBackRow(row, coupon.token, Date.now(), coupon.bundleId))
+    } catch (error) {
+      console.warn('[cashlink] coupon kept but its History row was not written', error instanceof Error ? error.message : 'unknown')
+    }
+  }
   notifyWalletChanged()
+}
+
+/** The History row for a claimed coupon, from the voucher row just saved. Exported for tests. */
+export function claimedRow(row: VoucherRow, token: string, at = Date.now(), bundleId?: string) {
+  const r = row as unknown as Record<string, unknown>
+  return buildReceivedTransaction({
+    tokenId: String(r.token_id),
+    amount: Number(r.face_value ?? r.token_amount ?? 0),
+    unit: String(r.face_unit ?? 'UNKNOWN'),
+    decimals: typeof r.face_decimals === 'number' ? r.face_decimals : 2,
+    merchantId: typeof r.issuer_id === 'string' ? r.issuer_id : undefined,
+    voucherId: typeof r.voucher_id === 'string' ? r.voucher_id : undefined,
+    validation: cashbackValidation(token),
+    bundleId,
+    at,
+  })
+}
+
+/**
+ * The History row for a Cashlink coupon back with its issuer. Its own id (`returned:`), so it never
+ * merges over the claim row of the same coupon on a wallet that both sent and claimed it.
+ */
+export function takenBackRow(row: VoucherRow, token: string, at = Date.now(), bundleId?: string) {
+  const received = claimedRow(row, token, at, bundleId) as unknown as Record<string, unknown>
+  const id = `returned:${String((row as unknown as Record<string, unknown>).token_id)}`
+  return { ...received, id, txId: id, memo: 'Taken back from Cashlink' } as unknown as ReturnType<typeof claimedRow>
 }
 
 export function appCashlinkPorts(): CashlinkPorts {
