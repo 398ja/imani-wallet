@@ -27,6 +27,9 @@ const keep8 = (m: string): string => `${m.slice(0, 8)}…`
 const PATTERNS: [RegExp, (m: string) => string][] = [
   [/nsec1[02-9ac-hj-np-z]{20,}/gi, () => '[REDACTED-NSEC]'],
   [/IMANI-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}/g, keep8],
+  // The compact canonical form (checkoutCode.ts `IMANIXXXXXXXXXXXX`), which shops and fields that
+  // allow no hyphens use. Missing it leaked whole codes for bart's shop into a report.
+  [/\bIMANI[A-Z0-9]{12}\b/g, keep8],
   [/\bCB-[A-Z0-9]{4,5}-[A-Z0-9]{2,5}\b/g, keep8],
   [/cashu[AB][A-Za-z0-9_\-+/=]{16,}/g, keep8],
   [/\bvreq[A-Za-z0-9_\-+/=]{16,}/g, keep8],

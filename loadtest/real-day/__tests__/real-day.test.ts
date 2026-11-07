@@ -138,6 +138,12 @@ describe('redaction', () => {
     expect(out).not.toMatch(/[0-9a-f]{64}/)
   })
 
+  it('redacts a checkout code in its compact form too', () => {
+    const out = redact('made IMANIZDEEF5P6R8GT for the shop')
+    expect(out).not.toContain('IMANIZDEEF5P6R8GT')
+    expect(out).toContain('IMANIZDE…')
+  })
+
   it('redacts deep, keys included', () => {
     const hex = bytesToHex(generateSecretKey())
     expect(JSON.stringify(redactDeep({ [hex]: [{ x: hex }] }))).not.toContain(hex)
