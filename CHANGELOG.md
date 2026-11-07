@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.1] - 2026-11-07
+
+### Fixed
+
+- **One Google Drive backup per account** (#559, #562). Drive used to hold a single fixed file,
+  `imani-wallet-account.json`, which every Drive backup replaced, whichever Imani account wrote it.
+  The web wallet and the Android app share that folder, so backing up a second account overwrote the
+  first account's key, and a restore brought back the wrong account. Each account now has its own
+  file, `imani-wallet-account-<pubkey>.json`, tagged with its npub and handle, and a backup only
+  updates its own account's file. Restore from Google Drive lists every account it finds, with the
+  date each was saved, and always asks which one, even when there is only one. The old shared file
+  is never written again. It stays listed, together with its older Drive revisions, so a key that
+  was overwritten there can still be restored.
+- **The backup screens say what a Drive backup replaces** (#559, #563): Settings > Backup, the
+  backup after creating an account, and Settings > Security > Passphrase, whose change rewrites the
+  Drive copy. They also warn that an app older than this version still writes the shared file.
+
 ## [0.58.0] - 2026-11-07
 
 ### Added
