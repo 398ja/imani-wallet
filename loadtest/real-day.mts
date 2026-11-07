@@ -119,7 +119,11 @@ async function buildPersonas(pool: PoolEntry[]): Promise<{ stalls: StallPersona[
   const poolStalls = STALLS - real.length
   // The pool's first identities are its stalls (market-day.js's convention). RESERVED_POOL_STALLS
   // keeps them out of the customers even when this run uses fewer of them (smoke with real slots).
-  const reserved = Math.max(poolStalls, num('RESERVED_POOL_STALLS', poolStalls))
+  // Default 10, the size of the pool's stall block: with corda and bart in slots 0 and 1 only 8
+  // pool stalls trade, but pool identities 8 and 9 are published stalls too, and a customer
+  // persona signed in as one lands on the merchant home ("Sell | Redeem") and fails every
+  // customer journey. Smoke with real slots trades 0 pool stalls and hit exactly that.
+  const reserved = Math.max(poolStalls, num('RESERVED_POOL_STALLS', 10))
   const need = reserved + BROWSER_CUSTOMERS + K6_CUSTOMERS
   if (pool.length < need) throw new Error(`the pool holds ${pool.length}, this run needs ${need} (${reserved} pool stalls + ${CUSTOMERS} customers). Run: node loadtest/pool.mjs --size ${need}`)
   const stalls: StallPersona[] = []
@@ -341,6 +345,12 @@ async function arrive(d: Day, c: CustomerState): Promise<JourneyResult> {
     c.pubHex = getPublicKey(c.secret!)
   }
   if (!/^[0-9a-f]{64}$/.test(c.pubHex)) return fail('no account after onboarding')
+  // A customer persona signed in as a published stall lands on the merchant home and fails every
+  // customer journey with timeouts that read like app faults. Say what it is instead.
+  // MerchantHomePage's primary action is a <Button> "Sell" (navigate('/sell')); customers never see it.
+  if (await page.getByRole('button', { name: /^Sell$/ }).first().isVisible({ timeout: 3_000 }).catch(() => false)) {
+    return fail(`HARNESS: ${c.id} (${c.pubHex.slice(0, 8)}) is a published stall, not a customer; raise RESERVED_POOL_STALLS`)
+  }
   await page.getByText('Total balance').waitFor({ timeout: 60_000 })
   const visible = Date.now() - started
   // The starting balance is read only once it has stopped moving: an existing wallet's boot drain
