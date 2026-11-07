@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-11-07
+
+### Added
+
+- **Checkout codes are backed up on the relay** (#557, #565). A checkout code ("Coupon code") was
+  kept only on the device, so logout stayed off for up to 7 days while one was unused, and after a
+  logout and login a code's History details no longer opened. Every code now goes into one
+  encrypted record (kind 30078, `d=imani:checkout-codes`, NIP-44 sealed to the account's own key,
+  chunked, on the relay and mirrored to the gateway) together with the refund counter. Unused codes
+  are always in it, and the newest 200 finished ones too. A part's bearer token never goes in, only
+  the token locked to the shop. Login merges the record back (a record on the device always wins)
+  and moves the refund counter past every restored index.
+
+### Changed
+
+- **Logout with an unused checkout code** (#557). Once a read-back of the backup holds the code and
+  every locked token, the code no longer blocks logout. A code still being made blocks with its own
+  message, naming the shop, the amount and the date its value comes back, plus a link to the code.
+  It no longer says "a payment or a Cashlink is still going through". An unconfirmed backup says
+  so and asks to try again.
+- **A checkout code's screen opens without its record** (#557). It shows the code's History row and
+  its current status from the shop's store (`GET /mine`) instead of failing, for example after a
+  restore on another device.
+
 ## [0.58.2] - 2026-11-07
 
 ### Fixed
