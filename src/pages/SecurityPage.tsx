@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { Screen, BackLink, PageHeader, ListSection, Button, Input, Alert } from '../components/ui'
 import { keyStore } from '../lib/nap'
@@ -67,6 +68,17 @@ export function SecurityPage({
             <Button variant="outline" className="w-full !text-red-600 dark:!text-red-400" onClick={onLogout}>
               Log out
             </Button>
+            {/* #558: account deletion, here and nowhere else. Never on a terminal (the branch above). */}
+            <p className="mb-3 mt-5 text-sm text-mono-500">
+              Deleting your account removes your name and what Imani keeps for you, then logs you out.
+            </p>
+            <Link
+              to="/settings/security/delete"
+              data-testid="delete-account-row"
+              className="block w-full rounded-xl border border-red-200 px-4 py-3 text-center font-medium text-red-600 dark:border-red-900 dark:text-red-400"
+            >
+              Delete my account
+            </Link>
           </div>
         )}
       </ListSection>
