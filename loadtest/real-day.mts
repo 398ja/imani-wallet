@@ -343,7 +343,18 @@ async function arrive(d: Day, c: CustomerState): Promise<JourneyResult> {
   if (!/^[0-9a-f]{64}$/.test(c.pubHex)) return fail('no account after onboarding')
   await page.getByText('Total balance').waitFor({ timeout: 60_000 })
   const visible = Date.now() - started
-  const bal = await customerBalances(page)
+  // The starting balance is read only once it has stopped moving: an existing wallet's boot drain
+  // can still be landing coupons sent before the run (a previous day's late deliveries), and
+  // counting those as this day's would fail money conservation for a reason that is not today's.
+  let bal = await customerBalances(page)
+  if (!c.before) {
+    for (let stable = 0, i = 0; stable < 2 && i < 12; i++) {
+      await page.waitForTimeout(10_000)
+      const now = parseBalancePanel(await ui.balancePanel(page).catch(() => '?'))
+      stable = JSON.stringify(now) === JSON.stringify(bal) ? stable + 1 : 0
+      bal = now
+    }
+  }
   // A first login on a fresh device re-drains the wallet's history; what it logs then is #123
   // (replays of receives settled elsewhere), not this day's money. Reported, not gated.
   if (!c.before && !c.isNew) {

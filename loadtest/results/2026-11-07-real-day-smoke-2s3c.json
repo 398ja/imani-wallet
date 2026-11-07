@@ -1,0 +1,521 @@
+{
+  "population": {
+    "customers": 5,
+    "browserCustomers": 3,
+    "k6Customers": 2,
+    "stalls": 2,
+    "stallNames": [
+      "0:corda",
+      "1:bart"
+    ],
+    "mode": "smoke",
+    "day": "5m",
+    "seed": 550,
+    "base": "https://wallet.staging.398ja.xyz"
+  },
+  "startedAt": "2026-11-07T12:15:19.082Z",
+  "durationS": 740.667,
+  "conservation": {
+    "ok": false,
+    "mismatches": [
+      {
+        "persona": "cust0004",
+        "unit": "EUR",
+        "before": 597,
+        "after": 696,
+        "observed": 99,
+        "expected": 100
+      }
+    ],
+    "unread": [],
+    "totals": {
+      "EUR": {
+        "observed": 99,
+        "expected": 100,
+        "issued": 300,
+        "burnt": 200,
+        "outstandingLinks": 0
+      },
+      "GBP": {
+        "observed": 200,
+        "expected": 200,
+        "issued": 200,
+        "burnt": 0,
+        "outstandingLinks": 0
+      }
+    }
+  },
+  "k6": {
+    "exitCode": 99,
+    "saleDelivered": 0.5,
+    "voucherPollFailed": 0,
+    "thresholdsCrossed": [
+      "sale_delivered"
+    ],
+    "counters": {
+      "coupons_delivered": 1,
+      "data_received": 241215,
+      "customer_drains": 32,
+      "failed": 1,
+      "customer_envelopes": 1,
+      "hidden_ticks": 19,
+      "receipts_drained": 0,
+      "boot_ticks": 2,
+      "succeeded": 1,
+      "http_reqs": 340,
+      "stall_drains": 60,
+      "data_sent": 217484,
+      "iterations": 130,
+      "coupons_acquired": 2,
+      "receipt_drains": 60
+    }
+  },
+  "rateLimitProbe": "no 429 on 6 probes (200)",
+  "limits": [
+    "register: paced to 8/min under gateway-core path-rate-limit 10/min/address on /api/v1/nip05 and /api/v1/accounts/register (no override)",
+    "codes: paced to 12/min under imani-checkout-codes CHECKOUT_CODES_RL_PER_IP (60/min/IP default; a code is several calls)",
+    "claims: paced to 6/min under cashback-claim per-address claim limiter (not lifted)"
+  ],
+  "notes": [
+    "Real-stall public records the guard kept from being republished (the app tried on login and retried): bart: blocked a kind-30078 d=imani:merchant publish via gateway mirror (with online_shop) x130; bart: blocked a kind-30078 d=imani:merchant publish via relay (with online_shop) x63; bart: blocked a kind-30078 d=imani:terminals publish via gateway mirror (unreadable content) x10; bart: blocked a kind-30078 d=imani:terminals publish via relay (unreadable content) x5",
+    "FINDING (#123, not gated: first login of an existing wallet on a fresh device): settled-but-not-saved logged for receives from its history, 46 lines: [corda] [tokenRedemption] receive replayed without a fresh token — not saved, needs reconciliation {fp: 3beabd56, receiveId: 1cdb1808-4cc8-4092-aaec-b80752397663} || [corda] [unsaved-receipt] RECEIVE_SETTLED_NOT_SAVED {receiveId: 1cdb1808-4cc8-4092-aaec-b80752397663, eventId: 2c1038fc…, reason: replay-without-token, at: 2026-11-07T12:15:28.006Z} || [corda] [tokenRedemption] receive replayed without a fresh token — not saved, needs reconciliation {fp: 3827a0cc, receiveId: ce753ce1-40cd-47dc-ba65-6af044355672} || [corda] [unsaved-receipt] RECEIVE_SETTLED_NOT_SAVED {receiveId: ce753ce1-40cd-47dc-ba65-6af044355672, eventId: 47217312…, reason: replay-without-token, at: 2026-11-07T12:15:28.872Z}"
+  ],
+  "attempts": [
+    {
+      "journey": "arrive",
+      "persona": "cust0002",
+      "outcome": "ok",
+      "startedAt": 1794053828069,
+      "endedAt": 1794053859519,
+      "visibleMs": 7867,
+      "observed": "registered, wallet shown"
+    },
+    {
+      "journey": "arrive",
+      "persona": "cust0003",
+      "outcome": "ok",
+      "startedAt": 1794053863578,
+      "endedAt": 1794053904790,
+      "visibleMs": 17666,
+      "observed": "backup key imported, wallet shown"
+    },
+    {
+      "journey": "arrive",
+      "persona": "cust0004",
+      "outcome": "ok",
+      "startedAt": 1794053909077,
+      "endedAt": 1794053959965,
+      "visibleMs": 17666,
+      "observed": "backup key imported, wallet shown"
+    },
+    {
+      "journey": "buy",
+      "persona": "cust0002",
+      "outcome": "ok",
+      "startedAt": 1794053964339,
+      "endedAt": 1794053986670,
+      "visibleMs": 17683,
+      "observed": "coupon visible in the wallet"
+    },
+    {
+      "journey": "buy",
+      "persona": "cust0002",
+      "outcome": "ok",
+      "startedAt": 1794053990278,
+      "endedAt": 1794054012047,
+      "visibleMs": 17667,
+      "observed": "coupon visible in the wallet"
+    },
+    {
+      "journey": "pay",
+      "persona": "cust0002",
+      "outcome": "ok",
+      "startedAt": 1794054014351,
+      "endedAt": 1794054055225,
+      "visibleMs": 5034,
+      "observed": "Paid shown on both sides"
+    },
+    {
+      "journey": "send",
+      "persona": "cust0002",
+      "outcome": "ok",
+      "startedAt": 1794054058794,
+      "endedAt": 1794054071427,
+      "visibleMs": 9113,
+      "observed": "recipient sees it arrive"
+    },
+    {
+      "journey": "link",
+      "persona": "cust0002",
+      "outcome": "ok",
+      "startedAt": 1794054074235,
+      "endedAt": 1794054094769,
+      "visibleMs": 20534,
+      "observed": "link claimed"
+    },
+    {
+      "journey": "online",
+      "persona": "cust0002",
+      "outcome": "skip",
+      "startedAt": 1794054098798,
+      "endedAt": 1794054116600,
+      "detail": "code made in 5.1s and taken by the shop's cart (cart total 43.9 -> 42.9); redemption needs the shop admin (E2E_SHOP_ADMIN_PASSWORD unset)"
+    },
+    {
+      "journey": "cashlink",
+      "persona": "cust0003",
+      "outcome": "ok",
+      "startedAt": 1794054121309,
+      "endedAt": 1794054147057,
+      "visibleMs": 25747,
+      "observed": "Cashlink claimed, voucher added"
+    },
+    {
+      "journey": "browse",
+      "persona": "cust0004",
+      "outcome": "ok",
+      "startedAt": 1794054149608,
+      "endedAt": 1794054160743,
+      "visibleMs": 11135,
+      "observed": "merchant page, transactions, detail, bell, expiring all rendered"
+    },
+    {
+      "journey": "card",
+      "persona": "cust0002",
+      "outcome": "ok",
+      "startedAt": 1794054164044,
+      "endedAt": 1794054301374,
+      "visibleMs": 133816,
+      "observed": "card purchase: coupon visible in the wallet"
+    },
+    {
+      "journey": "leave",
+      "persona": "cust0003",
+      "outcome": "ok",
+      "startedAt": 1794054304599,
+      "endedAt": 1794054333595,
+      "visibleMs": 7470,
+      "observed": "cold boot restored the wallet and its balance"
+    }
+  ],
+  "stats": [
+    {
+      "journey": "arrive",
+      "attempts": 3,
+      "ok": 3,
+      "fail": 0,
+      "skip": 0,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": 1,
+      "p50": 17666,
+      "p95": 17666,
+      "p99": 17666,
+      "skipReasons": [],
+      "failures": []
+    },
+    {
+      "journey": "buy",
+      "attempts": 2,
+      "ok": 2,
+      "fail": 0,
+      "skip": 0,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": 1,
+      "p50": 17667,
+      "p95": 17683,
+      "p99": 17683,
+      "skipReasons": [],
+      "failures": []
+    },
+    {
+      "journey": "pay",
+      "attempts": 1,
+      "ok": 1,
+      "fail": 0,
+      "skip": 0,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": 1,
+      "p50": 5034,
+      "p95": 5034,
+      "p99": 5034,
+      "skipReasons": [],
+      "failures": []
+    },
+    {
+      "journey": "send",
+      "attempts": 1,
+      "ok": 1,
+      "fail": 0,
+      "skip": 0,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": 1,
+      "p50": 9113,
+      "p95": 9113,
+      "p99": 9113,
+      "skipReasons": [],
+      "failures": []
+    },
+    {
+      "journey": "link",
+      "attempts": 1,
+      "ok": 1,
+      "fail": 0,
+      "skip": 0,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": 1,
+      "p50": 20534,
+      "p95": 20534,
+      "p99": 20534,
+      "skipReasons": [],
+      "failures": []
+    },
+    {
+      "journey": "online",
+      "attempts": 1,
+      "ok": 0,
+      "fail": 0,
+      "skip": 1,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": null,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "skipReasons": [
+        "code made in 5.1s and taken by the shop's cart (cart total 43.9 -> 42.9); redemption needs the shop admin (E2E_SHOP_ADMIN_PASSWORD unset)"
+      ],
+      "failures": []
+    },
+    {
+      "journey": "cashlink",
+      "attempts": 1,
+      "ok": 1,
+      "fail": 0,
+      "skip": 0,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": 1,
+      "p50": 25747,
+      "p95": 25747,
+      "p99": 25747,
+      "skipReasons": [],
+      "failures": []
+    },
+    {
+      "journey": "browse",
+      "attempts": 1,
+      "ok": 1,
+      "fail": 0,
+      "skip": 0,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": 1,
+      "p50": 11135,
+      "p95": 11135,
+      "p99": 11135,
+      "skipReasons": [],
+      "failures": []
+    },
+    {
+      "journey": "card",
+      "attempts": 1,
+      "ok": 1,
+      "fail": 0,
+      "skip": 0,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": 1,
+      "p50": 133816,
+      "p95": 133816,
+      "p99": 133816,
+      "skipReasons": [],
+      "failures": []
+    },
+    {
+      "journey": "leave",
+      "attempts": 1,
+      "ok": 1,
+      "fail": 0,
+      "skip": 0,
+      "rateLimited": 0,
+      "pacing": 0,
+      "successRate": 1,
+      "p50": 7470,
+      "p95": 7470,
+      "p99": 7470,
+      "skipReasons": [],
+      "failures": []
+    }
+  ],
+  "gates": [
+    {
+      "name": "arrive success >= 95%",
+      "ok": true,
+      "detail": "3/3"
+    },
+    {
+      "name": "buy success >= 95%",
+      "ok": true,
+      "detail": "2/2"
+    },
+    {
+      "name": "buy p95 < 20s",
+      "ok": true,
+      "detail": "p95 17.7s"
+    },
+    {
+      "name": "pay success >= 95%",
+      "ok": true,
+      "detail": "1/1"
+    },
+    {
+      "name": "pay p95 < 20s",
+      "ok": true,
+      "detail": "p95 5.0s"
+    },
+    {
+      "name": "send success >= 95%",
+      "ok": true,
+      "detail": "1/1"
+    },
+    {
+      "name": "send p95 < 30s",
+      "ok": true,
+      "detail": "p95 9.1s"
+    },
+    {
+      "name": "link success >= 95%",
+      "ok": true,
+      "detail": "1/1"
+    },
+    {
+      "name": "cashlink success >= 95%",
+      "ok": true,
+      "detail": "1/1"
+    },
+    {
+      "name": "browse success >= 95%",
+      "ok": true,
+      "detail": "1/1"
+    },
+    {
+      "name": "card success >= 95%",
+      "ok": true,
+      "detail": "1/1"
+    },
+    {
+      "name": "leave success >= 95%",
+      "ok": true,
+      "detail": "1/1"
+    },
+    {
+      "name": "harness paced under the un-lifted limits (no 429 there)",
+      "ok": true,
+      "detail": "none"
+    },
+    {
+      "name": "no uncaught page errors",
+      "ok": true,
+      "detail": "none"
+    },
+    {
+      "name": "no settled-but-not-saved",
+      "ok": true,
+      "detail": "none"
+    },
+    {
+      "name": "money is conserved",
+      "ok": false,
+      "detail": "cust0004 EUR observed 99 expected 100"
+    },
+    {
+      "name": "k6 sale_delivered > 95%",
+      "ok": false,
+      "detail": "50.0%"
+    },
+    {
+      "name": "k6 voucher-poll failures < 5%",
+      "ok": true,
+      "detail": "0.0%"
+    },
+    {
+      "name": "k6 thresholds held",
+      "ok": false,
+      "detail": "sale_delivered"
+    }
+  ],
+  "pass": false,
+  "timeline": [
+    {
+      "minute": 0,
+      "started": 0,
+      "completed": 0,
+      "failed": 0
+    },
+    {
+      "minute": 1,
+      "started": 1,
+      "completed": 0,
+      "failed": 0
+    },
+    {
+      "minute": 2,
+      "started": 1,
+      "completed": 1,
+      "failed": 0
+    },
+    {
+      "minute": 3,
+      "started": 1,
+      "completed": 1,
+      "failed": 0
+    },
+    {
+      "minute": 4,
+      "started": 3,
+      "completed": 3,
+      "failed": 0
+    },
+    {
+      "minute": 5,
+      "started": 2,
+      "completed": 2,
+      "failed": 0
+    },
+    {
+      "minute": 6,
+      "started": 2,
+      "completed": 1,
+      "failed": 0
+    },
+    {
+      "minute": 7,
+      "started": 2,
+      "completed": 2,
+      "failed": 0
+    },
+    {
+      "minute": 8,
+      "started": 0,
+      "completed": 0,
+      "failed": 0
+    },
+    {
+      "minute": 9,
+      "started": 1,
+      "completed": 1,
+      "failed": 0
+    },
+    {
+      "minute": 10,
+      "started": 0,
+      "completed": 1,
+      "failed": 0
+    }
+  ]
+}
