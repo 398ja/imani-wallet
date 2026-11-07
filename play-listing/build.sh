@@ -11,7 +11,7 @@ CREAM='#f3efe7'; INK='#1b1814'; ACCENT='#1c6cf5'; MUTED='#615a50'
 
 # 1. Icon: adaptive launcher icon (white background + xxxhdpi foreground), full bleed.
 magick -size 512x512 xc:'#ffffff' \( "$RES/mipmap-xxxhdpi/ic_launcher_foreground.png" -resize 512x512 \) \
-  -composite -alpha on -define png:color-type=6 "$HERE/icon-512.png"
+  -composite -alpha on -depth 8 -define png:color-type=6 "$HERE/icon-512.png"
 
 # 2. Feature graphic: site cream background, mark in site accent, wordmark and tagline, centred.
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -22,7 +22,7 @@ magick -size 1024x500 xc:"$CREAM" \
   -font "$FONT" -fill "$INK" -pointsize 112 -gravity center -annotate +80-62 'imani' \
   -fill "$INK" -pointsize 46 -annotate +0+78 'Digital vouchers for local shops.' \
   -font Noto-Sans-Regular -fill "$MUTED" -pointsize 26 -annotate +0+135 'Hold them, pay with them, send them to a friend.' \
-  -alpha off -define png:color-type=2 "$HERE/feature-graphic-1024x500.png"
+  -alpha off -depth 8 -define png:color-type=2 "$HERE/feature-graphic-1024x500.png"
 
 # 3. Screenshots: 1170x2532 source is 2.16:1, so pad the width to 1266 (exactly 2:1) with the app background.
 i=0
