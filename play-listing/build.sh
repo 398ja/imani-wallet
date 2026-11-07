@@ -9,9 +9,14 @@ RES="$REPO/android/app/src/main/res"
 FONT="${FONT:-Noto-Sans-Bold}"
 CREAM='#f3efe7'; INK='#1b1814'; ACCENT='#1c6cf5'; MUTED='#615a50'
 
-# 1. Icon: adaptive launcher icon (white background + xxxhdpi foreground), full bleed.
-magick -size 512x512 xc:'#ffffff' \( "$RES/mipmap-xxxhdpi/ic_launcher_foreground.png" -resize 512x512 \) \
-  -composite -alpha on -depth 8 -define png:color-type=6 "$HERE/icon-512.png"
+# 1. Icon: the Imani mark (public/imani.svg, the same path as the web app icon public/icon-512.png),
+#    #171717 on the app background #fafafa, full bleed. Not the Android mipmap: that is still the
+#    Capacitor template icon (imani-wallet#558).
+sed 's/@media[^}]*}[^}]*}//' "$REPO/public/imani.svg" > "$HERE/.mark.svg"
+magick -background none -density 1200 "$HERE/.mark.svg" -resize 300x300 "$HERE/.mark.png"
+magick -size 512x512 xc:'#fafafa' "$HERE/.mark.png" -gravity center -composite \
+  -alpha on -depth 8 -define png:color-type=6 "$HERE/icon-512.png"
+rm -f "$HERE/.mark.svg" "$HERE/.mark.png"
 
 # 2. Feature graphic: site cream background, mark in site accent, wordmark and tagline, centred.
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT

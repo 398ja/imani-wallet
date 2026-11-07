@@ -4,7 +4,7 @@ Google Play store listing assets for the Imani wallet (issue #558). Regenerate e
 
 | File | What it is | Source | Play Console section |
 |---|---|---|---|
-| `icon-512.png` | 512x512 32-bit PNG app icon, full bleed (Play rounds it) | `android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png` on the adaptive background `#FFFFFF` (`values/ic_launcher_background.xml`), same as the installed icon | Grow > Store presence > Main store listing > Graphics > App icon |
+| `icon-512.png` | 512x512 32-bit PNG app icon, full bleed (Play rounds it) | The Imani mark `public/imani.svg` (`#171717`) on the app background `#fafafa`, the same as the web app icon `public/icon-512.png`. Note: the Android launcher icon (`android/.../mipmap-*`) is still the Capacitor template and must be replaced to match (imani-wallet#558) | Grow > Store presence > Main store listing > Graphics > App icon |
 | `feature-graphic-1024x500.png` | 1024x500 24-bit PNG, no alpha | `imani-www/mark.svg` in the site accent `#1c6cf5`, site cream `#f3efe7` and ink `#1b1814` from `site.css`, tagline from `index.html` | Main store listing > Graphics > Feature graphic |
 | `screenshots/phone-01.png` | Home with a voucher | `imani-marketting/deck/shots/c-home-voucher.png` | Main store listing > Phone screenshots |
 | `screenshots/phone-02.png` | Receive (show your code) | `c-receive.png` | same |
