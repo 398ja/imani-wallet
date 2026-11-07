@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 
-import { upsertNotification } from './notifications/inbox'
+import { removeNotification, upsertNotification } from './notifications/inbox'
 
 /**
  * A voucher the gateway settled but this device did not save (#112).
@@ -172,5 +172,60 @@ export function resumeUnsavedReceipts(pubkey: string): void {
     for (const record of listUnsavedReceipts(pubkey)) fileRow(pubkey, record, false)
   } catch (e) {
     console.warn('[unsaved-receipt] could not resume:', e)
+  }
+}
+
+/** At most this many ids per gateway status call; the route accepts 50. */
+const STATUS_BATCH = 50
+
+/**
+ * Looks up the escrow status of this account's own receives
+ * (`POST /api/v1/wallet/receive/statuses`, gateway-customer, #560). Answers a
+ * map of receive id to status; unknown ids are absent.
+ */
+export type ReceiveStatusLookup = (
+  receiveIds: string[],
+) => Promise<{ statuses?: Record<string, string> } | null | undefined>
+
+/**
+ * #560: drop records the gateway now reports ACKNOWLEDGED. Such a receive was
+ * saved by this account (another device, or before a logout), so the warning
+ * was false; its coupon comes back via NIP-60. The record and its bell row go.
+ *
+ * Records without a receive id, and any the gateway does not answer for, are
+ * kept. A gateway without the route (404, older build) or any failure keeps
+ * everything: never throws, and the records age out under LIMIT as before.
+ * Returns how many records were dropped.
+ */
+export async function dropAcknowledgedReceipts(pubkey: string, lookup: ReceiveStatusLookup): Promise<number> {
+  try {
+    if (!pubkey) return 0
+    const ids = [
+      ...new Set(listUnsavedReceipts(pubkey).flatMap((r) => (r.receiveId ? [r.receiveId] : []))),
+    ]
+    if (ids.length === 0) return 0
+    const acknowledged = new Set<string>()
+    for (let i = 0; i < ids.length; i += STATUS_BATCH) {
+      const answer = await lookup(ids.slice(i, i + STATUS_BATCH))
+      const statuses = answer?.statuses ?? {}
+      for (const [id, status] of Object.entries(statuses)) {
+        if (typeof status === 'string' && status.toUpperCase() === 'ACKNOWLEDGED') acknowledged.add(id)
+      }
+    }
+    if (acknowledged.size === 0) return 0
+    // Re-read: an announce may have landed while the lookup was in flight.
+    const all = listUnsavedReceipts(pubkey)
+    const keep = all.filter((r) => !(r.receiveId && acknowledged.has(r.receiveId)))
+    localStorage.setItem(storageKey(pubkey), JSON.stringify(keep))
+    for (const id of acknowledged) {
+      removeNotification(pubkey, 'unsaved:' + id)
+      toast.dismiss?.('unsaved-' + id)
+    }
+    const dropped = all.length - keep.length
+    console.info('[unsaved-receipt] dropped records the gateway reports acknowledged', { dropped })
+    return dropped
+  } catch (e) {
+    console.warn('[unsaved-receipt] could not check acknowledged receipts:', e)
+    return 0
   }
 }

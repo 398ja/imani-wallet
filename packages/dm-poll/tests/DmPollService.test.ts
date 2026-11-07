@@ -528,6 +528,45 @@ describe('DmPollService', () => {
     });
 
     /**
+     * #560: a replay of a receive this account ACKNOWLEDGED (saved on another
+     * device, or before a logout) is already received. tokenRedemption reports
+     * it as "already been redeemed"; a raw 409 names the status in details.
+     * Either way: marked received, no redemption:unsaved.
+     */
+    it.each([
+      ['tokenRedemption acknowledged replay', new Error('This token has already been redeemed')],
+      [
+        "the gateway's raw 409 with status=ACKNOWLEDGED",
+        Object.assign(new Error('Conflict'), {
+          code: 'RECEIVE_ALREADY_SETTLED',
+          status: 409,
+          data: { error: { details: 'receive_id=9f729968 status=ACKNOWLEDGED' } },
+        }),
+      ],
+    ])('%s: no redemption:unsaved, marked received', async (_name, err) => {
+      (redemptionAdapter.redeem as ReturnType<typeof vi.fn>).mockRejectedValueOnce(err);
+      const storageAdapter = createMockStorageAdapter();
+      const service = new DmPollService({
+        recipientPubkey: 'recipient-pub',
+        recipientPrivkey: 'recipient-priv',
+        nostrdbAdapter,
+        cryptoAdapter,
+        redemptionAdapter,
+        storageAdapter,
+        enableAutoRedemption: true,
+        fetchRecentOnStart: false,
+      });
+      const unsaved = vi.fn();
+      service.on('redemption:unsaved', unsaved);
+
+      await service.processGiftWrap(createMockGiftWrap({ id: 'acked-elsewhere' }));
+
+      expect(unsaved).not.toHaveBeenCalled();
+      expect(storageAdapter.markTokenAsReceived).toHaveBeenCalled();
+      expect(service.getFailedEvents()).toEqual([]);
+    });
+
+    /**
      * #111 delta review: a receive the wallet deferred itself (pacer reset on
      * logout, per-token call budget spent) is retried later, quietly: no error
      * toast, no redemption:error, no success, not marked received.
