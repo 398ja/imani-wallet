@@ -378,9 +378,6 @@ export async function attemptLogout(
 
   // 2.
   if (!confirm(LOGOUT_WARNING)) return { status: 'cancelled' }
-  // 2a. #558: account deletion runs its signed DELETE here, after every safety check above has
-  // passed and before anything is stopped. Answering false cancels and changes nothing.
-  if (deps.proceed && !(await deps.proceed().catch(() => false))) return { status: 'cancelled' }
 
   // 2b. Every other tab of this wallet pauses first, or nothing happens (#335).
   // Asked after the confirmation, so a declined logout never disturbs them.
@@ -503,6 +500,11 @@ export async function attemptLogout(
   if (!(await others.stillPaused().catch(() => false))) {
     return { status: 'blocked', reason: 'other-tab', unconfirmed: [] }
   }
+  // #558: account deletion runs its signed DELETE here, after every reversible check has passed
+  // and before anything irreversible. False cancels: the writers and tabs reopen, nothing erased.
+  // The refusals still possible after this (the stillPaused re-checks below) leave the account
+  // deleted and logged in, which `deleteAccount` reports as deleted-logout-pending.
+  if (deps.proceed && !(await deps.proceed().catch(() => false))) return { status: 'cancelled' }
   wiping = true
 
   // And cancel the push subscription, which is the one piece of this account's

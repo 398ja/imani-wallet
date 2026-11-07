@@ -37,7 +37,7 @@ const { DeleteAccountPage } = await import('../DeleteAccountPage')
 const { SecurityPage } = await import('../SecurityPage')
 const { MerchantHomePage } = await import('../MerchantHomePage')
 const { emptyMerchant, buildMerchantEvent, mergeMerchantEvent } = await import('../../lib/merchant')
-const { deleteAccount, deleteHandle, liabilityBlock } = await import('../../lib/accountDeletion')
+const { deleteAccount, deleteHandle, liabilityBlock, forgetDeletedHandles } = await import('../../lib/accountDeletion')
 
 const merchant = (over = {}) => ({ ...emptyMerchant(STALL), issuanceCurrency: 'EUR', categories: ['food'], ...over })
 const issued = (amount: number, expiresAt?: number) => ({ type: 'issued', unit: 'EUR', amount, expiresAt, direction: 'out', at: 0, decimals: 2, id: String(Math.random()) })
@@ -47,6 +47,7 @@ afterEach(() => {
   state.rows = []
   state.published = []
   vi.unstubAllGlobals()
+  forgetDeletedHandles()
 })
 
 function page(props: Partial<Parameters<typeof DeleteAccountPage>[0]> = {}) {
@@ -236,5 +237,35 @@ describe('copy', () => {
     page()
     const text = document.body.textContent ?? ''
     expect(text).not.toMatch(/\u2014|NIP-05|nsec|escrow/i)
+  })
+})
+
+describe('after the handle is deleted', () => {
+  it('a logout refused after the DELETE shows Finish, which logs out', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 'deleted-logout-pending', logout: { status: 'blocked', reason: 'other-tab', unconfirmed: [] } })
+      .mockResolvedValueOnce({ status: 'done' })
+    const { onDeleted } = page({ run })
+    fireEvent.change(screen.getByLabelText(/Type duran/), { target: { value: 'duran' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete my account' }))
+    expect((await screen.findByTestId('deleted-pending')).textContent).toMatch(/Your account is deleted\. Close other Imani tabs, then tap Finish to log out\./)
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    await waitFor(() => expect(onDeleted).toHaveBeenCalled())
+  })
+})
+
+describe('a merchant on a fresh device', () => {
+  it('waits for the history restore before answering', async () => {
+    state.rows = [issued(1000, Date.now() + DAY)]
+    const { unmount } = render(
+      <MemoryRouter>
+        <DeleteAccountPage pubkey={STALL} nip05="duran@imani.casa" merchant={merchant()} onDeleted={() => {}} onMerchantSaved={() => {}} historyReady={false} />
+      </MemoryRouter>,
+    )
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.getByText(/Checking your vouchers/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Delete my account' })).toBeNull()
+    unmount()
   })
 })

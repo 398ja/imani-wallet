@@ -77,6 +77,12 @@ export type DeletionOutcome =
   | { status: 'done' }
   | { status: 'blocked'; logout: Extract<LogoutOutcome, { status: 'blocked' }> }
   | { status: 'failed'; reason: Exclude<DeleteHandleResult, 'deleted'> }
+  /**
+   * The handle is deleted (and retired, which is permanent), but the logout refused afterwards,
+   * for example another tab opened. The account IS deleted: the next step is `finishLogout`,
+   * which never sends the DELETE again.
+   */
+  | { status: 'deleted-logout-pending'; logout: Extract<LogoutOutcome, { status: 'blocked' }> | { status: 'cancelled' } }
 
 export interface DeletionDeps {
   logout?: typeof attemptLogout
@@ -86,42 +92,71 @@ export interface DeletionDeps {
 }
 
 /**
+ * Accounts whose handle this page has already deleted, in this document. A retry after our own
+ * 204 must not send the DELETE again (the second answer is a 404 and would read as "unknown").
+ */
+const deletedHere = new Set<string>()
+
+/** For tests. */
+export function forgetDeletedHandles(): void {
+  deletedHere.clear()
+}
+
+export function handleDeleted(pubkey: string): boolean {
+  return deletedHere.has(pubkey)
+}
+
+/**
  * The whole deletion, in the order the owner set:
- * 1. every logout safety check (in-flight money, unconfirmed backups, checkout codes); a refusal
- *    refuses the deletion with the same message, and nothing is deleted;
- * 2. the signed DELETE of the handle; a 403, 404 or network failure changes nothing;
- * 3. the rest of the logout, which cancels the push registration and erases this device.
+ * 1. every logout safety check (in-flight money, unconfirmed backups, checkout codes, other tabs,
+ *    writers drained); a refusal refuses the deletion with the same message, nothing is deleted;
+ * 2. the signed DELETE of the handle, run by `attemptLogout`'s `proceed` hook immediately before
+ *    its first irreversible step; a 403, 404 or network failure cancels and changes nothing;
+ * 3. the rest of the logout: push unsubscribe, session end, wipe.
  *
- * Step 2 runs where logout would ask "Log out?", so it happens only once the checks have passed.
+ * Once the DELETE has answered 204 the deletion is done. A logout that still refuses after it
+ * is `deleted-logout-pending`, and every later attempt goes straight to `finishLogout`.
  */
 export async function deleteAccount(
   pubkey: string,
   nip05: string | undefined,
   deps: DeletionDeps = {},
 ): Promise<DeletionOutcome> {
+  if (deletedHere.has(pubkey)) return finishLogout(pubkey, deps)
   const run = deps.logout ?? attemptLogout
   const del = deps.deleteHandle ?? deleteHandle
   let failure: Exclude<DeleteHandleResult, 'deleted'> | null = null
-  const outcome = await run(
-    pubkey,
-    () => true,
-    deps.reload,
-    {
-      ...deps.logoutDeps,
-      proceed: async () => {
-        if (!nip05) return true
-        const result = await del(nip05)
-        if (result === 'deleted') return true
-        failure = result
-        return false
-      },
+  const outcome = await run(pubkey, () => true, deps.reload, {
+    ...deps.logoutDeps,
+    proceed: async () => {
+      if (!nip05) return true
+      const result = await del(nip05)
+      if (result === 'deleted') {
+        deletedHere.add(pubkey)
+        return true
+      }
+      failure = result
+      return false
     },
-  )
+  })
+  if (outcome.status === 'done') return { status: 'done' }
+  if (deletedHere.has(pubkey)) {
+    return { status: 'deleted-logout-pending', logout: outcome.status === 'blocked' ? outcome : { status: 'cancelled' } }
+  }
   if (failure) return { status: 'failed', reason: failure }
   if (outcome.status === 'blocked') return { status: 'blocked', logout: outcome }
-  if (outcome.status === 'done') return { status: 'done' }
   return { status: 'failed', reason: 'network' }
 }
+
+/** After the handle is deleted: plain logout, never the DELETE again. */
+export async function finishLogout(pubkey: string, deps: DeletionDeps = {}): Promise<DeletionOutcome> {
+  const run = deps.logout ?? attemptLogout
+  const outcome = await run(pubkey, () => true, deps.reload, deps.logoutDeps)
+  if (outcome.status === 'done') return { status: 'done' }
+  return { status: 'deleted-logout-pending', logout: outcome.status === 'blocked' ? outcome : { status: 'cancelled' } }
+}
+
+export const DELETED_PENDING_COPY = 'Your account is deleted. Close other Imani tabs, then tap Finish to log out.'
 
 /** The refusal for a merchant whose customers can still spend vouchers (#558). */
 export function liabilityMessage(block: LiabilityBlock): string {

@@ -12,6 +12,8 @@ import { publish } from '../lib/relay'
 import { userMessage } from '../lib/userMessage'
 import {
   DELETE_COPY,
+  DELETED_PENDING_COPY,
+  handleDeleted,
   deleteAccount,
   liabilityBlock,
   liabilityMessage,
@@ -34,6 +36,7 @@ export function DeleteAccountPage({
   onMerchantSaved,
   onDeleted,
   run = deleteAccount,
+  historyReady = true,
 }: {
   pubkey: string
   nip05?: string
@@ -41,15 +44,21 @@ export function DeleteAccountPage({
   onMerchantSaved: (m: MerchantProfile) => void
   onDeleted: () => void
   run?: typeof deleteAccount
+  /**
+   * The sealed history has been restored from the relay. Until then a fresh device holds no issued
+   * rows and would see nothing outstanding, so a merchant's check waits.
+   */
+  historyReady?: boolean
 }) {
   const [block, setBlock] = useState<LiabilityBlock | null | 'loading'>(merchant ? 'loading' : null)
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [blocked, setBlocked] = useState<BlockedLogout | null>(null)
+  const [pending, setPending] = useState(() => handleDeleted(pubkey))
 
   useEffect(() => {
-    if (!merchant) return
+    if (!merchant || !historyReady) return
     let live = true
     listTransactions()
       .then((rows) => {
@@ -60,7 +69,7 @@ export function DeleteAccountPage({
     return () => {
       live = false
     }
-  }, [merchant, pubkey])
+  }, [merchant, pubkey, historyReady])
 
   const handle = handleOf(nip05)
   const matches = handle !== null && typed.trim().replace(/^@/, '').toLowerCase() === handle.toLowerCase()
@@ -76,8 +85,25 @@ export function DeleteAccountPage({
     }
     setBusy(false)
     if (outcome.status === 'done') onDeleted()
+    else if (outcome.status === 'deleted-logout-pending') setPending(true)
     else if (outcome.status === 'blocked') setBlocked(outcome.logout)
     else setError(outcome.reason === 'not-owner' ? DELETE_COPY.notOwner : outcome.reason === 'unknown' ? DELETE_COPY.unknown : DELETE_COPY.network)
+  }
+
+  if (pending) {
+    return (
+      <Screen>
+        <PageHeader title="Delete my account" />
+        <div data-testid="deleted-pending">
+          <Panel>
+            <p className="text-sm text-mono-700 dark:text-mono-200">{DELETED_PENDING_COPY}</p>
+          </Panel>
+        </div>
+        <Button size="lg" className="mt-4 w-full" disabled={busy} onClick={go}>
+          {busy ? 'Logging out…' : 'Finish'}
+        </Button>
+      </Screen>
+    )
   }
 
   if (block === 'loading' && !error) {

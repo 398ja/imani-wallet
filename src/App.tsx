@@ -151,6 +151,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   // The coupons coming back from their backup after login: said quietly, on
   // the home screen, so an empty list is not mistaken for an empty wallet.
   const [restoring, setRestoring] = useState(false)
+  // #558: the sealed history (kind 7376) is back from the relay. The account-deletion liability
+  // check reads issued rows from it, so it waits for this rather than answer from an empty device.
+  const [historyRestored, setHistoryRestored] = useState(false)
 
   useEffect(() => onWalletOpenStatus(setOpenStatus), [])
   const [profile, setProfile] = useState<Profile>(() => loadProfile(pubkey) ?? emptyProfile(pubkey))
@@ -316,6 +319,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           })
           .then((restored) => {
             if (restored > 0) console.info(`[app] restored ${restored} transactions from the relay`)
+            if (live) setHistoryRestored(true)
             // And push up anything the relay is missing — transactions made
             // before this existed, while a relay was refusing writes, or whose
             // publish lost the race with a closing tab.
@@ -871,6 +875,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
                 merchant={merchant}
                 onMerchantSaved={setMerchant}
                 onDeleted={onLoggedOut}
+                historyReady={historyRestored}
               />
             )
           }
