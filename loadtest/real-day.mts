@@ -563,6 +563,9 @@ async function cashlink(d: Day, c: CustomerState): Promise<JourneyResult> {
   const gen = await stall.lock(async () => {
     const sp = stall.live.page
     const generated = sp.waitForResponse((r) => r.url().endsWith('/api/v1/portal/cashback/generate') && r.request().method() === 'POST', { timeout: 90_000 })
+    // Observed so a throw below (a failed goto) cannot leave this rejecting unhandled later,
+    // which crashed the whole full run on 2026-11-07 and lost its report.
+    generated.catch(() => {})
     await goto(sp, `${BASE}/sell/cashback`)
     await ui.unlockIfLocked(sp)
     await sp.locator('input[placeholder="0.00"]').fill(formatMinor(minor), { timeout: 60_000 })
@@ -784,10 +787,32 @@ async function main(): Promise<number> {
     return 2
   }
   if (probe.limited) notes.push('Smoke ran with per-address limits ON; 429s are reported apart from app failures.')
+  // The exemption is for ONE client address. A VPN that reconnects comes back on another exit
+  // (2026-11-07: 146.70.204.171 -> 185.253.98.53 mid-run), and from then on every per-address limit
+  // bites again, so the run would measure the limiter. Watched once a minute; a change ends the day
+  // early with a note, rather than producing numbers that mean nothing.
+  const egress = async (): Promise<string> => (await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(10_000) }).then((r) => r.text()).catch(() => '')).trim()
+  const egressAtStart = await egress()
+  log(`egress address ${egressAtStart || 'unknown'} (must be the one exempted)`)
+  let egressChanged = ''
+  const egressTimer = setInterval(() => {
+    void egress().then((now) => {
+      if (now && egressAtStart && now !== egressAtStart && !egressChanged) {
+        egressChanged = `${egressAtStart} -> ${now} at ${new Date().toISOString()}`
+        notes.push(`HARNESS: the egress address changed (${egressChanged}); per-address limits applied from then on, so the day was ended early and its numbers are not valid`)
+        log(`egress address changed (${egressChanged}): ending the day early`)
+      }
+    })
+  }, 60_000)
+  egressTimer.unref()
 
   const startMs = Date.now()
   const startedAt = new Date(startMs).toISOString()
-  const browser = await chromium.launch()
+  // HOST_RESOLVER_RULES (e.g. "MAP *.staging.398ja.xyz 74.208.24.224") pins names in the browser.
+  // The full run on 2026-11-07 lost 85 journeys to net::ERR_NAME_NOT_RESOLVED from this machine's
+  // resolver (1366 timeouts), which says nothing about staging. TLS still verifies the real names.
+  const rules = env('HOST_RESOLVER_RULES', '')
+  const browser = await chromium.launch(rules ? { args: [`--host-resolver-rules=${rules}`] } : {})
   const summaryFile = `loadtest/results/.real-day-k6-${startMs}.json`
   let k6: Promise<K6Summary> | null = null
   try {
@@ -831,9 +856,9 @@ async function main(): Promise<number> {
         // Arrivals spread over the first tenth of the day.
         await new Promise((r) => setTimeout(r, Math.round(random() * dayMs * 0.1) + i * 500))
         await runJourney(own, c, 'arrive')
-        while (Date.now() < deadline) {
+        while (Date.now() < deadline && !egressChanged) {
           await new Promise((r) => setTimeout(r, thinkMs(random, THINK_MIN_S, THINK_MAX_S)))
-          if (Date.now() >= deadline) break
+          if (Date.now() >= deadline || egressChanged) break
           if (!c.live) await runJourney(own, c, 'arrive')
           const j = nextJourney(random, { holdsCoupons: heldStalls(c, own).length > 0 })
           await runJourney(own, c, j)
@@ -881,6 +906,14 @@ async function main(): Promise<number> {
     await browser.close().catch(() => {})
   }
 }
+
+// A stray rejection from a Playwright waiter (a page that navigated away, a dead socket) must not end
+// a 20-minute day without a report. Recorded as a note and the run goes on to write its result.
+process.on('unhandledRejection', (e) => {
+  const line = redact(String(e instanceof Error ? e.message : e).split('\n')[0] ?? '')
+  notes.push(`HARNESS: unhandled rejection (not fatal): ${line}`)
+  console.error(`unhandled rejection (not fatal): ${line}`)
+})
 
 main().then((code) => process.exit(code), (e) => {
   console.error(redact(e instanceof KeyFileError ? e.message : String(e instanceof Error ? e.stack : e)))
