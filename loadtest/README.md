@@ -699,6 +699,76 @@ tested and ruled out, and `drain.js` at 958 drains shows no step at all. It is
 recorded as unexplained rather than guessed at, and the summary now names the
 shape so nobody reads that p95 as load.
 
+## A real market day (#550)
+
+    node loadtest/signer.mjs &                         # the k6 crowd signs through it
+    node loadtest/pool.mjs --size 120                  # 10 pool stalls reserved + 100 customers
+    node loadtest/stalls.mjs --count 10 --verify       # the pool stalls trade
+    npx tsx loadtest/real-day.mts --dry-run            # pool, keys, pubkeys, env, then exit
+    npx tsx loadtest/real-day.mts --smoke              # corda + bart + 3 customers, every journey once
+    npx tsx loadtest/real-day.mts                      # 100 customers + 10 stalls, 20 minutes
+
+`market-day.js` alone is the gateway's share of a day. This is the day: the **deployed wallet**
+(`E2E_BASE`, default staging) driven through every user flow by browser personas, on one clock
+with the k6 crowd for the rest of the population.
+
+### Design, and why
+
+- **Two layers.** Flows whose work happens on the device (receive and save a coupon, split, the
+  NUT-18V payment, Cashlinks, checkout codes, cold boots) can only be measured in the real app, so
+  they run in Playwright: one Chromium, one context per persona. Crowd load (acquire, poll, drain,
+  atomic-send, receipt drains) is cheap per request and needs numbers, so it stays in k6.
+- **Population.** Default 100 customers + 10 stalls. `BROWSER_CUSTOMERS=30` customers and all 10
+  stalls are browser personas (40 contexts, `BROWSER_PERSONAS` caps it); the other 70 customers
+  are the k6 crowd (`market-day.js` with `CUSTOMER_OFFSET`, so no identity is driven twice).
+  The report header states the population and the split.
+- **Stall slots.** Slot 0 = corda, slot 1 = bart, slots 2-9 = pool stalls. bart is the only stall
+  with a published online shop, so the checkout-code journey runs against bart. `STALL_SLOTS=pool`
+  makes every slot a pool stall (no real keys needed); `STALLS` / `CUSTOMERS` resize.
+- **Real stalls' keys** are read at runtime from `MERCHANT_KEYS_FILE` (default
+  `~/.jcode/scratch/merchant-keys.env`, `CORDA_NSEC=` / `BART_NSEC=` lines, mode 600). The file is
+  parsed, not sourced; each key must decode to its expected pubkey prefix or the run aborts naming
+  the variable, never the value. Keys live in memory only: never argv, the pool file, results or
+  logs. No trace or screenshot is ever taken, so the backup-key import is not recorded.
+- **Real stalls are treated gently.** Sales are 0.50 to 2.00. Their contexts block every kind-0,
+  `d=imani:merchant` and `d=imani:terminals` publish (relay and gateway mirror): logging a stall
+  into a fresh browser makes the app republish them, and the run must not change a real stall's
+  profile, stall record or online_shop. Blocked attempts are listed in the report's notes.
+- **Journeys** (seeded by `SEED`, weights in `real-day/schedule.mts`, think time 5-40 s): arrive
+  (20% register as new, the rest import a backup key), buy (`/receive` + the stall's `/sell`), pay
+  at a stall (`/redeem` -> the request string from the till -> `/scan` "Paste code" -> `/pay`;
+  Paid on both sides), send (`/send?to=`, half of them bundles), send by link (`/send/link`, then
+  another persona claims `/g#...`), use online (bart's `/online` code, then bart's Woo shop takes
+  it in a real cart; with `E2E_SHOP_ADMIN_PASSWORD` the order is placed and set Processing, which
+  is when the plugin redeems it), Cashlink (`/sell/cashback` then `/c/...`; `E2E_CAPTCHA_BYPASS`
+  when the edge gate enforces), browse, card (`/buy/<stall>` through Stripe, **only** if
+  `GET /api/v1/card-sales/ready/<stall>` says ready and only if Checkout is a `cs_test_` session,
+  card 4242), leave and return (context closed, reopened from its storage: a cold boot).
+- **Measured as the user sees it.** Every latency is from the user's action to the visible
+  outcome: coupon in the wallet, Paid on both screens, the recipient's balance, link claimed.
+- **Money conservation.** Every persona's balance is read off the screen before and after the day,
+  stalls' as what they hold of their own coupons; the sum of changes must equal sales + Cashlinks
+  - payments to the issuer (burnt) - checkout codes. A mismatch fails the run, naming personas.
+
+### Limits
+
+The per-address limits must be lifted for this IP (imani-deploy `scripts/loadtest-ratelimit.sh
+off`). A probe at start checks; a full run stops if it sees 429s, a smoke run continues and reports
+them apart. Three limits are NOT lifted (imani-deploy#405) and are paced by shared token buckets:
+registration (gateway-core path limit 10/min, paced to 8/min), checkout codes
+(`CHECKOUT_CODES_RL_PER_IP`, paced to 12 codes/min) and Cashlink claims (paced to 6/min). A 429 on
+one of those is a **harness pacing failure**, counted apart from app failures. The report header
+lists them.
+
+### Output and gates
+
+`loadtest/results/<date>-real-day-<size>.{json,md}`: per journey attempts, ok, fail, 429 (app),
+429 (pacing), SKIPs with reasons, p50/p95/p99, failures with screen text and persona; the k6
+crowd's metrics; a per-minute timeline; the money check. Exit non-zero on any of: a journey under
+95% success, buy p95 >= 20 s, pay p95 >= 20 s, send p95 >= 30 s, an uncaught page error, a
+settled-but-not-saved receive, a pacing 429, money not conserved, or a k6 threshold. Every string
+written passes `real-day/redact.mts` (no nsec, no 64-hex, codes and tokens cut to 8 characters).
+
 ## Checkout codes
 
     node loadtest/signer.mjs &
