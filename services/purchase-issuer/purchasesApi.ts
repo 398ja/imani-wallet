@@ -82,6 +82,14 @@ export interface GiftDelivery {
   buyerPubkey?: string | null
   /** When the draft was created, unix ms (the guest's return-link mail date, approximately). Optional. */
   draftCreatedAt?: number | null
+  /**
+   * #410: what to mint. `code` is a checkout code for the stall's online shop (payment-adapter#314);
+   * absent or `voucher` is a voucher, as before. A code gift carries the pinned shop key S, its url and x.
+   */
+  gift?: 'voucher' | 'code'
+  shopKey?: string | null
+  shopUrl?: string | null
+  codeExpiresAt?: number | null
 }
 
 export type DischargeOutcome =
@@ -231,6 +239,16 @@ export function parseGiftDelivery(raw: unknown): GiftDelivery | null {
     const n = typeof rawCreated === 'number' ? rawCreated : typeof rawCreated === 'string' ? Date.parse(rawCreated) : NaN
     if (Number.isFinite(n) && n > 0) draftCreatedAt = n < 1e12 ? n * 1000 : n
   }
+  // #410 code gifts: strict, as everything here. An unknown gift kind drops the row rather than be
+  // read as a voucher: a code gift minted as an email voucher would be the wrong thing, paid for.
+  const gift = d.gift === undefined || d.gift === null || d.gift === 'voucher' ? 'voucher' : d.gift === 'code' ? 'code' : null
+  if (gift === null) return null
+  const shopKey = optStr(d.shopKey, 64)
+  const shopUrl = optStr(d.shopUrl, 2048)
+  if (shopKey === undefined || shopUrl === undefined) return null
+  const codeExpiresAt = d.codeExpiresAt === undefined || d.codeExpiresAt === null ? null : d.codeExpiresAt
+  if (codeExpiresAt !== null && (typeof codeExpiresAt !== 'number' || !Number.isSafeInteger(codeExpiresAt) || codeExpiresAt <= 0)) return null
+  if (gift === 'code' && (d.kind !== 'email' || shopKey === null || !HEX64.test(shopKey) || codeExpiresAt === null)) return null
   const claimWindowDays = typeof d.claimWindowDays === 'number' && Number.isInteger(d.claimWindowDays) && d.claimWindowDays > 0 && d.claimWindowDays <= 365 ? d.claimWindowDays : null
   if (claimWindowDays === null) return null
   return {
@@ -245,6 +263,10 @@ export function parseGiftDelivery(raw: unknown): GiftDelivery | null {
     recipientHandle: recipientHandle as string | null,
     buyerPubkey: buyerPubkey === null ? null : (buyerPubkey as string).toLowerCase(),
     draftCreatedAt,
+    gift,
+    shopKey: shopKey === null ? null : (shopKey as string).toLowerCase(),
+    shopUrl: shopUrl as string | null,
+    codeExpiresAt,
   }
 }
 

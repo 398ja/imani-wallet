@@ -80,6 +80,7 @@ import { linkKeySigner, linkPubOf, secretFromText, type GiftToken, type ProofSta
 import { nip98Header, type RequestSigner } from './nip98'
 import { encodePlainTokenV4 } from './plainToken'
 import { parseVoucherToken, tokenProofs, voucherOfSecret, type TokenProof } from './voucherToken'
+import { splitTokenByVoucher } from './tokenSplit'
 import { splitIntoDenominations, unblindOutputs, type BlindSignatureResponse, type BlindedOutput, type UnblindedProof } from './walletSwap'
 import { cashlinkClaimsKey } from './inFlightMoney'
 import { faceShareOf } from './faceSplit'
@@ -146,6 +147,22 @@ export interface KeptCoupon {
   faceValue?: number
   /** Why it is being kept, for the History row. */
   why: 'claimed' | 'returned'
+  /** Shared by every coupon claimed off one link, so History shows the claim as one entry. */
+  bundleId?: string
+  /**
+   * A Cashlink's own coupon, back with its issuer (`why: 'returned'`): the port writes the
+   * incoming "Taken back" row. Absent for every other return (checkout codes, guest gifts, kept
+   * sats of a burn), which have their own records.
+   */
+  takenBack?: true
+}
+
+/**
+ * The bundle id every coupon claimed off one Cashlink shares: a hash of the link's PUBLIC key, so
+ * it is the same on a retry or a start-up finish and reveals nothing about the link secret.
+ */
+export function cashlinkBundleId(linkPub: string): string {
+  return bytesToHex(sha256(new TextEncoder().encode('imani-cashlink-bundle:' + linkPub.toLowerCase()))).slice(0, 32)
 }
 
 export const LOCK_PATH = '/api/v1/wallet/vouchers/cashlink/lock'
@@ -367,9 +384,9 @@ const tokenOf = (mintUrl: string, proofs: UnblindedProof[]): string => encodePla
  * proofs of one gift kept under the same token would leave only the last proof's sats
  * (rev-wallet377 H1).
  */
-async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenProof, proofs: UnblindedProof[], why: KeptCoupon['why'], faceValue?: number): Promise<void> {
+async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenProof, proofs: UnblindedProof[], why: KeptCoupon['why'], faceValue?: number, bundleId?: string, takenBack?: boolean): Promise<void> {
   const couponToken = tokenOf(mintUrl, [{ amount: source.amount, id: source.id, secret: source.secret, C: source.C }])
-  await ports.keep({ token: couponToken, satsToken: tokenOf(mintUrl, proofs), sats: proofs.reduce((n, p) => n + p.amount, 0), why, ...faceOf(faceValue) })
+  await ports.keep({ token: couponToken, satsToken: tokenOf(mintUrl, proofs), sats: proofs.reduce((n, p) => n + p.amount, 0), why, ...faceOf(faceValue), ...(bundleId ? { bundleId } : {}), ...(takenBack && bundleId ? { takenBack: true as const } : {}) })
 }
 
 // --- Sending: arming --------------------------------------------------------
@@ -564,16 +581,21 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   const resuming = ctx.resuming === true || ctx.burnKeyset !== undefined
 
   // 0. Before anything moves. A resumed arm has already passed these and may have burnt.
+  // #540 F4: a preflight that passed has just read every proof UNSPENT (it refuses on anything
+  // else), so the arm does not ask the mint again. A refusal we carry on past (our own burn) has
+  // not, and the states are read below as before.
+  let preflightUnspent = false
   if (!resuming) {
     const refusal = await preflight(ctx, proofs, mintUrl, linkPub, refundPub)
     // #379: a gift spent into OUR burn outputs was burnt by this wallet (another run of this arm
     // whose record is not visible here), never claimed. It is finished like a resumed arm.
     if (refusal && !(refusal.kind === 'claimed' && (await burntByUs(ports, ctx.refundSecret, mintUrl, proofs)))) return refusal
+    preflightUnspent = refusal === null
   }
 
   const [burnKeyset, giftStates] = await Promise.all([
     ctx.burnKeyset ?? ports.mint.activeKeysetId(mintUrl),
-    ctx.preChecked
+    ctx.preChecked || preflightUnspent
       ? Promise.resolve(proofs.map(() => 'UNSPENT' as ProofState))
       : ports.mint.states(mintUrl, proofs.map((p) => p.proof.secret)).catch(() => undefined),
   ])
@@ -637,11 +659,21 @@ async function arm(ctx: ArmContext): Promise<ArmOutcome> {
   if (locked.length === 0) return gone === proofs.length ? { kind: 'claimed' } : { kind: 'kept_as_sats' }
 
   // 3. On the link. Until a copy is confirmed stored, the link stays `arming` and this is retried.
-  const lockedToken = tokenOf(mintUrl, locked)
+  // One token per voucher: a token mixing coupons is refused by `parseVoucherToken`, so a link of
+  // several coupons locked as one token could be neither claimed nor taken back (staging,
+  // 2026-11-05, a 3-coupon link). Every part must be on the link before it counts as delivered.
   for (const p of locked) assertNotOpenAfterLocktime(p.secret)
-  if (!(await ports.deliver(ctx.linkSecret, lockedToken))) return { kind: 'arming', why: 'not on the link yet' }
+  // Cut into relay-sized wraps only for a Cashlink. A checkout part (`lockPub`, #402) is one coupon
+  // handed to the code store whole as ONE token: its `deliver` keeps a single `lockedToken`, so a cut
+  // part would reach the store short (review of #533).
+  const lockedTokens = ctx.lockPub
+    ? [tokenOf(mintUrl, locked)]
+    : splitTokenByVoucher(tokenOf(mintUrl, locked)).flatMap((t) => fitToWraps(ctx.linkSecret, mintUrl, tokenProofs(t)))
+  for (const part of lockedTokens) {
+    if (!(await ports.deliver(ctx.linkSecret, part))) return { kind: 'arming', why: 'not on the link yet' }
+  }
   try {
-    ctx.onDelivered?.(lockedToken)
+    for (const part of lockedTokens) ctx.onDelivered?.(part)
   } catch {
     // A hint to the caller; the arm goes on either way.
   }
@@ -1340,13 +1372,23 @@ async function reform(
   if (answer.status === 200 && typeof signed === 'string' && isTheSuccessorAskedFor(signed, lockedVoucher)) {
     const coupon = await mintCarrier(ports, mintUrl, plain, signed, ctx.refundSecret, pathway === 'refund' ? 'mint-refund' : 'mint-link', locked)
     if (!coupon) return 'pending'
-    await ports.keep({ token: tokenOf(mintUrl, [coupon]), why: 'returned', ...faceOf(share) })
+    await ports.keep({ token: tokenOf(mintUrl, [coupon]), why: 'returned', ...faceOf(share), ...takenBackOf(ctx, locked) })
     return 'returned'
   }
   if (notYet(answer.status)) return 'pending'
   // A definite refusal after the sats came back (422, or 404: the routes are gone): keep them.
-  await keepAsSats(ports, mintUrl, locked, plain, 'returned', share)
+  await keepAsSats(ports, mintUrl, locked, plain, 'returned', share, takenBackOf(ctx, locked).bundleId, true)
   return 'returned'
+}
+
+/**
+ * A Cashlink take-back (the link key is known: `giftLinks.settleLocked`) is told in History as an
+ * incoming row, in the link's bundle (#530) so the coupons of one link fold into one entry. Other
+ * returns through `settle` (code and guest gifts, no link key) keep their own records.
+ */
+function takenBackOf(ctx: ReturnContext, locked: TokenProof): { bundleId?: string; takenBack?: true } {
+  const linkPub = ctx.linkSecret ? readLinkLock(locked.secret)?.linkPub : undefined
+  return linkPub ? { bundleId: cashlinkBundleId(linkPub), takenBack: true } : {}
 }
 
 /** Mint a signed successor from plain proofs, or find it if an earlier run already did. */
@@ -1504,6 +1546,7 @@ const PARTLY = 'It is only partly added. Try again in a moment.'
 /** 'ok', 'gone' (someone else spent it first), or a failure message (the claim is kept unless nothing moved). */
 async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uint8Array, claim: CashlinkClaim): Promise<'ok' | 'gone' | string> {
   const { proof, mintUrl, outputs } = claim
+  const bundleId = cashlinkBundleId(linkPubOf(linkSecret))
   const forget = () => saveClaims(pubkey, loadClaims(pubkey).filter((c) => !sameClaim(c, proof.secret)))
 
   // 1. Burn with the link key, or find our earlier burn.
@@ -1554,13 +1597,13 @@ async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uin
       minted = done.kind === 'proofs' ? done.proofs[0] : undefined
     }
     if (!minted) return PARTLY
-    await ports.keep({ token: tokenOf(mintUrl, [minted]), why: 'claimed', ...faceOf(claim.faceValue) })
+    await ports.keep({ token: tokenOf(mintUrl, [minted]), why: 'claimed', ...faceOf(claim.faceValue), bundleId })
     forget()
     return 'ok'
   }
   if (notYet(answer.status)) return PARTLY
   // A definite refusal after the burn: the value is kept as sats, in this wallet. Never lost.
-  await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue)
+  await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue, bundleId)
   forget()
   return 'ok'
 }
@@ -1839,6 +1882,35 @@ export function httpCashlinkGateway(): CashlinkGateway {
 }
 
 /** A gift wrap of `token` to the link key, sealed by the link key itself (it names nobody). */
-export function wrapForLink(linkSecret: Uint8Array, token: string) {
-  return nip17.wrapEvent(linkSecret, { publicKey: linkPubOf(linkSecret) }, JSON.stringify({ type: 'cashu_token_transfer', token }))
+/**
+ * The largest link wrap this wallet publishes, in bytes of event JSON. strfry refuses an event over
+ * `maxEventSize` (65,536 on staging) while the gateway's cache still keeps it, so a refused wrap
+ * reads as delivered. NIP-44 pads in steps and the step below 65,536 is 55,121 (gateway-customer
+ * GiftWrapSizeModel), so that is the budget.
+ */
+export const LINK_WRAP_BUDGET = 55_121
+
+/** Bytes of a link wrap for `token`, as it goes on the wire. */
+export function linkWrapBytes(linkSecret: Uint8Array, token: string): number {
+  return new TextEncoder().encode(JSON.stringify(wrapForLink(linkSecret, token, 'f'.repeat(64)))).length
+}
+
+/**
+ * One voucher's locked proofs as tokens whose wraps each fit {@link LINK_WRAP_BUDGET}, measured on
+ * the real wrap, halved until they fit. Each is a complete token, read on its own by the claimer
+ * and the issuer (the reader takes every wrap on the link). Order is kept, so the cut is the same
+ * on every run.
+ */
+export function fitToWraps(linkSecret: Uint8Array, mintUrl: string, proofs: UnblindedProof[]): string[] {
+  const token = tokenOf(mintUrl, proofs)
+  if (proofs.length <= 1 || linkWrapBytes(linkSecret, token) <= LINK_WRAP_BUDGET) return [token]
+  const half = Math.ceil(proofs.length / 2)
+  return [...fitToWraps(linkSecret, mintUrl, proofs.slice(0, half)), ...fitToWraps(linkSecret, mintUrl, proofs.slice(half))]
+}
+
+export function wrapForLink(linkSecret: Uint8Array, token: string, senderPubkey?: string) {
+  // `sender_pubkey` is the issuer's PUBLIC key, so the claimer can send the "claimed" receipt back
+  // (the same field the gateway puts on a bearer gift's wrap). Never a secret.
+  const sender = senderPubkey && /^[0-9a-f]{64}$/.test(senderPubkey) ? { sender_pubkey: senderPubkey } : {}
+  return nip17.wrapEvent(linkSecret, { publicKey: linkPubOf(linkSecret) }, JSON.stringify({ type: 'cashu_token_transfer', token, ...sender }))
 }

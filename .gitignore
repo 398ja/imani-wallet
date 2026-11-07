@@ -57,6 +57,10 @@ perf/results/*.md
 # smoke run against a stub. A run worth keeping is committed by hand, as the
 # dated reports in loadtest/results/ already are.
 loadtest/results/market-day-summary.json
+loadtest/results/checkout-codes-summary.json
+loadtest/results/checkout-codes-make-summary.json
+# The checkout codes a generation run made, with the shop keys that redeem them. Test keys, but keys.
+.loadtest-codes.json
 
 # Screenshots a failed e2e/probe-concurrent-redeem.mts run leaves behind.
 e2e/.probe-concurrent-redeem/
@@ -66,3 +70,5 @@ e2e/.probe-cashback-spend/
 
 # Local npm cache (npm ci --cache .npm in containers/CI).
 .npm
+# real-day.mts writes its k6 crowd summary here per run; the dated real-day report is what is kept.
+loadtest/results/.real-day-k6-*.json

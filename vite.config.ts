@@ -519,6 +519,8 @@ export default defineConfig({
       // The server-side SDKs (#366 @imani/cashlink-sender) reuse the app's engine, so they run here.
       'sdk/**/*.test.{ts,tsx}',
       'perf/**/*.test.{ts,tsx}',
+      // The real-day load test's pure parts (#550): scheduler, ledger, redaction, report.
+      'loadtest/**/*.test.ts',
       // `deploy/` ships the container's nginx.conf, and its CSP is application
       // behaviour, not decoration: `worker-src 'self'` there silently disabled
       // every QR scan in the app. Tested here so a header change is a failing

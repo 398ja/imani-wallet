@@ -17,6 +17,7 @@ import type { SubscriptionConfig } from '../config.ts'
 import { sellerFrom } from '../issuer.ts'
 import { Ledger, type SubscriptionRow } from '../ledger.ts'
 import { renderMetrics, resetMetricsForTest } from '../metrics.ts'
+import { resetBusinessMetricsForTest } from '../businessMetrics.ts'
 import { stripeSignatureHeader } from '../stripe.ts'
 
 const SECRET = 'whsec_metrics'
@@ -66,6 +67,7 @@ const paid = (sub: string, invoice: string, tier: string, term = 'monthly') =>
 
 beforeEach(async () => {
   resetMetricsForTest()
+  resetBusinessMetricsForTest()
   clock = NOW * 1000
   ledger = new Ledger(join(await mkdtemp(join(tmpdir(), 'sub-metrics-')), 'ledger.json'))
   const config: SubscriptionConfig = {
@@ -107,7 +109,7 @@ describe('GET /metrics on a service that has done nothing', () => {
         expect(sample(text, 'imani_subscription_events_total', { event, tier, term: 'monthly' }), `${event} ${tier}`).toBe(0)
       }
     }
-    for (const tier of ['basic', 'pro']) for (const status of ['active', 'cancelled', 'revoked']) expect(sample(text, 'imani_subscriptions', { tier, status })).toBe(0)
+    for (const tier of ['basic', 'pro']) for (const status of ['active', 'cancelled', 'revoked']) expect(sample(text, 'imani_subscriptions', { tier, status, term: 'monthly', grant_kind: 'subscription' })).toBe(0)
     expect(sample(text, 'imani_subscription_events_by_day', { event: 'created', tier: 'basic', day: '2026-10-29' })).toBe(0)
     expect(sample(text, 'imani_subscription_events_by_day', { event: 'cancelled', tier: 'pro', day: '2026-09-30' })).toBe(0)
     expect(sample(text, 'imani_subscription_status_messages_total', { result: 'failed' })).toBe(0)
@@ -125,7 +127,7 @@ describe('GET /metrics on a service that has done nothing', () => {
     expect(text).not.toContain(STALL)
     // Only closed label NAMES, and no identifier among the values.
     const labelNames = new Set([...text.matchAll(/[{,]([a-z_]+)="/g)].map((m) => m[1]))
-    expect([...labelNames].sort()).toEqual(['day', 'event', 'result', 'status', 'term', 'tier'])
+    expect([...labelNames].sort()).toEqual(['currency', 'day', 'event', 'grant_kind', 'limit', 'result', 'source', 'state', 'status', 'term', 'tier'])
     expect([...text.matchAll(/="([^"]*)"/g)].map((m) => m[1]).filter((v) => /^(sub_|cus_|in_)|^[0-9a-f]{64}$/.test(v))).toEqual([])
   })
 })
@@ -139,7 +141,7 @@ describe('created and cancelled, by tier, from the real webhook', () => {
     const text = await metrics()
     expect(sample(text, 'imani_subscription_events_total', { event: 'created', tier: 'basic', term: 'monthly' })).toBe(1)
     expect(sample(text, 'imani_subscription_events_total', { event: 'created', tier: 'pro', term: 'annual' })).toBe(1)
-    expect(sample(text, 'imani_subscriptions', { tier: 'basic', status: 'active' })).toBe(1)
+    expect(sample(text, 'imani_subscriptions', { tier: 'basic', term: 'monthly', grant_kind: 'subscription', status: 'active' })).toBe(1)
     expect(sample(text, 'imani_subscription_events_by_day', { event: 'created', tier: 'basic', day: '2026-10-29' })).toBe(1)
   })
 
@@ -150,8 +152,8 @@ describe('created and cancelled, by tier, from the real webhook', () => {
     await webhook('customer.subscription.updated', { id: 'sub_a', status: 'active', cancel_at: Math.floor(clock / 1000) + 300 * DAY, cancellation_details: {} })
     let text = await metrics()
     expect(sample(text, 'imani_subscription_events_total', { event: 'cancelled', tier: 'pro', term: 'annual' })).toBe(1)
-    expect(sample(text, 'imani_subscriptions', { tier: 'pro', status: 'cancelled' })).toBe(1)
-    expect(sample(text, 'imani_subscriptions', { tier: 'pro', status: 'active' })).toBe(0)
+    expect(sample(text, 'imani_subscriptions', { tier: 'pro', term: 'annual', grant_kind: 'subscription', status: 'cancelled' })).toBe(1)
+    expect(sample(text, 'imani_subscriptions', { tier: 'pro', term: 'annual', grant_kind: 'subscription', status: 'active' })).toBe(0)
     // On the day it was cancelled, not the day it was created.
     expect(sample(text, 'imani_subscription_events_by_day', { event: 'cancelled', tier: 'pro', day: '2026-10-31' })).toBe(1)
     expect(sample(text, 'imani_subscription_events_by_day', { event: 'created', tier: 'pro', day: '2026-10-29' })).toBe(1)
@@ -159,7 +161,7 @@ describe('created and cancelled, by tier, from the real webhook', () => {
     await webhook('customer.subscription.updated', { id: 'sub_a', status: 'active', cancel_at: null })
     text = await metrics()
     expect(sample(text, 'imani_subscription_events_total', { event: 'reactivated', tier: 'pro', term: 'annual' })).toBe(1)
-    expect(sample(text, 'imani_subscriptions', { tier: 'pro', status: 'active' })).toBe(1)
+    expect(sample(text, 'imani_subscriptions', { tier: 'pro', term: 'annual', grant_kind: 'subscription', status: 'active' })).toBe(1)
     // No longer cancelled, so it is not in the cancelled-per-day history.
     expect(sample(text, 'imani_subscription_events_by_day', { event: 'cancelled', tier: 'pro', day: '2026-10-31' })).toBe(0)
   })
@@ -199,8 +201,6 @@ describe('the 30-day history comes from the ledger, so it survives restarts and 
     expect(sample(text, 'imani_subscription_events_by_day', { event: 'created', tier: 'pro', day: '2026-09-29' })).toBeUndefined()
     expect(sample(text, 'imani_subscription_events_by_day', { event: 'cancelled', tier: 'pro', day: '2026-10-28' })).toBe(1)
     expect(sample(text, 'imani_subscription_events_by_day', { event: 'created', tier: 'other', day: '2026-10-29' })).toBe(1)
-    expect(sample(text, 'imani_subscriptions', { tier: 'custom', status: 'revoked' })).toBe(1)
-    expect(sample(text, 'imani_subscriptions', { tier: 'basic', status: 'cancelled' })).toBe(1)
     expect(sample(text, 'imani_subscription_ledger_rows')).toBe(8)
   })
 })

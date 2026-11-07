@@ -722,6 +722,26 @@ describe('sendVouchers and payRequest', () => {
     expect(sent).toHaveLength(0)
   })
 
+  it('#540 F5: asks nothing about a gift link key (never a stall)', async () => {
+    // The lookup would fail closed here; for a link it is not made at all.
+    const LINK = 'e'.repeat(64)
+    stubs.unreachable.add(LINK)
+    stubs.rows = [row()]
+    const sent = gateway()
+    wallet([row()])
+
+    await sendVouchers({
+      payer: PAYER,
+      recipient: { pubkey: LINK, name: 'Link' },
+      merchant,
+      unit: 'EUR',
+      amount: 250,
+      link: { k: 'k', x: 1_900_000_000, status: 'outstanding' },
+    })
+
+    expect(sent).toHaveLength(1)
+  })
+
   it('still redeems at the issuer while the relay is down', async () => {
     // What stops fail-closed from being a wallet that cannot send: paying the
     // issuer their own coupon is the case a market stall lives on, and it is

@@ -812,6 +812,52 @@ export function buildCashbackTransaction(input: {
 }
 
 /**
+ * The row for a coupon claimed off a Cashlink by this wallet's own swap (#295 phase 4).
+ *
+ * The same shape as imani-apps' `_buildReceiveTransactionRow` writes for every other receive, and
+ * the same id (`received:${tokenId}`), so a retry of the same keep overwrites rather than
+ * duplicating. Needed because a link-locked gift never goes through TokenRedemption, whose atomic
+ * write is what files the row on the legacy path: before this, the coupon arrived and History
+ * stayed empty.
+ */
+export function buildReceivedTransaction(input: {
+  tokenId: string
+  amount: number
+  unit: string
+  decimals: number
+  merchantId?: string
+  voucherId?: string
+  counterparty?: string
+  validation?: VoucherValidation
+  memo?: string
+  /**
+   * Shared by every coupon claimed off one Cashlink, so History folds them into one entry the way
+   * it folds a multi-voucher send. Absent on a single-coupon claim.
+   */
+  bundleId?: string
+  at: number
+}): TransactionRow {
+  return {
+    id: `received:${input.tokenId}`,
+    txId: `received:${input.tokenId}`,
+    type: 'received',
+    direction: 'in',
+    timestamp: input.at,
+    amount: input.amount,
+    unit: input.unit.toUpperCase(),
+    decimals: input.decimals,
+    merchantName: null,
+    merchantId: input.merchantId ?? null,
+    counterparty: input.counterparty ?? null,
+    voucherId: input.voucherId,
+    tokenId: input.tokenId,
+    ...(input.bundleId ? { bundleId: input.bundleId } : {}),
+    ...(input.validation ? { validation: input.validation } : {}),
+    memo: input.memo || 'Received via Cashlink',
+  } as unknown as TransactionRow
+}
+
+/**
  * Who is on the other side of this movement, and what to call them.
  *
  * `counterparty` is that person by construction — the sender of an arriving

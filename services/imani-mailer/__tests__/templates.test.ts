@@ -84,6 +84,47 @@ describe('built-in templates', () => {
     expect(never).toContain("Once it's back, it keeps its original expiry: the voucher doesn't expire.")
   })
 
+  describe('#410 code gifts', () => {
+    const TAKE_BACK = /take (it|the gift) back/i
+    const CODE = 'IMANI-AB12-CD34-EF56'
+    const LINKS2 = { hosts: [...LINKS.hosts, 'olive.example', 'codes.imani.test'], allowHttp: false }
+    it('gift-code: the code, shop, expiry and balance link in the body only; never take-back', () => {
+      const t = compile('gift-code', BUILTIN_TEMPLATES['gift-code'])
+      const out = render(t, resolveFields(t, {
+        from: 'Ann', stall: 'Olive', shop: 'olive.example', amount: '€15.00', code: CODE, shopUrl: 'https://olive.example',
+        expiresOn: '4 December 2026', balanceUrl: `https://codes.imani.test/v1/code-check/${CODE}`,
+      }, LINKS2))
+      expect(out.subject).toBe('Ann sent you a Olive shop code')
+      expect(out.subject).not.toContain(CODE)
+      expect(out.text).toContain(`Your code:\n${CODE}`)
+      // shopUrl is a line field (shop hosts cannot be allow-listed), so it renders as given; the
+      // issuer sends URL.href, already normalised.
+      expect(out.text).toContain('Enter it at checkout on https://olive.example')
+      expect(out.text).toContain('Use it by 4 December 2026.')
+      expect(out.text).toContain(`https://codes.imani.test/v1/code-check/${CODE}`)
+      expect(out.text).not.toMatch(TAKE_BACK)
+    })
+    it('gift-code-return-link: unspent balance at expiry, no take-back', () => {
+      const t = compile('gift-code-return-link', BUILTIN_TEMPLATES['gift-code-return-link'])
+      const out = render(t, resolveFields(t, { stall: 'Olive', expiresOn: '4 December 2026', returnUrl: 'https://wallet.imani.test/gift-return#r=ab' }, LINKS))
+      expect(out.text).toContain("can't be taken back. Whatever isn't spent by 4 December 2026 comes back to you.")
+      expect(out.text).not.toMatch(TAKE_BACK)
+    })
+    it('buyer notices carry no link and no code', () => {
+      for (const name of ['gift-code-used', 'gift-code-expired']) {
+        const def = BUILTIN_TEMPLATES[name]
+        expect(Object.values(def.fields).some((f) => f.type === 'url')).toBe(false)
+        expect(def.fields.code).toBeUndefined()
+      }
+      const used = compile('gift-code-used', BUILTIN_TEMPLATES['gift-code-used'])
+      const u = render(used, resolveFields(used, { stall: 'Olive', amount: '€15.00', spent: '€8.00', recipient: 'dan@example.com', expiresOn: '4 December 2026', remaining: '€7.00' }, LINKS)).text
+      expect(u).toContain('dan@example.com used €8.00 of the €15.00 code for Olive you sent.')
+      expect(u).toContain('€7.00 is left on the code, to spend until 4 December 2026.')
+      const done = render(used, resolveFields(used, { stall: 'Olive', amount: '€15.00', spent: '€15.00', recipient: 'dan@example.com', expiresOn: '4 December 2026' }, LINKS)).text
+      expect(done).not.toMatch(/is left/)
+    })
+  })
+
   it('refuses missing required fields, unknown fields and non-strings', () => {
     expect(() => renderClaim({ ...claimFields, stall: '' })).toThrow(/stall is required/)
     expect(() => renderClaim({ ...claimFields, bcc: 'x@y.z' })).toThrow(/unknown field "bcc"/)

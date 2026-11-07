@@ -67,11 +67,3 @@ export function displayHandle(nip05: string, defaultDomain = DEFAULT_HANDLE_DOMA
   const domain = nip05.slice(at + 1)
   return defaultDomain && domain === defaultDomain && local !== '_' ? `@${local}` : nip05
 }
-
-/** Normalise a recipient handle typed by the buyer: lower case, leading `@` dropped, bare → default domain. */
-export function normaliseRecipientHandle(raw: string, defaultDomain = DEFAULT_HANDLE_DOMAIN): string | null {
-  const value = raw.trim().replace(/^@/, '').toLowerCase()
-  if (value === '') return null
-  const nip05 = value.includes('@') ? value : `${value}@${defaultDomain}`
-  return isNip05(nip05) ? nip05 : null
-}

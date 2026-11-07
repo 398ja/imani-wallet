@@ -9,7 +9,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-11-06
+
+### Changed
+
+- **A Cashlink is locked from the start** (#543, #544). On staging, "Make Cashlink" to "Cashlink
+  ready" drops from 14.5 to 19.4 s to a median of 6.1 s for a whole coupon, and 9.5 s when a coupon
+  is split. Nothing goes through gateway-core's atomic send.
+  - The Cashlink is built like a checkout code (#402), with the link key in place of the shop key:
+    1. plan the parts (carve or bearer-split);
+    2. write an intent;
+    3. pre-check every part with nothing burnt;
+    4. arm every part with `lockPub = linkPub` and `R_i`;
+    5. publish the locked wraps.
+  - The publish runs beside the refund deposits. A wrap counts as delivered when the relay says OK
+    and the gateway mirror answers 2xx, with no read-back. A relay that could not be reached is
+    tried up to 3 times. A wrap still not on the link is republished after 5, 20 and 60 s, and
+    again on the next start.
+  - There is no bearer copy on the link any more, so the windows #379 and #396 worked around are
+    gone.
+  - Making a Cashlink is a counted spend, so logout waits for it.
+  - The old path (atomic send, bearer gift, then arm) stays as the fallback. It is chosen before
+    anything moves, for:
+    - merchant accounts;
+    - remote signers;
+    - coupons without a DLEQ;
+    - the relay off, or the routes unavailable;
+    - lock window problems;
+    - any other pre-check refusal.
+  - The wallet logs `[cashlink] path=direct` or `path=legacy why=<reason>`.
+  - `finishCashlinkIntents` finishes, on the next start, a Cashlink a page left part way.
+- **Fewer round trips around a Cashlink** (#540, #542):
+  - **One settle per Send screen.** `sendGift` does not settle again within 60 s of the screen's
+    completed settle.
+  - **No merchant lookup for a link key.**
+  - **One NUT-07 read for the arm.** It reuses the preflight's.
+  - **The arm reuses the tokens the delivery check read.**
+  - **Spent coupons are tombstoned by `#d`.** This replaces reading every kind 7375 event, which
+    was 1.5 MB per spend on a large account.
+  - **The spent set stays warm.** It learns local tombstones and is topped up with a `since` read.
+  - **The restore scan runs less often.** It runs only on a fresh device or once a day, probing 4
+    indices at a time.
+
 ### Added
+
+- `e2e/profile-cashlink.mts` (#541): phase times and a per-request timeline of Cashlink creation
+  against staging. `PROFILE_BUNDLE_DIR` serves a local build on the staging origin, and
+  `PROFILE_AMOUNT` sets the amount.
+
+## [0.56.0] - 2026-11-06
+
+### Added
+
+- **Nostr event size measurement** (#532). Every event the wallet publishes through
+  `relay.ts` `publish()` is measured (UTF-8 bytes of its JSON, once per publish, before sending)
+  and batched to gateway-customer's `POST /api/v1/telemetry/event-sizes` as `{kind, bytes, path}`
+  only, NIP-98 signed, flushed every 30 s, at 50 queued and when the page is hidden. Nothing is
+  sent while signed out or locked, and a failed batch is dropped. The gateway mirror
+  (`POST /api/v1/nostr/events`) is not measured here: the gateway records it. The subscription
+  service measures what it publishes to the relay and adds `imani_nostr_event_bytes`,
+  `imani_nostr_event_over_limit_total` and `imani_nostr_event_limit_bytes` to its `/metrics`,
+  with thresholds from `NOSTR_EVENT_SIZE_LIMITS` (default
+  `strfry_max_event=65536,wrap_budget=55121`). The shared recorder is
+  `src/lib/nostrEventSizeMetrics.ts`, copied into the subscription image.
+- **Subscription business metrics** (business-metrics contract, 2026-11-05). The subscription
+  service's `/metrics` now re-derives from the ledger on each scrape
+  `imani_subscriptions{tier,term,grant_kind,status}`,
+  `imani_subscription_paid_value{currency,tier,term,status}` (latest paid invoice per subscription,
+  major units), `imani_subscription_licences{state}`, and the housekeeping
+  `imani_business_metrics_poll_failures_total{source="subscription"}` and
+  `imani_business_metrics_last_poll_seconds{source="subscription"}`. `imani_subscriptions` gains the
+  `term` and `grant_kind` labels (it was `{tier,status}`). A ledger that cannot be read keeps the
+  last values and counts a failure instead of reporting zero.
+- **Gift claim outcomes reach payment-adapter** (business metrics). The purchase issuer's gift
+  tracker reports what it sees (CLAIMED, PARTLY_USED with the remaining balance, EXPIRED, RETURNED)
+  to `POST /api/v1/purchases/gifts/{draftId}/outcome`, so payment-adapter is the single owner of
+  `imani_product_*{product="gift"}` and no gift is counted twice. A report that cannot be delivered
+  is kept on the tracker row and retried on the next sweep.
 
 - **The stall hears when a customer claims its cashback** (#158, with
   imani-gateway-portal#59). The portal sends a `cashback_claimed` Web Push and keeps a
@@ -37,6 +113,152 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the missing route with 500, so a wallet shipped first logged "drain refused 500" every 10s
   forever. Ship the portal first; a wallet that ships first is now quiet either way.
   `paymentReceiptDrain.ts` has the same every-tick retry and warning on 5xx; left as is here.
+
+## [0.55.4] - 2026-11-05
+
+### Fixed
+
+- **The purchase-issuer image builds again** (#534). 0.55.3 gave `voucherToken.ts` an import of
+  `plainToken.ts`, which the purchase-issuer, subscription and wallet-api images do not copy, so the
+  purchase-issuer image failed its own load check and 0.55.3 never deployed. The split moves to
+  `tokenSplit.ts`. A new test fails when a wallet file a service image copies imports one it does not.
+  0.55.3's Cashlink fixes ship in this release.
+
+## [0.55.3] - 2026-11-05
+
+### Fixed
+
+- **A Cashlink of several coupons can be claimed and taken back** (#533, part of #532). The arm
+  locked every coupon into ONE token, which `parseVoucherToken` refuses ("mixes proofs from more
+  than one voucher"). Both the claimer and the issuer dropped it, so the link could be neither
+  claimed nor taken back. The arm now puts one locked token per voucher on the link, cut into
+  wraps of at most 55,121 bytes measured on the real event (strfry refuses over 65,536). The
+  reader splits a token already on a link this way, so links armed by 0.55.2 or older recover:
+  open the app and use Take it back, or claim the link. Take-back, settle and the claim recheck
+  now cover every locked token, not just the first. An arm that stops between wraps is resumed
+  until every part is on the link. Checkout code parts are not cut: the code store gets each
+  part as one token.
+- **A Cashlink take-back is in History** (#533). Taking a Cashlink back now writes an incoming
+  "Taken back from Cashlink" row in the link's bundle, beside the sent row's "Taken back".
+
+## [0.55.2] - 2026-11-05
+
+### Fixed
+
+- **History groups a several-voucher Cashlink again** (#530). 0.55.1's claim row had no bundle id,
+  so each coupon claimed off one Cashlink became its own History line. Every coupon off one link now
+  shares a bundle id derived from the link's public key, so a retry gets the same id. That covers
+  locked and unlocked claims, and sends recovered from the relay. Sent rows already stored without a
+  bundle id fold by their link. Ordinary multi-voucher sends were not affected.
+
+## [0.55.1] - 2026-11-05
+
+### Fixed
+
+- **A claimed Cashlink shows in History** (#528). Claiming a link-locked Cashlink kept the coupon
+  but wrote no transaction, because that path never ran the legacy receive's atomic write. It now
+  writes a `received` row with the same id the legacy path uses, so a retry overwrites it.
+
+### Added
+
+- **The issuer hears when their Cashlink is claimed** (#528). The claimer's wallet sends a payment
+  receipt to the link's issuer. gateway-core fires the `voucher_claimed` push from it server-side
+  (so the issuer's app need not be open), and the issuer's receipt drain files the bell entry and
+  toast. Locked links now carry the issuer's public key in the wrap. Links made before this release
+  name no issuer, so they still show as claimed on the sender's next settle, with no push. Nothing
+  secret goes in the receipt, and its id is stable, so a retry sends no second push.
+
+## [0.55.0] - 2026-11-05
+
+### Changed
+
+- **The gifting site is public: nobody signs in** (#410, owner decision 2026-11-05). The "Sign in
+  with your wallet" button, the session lookup and the signed-in branches are gone. Every buyer is
+  a guest, so every gift's refund key is a fresh key made in the browser and comes back to the buyer
+  as the return link in their email, the same for vouchers and shop codes. The home page now says
+  "Send a gift". payment-adapter still accepts guest drafts unchanged.
+
+## [0.54.1] - 2026-11-05
+
+### Fixed
+
+- **The wallet image can turn shop-code gift returns on.** The Dockerfile now declares
+  `VITE_GIFTING_CODE_GIFTS`, so a deploy's build arg reaches the gift return page. Before, it was
+  silently ignored and the return page always read a code gift as a plain gift.
+
+## [0.54.0] - 2026-11-05
+
+### Changed
+
+- **The gifting site sends gifts to an email address only** (#410, #515). Sending to an Imani handle,
+  and to yourself, is gone: the field, the live handle lookup, its validation and the draft path.
+  A form kept from the old page comes back as an email gift with the address left blank. Drafts and
+  return links already issued for a handle are still read and honoured.
+
+### Added
+
+- **Shop-code gifts** (#410, #515, #520, #521, #522). When the stall has an online shop that takes
+  checkout codes, the buyer chooses what to send with a segmented control: a voucher, or a code for
+  the shop. Behind `VITE_GIFTING_CODE_GIFTS=on` (site) and `PURCHASE_CODE_GIFTS=true` (issuer), both
+  off by default.
+  - purchase-issuer mints the gift locked to the shop key S, refundable to a fresh buyer key R after
+    the code's expiry x, deposits it at imani-checkout-codes (`<draftId>:code`), and mails the
+    recipient the code (`gift-code`: amount, shop, `IMANI-XXXX-XXXX-XXXX`, expiry and a balance
+    link). Nothing is armed at a relay and R's secret never reaches the server.
+  - The buyer hears when the code is used and when it expires (`gift-code-used`,
+    `gift-code-expired`). Their return link shows what is left and, only after x, receives it into
+    a wallet, including balance successors after a partial spend. A code gift never offers an early
+    take-back.
+  - The shop link goes into the mail as plain text, because shop hosts cannot be on the mailer's link
+    allowlist. The issuer accepts only a clean https shop url, checked before anything is minted.
+
+## [0.53.3] - 2026-11-05
+
+### Fixed
+
+- **The wallet image builds again.** 0.53.2's `xrateRates.test.ts` imported
+  `scripts/xrate-rates.mts` statically, and the image leaves `scripts/` out (`.dockerignore`), so
+  the image's `tsc -b` failed. The test now loads the script dynamically, as the other script tests
+  do. No app change.
+
+## [0.53.2] - 2026-11-05
+
+### Changed
+
+- **The free-tier thresholds come from imani-xrate** (#519, #506, owner decision "Option A"). The
+  generator reads a committed export of xrate's `GET /v1/rates`
+  (`services/subscription/xrate-rates.json`, version 154) instead of open.er-api.com, and the
+  workflow is manual only. No threshold changed (catalog stays v5).
+
+### Fixed
+
+- **Android: a backup saved through the share sheet is no longer empty** (#517). The file was
+  deleted the moment the share sheet returned, but Drive or Gmail read it after that. It now stays
+  in a private `share/` folder in the app's cache for 10 minutes, and that folder is cleared before
+  the next save and at app start.
+- **Every issuing script sends the stall's merchant issuance warrant** (#518, #516): the k6 load
+  test, `seed-merchant.mjs`, `loadtest/stalls.mjs` and the new checkout-code load test. The portal
+  refuses coupons without one since 0.18.0. #516 also adds the checkout-code load test (generation,
+  validation and the redeem race).
+
+## [0.53.1] - 2026-11-04
+
+### Fixed
+
+- **Android: a backup file can be picked to log in** (#511, #512). The login picker asked for
+  `application/json,.json`. Capacitor turns that into `EXTRA_MIME_TYPES`, so the system picker
+  greyed out every file not labelled `application/json`, which on Android is nearly all of them.
+  In the app it now asks for `*/*`, and `parseBackup` still turns away anything that is not a
+  backup. An empty picker result says "No file was opened…" instead of doing nothing.
+- **Android: the backup file, backup key and nsec export can be saved** (#511, #512). A `blob:`
+  download does nothing in the app's WebView, which has no download handler. In the app the text
+  is written to the app's private cache, handed to the share sheet, and the cache copy is deleted
+  afterwards. A failure says so. Adds `@capacitor/filesystem` 7, so the app needs the new APK.
+- `.json` exports are labelled `application/json`, not `text/plain`.
+- **Android: Google Drive backup no longer hangs** (#509). Google refuses its sign-in inside an app
+  WebView and the consent window can't report back, so the token wait never ended. In the app the
+  wallet now says straight away that Drive is not available yet, and every platform stops waiting
+  for Google after 3 minutes. Native Drive support is #510.
 
 ## [0.53.0] - 2026-11-04
 

@@ -1,10 +1,15 @@
-# The quarterly refresh of the free tier's threshold in every merchant currency (#506).
+# The refresh of the free tier's threshold in every merchant currency (#506).
 #
-# The thresholds are hard-coded (about 100 USD each, rounded down to 2 significant figures), so
-# they drift as currencies move. Every quarter this re-runs scripts/free-tier-amounts.mts against
-# that day's rates and opens a PR with what changed. Nothing is published until a person merges
-# it and the subscription service is redeployed: the rates are a snapshot taken here, never a
-# feed the wallet or the gateway reads.
+# The thresholds are hard-coded (about 100 USD each, rounded down to 2 significant figures) from
+# imani-xrate's rates, the estate's hand-set fiat table that gateway-customer and gateway-core
+# back vouchers with (owner decision "Option A"), so a threshold and its backing use the same
+# numbers. xrate is internal only and this runner cannot reach it, so there is NO schedule: the
+# rates only move when an operator changes them in xrate, and that operator then exports them on
+# the host (`GET /v1/rates`, see scripts/free-tier-amounts.mts) into
+# services/subscription/xrate-rates.json, pushes that file on a branch, and runs this workflow on
+# it (or runs the script locally, which does the same). It re-runs scripts/free-tier-amounts.mts
+# against the committed export and opens a PR with what changed. Nothing is published until a
+# person merges it and the subscription service is redeployed.
 #
 # The run FAILS, opening nothing, when a threshold would move by more than 50 % in one go (a bad
 # feed reading is likelier than a currency halving in a quarter). GitHub then emails the failure.
@@ -15,9 +20,7 @@
 name: Free-tier amounts
 
 on:
-  schedule:
-    # 06:00 UTC on the 2nd of January, April, July and October.
-    - cron: '0 6 2 1,4,7,10 *'
+  # Manual only (see above): run it from the branch that carries the new xrate-rates.json.
   workflow_dispatch:
     inputs:
       force:
@@ -53,7 +56,7 @@ jobs:
 
       - run: npm ci
 
-      - name: Regenerate the amounts from today's rates
+      - name: Regenerate the amounts from the committed imani-xrate export
         env:
           FREE_TIER_SUMMARY: ${{ env.SUMMARY }}
         run: npx tsx scripts/free-tier-amounts.mts ${{ inputs.force && '--force' || '' }}
@@ -62,7 +65,7 @@ jobs:
         id: diff
         run: |
           if git diff --quiet; then
-            echo "No threshold changed at today's rates." >> "$GITHUB_STEP_SUMMARY"
+            echo "No threshold changed at the committed imani-xrate rates." >> "$GITHUB_STEP_SUMMARY"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
@@ -76,6 +79,7 @@ jobs:
           packages/licence
           services/subscription
           src/lib/__tests__/freeTierCurrencies.test.ts
+          src/lib/__tests__/xrateRates.test.ts
           src/lib/__tests__/currencies.test.ts
           src/lib/__tests__/entitlement.test.ts
 
@@ -87,12 +91,13 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch -c "$BRANCH"
-          git commit -qam "chore(subscriptions): refresh the free-tier amounts at today's rates (#506)"
+          git add services/subscription/xrate-rates.json
+          git commit -qam "chore(subscriptions): refresh the free-tier amounts from imani-xrate (#506)"
           git push -qf origin "$BRANCH"
 
           body="$(cat "$SUMMARY")
 
-          Opened by \`.github/workflows/free-tier-amounts.yml\` (#506). Check the larger moves against a second source before merging. After merging, redeploy the subscription service so it serves the new catalog version. Wallets pick it up within a day, and the bundled copy with the next release."
+          Opened by \`.github/workflows/free-tier-amounts.yml\` (#506). The rates are imani-xrate's (see the version above): check the larger moves against xrate's history before merging. After merging, redeploy the subscription service so it serves the new catalog version. Wallets pick it up within a day, and the bundled copy with the next release."
 
           existing="$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')"
           if [ -n "$existing" ]; then

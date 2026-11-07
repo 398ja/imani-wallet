@@ -84,3 +84,18 @@ describe('HistoryListItem', () => {
     expect(document.querySelector('details')).toBeNull()
   })
 })
+
+describe('HistoryListItem, rows from the real builders', () => {
+  it('several sent parts of one bundle draw as ONE line with the total', async () => {
+    const { buildSentTransaction, toTransaction } = await import('../../../lib/transactions')
+    const rows = [0, 1, 2].map((i) =>
+      toTransaction(
+        buildSentTransaction({ tokenId: `t${i}`, amount: 300, unit: 'EUR', decimals: 2, merchantId: 'ab'.repeat(32), recipientPubkey: 'cd'.repeat(32), bundleId: 'ef'.repeat(16), at: Date.UTC(2026, 8, 20, 12) + i }),
+      ),
+    )
+    expect(groupHistory(rows)).toHaveLength(1)
+    const { container } = draw(rows)
+    expect(container.querySelectorAll('details')).toHaveLength(1)
+    expect(screen.getAllByText(/9\.00/).length).toBeGreaterThan(0)
+  })
+})

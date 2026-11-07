@@ -38,11 +38,12 @@ import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } 
 import { getWallet, notifyWalletChanged } from './wallet'
 import type { Merchant } from './merchants'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
-import { beginReceive, isReceiveDeferred } from './receiveGate'
+import { beginReceive, isReceiveDeferred, withSpend } from './receiveGate'
 import { deriveRefundSecret, readLinkLock, xOnlyPub } from './cashlinkLock'
 import {
   armGift,
   burntByThisWallet,
+  cashlinkBundleId,
   claimLockedGift,
   lockedLocktime,
   lockedOnLink,
@@ -57,7 +58,16 @@ import {
 } from './cashlinkFlow'
 import { isUnverifiedClaim, unconfirmedClaimLinks, type GiftLinkArm } from './transactions'
 import { pendingSendsKey } from './inFlightMoney'
+import { cashlinkIntentLinkKeys, movingCashlinkLinkKeys } from './cashlinkIntents'
+
+/** #543: links a direct Cashlink of this account is still moving value onto. */
+function directIntentLinks(): Set<string> {
+  const pubkey = sessionAccount(getSigner)
+  return pubkey ? movingCashlinkLinkKeys(pubkey) : new Set()
+}
 import { loadMerchant } from './merchant'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
 
 // --- #295 phase 4 seams -----------------------------------------------------
 
@@ -72,6 +82,17 @@ export const cashlinkSeam = {
   clearMoving: async (pubkey: string, id: string): Promise<void> => (await import('./cashlinkPorts')).clearMoving(pubkey, id),
   /** #381: the mint gift coupons live at, for a NUT-07 check with no token in hand. */
   mintUrl: async (): Promise<string> => (await (await import('./config')).gatewayMintConfig()).mintUrl.trim().replace(/\/+$/, ''),
+  /** #543: the direct path's ports, the coupon rows it plans over, and the bearer split for a split part. */
+  directPorts: async (): Promise<import('./cashlinkDirect').DirectPorts> => (await import('./cashlinkDirectPorts')).appDirectPorts(),
+  vouchers: async (): Promise<import('@imani/wallet-storage').VoucherRow[]> => getWallet().getAllVouchers(),
+  split: async (pubkey: string, req: { tokenId: string; token: string; amount: number }): Promise<import('./voucherSplit').SplitOutcome> => {
+    const [{ splitVoucher }, { appCheckoutPorts }] = await Promise.all([import('./voucherSplit'), import('./checkoutCodePorts')])
+    return splitVoucher(appCheckoutPorts(), pubkey, req)
+  },
+  /** #543: a split's change is locked to this wallet's own key: made an ordinary coupon again. */
+  unlockSelfLocked: async (pubkey: string): Promise<void> => {
+    await (await import('./selfLockedCouponsApp')).unlockSelfLockedCouponsNow(pubkey)
+  },
   isMerchant: (pubkey: string): boolean => {
     try {
       return loadMerchant(pubkey) !== null
@@ -102,6 +123,22 @@ function rememberLock(pubkey: string, giftSecret: string, signed: string): void 
     localStorage.setItem(locksKey(pubkey), JSON.stringify(Object.fromEntries(entries)))
   } catch {
     // A full store: the gateway's replay finds it instead.
+  }
+}
+
+/**
+ * #533: an arm puts a link's locked coupons on it as several wraps, so a run can stop after some of
+ * them. Fewer locked proofs on the link than bearer proofs it locked from means the rest are minted
+ * but on no wrap: the arm is resumed to deliver them (it replays every step by derivation), or
+ * neither the claimer nor a take-back could ever reach them. A proof kept as sats instead of locked
+ * also counts short, and costs one extra resume: the resumed arm leaves `arming` either way.
+ */
+function partlyDelivered(locked: GiftToken[], tokens: GiftToken[]): boolean {
+  try {
+    const count = (ts: GiftToken[]) => ts.reduce((n, t) => n + tokenProofs(t.token).length, 0)
+    return count(locked) < count(giftCandidates(tokens))
+  } catch {
+    return false
   }
 }
 
@@ -353,9 +390,18 @@ export async function settleAndCountLinks(
   state: (token: string) => Promise<ProofState> = tokenState,
   budgetMs = SETTLE_BUDGET_MS,
 ): Promise<LinkCounts> {
-  await settleWithin(nowMs, state, budgetMs)
+  if (await settleWithin(nowMs, state, budgetMs)) lastSettledAt = Date.now()
   return linkCounts(nowMs)
 }
+
+/**
+ * #540 F1: when the Send by link screen last finished its settle (wall clock, ms). `sendGift` does
+ * not settle again within `RECENT_SETTLE_MS` of it: the same links were checked seconds ago, and
+ * the limit is still judged from freshly read rows. Only a settle that finished counts; one cut
+ * short by the budget is still running and proves nothing yet.
+ */
+let lastSettledAt: number | undefined
+export const RECENT_SETTLE_MS = 60_000
 
 /**
  * How long Send waits for the settle before counting what is stored (review of #367). Each link is a
@@ -365,13 +411,17 @@ export async function settleAndCountLinks(
  */
 export const SETTLE_BUDGET_MS = 8_000
 
-async function settleWithin(nowMs: number, state: (token: string) => Promise<ProofState>, budgetMs: number): Promise<void> {
+/** Settle, waiting at most `budgetMs`. True when the settle finished within it. */
+async function settleWithin(nowMs: number, state: (token: string) => Promise<ProofState>, budgetMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    await Promise.race([
-      reconcileGiftLinks(nowMs, state),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, budgetMs)
+    return await Promise.race([
+      reconcileGiftLinks(nowMs, state).then(
+        () => true,
+        () => false,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), budgetMs)
       }),
     ])
   } finally {
@@ -574,8 +624,10 @@ export async function sendGift({
   }
   // #295 phase 0: settle every link first. A link that was claimed is marked, and one past its
   // expiry is taken back, so neither blocks this send. Never throws, and waits at most
-  // `settleBudgetMs`.
-  await settleWithin(nowMs, state, settleBudgetMs)
+  // `settleBudgetMs`. #540 F1: skipped when the Send screen finished the same settle moments ago.
+  if (lastSettledAt === undefined || Date.now() - lastSettledAt > RECENT_SETTLE_MS) {
+    await settleWithin(nowMs, state, settleBudgetMs)
+  }
   const rows = await linkRows()
   const refusal = linkLimitMessage(countLinks(rows, nowMs))
   if (refusal) throw new Error(refusal)
@@ -596,6 +648,26 @@ export async function sendGift({
   let sendDone!: () => void
   sendsRunning.set(k, new Promise<void>((r) => (sendDone = r)))
   try {
+  // #543: locked from the start when it can be, decided before anything moves; otherwise the
+  // legacy path below (atomic send, bearer gift, then arm), exactly as before.
+  // #543 review: a counted spend (#335), as the legacy send is through `deliver`. Logout closes spends
+  // and waits for one running, so it can never wipe the wallet between a burn and its intent's save.
+  const direct = await withSpend(() => tryDirect({ payer, merchant, unit, amount, memo, x, i: allocated.i, nowMs }))
+  if (direct.kind === 'made') {
+    console.info('[cashlink] path=direct')
+    // #543 review: a wrap still not on the link (the relay out of reach through every try) is tried
+    // again in the background within the minute the screen promises, not only at the next start.
+    if (!direct.published) scheduleIntentRetry(payer)
+    return {
+      // #543 review: the bundle id the rows share, never `k` (the link's bearer secret).
+      result: { id: cashlinkBundleId(allocated.linkPub), requested: amount, delivered: direct.delivered, parts: direct.parts, ...(direct.delivered < amount ? { shortfall: 'part of it could not be locked; its value is kept in your wallet' } : {}) },
+      link,
+      x,
+      delivered: direct.published,
+      returnsOnItsOwn: direct.armed,
+    }
+  }
+  console.info(`[cashlink] path=legacy why=${direct.why}`)
   const result = await sendVouchers({
     payer,
     recipient: { pubkey: allocated.linkPub, name: 'Link' },
@@ -608,14 +680,18 @@ export async function sendGift({
 
   // The delivery check (spec 3.3 send step 3). A miss is reported, not fatal: the gift wrap can
   // reach the gateway's cache a moment after COMPLETED, and the recipient's wallet queries again.
+  // #540 F3: the tokens this read found are handed to the arm, which used to read the link a second
+  // time straight after. A hit costs no sleep; only a miss waits and reads again.
   let delivered = false
+  let onLink: GiftToken[] = []
   for (let attempt = 0; attempt < 5 && !delivered; attempt++) {
     try {
-      delivered = (await giftTokensFrom(allocated.secret, await fetchGiftWraps(allocated.secret))).length > 0
+      onLink = await giftTokensFrom(allocated.secret, await fetchGiftWraps(allocated.secret))
+      delivered = onLink.length > 0
     } catch {
       delivered = false
     }
-    if (!delivered) await new Promise((r) => setTimeout(r, 1500))
+    if (!delivered && attempt < 4) await new Promise((r) => setTimeout(r, 1500))
   }
   // #295 phase 4: lock the gift to its link and leave its take-back with the voucher service, so it
   // comes back on its own. Only once it is on the link, only for an account whose key this wallet
@@ -623,7 +699,7 @@ export async function sendGift({
   // expired Cashlinks lapse). Anything that stops it leaves the link exactly as it is.
   let returnsOnItsOwn = false
   if (delivered && allocated.i !== undefined && !cashlinkSeam.isMerchant(payer)) {
-    returnsOnItsOwn = (await armLink(payer, k, allocated.secret, allocated.i, x)).kind === 'armed'
+    returnsOnItsOwn = (await armLink(payer, k, allocated.secret, allocated.i, x, onLink)).kind === 'armed'
   }
   return { result, link, x, delivered, returnsOnItsOwn }
   } finally {
@@ -649,6 +725,7 @@ const linkSettles = new Map<string, Promise<void>>()
 /** Tests only: forget settles a previous test left pending. */
 export function resetLinkSettlesForTests(): void {
   linkSettles.clear()
+  lastSettledAt = undefined
 }
 /**
  * #401: how many links one reconcile run checks at once. Two, so one slow take-back never holds up
@@ -662,7 +739,15 @@ const newestOf = (parts: LinkRow[]): number => Math.max(...parts.map((p) => Numb
 /**
  * Arm (or resume arming) one link, recording each step on its row. Never throws.
  */
-async function armLink(pubkey: string, k: string, linkSecret: Uint8Array, i: number, x: number): Promise<ArmOutcome> {
+async function armLink(
+  pubkey: string,
+  k: string,
+  linkSecret: Uint8Array,
+  i: number,
+  x: number,
+  /** #540 F3: the link's tokens, read by the caller just now; read here when not given. */
+  onLink?: GiftToken[],
+): Promise<ArmOutcome> {
   const refundSecret = refundSecretFor({ i })
   if (!refundSecret) return { kind: 'unarmed', why: 'not_lockable' }
   linksInFlight.add(k)
@@ -671,7 +756,7 @@ async function armLink(pubkey: string, k: string, linkSecret: Uint8Array, i: num
     const rows = await rowsNow()
     if (rows.length === 0) return { kind: 'unarmed', why: 'no_gift' }
     const id = rows[0].id
-    const tokens = giftCandidates(await giftTokensForSecret(linkSecret))
+    const tokens = giftCandidates(onLink ?? (await giftTokensForSecret(linkSecret)))
     const ports = await cashlinkSeam.ports()
     // #379: resumed whenever any row of the link says `arming`, with or without its keyset. A resume
     // never re-runs the pre-check, which would read our own burn as a claim.
@@ -750,6 +835,83 @@ const sendsRunning = new Map<string, Promise<void>>()
  * only stops a hung send from holding the tap forever.
  */
 export const TAKE_BACK_WAITS_FOR_SEND_MS = 90_000
+
+/**
+ * #543: what Send by link warms while the amount is typed: the mint (its keyset and keys) and the
+ * modules the direct path loads on demand. Never throws, never blocks.
+ */
+export async function warmCashlinkPath(): Promise<void> {
+  try {
+    const [{ warmMint }, { trustedMintUrls }] = await Promise.all([import('./cashlinkFlow'), import('./trustedMint'), import('./cashlinkDirect'), import('./cashlinkDirectPorts'), import('./voucherSplit'), import('./checkoutCodePorts')])
+    for (const url of trustedMintUrls()) warmMint(url)
+  } catch {
+    // Only a cold cache.
+  }
+}
+
+type DirectTry =
+  | { kind: 'made'; delivered: number; parts: number; published: boolean; armed: boolean }
+  | { kind: 'legacy'; why: string }
+
+/**
+ * #543: make the Cashlink locked from the start (`cashlinkDirect.ts`), or say why not while nothing
+ * has moved, so the caller takes the legacy path. Throws only once value has moved and no link can
+ * be shown (all of it kept as sats, or part way: the next start finishes it).
+ */
+async function tryDirect(req: { payer: string; merchant: Merchant; unit: string; amount: number; memo?: string; x: number; i: number | undefined; nowMs: number }): Promise<DirectTry> {
+  if (cashlinkSeam.isMerchant(req.payer)) return { kind: 'legacy', why: 'merchant' }
+  if (req.i === undefined) return { kind: 'legacy', why: 'remote_signer' }
+  let rows: import('@imani/wallet-storage').VoucherRow[]
+  try {
+    rows = await cashlinkSeam.vouchers()
+  } catch {
+    return { kind: 'legacy', why: 'no_plan' }
+  }
+  if (rows.length === 0) return { kind: 'legacy', why: 'no_plan' }
+  const direct = await import('./cashlinkDirect')
+  const nowS = Math.floor(req.nowMs / 1000)
+  let plan
+  try {
+    plan = direct.planDirectParts({ rows, payer: req.payer, stall: req.merchant.pubkey, unit: req.unit, amount: req.amount, x: req.x, nowS })
+  } catch {
+    plan = null
+  }
+  if (!plan) return { kind: 'legacy', why: 'no_plan' }
+  const ports = await cashlinkSeam.directPorts()
+  // A part no subset of proofs can make is split first (its own crash-safe intent, #402).
+  const splitting = plan.find((p) => p.needsSplit)
+  let made: Array<{ tokenId: string; token: string; amount: number; faceValue: number }> = []
+  if (splitting) {
+    const out = await cashlinkSeam.split(req.payer, { tokenId: splitting.row.token_id, token: splitting.row.token, amount: splitting.amount })
+    if (out.kind === 'refused') return { kind: 'legacy', why: 'split_refused' }
+    if (out.kind === 'kept_as_sats') throw new Error('Your voucher could not be split. Its value is still in your wallet, now as sats. Nothing was sent.')
+    if (out.kind === 'pending') throw new Error('Your voucher is being split. It is safe, and it finishes the next time Imani opens. Try again in a moment.')
+    made = out.parts
+  }
+  const parts = plan.flatMap((p) => (p.needsSplit ? made : [{ tokenId: p.row.token_id, token: p.row.token, amount: p.amount, faceValue: p.faceValue }]))
+  const out = await direct.startDirectCashlink({
+    ports,
+    pubkey: req.payer,
+    i: req.i,
+    x: req.x,
+    stall: req.merchant.pubkey,
+    ...(req.merchant.name && req.merchant.name !== req.merchant.pubkey ? { merchantName: req.merchant.name } : {}),
+    unit: req.unit,
+    decimals: plan[0].row.face_decimals ?? 2,
+    amount: req.amount,
+    ...(req.memo ? { memo: req.memo } : {}),
+    parts,
+  })
+  if (splitting) {
+    // The legacy send cannot spend a coupon locked to this wallet's own key: unlocked first then.
+    const unlocking = cashlinkSeam.unlockSelfLocked(req.payer).catch(() => undefined)
+    if (out.kind === 'legacy') await unlocking
+  }
+  if (out.kind === 'legacy') return out
+  if (out.kind === 'made') return { kind: 'made', delivered: out.delivered, parts: parts.length, published: out.published, armed: out.armed }
+  if (out.kind === 'nothing') throw new Error('The Cashlink could not be made. Its value is still in your wallet, now as sats.')
+  throw new Error('Your Cashlink is still being made. It is safe, and it finishes the next time Imani opens.')
+}
 
 async function refuseForeignIssuerForGift(issuer: string, payer: string): Promise<void> {
   try {
@@ -832,13 +994,65 @@ export async function redeemGiftTokens(
       notifyWalletChanged()
       if (outcome.kind === 'own_coupon') return { kind: 'failed', message: OWN_COUPON_MESSAGE }
       if (outcome.kind !== 'ok') return outcome
+      tellIssuerClaimed(locked, account)
       const rest = tokens.filter((t) => !locked.includes(t))
-      return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption)
+      return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption, cashlinkBundleId(linkPubOf(linkSecret)))
     }
-    return await swapGiftTokens(tokens, source, redemption)
+    return await swapGiftTokens(tokens, source, redemption, linkSecret ? cashlinkBundleId(linkPubOf(linkSecret)) : undefined)
   } finally {
     endReceive()
   }
+}
+
+/**
+ * Tell whoever made and funded the Cashlink that it was claimed (the "claimed" notice).
+ *
+ * Reuses the payment-receipt channel rather than a new one: `POST /api/v1/payment-receipts` fires
+ * the issuer's `voucher_claimed` Web Push server-side (gateway-core `fireSettlementPush`), so the
+ * issuer's app need not be open, and their `paymentReceiptDrain` files the bell row and toast
+ * when it next runs. Observed here, by the claimer, because only the claim knows it happened at
+ * the moment it happens: the issuer learns of a spend only when its own wallet next settles the
+ * link, and the gateway's re-sign route cannot tell the issuer's key from a stranger's.
+ *
+ * The issuer is the wrap's `sender_pubkey` (a public key). The receipt id is derived from the
+ * locked proof's secret hash, never the secret or the link key, and is stable so a retry is a 409.
+ * Fire and forget: the coupon is already here, a lost receipt costs only the notice.
+ */
+export function tellIssuerClaimed(locked: GiftToken[], claimer: string | undefined): void {
+  const issuer = locked.map((t) => t.senderPubkey).find((p): p is string => typeof p === 'string' && /^[0-9a-f]{64}$/.test(p))
+  if (!issuer || issuer === claimer?.toLowerCase()) return
+  let faceValue = 0
+  let faceUnit: string | undefined
+  let faceDecimals: number | undefined
+  let voucherId: string | undefined
+  let verified = true
+  for (const { token } of locked) {
+    try {
+      const parsed = parseVoucherToken(token)
+      faceValue += creditableFaceValue(parsed).faceValue
+      faceUnit ??= parsed.voucher.unit
+      faceDecimals ??= parsed.voucher.faceDecimals
+      voucherId ??= parsed.voucher.voucherId
+      if (cashbackValidation(token)?.signatureValid !== true) verified = false
+    } catch {
+      verified = false
+    }
+  }
+  let anchor: string
+  try {
+    anchor = 'cashlink:' + tokenProofs(locked[0].token).map((p) => bytesToHex(sha256(new TextEncoder().encode(p.secret)))).join(',')
+  } catch {
+    return
+  }
+  void import('./paymentReceipt').then(({ postPaymentReceipt }) =>
+    postPaymentReceipt({
+      senderPubkeyHex: issuer,
+      deliveryEventId: bytesToHex(sha256(new TextEncoder().encode(anchor))),
+      voucherId,
+      // Amounts only from a verified voucher, as on the DM receive.
+      ...(verified && faceUnit ? { faceValue, faceUnit, faceDecimals } : {}),
+    }),
+  ).catch(() => undefined)
 }
 
 /** A stall opening a Cashlink of its own coupon (owner decision Q3: no self-swap). Nothing moved. */
@@ -853,17 +1067,22 @@ async function swapGiftTokens(
   tokens: GiftToken[],
   source: 'gift_link' | 'gift_link_reclaim',
   redemption: NonNullable<Window['TokenRedemption']>,
+  /** One id for every coupon off this link, so History folds a several-coupon claim into one entry. */
+  bundleId?: string,
 ): Promise<GiftRedeemOutcome> {
   let added = 0
   let spent = 0
   let failure: string | undefined
-  for (const { token } of tokens) {
+  const claimed: GiftToken[] = []
+  for (const gift of tokens) {
+    const { token } = gift
     try {
       const validation = cashbackValidation(token)
-      await withCorrelation(validation ? { validation: { ...validation } } : {}, (correlationId) =>
+      await withCorrelation({ ...(validation ? { validation: { ...validation } } : {}), ...(bundleId ? { bundleId } : {}) }, (correlationId) =>
         redemption.redeem(token, { source, metadata: { correlation_id: correlationId } }),
       )
       added += 1
+      claimed.push(gift)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       // The server refused it under the same rule: nothing was swapped, and nothing else will pass.
@@ -880,6 +1099,8 @@ async function swapGiftTokens(
     }
   }
   notifyWalletChanged()
+  // A recipient's claim (never the sender's own take-back) tells the issuer, one receipt per coupon.
+  if (source === 'gift_link') for (const gift of claimed) tellIssuerClaimed([gift], sessionAccount(getSigner))
   if (failure !== undefined) return { kind: 'failed', message: failure }
   if (added === 0 && spent > 0) return { kind: 'claimed' }
   return { kind: 'ok' }
@@ -894,6 +1115,38 @@ export async function giftTokensForSecret(secret: Uint8Array): Promise<GiftToken
  * Start-up (#295 phase 4): finish every Cashlink claim this wallet began and did not finish (the
  * page died after the burn). Behind the receive gate, like every receive. Never throws.
  */
+/**
+ * #543 review: when a direct Cashlink is made with a wrap not yet on its link, its intent is run
+ * again after these delays (each run republishes only what is missing, under the intent's lock).
+ */
+export const INTENT_RETRY_DELAYS_MS = [5_000, 20_000, 60_000]
+
+function scheduleIntentRetry(pubkey: string, delays: readonly number[] = INTENT_RETRY_DELAYS_MS): void {
+  const [first, ...rest] = delays
+  if (first === undefined) return
+  setTimeout(() => {
+    // Only for the account that made it: the run derives R from the signed-in key.
+    if (sessionAccount(getSigner) !== pubkey) return
+    void finishCashlinkIntentsNow(pubkey).then(() => {
+      if (movingCashlinkLinkKeys(pubkey).size > 0) scheduleIntentRetry(pubkey, rest)
+    })
+  }, first)
+}
+
+/**
+ * #543: every Cashlink a page left part way on the direct path, finished from its intent (spec
+ * section 5), beside `finishPendingCashlinkClaims` at start-up. Never throws.
+ */
+export async function finishCashlinkIntentsNow(pubkey: string): Promise<number> {
+  try {
+    if (cashlinkIntentLinkKeys(pubkey).size === 0) return 0
+    const [{ finishCashlinkIntents }, ports] = await Promise.all([import('./cashlinkDirect'), cashlinkSeam.directPorts()])
+    return await finishCashlinkIntents(ports, pubkey)
+  } catch {
+    return 0
+  }
+}
+
 export async function finishPendingCashlinkClaims(pubkey: string): Promise<number> {
   const { finishCashlinkClaims, loadClaims } = await import('./cashlinkFlow')
   if (loadClaims(pubkey).length === 0) return 0
@@ -962,7 +1215,7 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
     linksInFlight.add(k)
     let outcome: ReturnOutcome
     try {
-      outcome = await settleLocked(rows, secret, locked[0].token, true)
+      outcome = await settleLocked(rows, secret, locked.map((t) => t.token), true)
     } finally {
       linksInFlight.delete(k)
     }
@@ -998,17 +1251,34 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
 }
 
 /**
+ * The link's outcome from each locked token's: anything unfinished wins (the next run carries on),
+ * then any coupon back here makes it "taken back", and only all claimed is "claimed".
+ */
+export function combineReturns(outcomes: ReturnOutcome[]): ReturnOutcome {
+  if (outcomes.length === 0) return { kind: 'unknown', why: 'nothing locked' }
+  const unknown = outcomes.find((o) => o.kind === 'unknown')
+  if (unknown) return unknown
+  const kinds = new Set(outcomes.map((o) => o.kind))
+  if (kinds.has('returning')) return outcomes.find((o) => o.kind === 'returning')!
+  if (kinds.has('waiting')) return kinds.size === 1 ? { kind: 'waiting' } : { kind: 'returning', why: 'part way' }
+  return kinds.has('returned') ? { kind: 'returned' } : { kind: 'claimed' }
+}
+
+/**
  * One run for a locked link (#295 phase 4), recording what it found. `takeBackNow` is "Take it back"
  * before the link expires. Never throws.
  */
-async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken: string, takeBackNow = false): Promise<ReturnOutcome> {
+async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedTokens: string[], takeBackNow = false): Promise<ReturnOutcome> {
   const link = openLinkOf(rows)
   const refundSecret = refundSecretFor(link)
   if (!refundSecret) return { kind: 'unknown', why: 'no refund key here' }
   const pubkey = sessionAccount(getSigner) ?? ''
   try {
     const ports = await cashlinkSeam.ports()
-    const outcome = await settleLockedGift({
+    // Every locked token on the link (one per coupon), not only the first: a link of several
+    // coupons came back one coupon at a time, and the rest stayed on the link.
+    const outcomes: ReturnOutcome[] = []
+    for (const lockedToken of lockedTokens) outcomes.push(await settleLockedGift({
       ports,
       linkSecret,
       refundSecret,
@@ -1023,7 +1293,8 @@ async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken
         await cashlinkSeam.markMoving(pubkey, rows[0].id)
         if (link.arm?.s !== 'returning') await setLinkArm(rows, { s: 'returning', ...(link.arm?.ks ? { ks: link.arm.ks } : {}) })
       },
-    })
+    }))
+    const outcome = combineReturns(outcomes)
     const told = takeBackNow ? { noticedAt: Date.now() } : {}
     if (outcome.kind === 'returned') {
       await setLinkStatus(rows, 'reclaimed', Date.now(), told)
@@ -1034,8 +1305,12 @@ async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken
     } else if (outcome.kind === 'waiting' && link.arm?.s === 'not_armed' && Math.floor(ports.now() / 1000) < link.x) {
       // Not armed yet and still before its expiry: leave the take-back with the service again (the
       // same derivation, so one it already holds replays). Off or refused: stays as it is.
-      const again = await retryDeposit(ports, linkSecret, refundSecret, lockedToken)
-      if (again.kind === 'armed') await setLinkArm(rows, { s: 'armed', ks: again.keyset })
+      let armed: string | undefined
+      for (const lockedToken of lockedTokens) {
+        const again = await retryDeposit(ports, linkSecret, refundSecret, lockedToken)
+        armed = again.kind === 'armed' && armed !== '' ? again.keyset : ''
+      }
+      if (armed) await setLinkArm(rows, { s: 'armed', ks: armed })
     }
     return outcome
   } finally {
@@ -1150,7 +1425,7 @@ export async function reconcileGiftLinks(
       // must never be read below as "claimed".
       const link = openLinkOf(parts)
       const locked = ownLockedOnLink(link, secret, tokens)
-      if (link.arm?.s === 'arming' && link.i !== undefined && locked.length === 0) {
+      if (link.arm?.s === 'arming' && link.i !== undefined && (locked.length === 0 || partlyDelivered(locked, tokens))) {
         await armLink(sessionAccount(getSigner) ?? '', k, secret, link.i, link.x)
         return
       }
@@ -1166,7 +1441,7 @@ export async function reconcileGiftLinks(
         }
         const fresh = (await linkRows()).filter((r) => r.link.k === k && r.link.status === 'outstanding')
         if (fresh.length === 0) return
-        const outcome = await settleLocked(fresh, secret, locked[0].token)
+        const outcome = await settleLocked(fresh, secret, locked.map((t) => t.token))
         if (outcome.kind === 'returned') reclaimed += 1
         else if (outcome.kind === 'claimed') claimed += 1
         return
@@ -1217,8 +1492,9 @@ export async function reconcileGiftLinks(
       }
     }
     const one = async ([k, snapshot]: (typeof ordered)[number]): Promise<void> => {
-      // #379: a link this tab is sending, arming or (#401) taking back is left to that run.
-      if (linksInFlight.has(k)) return
+      // #379: a link this tab is sending, arming or (#401) taking back is left to that run. #543: and
+      // one still being made on the direct path, which `finishCashlinkIntents` finishes.
+      if (linksInFlight.has(k) || directIntentLinks().has(k)) return
       const before = linkSettles.get(k)
       const mine = (async () => {
         if (before) await before
@@ -1326,7 +1602,9 @@ async function recheckClaim(rows: LinkRow[], linkSecret: Uint8Array, tokens: Gif
     const ports = await cashlinkSeam.ports()
     const locked = ownLockedOnLink(link, linkSecret, tokens)
     if (locked.length > 0) {
-      const states = await tokenStates(ports, locked[0].token)
+      // Every locked token on the link (one per coupon, #533), not only the first: a link whose
+      // first coupon was claimed but whose second is still locked is open, not settled.
+      const states = (await Promise.all(locked.map((t) => tokenStates(ports, t.token)))).flat()
       if (states.some((s) => s !== 'SPENT' && s !== 'UNSPENT')) return 'left'
       const locktime = lockedLocktime(locked[0].token) ?? link.x
       if (states.some((s) => s === 'UNSPENT')) {
@@ -1334,7 +1612,7 @@ async function recheckClaim(rows: LinkRow[], linkSecret: Uint8Array, tokens: Gif
         return 'open'
       }
       await syncLinkExpiry(rows, locktime)
-      const outcome = await settleLocked(rows, linkSecret, locked[0].token)
+      const outcome = await settleLocked(rows, linkSecret, locked.map((t) => t.token))
       if (outcome.kind === 'claimed') await confirmClaim(rows)
       return outcome.kind === 'returned' ? 'returned' : 'left'
     }
@@ -1427,18 +1705,25 @@ export async function restoreScan(
     const known = new Set(rows.map((r) => r.link.k))
     // #379: a link this wallet is sending right now (this tab, or a send whose row is not written
     // yet) is the send's, never adopted as a second row with a guessed expiry.
-    for (const k of [...linksInFlight, ...pendingSendLinks(pubkey)]) known.add(k)
+    for (const k of [...linksInFlight, ...pendingSendLinks(pubkey), ...cashlinkIntentLinkKeys(pubkey)]) known.add(k)
     let last = Math.max(-1, ...rows.map((r) => r.link.i ?? -1), nextLinkIndex(pubkey) - 1)
     let adopted = 0
+    // #540 F8: probed RESTORE_PROBE_BATCH indices at a time, each batch handled in index order
+    // afterwards, so every #379 guard below runs exactly as it did one by one.
+    let probed: Promise<GiftToken[] | null>[] = []
+    let batchStart = 0
     for (let i = 0; i <= last + RESTORE_GAP; i++) {
+      if (i >= batchStart + probed.length) {
+        batchStart = i
+        const end = Math.min(i + RESTORE_PROBE_BATCH - 1, last + RESTORE_GAP)
+        probed = []
+        for (let j = i; j <= end; j++) probed.push(probe(deriveLinkSecret(id, j)).catch(() => null))
+      }
       const secret = deriveLinkSecret(id, i)
       const k = secretToText(secret)
-      let tokens: GiftToken[]
-      try {
-        tokens = await probe(secret)
-      } catch {
-        continue
-      }
+      const answer = await probed[i - batchStart]
+      if (answer === null) continue
+      let tokens: GiftToken[] = answer
       if (tokens.length === 0) continue
       if (i > last) last = i
       advanceLinkIndex(pubkey, i)
@@ -1480,6 +1765,39 @@ export async function restoreScan(
   } finally {
     id.fill(0)
   }
+}
+
+/** #540 F8: how many link keys the restore scan asks about at once. */
+export const RESTORE_PROBE_BATCH = 4
+/** #540 F8: the start-up restore scan runs at most this often on a device that kept its history. */
+export const RESTORE_SCAN_EVERY_MS = 24 * 60 * 60 * 1000
+const restoreScanKey = (pubkey: string) => `imani-wallet:gift-restore-scan:${pubkey}`
+
+/**
+ * #540 F8: the start-up restore scan, only when it can find something. The stamp lives under the
+ * `imani-wallet:` prefix, so logout's sweep (and a new device, or wiped storage) removes it and
+ * the next start scans at once; otherwise at most once a day. The scan only adopts links this
+ * device's rows do not know, and a device that kept its rows already knows every link it made.
+ */
+export async function restoreScanIfDue(
+  pubkey: string,
+  nowMs = Date.now(),
+  scan: (pubkey: string) => Promise<number> = restoreScan,
+): Promise<number> {
+  let stamp = NaN
+  try {
+    stamp = Number(localStorage.getItem(restoreScanKey(pubkey)))
+  } catch {
+    // No storage: scan, as before.
+  }
+  if (Number.isFinite(stamp) && stamp > 0 && nowMs - stamp >= 0 && nowMs - stamp < RESTORE_SCAN_EVERY_MS) return 0
+  const adopted = await scan(pubkey)
+  try {
+    localStorage.setItem(restoreScanKey(pubkey), String(nowMs))
+  } catch {
+    // Scans again next start.
+  }
+  return adopted
 }
 
 /** A link this wallet has a pending send for (its row is written only once the send settles). */
@@ -1533,6 +1851,8 @@ async function adoptLink(
       voucherId: parsed.voucher.voucherId,
       link: { k, i, x, status: 'outstanding', ...(locked ? { arm: locked.arm } : {}) },
       at: sentAt * 1000,
+      // One link's coupons are one send: History folds them (the live send's random id is gone).
+      ...(tokens.length > 1 ? { bundleId: cashlinkBundleId(linkPubOf(secretFromText(k)!)) } : {}),
     })
     await wallet.addTransaction(row)
   }

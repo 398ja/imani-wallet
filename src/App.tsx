@@ -12,6 +12,7 @@ import { RestoringVouchers, WalletOpening } from './components/WalletOpening'
 import { startDmPoll } from './lib/dmPoll'
 import { startIncomingNotifications } from './lib/incomingNotifications'
 import { startCatalogRefresh } from './lib/entitlement'
+import { sweepSharedFiles } from './lib/download'
 import { startPaymentReceipts, stopPaymentReceipts } from './lib/paymentReceiptDrain'
 import { startCashbackClaims, stopCashbackClaims } from './lib/cashbackClaimDrain'
 import { startPushListener, stopPushListener } from './lib/notifications/listener'
@@ -78,7 +79,7 @@ import { refreshOwnBadge, setVerificationOwner } from './lib/verificationReader'
 import { SUBSCRIPTION_STATUS_EVENT } from './lib/subscriptionStatusStore'
 import { GiftLandingPage } from './pages/GiftLandingPage'
 import { GiftReturnPage } from './pages/GiftReturnPage'
-import { finishPendingCashlinkClaims, reconcileGiftLinks, restoreScan } from './lib/giftLinks'
+import { finishCashlinkIntentsNow, finishPendingCashlinkClaims, reconcileGiftLinks, restoreScanIfDue } from './lib/giftLinks'
 import { runCashlinkExpiryNoticesAfterReconcile } from './lib/cashlinkExpiryNotice'
 import { BuyPage } from './pages/BuyPage'
 import { BuyCancelledPage, BuyDonePage } from './pages/BuyReturnPages'
@@ -184,6 +185,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // The signed tier catalog, now and daily (#506): a stall that never opens Settings ›
         // Subscription still gets a newer limit. Same for every account, so started once.
         startCatalogRefresh()
+
+        // A backup saved through the share sheet last session may still sit in the app's cache
+        // (it is kept until the target app has read it). Clear it now. Native only, never throws.
+        void sweepSharedFiles()
 
         // The other half of the same idea, for when the app is NOT open: a
         // push the service worker (or the native plugin) received is posted
@@ -364,12 +369,15 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           // from another device is known by its row. The restore scan adopts any outstanding link
           // this device's history does not know (a lost phone), then every outstanding link is
           // checked by NUT-07: spent is claimed, and past its expiry it is taken back. Never throws.
-          .then(() => restoreScan(pubkey))
+          .then(() => restoreScanIfDue(pubkey))
           // #295 phase 4: a Cashlink this wallet started to claim and did not finish (the page
           // died after the burn) is finished first, from the factors it wrote down. Never throws.
           .then(async (adopted) => {
             const done = await finishPendingCashlinkClaims(pubkey)
             if (done > 0) console.info(`[app] finished ${done} Cashlink claim(s)`)
+            // #543: a Cashlink made on the direct path that a page left part way.
+            const made = await finishCashlinkIntentsNow(pubkey)
+            if (made > 0) console.info(`[app] finished ${made} Cashlink(s) being made`)
             return adopted
           })
           .then((adopted) => {
