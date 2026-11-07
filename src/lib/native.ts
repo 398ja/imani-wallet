@@ -1,6 +1,5 @@
-import { Capacitor } from '@capacitor/core'
+import { Capacitor, SystemBars, SystemBarsStyle } from '@capacitor/core'
 import { App } from '@capacitor/app'
-import { StatusBar, Style } from '@capacitor/status-bar'
 
 /**
  * The handful of things a web build cannot know about Android.
@@ -22,20 +21,16 @@ export function initNative(): void {
     else App.exitApp()
   })
 
-  // Ask for the status bar area to be reserved rather than drawn under.
-  //
-  // Android 15 ignores this: targetSdk 35 enforces edge-to-edge, and a Pixel
-  // duly rendered the header behind the clock where it could not be tapped. So
-  // Header pads itself with `env(safe-area-inset-top)`, which is the case this
-  // call was meant to avoid. It stays for everything older, where it IS
-  // honoured and the inset is then 0 — the two do not double up.
-  StatusBar.setOverlaysWebView({ overlay: false })
-  // --background, light theme. Matched by hand: Tailwind's tokens are CSS
-  // variables the native layer cannot read.
-  StatusBar.setBackgroundColor({ color: '#fafafa' })
-  // Dark icons, because that background is light. Style.Light means "for a
-  // light background", which reads backwards.
-  StatusBar.setStyle({ style: Style.Light })
+  // targetSdk 36 (Android 16) enforces edge-to-edge with no opt-out: the
+  // WebView always draws under the status and navigation bars, and a status
+  // bar background colour can no longer be set. So there is nothing to reserve
+  // natively. Header pads itself with `env(safe-area-inset-top)` and #root and
+  // the Toaster with `env(safe-area-inset-bottom)`; Capacitor 8's SystemBars
+  // (insetsHandling in capacitor.config.ts) makes those values correct even on
+  // WebViews older than Chromium 140. All that is left is the icon colour:
+  // dark icons, because the header material is light. SystemBarsStyle.Light
+  // means "for a light background", which reads backwards.
+  void SystemBars.setStyle({ style: SystemBarsStyle.Light }).catch(() => {})
 }
 
 /**

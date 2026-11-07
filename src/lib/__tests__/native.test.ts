@@ -2,9 +2,12 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
 // Web build only: `isNativePlatform()` false, so these exercise the browser
 // path and the fallback. The native path is the plugin's own contract.
-vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => false } }))
+vi.mock('@capacitor/core', () => ({
+  Capacitor: { isNativePlatform: () => false },
+  SystemBars: { setStyle: async () => {} },
+  SystemBarsStyle: { Light: 'LIGHT' },
+}))
 vi.mock('@capacitor/app', () => ({ App: { addListener: () => {} } }))
-vi.mock('@capacitor/status-bar', () => ({ StatusBar: {}, Style: {} }))
 
 import { canShare, shareText } from '../native'
 
