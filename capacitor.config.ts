@@ -43,6 +43,15 @@ const config: CapacitorConfig = {
     url: appUrl(),
   },
   plugins: {
+    SystemBars: {
+      // targetSdk 36 is always edge-to-edge. `css` keeps env(safe-area-inset-*)
+      // correct on WebViews older than Chromium 140 (where Chromium reports 0)
+      // and also exposes --safe-area-inset-* variables. index.html already
+      // declares viewport-fit=cover, so hint it to avoid a first-frame jump.
+      insetsHandling: 'css',
+      initialViewportFitValueHint: 'cover',
+      style: 'LIGHT',
+    },
     Keyboard: {
       // Resize the WebView rather than sliding it, so a focused input at the
       // bottom of a scrollable page stays visible instead of going under the

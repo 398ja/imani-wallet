@@ -30,11 +30,9 @@ import { profileHandle, profileName, profileUnknown, type Profile } from '../../
  * stranger's pubkey, and this is the one person whose profile we already hold.
  *
  * `pt-[env(safe-area-inset-top)]` is load-bearing, not padding taste. targetSdk
- * 35 is Android 15, which enforces edge-to-edge and ignores
- * `StatusBar.setOverlaysWebView({ overlay: false })` — so on a Pixel the WebView
- * starts at y=0, and the avatar rendered behind the clock where it could not be
- * tapped. The inset is 0 in every browser and on any Android where that call is
- * still honoured, so it costs nothing where it is not needed. It belongs on the
+ * 36 enforces edge-to-edge with no opt-out, so the WebView starts at y=0 and,
+ * unpadded, the avatar renders behind the clock where it cannot be tapped.
+ * The inset is 0 in every browser, so it costs nothing where it is not needed. It belongs on the
  * header rather than on `#root` because the header is sticky: padding the page
  * would slide back under the status bar on the first scroll.
  *
