@@ -216,6 +216,12 @@ export function handleLabel(nip05: string): string {
   return `@${nip05.split('@')[0]}`
 }
 
+/** The handle part of a nip05 (`duran` from `duran@staging.398ja.xyz`), or null. */
+export function handleOf(nip05: string | null | undefined): string | null {
+  const name = nip05?.split('@')[0]?.trim()
+  return name ? name : null
+}
+
 /** Short form of a pubkey for display. */
 export function shortPubkey(pubkey: string): string {
   return pubkey.length > 16 ? `${pubkey.slice(0, 8)}…${pubkey.slice(-4)}` : pubkey
