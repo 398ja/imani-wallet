@@ -26,18 +26,18 @@ describe('checkout codes in flight', () => {
   it('a reserved code holds its coupons back from spending and blocks logout', () => {
     saveCheckoutCode(ME, record())
     expect(withoutInFlight(rows, ME).map((r) => r.token_id)).toEqual(['row-b'])
-    expect(moneyInFlight(ME).cashlinks).toBe(1)
+    expect(moneyInFlight(ME).codes).toBe(1)
   })
 
   it('a finished code holds nothing', () => {
     saveCheckoutCode(ME, record({ status: 'redeemed', done: true }))
     expect(withoutInFlight(rows, ME)).toHaveLength(2)
-    expect(moneyInFlight(ME).cashlinks).toBe(0)
+    expect(moneyInFlight(ME).codes).toBe(0)
   })
 
   it('an unreadable ledger blocks logout', () => {
     localStorage.setItem(checkoutCodesKey(ME), '{oops')
-    expect(moneyInFlight(ME).cashlinks).toBe(1)
+    expect(moneyInFlight(ME).codes).toBe(1)
   })
 
   it('refund indices are wallet-wide and never handed out twice', () => {

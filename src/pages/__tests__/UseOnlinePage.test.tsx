@@ -228,3 +228,37 @@ describe('Use online', () => {
     expect(screen.getByTestId('checkout-code').textContent).toBe(CODE)
   })
 })
+
+describe('#557: a History row whose code record is not on this device', () => {
+  const row = {
+    id: 'checkout:gone', type: 'checkout_code', direction: 'out', timestamp: NOW_S * 1000, amount: 75, unit: 'EUR', decimals: 2,
+    merchantId: W.STALL, checkoutCode: { id: 'gone', status: 'reserved', shopHost: 'shop.example' },
+  }
+
+  it('opens a readable detail from the History row, with the status from /mine', async () => {
+    codes = []
+    deps.historyRow = vi.fn(async (id: string) => (id === 'checkout:gone' ? row : null))
+    deps.mine = vi.fn(async () => [{ idempotency_key: 'gone', status: 'redeemed' }])
+    at('/online/code/gone')
+    const detail = await screen.findByTestId('code-from-history')
+    expect(detail.textContent).toMatch(/0\.75/)
+    await waitFor(() => expect(screen.getByTestId('code-from-history').textContent).toContain('Used'))
+    expect(screen.getByText('For shop.example')).toBeTruthy()
+    expect(screen.queryByText('No such code.')).toBeNull()
+  })
+
+  it('falls back to the row status when /mine does not answer', async () => {
+    codes = []
+    deps.historyRow = async () => row
+    deps.mine = async () => null
+    at('/online/code/gone')
+    expect((await screen.findByTestId('code-from-history')).textContent).toContain('Ready to use')
+  })
+
+  it('after a restore the full code screen opens again', async () => {
+    // The record as restoreCheckoutCodes writes it back (checkoutCodeBackup557.test.ts).
+    codes = [record({ id: 'gone' })]
+    at('/online/code/gone')
+    expect(screen.getByTestId('checkout-code')).toBeTruthy()
+  })
+})

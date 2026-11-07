@@ -30,7 +30,7 @@ beforeEach(() => localStorage.clear())
 
 describe('moneyInFlight', () => {
   it('sees a swap intent the receive path wrote, and stops seeing it once forgotten', () => {
-    expect(moneyInFlight(PK)).toEqual({ sends: 0, swaps: 0, cashlinks: 0 })
+    expect(moneyInFlight(PK)).toEqual({ sends: 0, swaps: 0, cashlinks: 0, codes: 0 })
     rememberSwapIntent(PK, intent('one') as never)
     expect(moneyInFlight(PK).swaps).toBe(1)
     forgetSwapIntent(PK, 'one')
@@ -71,6 +71,6 @@ describe('moneyInFlight', () => {
 
   it('is per account', () => {
     rememberSwapIntent(PK, intent('mine') as never)
-    expect(moneyInFlight('cd'.repeat(32))).toEqual({ sends: 0, swaps: 0, cashlinks: 0 })
+    expect(moneyInFlight('cd'.repeat(32))).toEqual({ sends: 0, swaps: 0, cashlinks: 0, codes: 0 })
   })
 })

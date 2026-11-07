@@ -100,7 +100,9 @@ describe('the default settle step (third check of #326)', () => {
     // The stash check (#331) would block on this too; it is passed here so the
     // ledger's own default reader is what refuses.
     const checkStash = async () => ({ ok: true as const, fingerprint: '', count: 0 })
-    expect(await attemptLogout(PK, () => true, () => {}, { checkStash })).toMatchObject({
+    // And the checkout-code check (#557), for the same reason.
+    const checkCodes = async () => ({ ok: true as const, fingerprint: '' })
+    expect(await attemptLogout(PK, () => true, () => {}, { checkStash, checkCodes })).toMatchObject({
       status: 'blocked',
       reason: 'in-flight',
     })
