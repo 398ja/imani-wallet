@@ -32,6 +32,38 @@ export function ClosedNote({ owner }: { owner: boolean }) {
 }
 
 /**
+ * #558 "Close my stall": the banner while selling has stopped and redeeming goes on.
+ */
+export function SalesClosedNote() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="sales-closed"
+      className="mt-4 rounded-2xl bg-amber-50 p-4 text-center text-sm text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+    >
+      <p className="font-medium">Your stall is closed for selling</p>
+      <p className="mt-1">
+        You can no longer sell vouchers here, on your terminals or by card. Customers can still spend the
+        vouchers they hold with you, so keep redeeming them.
+      </p>
+    </div>
+  )
+}
+
+/** Guards Sell and Cashback for a stall closed for selling (#558). Redeem is never wrapped. */
+export function SellingStallOnly({ merchant, children }: { merchant: { salesClosed?: boolean }; children: ReactNode }) {
+  if (merchant.salesClosed !== true) return <>{children}</>
+  return (
+    <Screen>
+      <div className="flex min-h-[calc(100svh-9rem)] flex-col justify-center">
+        <SalesClosedNote />
+      </div>
+    </Screen>
+  )
+}
+
+/**
  * Guards a trading screen (Sell, Cashback, Redeem) on the stall being OPEN (#434). The routes stay
  * mounted for a closed stall, so a typed URL or a stale tab lands on an explanation rather than a
  * customer screen or a 404, and nothing on the screen behind can move money.

@@ -59,7 +59,7 @@ import { isTerminalDevice } from './lib/terminalEnrol'
 import { WelcomePage } from './pages/WelcomePage'
 import { MerchantsPage } from './pages/MerchantsPage'
 import { MerchantHomePage } from './pages/MerchantHomePage'
-import { OpenStallOnly } from './components/StallClosed'
+import { OpenStallOnly, SellingStallOnly } from './components/StallClosed'
 import {
   MerchantTransactionsPage,
   IssuedCouponsPage,
@@ -100,6 +100,7 @@ import { ProfilePage } from './pages/ProfilePage'
 import { FinishProfilePrompt } from './components/FinishProfilePrompt'
 import { claimProfileWith } from './lib/profileGate'
 import { SettingsPage } from './pages/SettingsPage'
+import { DeleteAccountPage } from './pages/DeleteAccountPage'
 import { AboutPage } from './pages/AboutPage'
 import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
@@ -150,6 +151,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   // The coupons coming back from their backup after login: said quietly, on
   // the home screen, so an empty list is not mistaken for an empty wallet.
   const [restoring, setRestoring] = useState(false)
+  // #558: the sealed history (kind 7376) is back from the relay. The account-deletion liability
+  // check reads issued rows from it, so it waits for this rather than answer from an empty device.
+  const [historyRestored, setHistoryRestored] = useState(false)
 
   useEffect(() => onWalletOpenStatus(setOpenStatus), [])
   const [profile, setProfile] = useState<Profile>(() => loadProfile(pubkey) ?? emptyProfile(pubkey))
@@ -315,6 +319,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           })
           .then((restored) => {
             if (restored > 0) console.info(`[app] restored ${restored} transactions from the relay`)
+            if (live) setHistoryRestored(true)
             // And push up anything the relay is missing — transactions made
             // before this existed, while a relay was refusing writes, or whose
             // publish lost the race with a closing tab.
@@ -577,6 +582,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
                   session={terminal.session}
                   refusal={terminal.refusal}
                   closed={!merchant.active}
+                  salesClosed={merchant.salesClosed === true}
                 />
               ) : (
                 <MerchantsPage pubkey={pubkey} />
@@ -591,12 +597,14 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               path="/sell"
               element={
                 <OpenStallOnly merchant={merchant}>
-                  <SellPage
-                    pubkey={pubkey}
-                    merchant={merchant}
-                    actor={terminal.actor ?? undefined}
-                    session={terminal.session}
-                  />
+                  <SellingStallOnly merchant={merchant}>
+                    <SellPage
+                      pubkey={pubkey}
+                      merchant={merchant}
+                      actor={terminal.actor ?? undefined}
+                      session={terminal.session}
+                    />
+                  </SellingStallOnly>
                 </OpenStallOnly>
               }
             />
@@ -607,11 +615,13 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               path="/sell/cashback"
               element={
                 <OpenStallOnly merchant={merchant}>
-                  <CashbackIssuePage
-                    merchant={merchant}
-                    actor={terminal.actor ?? undefined}
-                    session={terminal.session}
-                  />
+                  <SellingStallOnly merchant={merchant}>
+                    <CashbackIssuePage
+                      merchant={merchant}
+                      actor={terminal.actor ?? undefined}
+                      session={terminal.session}
+                    />
+                  </SellingStallOnly>
                 </OpenStallOnly>
               }
             />
@@ -850,6 +860,24 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               pubkey={pubkey}
               terminal={terminal.actor !== null}
             />
+          }
+        />
+        {/* #558: reached only from Security's Danger zone. Never on a terminal. */}
+        <Route
+          path="/settings/security/delete"
+          element={
+            terminal.actor !== null ? (
+              <Navigate to="/settings/security" replace />
+            ) : (
+              <DeleteAccountPage
+                pubkey={pubkey}
+                nip05={profile.nip05}
+                merchant={merchant}
+                onMerchantSaved={setMerchant}
+                onDeleted={onLoggedOut}
+                historyReady={historyRestored}
+              />
+            )
           }
         />
         <Route

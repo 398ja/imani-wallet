@@ -48,7 +48,7 @@ import { openTillSales } from '../lib/tillSalesNet'
 import { checkForRenewal, sendRenewRequest, RENEWAL_POLL_MS } from '../lib/terminalRenewalNet'
 import { pendingTillSales, UNSENT_SALES_WARNING } from '../lib/tillSales'
 import { useStallStatus } from '../hooks/useStallStatus'
-import { ClosedNote, OpenStallOnly } from '../components/StallClosed'
+import { ClosedNote, OpenStallOnly, SalesClosedNote, SellingStallOnly } from '../components/StallClosed'
 
 /**
  * The till, on a device enrolled as a terminal (#160 phase 3, spec 2.3 and 2.4).
@@ -241,7 +241,9 @@ export function TerminalApp() {
         element={
           stall && mayWarrantSale(till.actor, till.session) ? (
             <OpenStallOnly merchant={{ active: !closed }} owner={false}>
-              <SellPage pubkey={till.devicePubkey} merchant={stall} actor={till.actor} session={till.session} />
+              <SellingStallOnly merchant={stall}>
+                <SellPage pubkey={till.devicePubkey} merchant={stall} actor={till.actor} session={till.session} />
+              </SellingStallOnly>
             </OpenStallOnly>
           ) : (
             <SellUnavailable till={till} stall={stall} />
@@ -253,7 +255,9 @@ export function TerminalApp() {
         element={
           stall && mayWarrantSale(till.actor, till.session) ? (
             <OpenStallOnly merchant={{ active: !closed }} owner={false}>
-              <CashbackIssuePage merchant={stall} actor={till.actor} session={till.session} />
+              <SellingStallOnly merchant={stall}>
+                <CashbackIssuePage merchant={stall} actor={till.actor} session={till.session} />
+              </SellingStallOnly>
             </OpenStallOnly>
           ) : (
             <SellUnavailable till={till} stall={stall} />
@@ -494,7 +498,7 @@ function TerminalHome({
         </div>
         <div className={`grid gap-3 ${mayIssue && mayRedeem ? 'grid-cols-2' : 'grid-cols-1'}`}>
           {mayIssue ? (
-            <Button size="lg" disabled={closed} onClick={() => navigate('/sell')}>
+            <Button size="lg" disabled={closed || stall?.salesClosed === true} onClick={() => navigate('/sell')}>
               <Send className="mr-2 h-5 w-5" aria-hidden /> Sell
             </Button>
           ) : null}
@@ -505,6 +509,7 @@ function TerminalHome({
           ) : null}
         </div>
         {closed && stall !== null && <ClosedNote owner={false} />}
+        {!closed && stall?.salesClosed === true && <SalesClosedNote />}
         {/* A selling role the stall never attested (spec 4.6.5): Redeem only, and the owner's
             one-tap Renew, which this till can ask for (#160 phase 6, Q3). */}
         {till.actor.attested !== true &&
