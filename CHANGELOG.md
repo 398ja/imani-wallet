@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.58.2] - 2026-11-07
+
+### Fixed
+
+- **No false "Voucher not saved" for a payment saved on another device** (#560, #567). When the
+  wallet read an old gift wrap whose receive this account had already saved and acknowledged (on
+  another device, or before a logout), the gateway's replay came back without a token and the
+  wallet warned "Voucher not saved ... contact support". An account used on two devices got one such
+  warning per payment the other device received. The gateway now names the escrow status on the
+  replay (gateway-customer 0.48.0, `X-Receive-Status`). An `ACKNOWLEDGED` replay, or a 409
+  `RECEIVE_ALREADY_SETTLED` whose details say `status=ACKNOWLEDGED`, is treated as already
+  received. A replay of a receive that settled but was never acknowledged still warns. On start the
+  wallet also asks the gateway (`POST /receive/statuses`) about every stored warning and drops the
+  ones now acknowledged, with their bell rows. An older gateway sends no status, and nothing changes
+  there.
+
 ## [0.58.1] - 2026-11-07
 
 ### Fixed
