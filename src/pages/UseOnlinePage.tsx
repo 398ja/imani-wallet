@@ -4,14 +4,15 @@ import { Copy, ExternalLink, Globe } from 'lucide-react'
 
 import { Alert, BackLink, Button, Centered, DetailRow, IdentityInline, Input, Notice, PageHeader, Panel, Screen } from '../components/ui'
 import { humanName } from '../lib/identity'
-import { listVouchers } from '../lib/wallet'
+import { getTransactionRow, listVouchers } from '../lib/wallet'
 import { toMerchants } from '../lib/merchants'
 import { fetchMerchantRecord } from '../lib/merchant'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import { availableOf, checkoutPlan, maxExpiryFor, type CheckoutExclusion, type CheckoutPlan } from '../lib/checkoutPlan'
 import { compact, display } from '../lib/checkoutCode'
 import { loadCheckoutCodes, remainingOf, type CheckoutCodeRecord } from '../lib/checkoutCodeRecords'
-import { startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
+import { CHECKOUT_CODES_PATH, startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
+import { asCheckoutCodeSnapshot, checkoutTxId, CHECKOUT_STATUS_WORDS } from '../lib/checkoutCodeHistory'
 import { appCheckoutPorts } from '../lib/checkoutCodePorts'
 import { splitVoucher } from '../lib/voucherSplit'
 import { warmMint } from '../lib/cashlinkFlow'
@@ -45,6 +46,10 @@ export interface UseOnlineDeps {
   split: typeof splitVoucher
   /** #477: open the mint connection and read its keyset while the amount is typed. */
   warm?: () => void
+  /** #557: the code's History row, for a code whose record is not on this device. */
+  historyRow?: (txId: string) => Promise<Record<string, unknown> | null>
+  /** #557: the store's `GET /mine`, for that code's current status. Null when it did not answer. */
+  mine?: () => Promise<Array<Record<string, unknown>> | null>
 }
 
 const realDeps: UseOnlineDeps = {
@@ -55,6 +60,15 @@ const realDeps: UseOnlineDeps = {
   codes: loadCheckoutCodes,
   ports: appCheckoutPorts,
   split: splitVoucher,
+  historyRow: async (txId) => ((await getTransactionRow(txId)) as unknown as Record<string, unknown> | null) ?? null,
+  mine: async () => {
+    const answer = await appCheckoutPorts().store.call('GET', `${CHECKOUT_CODES_PATH}/mine`)
+    if (answer.status !== 200) return null
+    const body = answer.body as unknown
+    if (Array.isArray(body)) return body as Array<Record<string, unknown>>
+    const codes = (body as { codes?: unknown } | null)?.codes
+    return Array.isArray(codes) ? (codes as Array<Record<string, unknown>>) : null
+  },
   warm: () => {
     for (const url of trustedMintUrls()) warmMint(url)
   },
@@ -400,7 +414,7 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
 function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: UseOnlineDeps }) {
   const [record] = useState<CheckoutCodeRecord | undefined>(() => deps.codes(pubkey).find((r) => r.id === id))
   const [copied, setCopied] = useState(false)
-  if (!record) return <Centered>No such code.</Centered>
+  if (!record) return <CodeFromHistory id={id} deps={deps} />
   const shop = hostOf(record.shopUrl)
   const denom = { unit: record.unit, decimals: record.decimals }
   const expires = new Date(record.x * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -475,6 +489,51 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
           Anyone with this code can use the rest until {expires}; whatever is left then comes back to you.
         </p>
       )}
+    </Screen>
+  )
+}
+
+/**
+ * #557: a code whose record is not on this device (a login on a new device before the backup came
+ * back, or a record that was never backed up). What its History row says, and its status from the
+ * store's `/mine` when it answers, instead of a dead end.
+ */
+function CodeFromHistory({ id, deps }: { id: string; deps: UseOnlineDeps }) {
+  const [state, setState] = useState<{ row: Record<string, unknown> | null; status?: string } | 'loading'>('loading')
+  useEffect(() => {
+    let live = true
+    void (async () => {
+      const row = await (deps.historyRow ?? (async () => null))(checkoutTxId(id)).catch(() => null)
+      if (live) setState({ row })
+      const mine = await (deps.mine ?? (async () => null))().catch(() => null)
+      const entry = mine?.find((e) => e.idempotency_key === id)
+      if (live && typeof entry?.status === 'string') setState({ row, status: entry.status })
+    })()
+    return () => {
+      live = false
+    }
+  }, [id, deps])
+  if (state === 'loading') return <Centered>Loading…</Centered>
+  const { row } = state
+  if (!row) return <Centered>No such code.</Centered>
+  const snap = asCheckoutCodeSnapshot(row.checkoutCode)
+  const denom = { unit: String(row.unit ?? ''), decimals: Number(row.decimals ?? 0) }
+  const amount = typeof row.amount === 'number' ? formatFace(row.amount, denom) : 'Not recorded'
+  const stall = typeof row.merchantId === 'string' ? row.merchantId : undefined
+  const when = typeof row.timestamp === 'number' ? new Date(row.timestamp).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Not recorded'
+  const status = state.status ?? snap?.status
+  const statusWords = status ? (CHECKOUT_STATUS_WORDS as Record<string, string>)[status] ?? status : 'Not known'
+  return (
+    <Screen>
+      <BackLink to={stall ? `/merchants/${stall}` : '/'} label="Done" />
+      <PageHeader title="Your code" subtitle={snap?.shopHost ? `For ${snap.shopHost}` : undefined} />
+      {stall && <StallCard stall={stall} shopUrl={snap?.shopHost ? `https://${snap.shopHost}` : undefined} linkToProfile />}
+      <section className="mb-6 divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800" data-testid="code-from-history">
+        <DetailRow label="Amount" value={amount} />
+        <DetailRow label="Made" value={when} />
+        <DetailRow label="Status" value={statusWords} />
+      </section>
+      <Notice tone="warning">The details of this code are not on this device, so its code cannot be shown here.</Notice>
     </Screen>
   )
 }

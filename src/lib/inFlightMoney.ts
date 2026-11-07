@@ -141,13 +141,15 @@ function movingIntents(key: string): number {
 }
 
 /** Live (unexpired) entries in each ledger. Never throws. */
-export function moneyInFlight(pubkey: string): { sends: number; swaps: number; cashlinks: number } {
+export function moneyInFlight(pubkey: string): { sends: number; swaps: number; cashlinks: number; codes: number } {
   return {
     sends:
       liveEntries(pendingSendsKey(pubkey), PENDING_SEND_LIFETIME_MS) +
       liveEntries(sendIntentsKey(pubkey), SEND_INTENT_LIFETIME_MS),
     swaps: liveEntries(swapIntentsKey(pubkey), SWAP_INTENT_LIFETIME_MS),
-    // #402: an outstanding checkout code counts with the Cashlinks: the same kind of locked value.
-    cashlinks: allEntries(cashlinkClaimsKey(pubkey)) + allEntries(cashlinkMovingKey(pubkey)) + outstandingCodes(checkoutCodesLedgerKey(pubkey)) + allEntries(voucherSplitsKey(pubkey)) + movingIntents(cashlinkIntentsKey(pubkey)),
+    cashlinks: allEntries(cashlinkClaimsKey(pubkey)) + allEntries(cashlinkMovingKey(pubkey)) + allEntries(voucherSplitsKey(pubkey)) + movingIntents(cashlinkIntentsKey(pubkey)),
+    // #557: outstanding checkout codes, on their own. Logout lets one through once its relay backup
+    // is read back (checkoutCodeBackup.ts); anything else that reads this still counts it as value.
+    codes: outstandingCodes(checkoutCodesLedgerKey(pubkey)),
   }
 }
