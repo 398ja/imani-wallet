@@ -59,7 +59,7 @@ import { isTerminalDevice } from './lib/terminalEnrol'
 import { WelcomePage } from './pages/WelcomePage'
 import { MerchantsPage } from './pages/MerchantsPage'
 import { MerchantHomePage } from './pages/MerchantHomePage'
-import { OpenStallOnly } from './components/StallClosed'
+import { OpenStallOnly, SellingStallOnly } from './components/StallClosed'
 import {
   MerchantTransactionsPage,
   IssuedCouponsPage,
@@ -100,6 +100,7 @@ import { ProfilePage } from './pages/ProfilePage'
 import { FinishProfilePrompt } from './components/FinishProfilePrompt'
 import { claimProfileWith } from './lib/profileGate'
 import { SettingsPage } from './pages/SettingsPage'
+import { DeleteAccountPage } from './pages/DeleteAccountPage'
 import { AboutPage } from './pages/AboutPage'
 import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
@@ -577,6 +578,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
                   session={terminal.session}
                   refusal={terminal.refusal}
                   closed={!merchant.active}
+                  salesClosed={merchant.salesClosed === true}
                 />
               ) : (
                 <MerchantsPage pubkey={pubkey} />
@@ -591,12 +593,14 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               path="/sell"
               element={
                 <OpenStallOnly merchant={merchant}>
-                  <SellPage
-                    pubkey={pubkey}
-                    merchant={merchant}
-                    actor={terminal.actor ?? undefined}
-                    session={terminal.session}
-                  />
+                  <SellingStallOnly merchant={merchant}>
+                    <SellPage
+                      pubkey={pubkey}
+                      merchant={merchant}
+                      actor={terminal.actor ?? undefined}
+                      session={terminal.session}
+                    />
+                  </SellingStallOnly>
                 </OpenStallOnly>
               }
             />
@@ -607,11 +611,13 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               path="/sell/cashback"
               element={
                 <OpenStallOnly merchant={merchant}>
-                  <CashbackIssuePage
-                    merchant={merchant}
-                    actor={terminal.actor ?? undefined}
-                    session={terminal.session}
-                  />
+                  <SellingStallOnly merchant={merchant}>
+                    <CashbackIssuePage
+                      merchant={merchant}
+                      actor={terminal.actor ?? undefined}
+                      session={terminal.session}
+                    />
+                  </SellingStallOnly>
                 </OpenStallOnly>
               }
             />
@@ -850,6 +856,23 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
               pubkey={pubkey}
               terminal={terminal.actor !== null}
             />
+          }
+        />
+        {/* #558: reached only from Security's Danger zone. Never on a terminal. */}
+        <Route
+          path="/settings/security/delete"
+          element={
+            terminal.actor !== null ? (
+              <Navigate to="/settings/security" replace />
+            ) : (
+              <DeleteAccountPage
+                pubkey={pubkey}
+                nip05={profile.nip05}
+                merchant={merchant}
+                onMerchantSaved={setMerchant}
+                onDeleted={onLoggedOut}
+              />
+            )
           }
         />
         <Route

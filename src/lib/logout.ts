@@ -185,6 +185,11 @@ export interface LogoutDeps {
    * tab that is busy, does not answer, or cannot be reached refuses the logout.
    */
   pauseTabs?: () => Promise<PauseResult>
+  /**
+   * #558: one more step once the safety checks pass and the user confirmed, before anything is
+   * stopped. Account deletion deletes the handle here. False cancels the logout.
+   */
+  proceed?: () => Promise<boolean>
 }
 
 /** How long logout gives the pending sends to settle before it checks them. */
@@ -373,6 +378,9 @@ export async function attemptLogout(
 
   // 2.
   if (!confirm(LOGOUT_WARNING)) return { status: 'cancelled' }
+  // 2a. #558: account deletion runs its signed DELETE here, after every safety check above has
+  // passed and before anything is stopped. Answering false cancels and changes nothing.
+  if (deps.proceed && !(await deps.proceed().catch(() => false))) return { status: 'cancelled' }
 
   // 2b. Every other tab of this wallet pauses first, or nothing happens (#335).
   // Asked after the confirmation, so a declined logout never disturbs them.

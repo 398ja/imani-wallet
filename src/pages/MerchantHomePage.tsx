@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { ClosedNote } from '../components/StallClosed'
+import { ClosedNote, SalesClosedNote } from '../components/StallClosed'
 import { Clock, QrCode, Send, ShieldOff } from 'lucide-react'
 
 import { Button, Screen } from '../components/ui'
@@ -59,6 +59,7 @@ export function MerchantHomePage({
   session,
   refusal,
   closed = false,
+  salesClosed = false,
 }: {
   /** The terminal acting for this stall. Absent on the owner's own device. */
   actor?: Actor
@@ -74,6 +75,8 @@ export function MerchantHomePage({
    * device links to the switch; a till is told to ask the owner.
    */
   closed?: boolean
+  /** #558: the stall is closed for selling ("Close my stall"). Sell is off, Redeem stays. */
+  salesClosed?: boolean
 } = {}) {
   const navigate = useNavigate()
 
@@ -123,7 +126,7 @@ export function MerchantHomePage({
             it is a device whose whole job is the one button it has. */}
         <div className={`grid gap-3 ${mayIssue && mayRedeem ? 'grid-cols-2' : 'grid-cols-1'}`}>
           {mayIssue ? (
-            <Button size="lg" disabled={closed} onClick={() => navigate('/sell')}>
+            <Button size="lg" disabled={closed || salesClosed} onClick={() => navigate('/sell')}>
               <Send className="mr-2 h-5 w-5" aria-hidden /> Sell
             </Button>
           ) : null}
@@ -141,6 +144,7 @@ export function MerchantHomePage({
           ) : null}
         </div>
         {closed && <ClosedNote owner={owner} />}
+        {!closed && salesClosed && <SalesClosedNote />}
       </div>
     </Screen>
   )
