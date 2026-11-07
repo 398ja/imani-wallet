@@ -102,6 +102,11 @@ export interface MerchantProfile {
    */
   acceptsCards?: boolean
   /**
+   * #558 "Close my stall": selling has stopped for good (no Sell, no card sales) while redeeming
+   * and receiving go on, so customers can still spend what they hold. Only a literal `true` counts.
+   */
+  salesClosed?: boolean
+  /**
    * The stall opted in to search-engine indexing of its gifting page (#410 G1).
    * Like `acceptsCards`, only a literal `true` counts, and absent means no.
    */
@@ -355,7 +360,8 @@ export function buildMerchantEvent(merchant: MerchantProfile): EventTemplate {
   // Only when TRUE. Absent means "this stall does not take cards", which is
   // also what an older client that never knew the field publishes, so the two
   // agree rather than needing to be told apart.
-  if (merchant.acceptsCards === true) content.acceptsCards = true
+  if (merchant.acceptsCards === true && merchant.salesClosed !== true) content.acceptsCards = true
+  if (merchant.salesClosed === true) content.salesClosed = true
   if (merchant.giftingIndexable === true) content.giftingIndexable = true
   // Republished as read, so saving the profile here never drops a shop another client connected.
   if (merchant.onlineShop) content.online_shop = onlineShopField(merchant.onlineShop)
@@ -416,7 +422,8 @@ export function mergeMerchantEvent(
     // tracks a live external fact — whether Stripe will accept a charge — and a
     // record that stops asserting it has stopped being evidence for it. Holding
     // the old value would keep a Buy button alive on a stall that disconnected.
-    acceptsCards: parsed.acceptsCards === true,
+    acceptsCards: parsed.acceptsCards === true && parsed.salesClosed !== true,
+    salesClosed: parsed.salesClosed === true,
     giftingIndexable: parsed.giftingIndexable === true,
     // Absent or malformed means no shop, for the reason `acceptsCards` gives: a record that stops
     // naming a key has stopped being evidence for it, and a stale `S` would lock money to it.
