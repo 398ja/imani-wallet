@@ -24,6 +24,7 @@ import {
   BROWSER_LOCALE, FAILURE_WORDS, SALE_DELIVERED, UNSAVED_RECEIVE, cents, createUi, goto, handleOf, oneLine, pubkeyOf,
   screenText, visibleToasts,
 } from './lib/ui.mts'
+import { shouldResell } from './lib/resell.mts'
 
 const BASE = (process.env.E2E_BASE ?? 'https://wallet.staging.398ja.xyz').replace(/\/+$/, '')
 const SINGLE_SALE = process.env.E2E_SINGLE_SALE ?? '7.00'
@@ -135,17 +136,31 @@ function asEuros(amountInCents: number): string {
   return (amountInCents / 100).toFixed(2)
 }
 
+/** How long a sale that did not show "delivered" gets to land in the customer's balance (#566). */
+const RESELL_CHECK_MS = 4 * 60_000
+
 /**
  * Sells until the sale lands, re-logging-in once if the session lapsed. A setup sale that
  * does not land is not the scenario under test, so it is retried; a second failure is reported.
+ *
+ * The result screen can lag a sale that went through, and selling again then issues a second
+ * voucher (#566: A ended at EUR 24.00, not 19.00). So before any retry the customer's balance
+ * is read once it settles, and the sale is sold again only if that balance did not rise by it.
+ * The decision is recorded as its own step, so a failure downstream says what happened here.
  */
-async function sellForSetup(context: BrowserContext, merchant: Page, to: string, amount: string): Promise<string> {
+async function sellForSetup(context: BrowserContext, merchant: Page, customer: Page, to: string, amount: string): Promise<{ landed: boolean; detail: string }> {
+  const before = await balance(customer)
   let sold = await sell(merchant, to, amount).catch((e) => `ERR ${e}`)
-  if (!SALE_DELIVERED.test(sold)) {
-    if (!merchant.url().includes('/sell') || /redirected/.test(sold)) await relogin(context, merchant)
-    sold = await sell(merchant, to, amount).catch((e) => `ERR ${e}`)
-  }
-  return sold
+  if (SALE_DELIVERED.test(sold)) return { landed: true, detail: sold }
+  const after = await waitForBalanceToSettle(customer, RESELL_CHECK_MS)
+  const screenNow = await screenText(merchant, 900).catch(() => '')
+  const resell = !SALE_DELIVERED.test(screenNow) && shouldResell(before, after, amount)
+  record(`setup: sell EUR ${amount} to ${to} not confirmed on screen, ${resell ? 'sold again' : 'not sold again'}`, true,
+    `customer balance ${before} -> ${after}; first screen: ${oneLine(sold)}; screen now: ${oneLine(screenNow)}`)
+  if (!resell) return { landed: true, detail: SALE_DELIVERED.test(screenNow) ? screenNow : `${sold} (landed: balance ${before} -> ${after})` }
+  if (!merchant.url().includes('/sell') || /redirected/.test(sold)) await relogin(context, merchant)
+  sold = await sell(merchant, to, amount).catch((e) => `ERR ${e}`)
+  return { landed: SALE_DELIVERED.test(sold), detail: sold }
 }
 
 /**
@@ -361,8 +376,8 @@ function watchToasts(page: Page): { stop: () => void; seen: Set<string>; maxAtOn
 async function payCustomerToCustomer(w: Wallets): Promise<void> {
   const beforeSetup = await balance(w.customer)
   for (const part of BUNDLE_PARTS) {
-    const sold = await sellForSetup(w.merchantContext, w.merchant, w.customerHandle, part)
-    if (!SALE_DELIVERED.test(sold)) record(`T8 setup: sell EUR ${part} to A`, false, oneLine(sold))
+    const sold = await sellForSetup(w.merchantContext, w.merchant, w.customer, w.customerHandle, part)
+    if (!sold.landed) record(`T8 setup: sell EUR ${part} to A`, false, oneLine(sold.detail))
   }
   const heldByA = await waitForBalanceToSettle(w.customer, 5 * 60_000)
   record(`T8 setup: A holds ${BUNDLE_PARTS.length} extra coupons`,
@@ -421,8 +436,8 @@ async function payBackToIssuer(w: Wallets): Promise<void> {
   const heldBefore = await balance(w.recipient)
   const topUps = Array.from({ length: SELF_ISSUED_PARTS - (1 + BUNDLE_PARTS.length) }, () => SELF_ISSUED_TOP_UP)
   for (const part of topUps) {
-    const sold = await sellForSetup(w.merchantContext, w.merchant, w.recipientHandle, part)
-    if (!SALE_DELIVERED.test(sold)) record(`T9 setup: sell EUR ${part} to B`, false, oneLine(sold))
+    const sold = await sellForSetup(w.merchantContext, w.merchant, w.recipient, w.recipientHandle, part)
+    if (!sold.landed) record(`T9 setup: sell EUR ${part} to B`, false, oneLine(sold.detail))
   }
   const heldByB = await waitForBalanceToSettle(w.recipient, 5 * 60_000)
   const expectedHeld = cents(heldBefore) + sumOfCents(topUps)
