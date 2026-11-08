@@ -17,6 +17,8 @@ import {
   MAX_VOUCHER_DOCUMENTS_TOTAL_BYTES,
   isVoucherByReference,
   isVoucherSecret,
+  tokenProofs,
+  tokenVoucherDocuments,
   parseVoucherToken,
   validateVoucherDocuments,
   verifyVoucher,
@@ -121,5 +123,29 @@ describe('Java by-reference vectors: negatives', () => {
     // One byte over: bad keys on purpose, to show the total is checked before any hash.
     const over = { ...ok, ['00'.repeat(32)]: new Uint8Array(1) }
     expect(() => validateVoucherDocuments(over, 64)).toThrow(/1 MiB/)
+  })
+})
+
+interface TokenMapVector {
+  name: string
+  token: string
+  accepted: boolean
+}
+
+describe('Java by-reference vectors: token documents maps (review L5)', () => {
+  const maps = vectors.token_documents_maps as TokenMapVector[]
+
+  it('covers __proto__, duplicate and non-text keys', () => {
+    expect(maps.map((m) => m.name)).toEqual(expect.arrayContaining(['well-formed', 'proto-key', 'duplicate-key', 'non-text-key']))
+  })
+
+  it.each(maps)('$name: accepted exactly when Java accepts it', (m) => {
+    const read = () => tokenVoucherDocuments(m.token)
+    if (m.accepted) expect(read().size).toBe(1)
+    else expect(read).toThrow()
+    if (!m.accepted) {
+      expect(() => tokenProofs(m.token)).toThrow()
+      expect(() => parseVoucherToken(m.token)).toThrow()
+    }
   })
 })
