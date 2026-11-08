@@ -541,6 +541,12 @@ export function referencedDocuments(
     found.set(digest, hex.toLowerCase())
   }
   if (found.size === 0) return undefined
+  // The same count, per-document and 1 MiB total checks the decoder (and Java's VoucherDocuments)
+  // applies, so the wallet never builds a token or swap that it or the mint would refuse.
+  validateVoucherDocuments(
+    Object.fromEntries([...found.entries()].map(([k, hex]) => [k, hexToBytes(hex)])),
+    proofs.length,
+  )
   return Object.fromEntries([...found.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
 }
 
