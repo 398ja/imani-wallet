@@ -5,6 +5,8 @@ import { finalizeEvent } from 'nostr-tools'
 
 let store: ReturnType<typeof finalizeEvent>[] = []
 let fail = false
+/** The relay's own REQ cap, which may be below the limit the wallet asks for. */
+let relayCap = Infinity
 /** When set, the gateway ignores the filter and answers this per call (a misbehaving gateway). */
 let rogue: (() => ReturnType<typeof finalizeEvent>[]) | null = null
 vi.mock('../gatewayNostr', async (orig) => {
@@ -18,7 +20,7 @@ vi.mock('../gatewayNostr', async (orig) => {
       return store
         .filter((e) => f.until === undefined || e.created_at <= f.until)
         .sort((a, b) => b.created_at - a.created_at)
-        .slice(0, f.limit)
+        .slice(0, Math.min(f.limit, relayCap))
     },
   }
 })
@@ -65,5 +67,32 @@ describe('eventsByDTag page bound (N5)', () => {
     await expect(eventsByDTag(30078, 'x')).rejects.toThrow(`${MAX_LEDGER_PAGES} pages`)
     expect(call).toBe(MAX_LEDGER_PAGES)
     rogue = null
+  })
+})
+
+describe('eventsByDTag same-second stall (SAME_SECOND_REFUSAL)', () => {
+  const at = (t: number, n: number, tag: string) =>
+    Array.from({ length: n }, (_, i) => finalizeEvent({ kind: 30078, tags: [['d', 'x']], content: `${tag}${i}`, created_at: t }, sk))
+  const revoked = () => finalizeEvent({ kind: 30078, tags: [['d', 'x']], content: 'REVOKED', created_at: 50 }, sk)
+  it('relay cap 10, 11 events in one second plus an older REVOKED: throws', async () => {
+    fail = false
+    relayCap = 10
+    store = [...at(100, 11, 's'), revoked()]
+    await expect(eventsByDTag(30078, 'x')).rejects.toThrow('one second')
+    relayCap = Infinity
+  })
+  it('relay cap 20, 9 events in one second plus an older REVOKED: complete, REVOKED included', async () => {
+    fail = false
+    relayCap = 20
+    store = [...at(100, 9, 's'), revoked()]
+    const got = await eventsByDTag(30078, 'x')
+    expect(got).toHaveLength(10)
+    expect(got.some((e) => e.content === 'REVOKED')).toBe(true)
+    relayCap = Infinity
+  })
+  it('3 legitimate same-second events read normally', async () => {
+    fail = false
+    store = at(100, 3, 's')
+    expect(await eventsByDTag(30078, 'x')).toHaveLength(3)
   })
 })
