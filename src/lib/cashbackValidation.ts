@@ -84,7 +84,9 @@ function check(token: string): VoucherValidation | undefined {
     let carriesVoucher = false
     try {
       carriesVoucher = proofSecrets(token).some(isVoucherSecret)
-    } catch {
+    } catch (inner) {
+      // Unverifiable on its own terms (review N9), not "plain ecash", whatever the outer parse said.
+      if (isUnverifiableVoucherError(inner)) return { ...UNREADABLE }
       carriesVoucher = false
     }
     if (!carriesVoucher) return undefined
