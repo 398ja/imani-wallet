@@ -5,12 +5,15 @@ import { finalizeEvent } from 'nostr-tools'
 
 let store: ReturnType<typeof finalizeEvent>[] = []
 let fail = false
+/** When set, the gateway ignores the filter and answers this per call (a misbehaving gateway). */
+let rogue: (() => ReturnType<typeof finalizeEvent>[]) | null = null
 vi.mock('../gatewayNostr', async (orig) => {
   const real = await orig<typeof import('../gatewayNostr')>()
   return {
     ...real,
     gatewayQuery: async (f: { limit: number; until?: number }) => {
       if (fail) throw new real.GatewayUnreachableError('timed out')
+      if (rogue) return rogue()
       // Newest first, capped at the page limit, inclusive `until`: like the gateway.
       return store
         .filter((e) => f.until === undefined || e.created_at <= f.until)
@@ -42,5 +45,25 @@ describe('eventsByDTag', () => {
   it('throws when the gateway cannot answer', async () => {
     fail = true
     await expect(eventsByDTag(30078, 'x')).rejects.toThrow('timed out')
+  })
+})
+
+describe('eventsByDTag page bound (N5)', () => {
+  it('throws past MAX_LEDGER_PAGES when every page brings only one new event', async () => {
+    fail = false
+    const { MAX_LEDGER_PAGES } = await import('../relay')
+    const base = ev(1)
+    // Each call: one full page, 499 repeats plus one new id, a second earlier each time, so the walk never ends.
+    let call = 0
+    rogue = () => {
+      call++
+      return [
+        ...Array.from({ length: 499 }, (_, i) => ({ ...base, id: `old${i}`, created_at: 10_000 - call })),
+        { ...base, id: `n${call}`, created_at: 10_000 - call },
+      ]
+    }
+    await expect(eventsByDTag(30078, 'x')).rejects.toThrow(`${MAX_LEDGER_PAGES} pages`)
+    expect(call).toBe(MAX_LEDGER_PAGES)
+    rogue = null
   })
 })
