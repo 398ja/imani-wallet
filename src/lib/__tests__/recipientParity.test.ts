@@ -33,7 +33,10 @@ vi.mock('nostr-tools/pool', () => ({
   },
   useWebSocketImplementation: () => {},
 }))
-vi.mock('../gatewayNostr', () => ({ gatewayEvents: async () => relayEvents() }))
+vi.mock('../gatewayNostr', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../gatewayNostr')>()),
+  gatewayEvents: async () => relayEvents(),
+}))
 // #428: reads go through the gateway only, so the stub sits at `newestAddressable` (signature
 // checks are covered in gatewayNostr.test.ts; these records are unsigned fixtures).
 vi.mock('../relay', async (importOriginal) => ({
