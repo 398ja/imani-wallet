@@ -1,0 +1,510 @@
+{
+  "description" : "voucher ledger v2 golden vectors, see docs/explanation/voucher-ledger-v2.md. Byte strings are lowercase hex. Regenerate with -Dcv.writeLedgerV2Vectors=<path>.",
+  "keys" : {
+    "platformSecretKey" : "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "platformPublicKey" : "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d",
+    "platformLedgerRoot" : "43cb9726ac8c671075227c9c31db5555804e347667be6997a46b07b957cb409d",
+    "stallSecretKey" : "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+    "stallPublicKey" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "stallLedgerRoot" : "346843f2633f03c0d1a12f1fa545409e65832dddea366faa4b839b089df8b4cb",
+    "attackerSecretKey" : "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+    "attackerPublicKey" : "438a4f623099e7c238970a8481b03d449fd45cc2c2185e739b28f28ce5342bb3"
+  },
+  "derivations" : [ {
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "normalisedIssuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "normalisedVoucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "root" : "stall",
+    "ref" : "df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6",
+    "key" : "3ad8c75742c6ba12761f4619156265e47e50d36d07a41b1330f1fd2ea1b7d872",
+    "locator" : "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567",
+    "eventKey" : "4cdbeb099ed61e350c386f5c483b1de46599a0fdcc1e93992f11451a4ea41b04",
+    "eventPubkey" : "4a98b7e5786b518b60ecd63a83c675cb774be85c4efa3dbc3483c95dec68a9f6"
+  }, {
+    "issuerId" : "6AA3DA9B5C1D61956076CB3014FFDAA0996BACDAE29BA4B89E39B4088F86EC78",
+    "voucherId" : "0B8E3F6A-1C2D-4E5F-8A9B-0C1D2E3F4A5B",
+    "normalisedIssuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "normalisedVoucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "root" : "stall",
+    "ref" : "df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6",
+    "key" : "3ad8c75742c6ba12761f4619156265e47e50d36d07a41b1330f1fd2ea1b7d872",
+    "locator" : "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567",
+    "eventKey" : "4cdbeb099ed61e350c386f5c483b1de46599a0fdcc1e93992f11451a4ea41b04",
+    "eventPubkey" : "4a98b7e5786b518b60ecd63a83c675cb774be85c4efa3dbc3483c95dec68a9f6"
+  }, {
+    "issuerId" : "merchant-42@imani",
+    "voucherId" : "7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6",
+    "normalisedIssuerId" : "merchant-42@imani",
+    "normalisedVoucherId" : "7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6",
+    "root" : "platform",
+    "ref" : "1338088cfed22891b19797acf715d2c21d17b866764b6678baa61062acf9c39f",
+    "key" : "e06296fa5fe7aef934b8c2ca3ccabd0e1658920805425580c7c1376fc2854f7a",
+    "locator" : "0f2e2442205c160423a21e669cd559ead1672d53a90d06cf51b98089a5fe4877",
+    "eventKey" : "efd21d1e0c43f37edab99e7bcb9fe7f6edde0942c3ccc77c97428ff891344ab9",
+    "eventPubkey" : "756c622edc14e031961ca3038643ff1e479df33fc37b8400f75269c92e7d5713"
+  }, {
+    "issuerId" : "!~",
+    "voucherId" : "00000000-0000-0000-0000-000000000000",
+    "normalisedIssuerId" : "!~",
+    "normalisedVoucherId" : "00000000-0000-0000-0000-000000000000",
+    "root" : "platform",
+    "ref" : "4c179b3a8d963654225d14fe451f81257acd986e9b8f5d1316d386b91153761f",
+    "key" : "bc7acae772f5f39c7d748cde98d32397fc08097a5051aabe0c892b6783c12850",
+    "locator" : "e1218f5786052263385286d8c2a8797249f9b4e345c0ffa097634d0197a1e92a",
+    "eventKey" : "0d0574dce0e53d29da07d21093ee90a590d1c4ad6d6cc5506ff56dff1da393f5",
+    "eventPubkey" : "9ec143104d52ed529f81e45fb57897b92b309d62d9b38b1a4b42037e0d06420f"
+  } ],
+  "refusedInputs" : [ {
+    "issuerId" : "",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "note" : "empty issuerId"
+  }, {
+    "issuerId" : "has space",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "note" : "issuerId with a space"
+  }, {
+    "issuerId" : "café",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "note" : "non-ASCII issuerId"
+  }, {
+    "issuerId" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "note" : "issuerId over 256 characters"
+  }, {
+    "issuerId" : "tab\tid",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "note" : "control character in issuerId"
+  }, {
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "not-a-uuid",
+    "note" : "voucherId not a UUID"
+  }, {
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a1c2d4e5f8a9b0c1d2e3f4a5b",
+    "note" : "voucherId without hyphens"
+  }, {
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "{0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b}",
+    "note" : "voucherId in braces"
+  } ],
+  "expirationTag" : [ {
+    "expiresAt" : 1790000000,
+    "expiration" : 1792627200
+  }, {
+    "expiresAt" : 1789948800,
+    "expiration" : 1792540800
+  }, {
+    "expiresAt" : 1,
+    "expiration" : 2678400
+  }, {
+    "expiresAt" : 0,
+    "expiration" : 2592000
+  } ],
+  "sealed" : [ {
+    "name" : "issued-platform-expiring",
+    "input" : {
+      "status" : "ISSUED",
+      "signer" : "platform",
+      "root" : "platform",
+      "nip44Nonce" : "0101010101010101010101010101010101010101010101010101010101010101",
+      "auxRand" : "0202020202020202020202020202020202020202020202020202020202020202",
+      "voucher" : {
+        "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+        "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+        "issuerPublicKey" : "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d",
+        "unit" : "sat",
+        "faceValue" : 1000,
+        "faceDecimals" : 2,
+        "expiresAt" : 1790000000,
+        "memo" : "Coffee \"large\" \\ café ☕ 🎉 \u0001\u001F\n\t/",
+        "backingStrategy" : "MINIMAL",
+        "issuanceRatio" : "0.5"
+      }
+    },
+    "body" : "{\"v\":2,\"ref\":\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\",\"status\":\"ISSUED\",\"seq\":1,\"voucher\":{\"voucherId\":\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\",\"issuerId\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"issuerPublicKey\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"unit\":\"sat\",\"faceValue\":1000,\"faceDecimals\":2,\"expiresAt\":1790000000,\"memo\":\"Coffee \\\"large\\\" \\\\ café ☕ 🎉 \\u0001\\u001f\\n\\t/\",\"backingStrategy\":\"MINIMAL\",\"issuanceRatio\":\"0.5\"}}",
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"Coffee \\\\\\\"large\\\\\\\" \\\\\\\\ café ☕ 🎉 \\\\u0001\\\\u001f\\\\n\\\\t/\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"386de3bd8d5045c26c35219a37170a083b8835fefba26c68b1f013ab57018431b44ae52a58d41a6ea04eba64b6597b8b1bdb1d8b83b19427199eea1f00df4a88\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "envelopeBytes" : 1024,
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ], [ "expiration", "1792627200" ] ],
+      "content" : "AgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBdJ/fnNLI4G98Vnt1j2haehKbabNN1dVdi0OsDgt5w1uDwp4WwdIpEBb65ALRW2ZoN/yAC/yJnSQtYek0kw3zOcJRL9o0KFu6cXlKdvwz8/we36V9F/osf1oFICNBl80q8SRlZBweS0aJHdZ8zVyS5RYAANhbvmvSvN4t15rP3QHSoECikDgbUrUPjrP17hnvtDZ9a64smfA3vw3+XDLXFMpwB15UL+lCUUijnGn2cStRZz3Ido2UMbF7zkXjqQo/oGX54hUkAo6+YMH8uGgL9zQT6ZXO14VjRF+D0t85yE7xfHeEH1vIFmPJJW3Ic40Z3BXhpMnmaO6xQ27dlqdJK+OBmOLH63yTVNUiLmLirLVX7vyvK26q0wjnYpl5E/2xyb/IHCJ/AgHQzk+pjAbN2nkkIug6OTMIxAv0uuDIiSrpCveEbi1wr6zGaQkTNB7uXHAtxG10S9IY+1dl7nCK/6hicWNWhNemM2cDzLmqIL1m/NSPol0FJDTjowSySPQ0FYIAxwSsG59c2KdVRhWsze+af4xLL523vE1sBXykLxNzboW5didkz9wALC3YMPTQ1QLCChWjN+z1YsB3Q4Fsgv64W541VTNiEmN5bRBndKSaiBTYBrw7r4KcvuP1a+YB0aIq7/6wGPMqtqPCEBcRv75FH2OP92xVQaXBmsTsmDKvw0SNk+FNwazoi6+6xfLUyV2SbU9r3bZni+ogbllNDy4HNgNocidVHFCb8BcVpUHQKnUP13f1zk5Ua0IouRDTSBc3J8PiIuC0qmULWiDVi72QLnGctcpG1VPzGN4tyQYC9IQuV9msvVIiSac/vzIhtk8WbwAG1cyXlKMj0aEdB9FuTGxlwkQkSRzCTHj4kkIwRJwAo0spmqvhFr22eCyRFLmCd8qei6mfWpeIL0QRiLC5tPy3GUeAjmi185HcCNx+hEsA0xuu89ttaFrkpNU6uE0mVdXGymseHed/6eZMp+6v0uhtp+go9RsHFuYH0nRulx7iSWf4lfg22mT8Gg2w/7JtTYinpSNYEQoKX4k9xMmkGNTT/xYGF2io6jgoybGo5ujciz09CrKaprCL5e32bzLRCf2O8PYZVfmgdEB4CYodguGw0/RQt8zKDyQDDUDZgomrUjClK3fsbr9Hf2ppEBRaM66kmABIDIVmoPzzV4acP9g6+P6Qvz06QoV/XwKvRXsPbMqB+lNBdMb5HMoX8yXD6MfntEAp+eskAOkzvV07jV6mhjTHchEPCWr7rL1rTCDlEHOuskGbB7+jnGM6CIaivWhUj4E/iQKt6kAcKwvwvSQu/lxmJG9lSui2Wi/UMeyyIq04mxMNkZd1moOxQ0w7GSxFut9P3n+ejAPWpTmIHvyZQpG3q1DPtkG+H1W69GY6R8GIkgo0c0DldLXnSg4="
+    },
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ]
+  }, {
+    "name" : "issued-platform-with-doc",
+    "input" : {
+      "status" : "ISSUED",
+      "signer" : "platform",
+      "root" : "platform",
+      "nip44Nonce" : "0303030303030303030303030303030303030303030303030303030303030303",
+      "auxRand" : "0404040404040404040404040404040404040404040404040404040404040404",
+      "voucher" : {
+        "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+        "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+        "issuerPublicKey" : "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d",
+        "unit" : "sat",
+        "faceValue" : 1000,
+        "faceDecimals" : 2,
+        "expiresAt" : 1790000000,
+        "memo" : "hi",
+        "backingStrategy" : "MINIMAL",
+        "issuanceRatio" : "0.5"
+      },
+      "doc" : "bf69766f75636865724964782430623865336636612d316332642d346535662d386139622d30633164326533663461356268697373756572496478403661613364613962356331643631393536303736636233303134666664616130393936626163646165323962613462383965333962343038386638366563373864756e697463736174696661636556616c75651903e8696578706972657341741a6ab13b80646d656d6f6268696f6261636b696e675374726174656779674d494e494d414c6d69737375616e6365526174696ffb3fe00000000000006c66616365446563696d616c7302656e6f6e63657840303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030306f6973737565725075626c69634b65797840616235643265373963666436323162316230323766666232346532343533656437666235373162613961383431666630653234373334363663616264313638646f6973737565725369676e617475726578803134336365366234316265343635313730303339343066336464383831666533396331303934313565356365616364616639313034373835626332356636316134653164663935653235643935383034396337346238396137633666666639626365383836613133393338313738613761663035323463663432353938346662ff"
+    },
+    "body" : "{\"v\":2,\"ref\":\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\",\"status\":\"ISSUED\",\"seq\":1,\"voucher\":{\"voucherId\":\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\",\"issuerId\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"issuerPublicKey\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"unit\":\"sat\",\"faceValue\":1000,\"faceDecimals\":2,\"expiresAt\":1790000000,\"memo\":\"hi\",\"backingStrategy\":\"MINIMAL\",\"issuanceRatio\":\"0.5\"},\"doc\":\"bf69766f75636865724964782430623865336636612d316332642d346535662d386139622d30633164326533663461356268697373756572496478403661613364613962356331643631393536303736636233303134666664616130393936626163646165323962613462383965333962343038386638366563373864756e697463736174696661636556616c75651903e8696578706972657341741a6ab13b80646d656d6f6268696f6261636b696e675374726174656779674d494e494d414c6d69737375616e6365526174696ffb3fe00000000000006c66616365446563696d616c7302656e6f6e63657840303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030306f6973737565725075626c69634b65797840616235643265373963666436323162316230323766666232346532343533656437666235373162613961383431666630653234373334363663616264313638646f6973737565725369676e617475726578803134336365366234316265343635313730303339343066336464383831666533396331303934313565356365616364616639313034373835626332356636316134653164663935653235643935383034396337346238396137633666666639626365383836613133393338313738613761663035323463663432353938346662ff\"}",
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"},\\\"doc\\\":\\\"bf69766f75636865724964782430623865336636612d316332642d346535662d386139622d30633164326533663461356268697373756572496478403661613364613962356331643631393536303736636233303134666664616130393936626163646165323962613462383965333962343038386638366563373864756e697463736174696661636556616c75651903e8696578706972657341741a6ab13b80646d656d6f6268696f6261636b696e675374726174656779674d494e494d414c6d69737375616e6365526174696ffb3fe00000000000006c66616365446563696d616c7302656e6f6e63657840303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030306f6973737565725075626c69634b65797840616235643265373963666436323162316230323766666232346532343533656437666235373162613961383431666630653234373334363663616264313638646f6973737565725369676e617475726578803134336365366234316265343635313730303339343066336464383831666533396331303934313565356365616364616639313034373835626332356636316134653164663935653235643935383034396337346238396137633666666639626365383836613133393338313738613761663035323463663432353938346662ff\\\"}\",\"sig\":\"fb197c5a8027da8d59acf372925194f286852b42ad1ef1c6baaf2c9211d9a91c666a3a82c266b0eea538def7bb1bf5ca0b24f13345010f5d1fcd435a5945f3cd\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "envelopeBytes" : 2048,
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ], [ "expiration", "1792627200" ] ],
+      "content" : "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"
+    },
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ]
+  }, {
+    "name" : "redeemed-stall",
+    "input" : {
+      "status" : "REDEEMED",
+      "signer" : "stall",
+      "root" : "stall",
+      "nip44Nonce" : "0505050505050505050505050505050505050505050505050505050505050505",
+      "auxRand" : "0606060606060606060606060606060606060606060606060606060606060606",
+      "voucher" : {
+        "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+        "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+        "issuerPublicKey" : "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d",
+        "unit" : "sat",
+        "faceValue" : 1000,
+        "faceDecimals" : 2,
+        "expiresAt" : 1790000000,
+        "memo" : "hi",
+        "backingStrategy" : "MINIMAL",
+        "issuanceRatio" : "0.5"
+      }
+    },
+    "body" : "{\"v\":2,\"ref\":\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\",\"status\":\"REDEEMED\",\"seq\":2,\"voucher\":{\"voucherId\":\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\",\"issuerId\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"issuerPublicKey\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"unit\":\"sat\",\"faceValue\":1000,\"faceDecimals\":2,\"expiresAt\":1790000000,\"memo\":\"hi\",\"backingStrategy\":\"MINIMAL\",\"issuanceRatio\":\"0.5\"}}",
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"REDEEMED\\\",\\\"seq\\\":2,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"e0aa0928616ea73f4c9a703c46454a1fd513e796017bc0baf5ae036feff90b001462465320e91e1905326ea8b52e2378b2f817955029a45ec5a8387de6aacc8e\",\"signer\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"pad\":\"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "envelopeBytes" : 1024,
+    "event" : {
+      "pubkey" : "4a98b7e5786b518b60ecd63a83c675cb774be85c4efa3dbc3483c95dec68a9f6",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ], [ "expiration", "1792627200" ] ],
+      "content" : "AgUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFVqjm4N62hmDXW0nSpa6FbiEs1J7VtcTeQ3ja3O3S8cmUujsm6dxrSFaxWuHfHbdiEjQA9KdKoHHuLp7S4Chg4H+nsmSN98N30DBII0Y8M5DqQADmykQJBlYAGg0xx4PWzj9Y9H+sILyOpJJHHzdZAbhYhCSUzsTTe2q6vdxl1ipG4ALd4ZRu+xnQz/aKMK2Wa4tHU033tKA7TNniUXJ6l1CMHLw951tnOpmfZwQBsj9q5KTyJGjeZHx6STJW7EHiVmabXVRr/YLrgsqgTpwfGVYWjinAH55DG0TbDrX7qOLSig3+NsOHr7RPDiPeurGOd0XbbxcRHbBLZmQIgDylxzIQGoINXa7FjoWVTbXKJekdtmZes3nDIz1Ze/ySyETYZHzz8q0EY3vd2AAZyDzI+7IlMLe/KyhqBt+LHq7ravvFuCUpO2gzrQFNL7dqLlzlG2ipb2qd8zJQTkkPdeCJJli0GBOOvZZyxxHYIM+NUYebhRwBsEkjbc+Bmma3tbvJPtwtDM8oK2KnM/zd/ahVZ4RCgCEmMiNEVz/WY7+ovpJDRhp4EiDOyVSg+3LQG+C0i12BpKeIAmPg8yYWy9IKlNDYZMHAgQLSm/BePFiLDwaJdRC9reIGwDy6Soac4KHHlwpOo7kEyGnc7ZVwppfWClRnmjlOGgh9lKPypwv7Xc39zdAzCn+No7Om9f7frqtwPxodASDi8iB8uXT8TpvXz++//pwcvGoTbuZTWVwZU5cGpRBx0QznKqcTH+ScjMbsPdFjYz7kRlztwfTgD0C0l46lcggRNmUyffzg6Jql+hJr4TmajZW7oWz7gKVNVj4s9zjXlTep5N10Hot5J2c52CkRS9FV2g9g/mS1IaR803L6Q3sgynn8arv5ODgyYCLp0LB+hQ8cMSkLX5wcAKjkRPx00hAkmt/H+iXx3/OUA+KCY9hTrLItqAJIrdDt2lGKfRyrBGC0572HouFXKeM6SEVVHs1gMSzVMWBcvUVpe2PdW4Xs5jBR4IedTUV4zJzzqPeIycXFxoMndlrUohux3/uAPB4AzwWuhJHHcGPkcjlM9fDlBlDJmIVm3dIBf8J54D4Sw+vl9JcgJKP6NKK30q/W9CD1ZY/K+rqovmjBVd4otPLKS+cQ73p2oo6mQ0R4n63EoYHiRSE9vMq8pIZHWYTucNOIYFT/3HEI3Cfa8LbILWtMvgzZn/A7eBqMKHG4E4OKAN8+EdbzipmG+Jh/82kQMKZ8fNfxRCuXmp9v5WPH49cycPQFLA2ezNQiCtCA0eyJw+zBniHguB6ZJqwkbT4fUpizzHd605lA9iPLF36Jx6ZrsuhBcIbEu4zo4j7KM5p3OepiGoAIgsbLWyUDzK2oIgbEkzHRMe606E5wyZyPZ3NYpF19CugCzx38qIq1OGQ="
+    },
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ]
+  }, {
+    "name" : "issued-non-expiring-large-warrant",
+    "input" : {
+      "status" : "ISSUED",
+      "signer" : "platform",
+      "root" : "platform",
+      "nip44Nonce" : "0707070707070707070707070707070707070707070707070707070707070707",
+      "auxRand" : "0808080808080808080808080808080808080808080808080808080808080808",
+      "voucher" : {
+        "voucherId" : "7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6",
+        "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+        "issuerPublicKey" : "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d",
+        "unit" : "sat",
+        "faceValue" : 1000,
+        "faceDecimals" : 2,
+        "backingStrategy" : "MINIMAL",
+        "issuanceRatio" : "0.5",
+        "issuanceWarrant" : "{\"form\":\"none\",\"note\":\"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\"}"
+      }
+    },
+    "body" : "{\"v\":2,\"ref\":\"1a0d193c9805e3fd2f287a29b7e3fad099a3a9c0e8f86c72f0b0569a962bcf97\",\"status\":\"ISSUED\",\"seq\":1,\"voucher\":{\"voucherId\":\"7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6\",\"issuerId\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"issuerPublicKey\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"unit\":\"sat\",\"faceValue\":1000,\"faceDecimals\":2,\"backingStrategy\":\"MINIMAL\",\"issuanceRatio\":\"0.5\",\"issuanceWarrant\":\"{\\\"form\\\":\\\"none\\\",\\\"note\\\":\\\"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\\\"}\"}}",
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"1a0d193c9805e3fd2f287a29b7e3fad099a3a9c0e8f86c72f0b0569a962bcf97\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\",\\\"issuanceWarrant\\\":\\\"{\\\\\\\"form\\\\\\\":\\\\\\\"none\\\\\\\",\\\\\\\"note\\\\\\\":\\\\\\\"wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\\\\\\\"}\\\"}}\",\"sig\":\"0253bb724e0dace277b48c265e4265bcedc08fe3eb7ea9e807976400350c26383a2c6aeca73cb9f30fedf0be915b0a5b971b88f9c0f7bbf66d35fc955b181c2b\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "envelopeBytes" : 4096,
+    "event" : {
+      "pubkey" : "0b6d5ed5a5b386a8eb62e0bbffdeaaf867af1b82750ed52816734c773d20c37c",
+      "kind" : 30078,
+      "tags" : [ [ "d", "b375b90321db762f5aa7baaf5fe634e89fdc8e3b604d6abd8f3eee6ffec556f1" ] ],
+      "content" : "AgcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH9dsUEK9l0HWYL94xMguO8VWBZBduBBRMdqWe/rF+aT+nPr2qmDj4QfCA/AlTHZfYpxC0HRXjXIEHfKGjndXSnyhMD9G20xlOCtTez5iBRTt9llG8cWDMhGLSUPVO2PVKqsQgDmm2yvYf5jq70dJ8Y3KwBsb5IuvLmN0y2neQQkQxAFvbq1/KW+9QFIkyZqi6js4C6wnqvGwBspikqwlc+vG4TFoMGaAXHw0JeclrMY8r2TbtPodDVBPUWdkB4Sjq5LaNe7bLjjHfyLtUDWIZjMh6fW20YWiWOUPorng7IZv2cx9j8ytUsAHWjOG3WC73Z4Upw7uWE6rbM009p4wvIBQLm5o8/mF5jEwD4Pjo7+1E5Lo63nQq22h3CKijZdjIm9X4NHzdX5bwh0pzWXAwUG/dj/ghpqxnAqDfaNta2YFLh4T4KbuBbfDSzt6TQ9kEnOUYsJV1wO8IgLbocZH/mqKnPYLpjvJevtp5xCSh9b2HMFiyMny9g6Re7SJ8nlb5wrVldHcsnkWfV6kWElh/QB7a5YjvRm3pug300R4b6Nq21hAWlhiYM5hOpHjCqkJjTEHQ8jfqnthS2RD2eMJVDcitn+FvTMjVH2UvEkVrNS666Km262lknTZpctwtrJBtV4ftpS9bP8m6OL9Ukqy29kxl9WJMMbF7wy8DRowFgXHlNU8Cbv/iYJMgiAQmqjfQI8PbEea2MXWMNyM5w7nQC9P7a8So1Yu+JdDOW+Pa7BJVvRx+60qmUpdeIDnurDeTUuluAi4qNz1HQkiDjw6RHEbpfWrfu3ISPr8AWE2HBvWBe4wbFTxuWGFsl669x9GIi+lH3hW1tFTfrBGeIYiG8o3CNxuTzokhFiVdu7Y8ZmdNyAeOzIo18ybjKaxHYZepoMdn6hnvVKv2NKjmtDDytjBZnIo46saIT6BD9kNIwd8ZiL1xp8QRm4b/gcmv0eE79256nnOQIHrSlaPZltaaCMz5CwUI79Br/5nPv8lQhD5xbJ3pNf9n7rphVyzwhUd/8WIXwcu+gggymZ1z4CZbE+vXu+3VcRhflbN3Lfuh1xwbrXCKyyDlEMC5pTo7VwvfGEQlc4Wl2ISYMMkRyjCtxVFfqCO/+/jspBknYYRtmhN42OhEsKur2yK6YFZ05K4k6wvdLoVJCaqLJ5zDJqpaACntWb0WWigjFds3DYwrHZCEz21pFlVuMUuC8lub5+c9wvF4Mr8BFqCN56RrprKIQwsqrjspiHhQdqelrvxtCaw2SKirZsgXejPNC5K3heeH4IrDPQ+2A4DS8K6zLUnuB9P3pXX7Q0CYsokhXD8s+R2QGIQ+8b0+ka6VeS4w29d9Bnh2QmdTsdRwoAtRxlUjAXMzZNCAW41v3VG/6n3XGGnRWKUeOQcBoipncIsblMPKFnIUFHEzcN5HcGd/N0J3nld0GOqZJYokAShOgwsGHz9Ra7QlNwoCINMfqDhD+gBZNWEruPD09c5QUBNNjr4+IKvSqUrqGo9ja/77nLqGsBew6K8CBuZQTqjUNWI8tmpRHt7y/JFyD7ZNvGxHgbaCAEAypWFRO2yIn8dmbfQzSBnd1lEwQ+Uto+kKchu35PRrGokb8zbTK1p8it/mVViSiQ/mzwLQmj4iJH9qLTO0hDXSgSYY56Xtt5Mhr6rf9CQzL8ShCOLWz6DV9tOP229Q5S1/iL/79knM/Vh4exQ7knoh4o8WPWqL2uFdIVFXBTDzEt+rD4kOy3YPNE3QCP8sqQpmdc18vgNWAHtgX4ccTt1NiGaYtUhZKqelIdRYezw9c7WvVtwflKbypK+bVnNC1QYr+qQUWJJayQWrKSAWYi8Pnca2Bmp/NhePw60FUscorR+moAIUGKghOI7ppfsSM+gOEtzO6szbzg41tVSNENAGJyTQIDPCe0T8d8M0hqrdJkS+nv+xx+0fLbcytxUovjmsDHW8uta+IqtO78xa0bAJ9yDhyRVNlxsk6H4b16BQjwAMtCCnlHoCFZtic3DT/I/1Y1WoMz0feqeME7RK+JV0R3jcwrplDeH2HBcH4WJBIXK6gyY6rTjwRDZXpm0rcc2JJXEDeFDjEOCbZvCrQtWtfR8YpQqNXDwyJMlt9gY9wxcIYLg2pvquLiBYBUHO/fBybvnoafFdikOnJITrQqqAKrefucmoRFm/P96VF9Knlj8AnsXwNxFK1iwdZs2c41OFBVIsOgowL6d9Sm1fZ+K3uZNcKoPATe8EJjrZP0EX9I6Ie32MXCIJYUGRJ3Ba3sq2Wm8LRboXhiMgqiuboJD1uOpCOcL46ubM/rnuU6/OlrBDie2GCt1cQij2Ao92nQKgDtahO0CwJmHTzcoWeGrJjC9PfrVLw6+/qM0zf6qt111PjM5NYYvxt6Qs+7m5KjSU94R71gPy95uJWPxFjFGvknv8QEnKgnOnWkvLhbPKQKJE2wdGqD97nt/sNZ6zwy7A5gK1jvwewVKVg1e1IWogdIUAU5FVeN9l9fzUM/Q5xQltywWDQi3FK81jwRcismMroZnmRWUKcyDndiA3u7xI1EGBrAfLlzV8NUze/fwMDAc8ZhiD/9twl1Vn7KyPmtQ/qkuX6c1dKNgpKecOMsGsXwNhA2CZfokFqr0DnhEBu0o/+JEOefp3ELXOBZCzbMfiuSpBnLkiPgFVsl54QLiocKhGj87rcCEs6VhAL5uUeFetgvOrGjJ+hu6I0LWOcBd1w7mXjT3R5BwD1+95Z+R5ZjQFcU+duS2NmmOfJ94pWwROku7ZN9fUh+u+1NJcNzvL7XQmD7HQ0zv0cPbf91JR73LESP8R+CJMEb076dAxsVyX/alzoUtg8X0wrMTmM5A7nsKe63a+rSThWf3A2H93iQQDwFhLtQXcp8Dwm51JjKYbfeommljxA7Vx5JC34jbxzoXbMjdsnKm6nG9QF2m+BlUCT6I77nw7iPkgUvVunRcMTOQlPjuAX8V12K1Q8BOHIsofeemeM4Cl7+5BlODufDoYYgO+LVSFKtMFsWhpfcbp0A5LcQ28kyF8kPi9EJJH+LzDxN/Jx22QHFGcfspETQ8YjYRUBl3Qoyj648KHDxTm7bLADge4tGfcgbVAZCGqRNTOkouOpk+om4DX3cOC/EuZqlOt7YPa5+Zi3wfnsh9HM49IQt4DS2RGJ8Mt2CWEQXinQuDv44oMZ3nZQx+YciqfMDYuSGwdZrTaHAfDep7R6krV3rLDKoczVngDffY2AsdR8p1/DyRLr+L6dYFRW6/mADUayulM7eQQEDZKvlb1W7pCV57z2vDWvkSROlkQw/cznKsJbgFpdjc7Wl2FMiioXcM169J6raDpI7ergez/FCgHJsgKh8DJ9E1TfGZjo+eohYfu8OJsoy8+yYf0FsNArH66MO/TMeVLhD1PreFuTeZUpaV/F53Hn6aQ4lHV/R+WDbVB/3/wMXva6mw39gJ3e6wsT0riTvtAAuaG1vE/CamdvmVWwolmJ9xY7+Oniu1Csj2zUczvL1AUqh6HblaXH7VAykbKT1dULj09vZciFFWX+VUAQLRYONo6Y+e7K8qN2ZGRtDKixrl2tDuaZ5dzohOIl5tcpJ2UCgAni7sLL3bixW8dA6xhW42Kk8USYQQ5JsVP1sbvnOQnwdBsnjtrojCF63qMXf7AS0LqGNkC3eatW7+raCwlcDj4TiZoauHmoHMiK56w6tsVvglNIYQ6Dz9ifQ8yZrfacHKQuaVEI9oC6MKAWNr7hjax2RPLujkl/dAXF2j8Z2Ty/R03SPnj4zhzHZ7AEBCy34sGcy/CJlw/XoGon6ThHjDnMwZzzfQ1iSH58WtU7XiDHina3c1u8K2EzD6tAe/N+hcHJm6MXUP7cyHsVkxKuSSxjLYa71yJVEP5nlQV5NKb2pYf7TZfM7qhf+Wf/CK49rHweqPVOwrA1cxBIgilZjVrh2YmTOIAeLwnUN3u7B/t0l18mE97fFL4alPValfmHQTGlKyEY6UgM7NG22RhZUJPg6oGu+k//cA7XsjWbgIbwulxuHkMxtH+QN8YpemNCUXjarnqLS7DHta51583AEFyB0ITXGJnRShDOq7P4rVtVJ2D+2/IPhuUaPrcad8bmaPjwfSATk29vPENU6WDrUW+bj8jEz2pK16VT7puk9Skq87TcDN88p2wKeUfRNUau6eItbLB2cJ9JdTPpovLpxqz4X0cwanYsMtVHv22Un5TiDnc+98K61qicZW9bktN1VMA1+Vqa2autYhFiL24ZENwbX7H+wS4JdeZWVEhGn1qsUt++712aunNiFPG2DkUAd0XyuNHjWg4nS6f6Td6qqdL5yk/sYLDteL4FA2B86ligvPMHAlwN6ZofDIx2ATtonuLmvGddMrnSKwjgnm0X6/3SBkAMMzEJ4d+i8MnR23I41WnjketndBNgnFZx1XtMNFkJOzdOpWEiMGG/zY8/H9IW1DtfgLvfclNLKTO/+ELPKNvwjGdfTHqVo1xPgotUf4I0SBZ8ZZKVYVWf+WyFliX3T8vvQ18CC6qsGy7ZTBf8+j919InB1LMfmIorY4LslpAAzsRKAZyw8SMJSqs9g5d4JSrmDTv/2IEiizVZyOQH5WxRCjZXyKBHzsOopFVmPwR6mT9VhnKJNr2RvvNbiVqLcvGVai3hXLEQoXDNSH+i5AMr83oBz7FxUtnoBZO9zenw0VanZYqgk634XT8yNSTEs8WW4KCqBErIOz2u/HAno5V9pH/tRQO7clJrU4T9m97HZztxMkObUO041kOL93z2jI0vbS4qZTLZblLGJ7lErzhMfJlhFye0Ht9hX8dK6i5kUGdnL/07H//SyXrkrE+EcX1VsyrfAmDujDBYMfHoQVmRPxI6uo9NWI3EMB9XbdIdnqLvuLHlZ2Q7df9F7Xer8ozNi4Jd/TGRWe0d7wrmddxsY8JXN1MLEg+N0dtlvNQzfZ3JVgz1x1keIw0cJcbou48r8RL4Jyerjg5BonBQCUYN2t9OptVt+6GJ4sDc0yNojUm0WhMG+8VWdlyTogdYBA3Kp+ccnkyMMJGvwleeha6ARClGtKuQ4Gv9/k1L/hmtqw/9RSXmKbZFo5rvAxp4+tbjLSoxmSWpdEeo4t+XYh09aUXP6H4a4AOKgFlNaNSV/PDoU6YXyH/xQE3VAd7dmJO9AOtFCV+fLzjAqJGySzxgEulGcowh5jEByuWjOoT0fCPo6aphDE/kOlotfaZ58laJG/Ff00cY8tA6AZk3GFNcPJlxmQR25kFeCDEo8z0rPLW6NZBba6+Pbqi2TGkb1wl30KPqIPu2ct+tFveiOHRltJosqy+ajDHmZCe/ZLrRvupCpPmJR4KRfge8mqO+wUmeokjHScjA/7LfPsDDYFaG/vCLJLwR8plvOwEPtXcGpXP2t2mS/41derZQPA0k5AXNJDFS7ar6eXDRC5bTvOE6RjKz1HkjXuDpQQh1G7H1dlbbx7BJQpThzhdf96i6PZAl9aCv4kHaIcaXXzYNd2uBbEvly/aYZBVSl5JsYV8HuI="
+    },
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ]
+  }, {
+    "name" : "issued-non-hex-issuer",
+    "input" : {
+      "status" : "ISSUED",
+      "signer" : "platform",
+      "root" : "platform",
+      "nip44Nonce" : "0909090909090909090909090909090909090909090909090909090909090909",
+      "auxRand" : "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+      "voucher" : {
+        "voucherId" : "7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6",
+        "issuerId" : "merchant-42@imani",
+        "issuerPublicKey" : "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d",
+        "unit" : "eur",
+        "faceValue" : 2500,
+        "faceDecimals" : 2,
+        "backingStrategy" : "PROPORTIONAL",
+        "issuanceRatio" : "2",
+        "merchantMetadata" : "{\"name\":\"Bakery\"}"
+      }
+    },
+    "body" : "{\"v\":2,\"ref\":\"1338088cfed22891b19797acf715d2c21d17b866764b6678baa61062acf9c39f\",\"status\":\"ISSUED\",\"seq\":1,\"voucher\":{\"voucherId\":\"7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6\",\"issuerId\":\"merchant-42@imani\",\"issuerPublicKey\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"unit\":\"eur\",\"faceValue\":2500,\"faceDecimals\":2,\"backingStrategy\":\"PROPORTIONAL\",\"issuanceRatio\":\"2\",\"merchantMetadata\":\"{\\\"name\\\":\\\"Bakery\\\"}\"}}",
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"1338088cfed22891b19797acf715d2c21d17b866764b6678baa61062acf9c39f\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6\\\",\\\"issuerId\\\":\\\"merchant-42@imani\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"eur\\\",\\\"faceValue\\\":2500,\\\"faceDecimals\\\":2,\\\"backingStrategy\\\":\\\"PROPORTIONAL\\\",\\\"issuanceRatio\\\":\\\"2\\\",\\\"merchantMetadata\\\":\\\"{\\\\\\\"name\\\\\\\":\\\\\\\"Bakery\\\\\\\"}\\\"}}\",\"sig\":\"1a8c987bb97332dcfb688427156f5ca84812dd16c94bb77f8b2c816170519799a44e5441ad47c4a2ea6bb77e3df29a7e16ce01522f7b42750bdc56ef0c2725fe\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "envelopeBytes" : 1024,
+    "event" : {
+      "pubkey" : "756c622edc14e031961ca3038643ff1e479df33fc37b8400f75269c92e7d5713",
+      "kind" : 30078,
+      "tags" : [ [ "d", "0f2e2442205c160423a21e669cd559ead1672d53a90d06cf51b98089a5fe4877" ] ],
+      "content" : "AgkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJ4jqFmxAG5pwoMLtWSG9jMV18SBq2/VWrgBGjz0bjn70tnG5R4vMKf4FrHM/4xGXq8QAycUNCFiVyxDl3sUJlqGMRI/tJwbh45T7BtsgeNGEAlLJSLpJzj8+71ljwSCL3UaOfRzDmzFEBiAMnG6V7g67tgoaXRXp2cMveGrX9d1F3seK4a2w4OKFQkEJCMaST/LkVC1YUK6fDoLxjqqMpw2cnQW1loSabYY1RzAsElStIevvAw9VmaYOnYSbRGSkC0RVZlnRyazTi4ndrECccdw4saommuJFHBx0b6a7s5p3fk2oMwjYzro0m5z69rotxwx17bx9Js9ISit/0oDSlp8jkiwEf2toVocjLO3maEkvWkoSe4aTg6Wf6/z6eYi+e0VjyIosYVxjXdgQt7J1YtVlv/Zd3+KcWHav1AYxH8wYWDg2CoMHnZQl8kimTG/r5dbtioirjdPR8Qj6zi1WB8Ran0Mgd4yrKcQmHT4XWmdN9RR1xRa01v8/ijoCPxqIF3cHouNo04sh83Vsc8vjw6vItlvr+LDNpy1f2Fhw3fXuFxz+StLdid/WGHffdeSgnXrnSzCsHI0NL1dwpG4CteCPqHmiGHrr0TIBC6d3D1pzPQW4DUCL/Xtcxk0F5dd9v4nwxNN6ExUzmXPjlJfHaVHmGKG1vRW8wda7v1c3/XwUBKFYQpG0mSYSj1v2PfsXo7sEPcfPE3NeNfF1Ki3+Ze/BB/AXizqeFMCeB2LsUNYOFMdbj1te43+X4qQuNWL2xC26lJen0113lvqMecZQ00d/eN7wxAI2RN8TCS++PFFIJ2optqwGEMizLXry9LGra8h4/lSmKt0uKM0kBRpe0V/UhlXc2XMDnJmtlLMkPgOQXVyVRYqbq7v+n1+lHVhb6RgzQgpvdILiRx1TyAMoeiZIBQJFxySRiYI+ol3LFUnnsNoEERpo+uk2ER047Hg52L0yVpgSqeLry/ZtMbnevT88zEev/w6r5Qw/sMPph02VU7VyEqYFaQelPkrZw6wbOZHdMkUVZtq/qtecKvEQf52l50Nm0n2ag1Pcf3voudiuqv1tMPsi0UMsgG5+N27NCtVTVDKHWIaSAMxJtUCnh80cg/MT7HT9lIY/bWkCcNbJjF8AeUf0rxCEDyfFEx97+w7ZAI/c8evNhWT10oWYrhH1M+ept/lMtpRovzKiZYY5chOlb3f/5E1F09iZ30xu63AoPOMrZR4vm4An+cn1mKtVIDLElr+/xb50BmZuYainZemUGiZDmXNsLxxcVHXgBrV+sX0aJipyBSqRShjks3Xb9CAZIbJxXSnHnn0+nJSJgSfdsBRKepJA7ZXhBqMyg40s6bZSOkc7XmWPStiXuit3s/Wih0tro8xXq3QiWeqjG6ANWwPi0yHKIhlr9guQsvtw="
+    },
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ]
+  } ],
+  "negativeReads" : [ {
+    "name" : "redeemed-signed-by-platform",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"REDEEMED\\\",\\\"seq\\\":2,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"d1a2b6ab489669eaff1563c1a8f77e6eebd0be5dec37a4a6d856162b2e4bebf6f2a7086e11e48b47ece6fd4d699ab747f40b4e70e8573f780e33f9bfcbff096a\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AlFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRFZ59IZn7gOKdnd8Kjy20FNQDBgvZnVaWHdueqi4pXWyJU9HhqDPYwq5yxCxuMgRguGBXX5x6IylgH/hGDR51xeMwGo05951KsPx5OC6+f0vxEAsTz+8KqfgcUD636XupFLq2SXwvQthB1vZDAXVICELr3qwE8d9stOO2eZURwtn++L3LOaKHxMzYH659t1iWf3SNB3FvMRSyvqA+Y4/GGKG/fjjAO6BHRX80wF9j3riIC5EBgFU31MSAYL9fls+jgwtJCbce2Bs+qvLOXxVyUSLvP2dLzku6TAPpCIYwcGM9tkSndmVcnVfzr+3dvWKkeK8ZWraC2O4AtVF9PSKllgG0kTTvoXdDXdMDlA+RUO85xyNbOFkh/myMx7Z/0qaLtaLt23VBy+Dbi7Q4XRIF2czQj1Fvjeec85UggMg+sjg6TZheJJDCYRqcZmlhTk1DE4sPo58H2eXxx4NuuxCCDJt+GUTgtdtvNebDVdMlnBMfZeNXdsBYywToo+bpvaEOhHXdMTyy4z1uWQj2HeQI6xzoe1ElsgJg1GczNpD4f7aXf5yOsvPreLeijHZWi5RsXtt+CEOQkotJUuIz3cvqCZGDjNDxwu8+b+XQ4UU4ecJzrH431QyQsQEFEvaAjw/Tmk/wFF5KNavhWXKIrcgo03C6BrKF7QB71XlNi1Oxo1L5Z0w1dO1DxlsuC3udVRphnPe3sa7DU6+rGlwr13CKdLlzWycxdMRZlNhgUl1E7sNuFUF/2yCfpnJYacTc/Ep4taZZ5aO8LzViTgUOa0LZL8aJ2H2zPDUP7lKZdgsy4IPy6wDflOeEqeDkKbrOW2XnJKxUPXhRQixlmveNTUvyalFKyYJDAPPeoFNpHM7YUiLKu+PuZE/e+tPckKjUt7oHUv086xALkfqCvHlZf4+bkyGYPsuUa3ty4jllDklqqz6GhYHW42uKAZ30iWaKu4U7DQdyT49eCbU22vYDxaXz/zQs64/zOJVl/gB3pksPjrgD+7BhE7sthklqvsj/77U84I7168ETQczmMvqBF0gkPhTWikTSCwKgpA30VRkdSSjNGn2XsrO2vWYs2CFVWIbnEetYVr+EOR9pWsWbKs8xS7DgO8zylnLHVX/hfPBsgQX7LKLMlCIWvPYir1uiPrqI7pBiw/Uh2H5aYFLOlNFwKL2apN3XNulpR4Bc5hP6r4CnVKOIJlGymd3C5RHvTIry8Y6o1w+uyvr1bg0Nxd8aaIuWqGo4y2z0m+jc5N4bYddbw9Lsf/1BI6BM5WE/GwI03GfyF6HYP4Flp89hpKqn2/XFvhTmDWvykLSZiugve9MdwF09zNxKKWfVneA4oqfFFdbmCjd2lHjPS0e7fMNBux+UwAJtkNKSC7YBy+nrKC1XMnB4XS5fKqpU/5FAS0p/EsA="
+    },
+    "expected" : "UNAUTHORISED_SIGNER"
+  }, {
+    "name" : "issued-signed-by-attacker",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"611ad8e9be47ee419ce277685a7dd56ae02a498d528b97df378268a62aa52dc2be39af51fce269360c60f0e744ad241401596acf11dec22cfddd09c53fcc4acc\",\"signer\":\"438a4f623099e7c238970a8481b03d449fd45cc2c2185e739b28f28ce5342bb3\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AlNTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NT3Pjitm7dv+YGlgGazgPZNzvaQlg5lABRpCfRVgfpht2oRQ0CVHghvLXxZdhQUJrKMeVwM676tCix+R/x1FuVbLhs8p+MBQ3CPdGLpnUUmBapbSKyQJELXsaFihCDD/LpkAEoB9l1dsSvqEN2LDEincuqIw/ybVIaJylpIzd3ZDh4vpjSS3WAn6T2/R5S6QelN0YhHWFKmaMgOheQKRUuBM/5zg9pa2kmThs+txyIF4hVXI4A+r/7JEDUzGHwMNL6JOKpR5d54xEFNRwooK8qHCN1mb0OD6YxiFOmVEJQu9rPD1KbutXvRkgj4djAwN9l9K3qByhzMPejp/Xk6BZIYQq+bXtLwgdjkOjhUr+TmVpPSZwSigVOSpIo9bUO5uBhlCBaL7Qyj2sjFUTloGXe2fztukPlDAxEPQ3AcZO39NK6dHjbcM+cUwR9emLkjeHpoaJFYxKI+l9kp0nTJPZgOcyxoq53SG4vGHb4L0Vjs/+TlO1of24taqtUTbWo1qc+F/AYd9FZGcLwAU6qbRfolRv5zAqoG10TsAl0wFy8DGpkem/2D2fZXfj1edjw+92Z3Oa5iUTiZPxERglouDoeya82TkN0zvKbV4ELu8KZH9gp+lsnQ6Tx/sN+4++DMrOBS0gOyljJg9JNFrklrl5DfT9XtpOXBeT1ExxeZ2KHHE3k4WNOeM2RyotcvpdKmfO+R/SHe9CDS0qc5Cz+X6OA3Cvcl1GPnyv1+/l2X9vUPJfqJVEKRYoR3imrrbpgrCO1alSIdKCfZGbEoRM+9TRdoQMwV3+WL+S0aOiWY/u+hlwRnoLcIIPxiGCh4sj0npx4n2xCwNnJ3mtABFkxSCRB9u6QHZEXZ6LRz5ZDaLZpdYsTS4/UTaZ47GW5VjtUpnH2qUarQRG40v2IH+81HfG4dqSzH+xtzE0EhaYhWt1BwFMSBfnX6RK7Gb60GY1rNbIDYFKgGL4OkZuj1Uj2ZxzQEKaqeUpKOK4GXj4WiBzBsFm21F+YKVCXBS+TyN5IF/dvNFUewzb3hWIIceXMWySH2RqUU1NT3nIa3LNQieYGl7DdS2ST2ZQ9UZ47FHQ6VS//hZEwqhPMhQtDSZDYToPW8deLl05sIPXYIQ/0Y5I1pXwgUr2ltE0S94WrOvgVbUSMfGduV/SIEcuVtv4seKTVUNZ+Uc8fo1Pu8DpeFoTvIjAPZqah71tlvBkfYn1fqRS8ZU2yJdtUM2rs9xTdJsZwL9S4KWEAmq1wfGikZuA4GyBhgW1ynNVq8qllY1njHGTWv1AOPE/135PxHnEkQSY6/c2nsVpqsk03aVqtEVUf2KE7Xl9HAHNPQhkis9qLw97eD2NIWfar5fSsusv2YLf058DLK+Z6eMLL5M84NBmGKrD/8oEJxHMAiOUnBVqWO0Pq+98="
+    },
+    "expected" : "UNAUTHORISED_SIGNER"
+  }, {
+    "name" : "seq-status-mismatch",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"REDEEMED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"72c5109c5df697336f24b86624388647b6eadaa21c7d7fc11618e096ed68c73519d9b3d6871fd20862ba625e403b912b96d05dbb519112638918706b2ceb6617\",\"signer\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"pad\":\"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4a98b7e5786b518b60ecd63a83c675cb774be85c4efa3dbc3483c95dec68a9f6",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AlVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV6xw5ZdjeJj0ygMEAeInUDmgwY8s3bhoLBcs9CyuaKE0wmdXBJq9fJTlaevQd4IDiUdVB47mOwGtEZwcrUH96mzXslEoSwG5ATV2G1N7WznWA18eiiSpNvrheEvOn0gJ9oOH3sc/7Ib3iJvV8Annz9P6tMbrcW+2YXGi6zIsocZVBsOfOiQdyqy66JtaTb7rHwF7J627uUagin06KO7ZM+CmD7nG0YQBnwsR45QdAY9bWn02Reh+ZrKl9+KXG63UdYnfdYeRv6Re9Fn1Uz3IRig+qvGiXkUc5NvlLwNBGPCner58K15w3vHfQj+RH61EKFJlQ6rvSWsofOcN8bClbyFNDy8TRM8VpE1MZ+ymGYdqDIM7NMGLzRmtuGeMZ/i8lACr8ghzzzg5rpGC4eSNcwbtuy+L/q1yN521Pag0JA/qdMg0jz8XM6FUwYPvh5RdRKk6WhSbArW8LACw7hXFDrdD7drN3EgaB01zkYJzSUNNg94Eamd5M6ppZ94q64q/GCRjIZM2ygdTbOx/mlwSwh37E+kqyp9ufMYNMDmlEOPRmBEdxqJpgaH9EeT7zMm6dNskFtuCuh6Tsz9lgA5XEjfcwaRyELDOyxA2IjkQMEBwQIGFS3aHpkY0PougTBg2FeGvccPE0/EhJdJLS3iQ4S/Y1HF9uhanPWzHDsNwOZ51s6PEQhuqxNELvw4HHAtzJ0GtqVIdc9HjGtF+Uv3nq5XqXODvD48DRshHZqvwQzUgLc43KpHaUAuuwbK+RHpsVVCGfAJlqc6XVpkNMe6sR8edTtYLXSkfrH/oKdY9M1LOkRGkIsjrfm+rQQD8UnWxTqLdNvecCNhLHmIJVF4MJ3pimre+NRQ1PUsepuwbiwDOt4m4R7X7hhIJJu/LQLpn75jQeMfXlIvquPgH4BbFH+QtdgmEZm2+x47RwNCf3m/B0gknYHeOSHIPCO23gAYYbejqnszEdBXf+jb+MqKHxFWC5t2DldgJX1WyL9Q3d3UY6vaRKKNKi/v4lt1RhYs1j6/Tfg2Xqwq6s18tnYm9HsNtrN/0w2KaO4nXqELeNp3Y64PAR/2U3N3HQb8xYkbJLZMHeuoQ1IERJi2OmHmkwrw3wDFcQ3NT8ISSUo3oDmtdyxZqthZ5spw3eveL8p3a1k/NDQpa1MOqJczC35dRXLRvfZoESryGrc4GMZL81rwuBR7L2pNX+SE0E0Rs2SNGv/w3Q0+Do1n+nECplAK1lwyjBhrdy0UBgVckT5sT/NapRT6wBkUqbaPG/mS2uKwgOlhEIBZ+bbP01c0BTkQ1p/EeEmaZtLOZ6FoDVTeHyeGYGhqHN5y6ljCMeLxMpQt49XXrsOxtwW5Y1aFSYJfNXO+ZWoehVsq5cqxxQNdvm67nBa42ZHmoeO3fFK88BsfqOnjI="
+    },
+    "expected" : "SEQ_MISMATCH"
+  }, {
+    "name" : "body-for-another-voucher",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"1a0d193c9805e3fd2f287a29b7e3fad099a3a9c0e8f86c72f0b0569a962bcf97\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"abd797ac9f22acf56cee7a6754adb69db383ee81d9e5c7aa97920610de0a1f84ecdb53b5a64a099ec35e2001da99ae07a041062bcba40eb5369608bfe8d1976c\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AldXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXkCeY3bbUhs2OsYPjflVGT6Xin47bCc60wVkm/BJTCRpaZR8d1Dwo6f42iLEptm10bf5vJbuCOpfCgdfqrrGZTgHNxdQ9qLPtC7mgWeeJYIXYL9UCJmZrbGR/ajVGQWBzUwdOP2eKUg1xLT09zf9AN72XNzo05BwhBaNJwn3VUAEiOvVBNWdodykvXjxUgYKpcJW2evkSNt4B98qHZH14Matrv8avIZL36oOnbArzukn3l61DAd70RIV1nIKoIV/69LVW9qpalvDJLH99aa3GIqK3ETTvi86IGLv4qGbs4yIOyeV64AZAAGoXCZU/z4EnrJBMgRwN1bmwyGebCEgUAUlBwBtgqlZmMjnVOJn+alFpj4V1BsHOGvyOx9IvBxcFQovFtHaHmnSYFxX7kzAatG8y031SjGyiKHdh4lkSJHL5FnpwJArQUZBg0W95V1ysmw1vlsXH1f5vStbfAPm2cRJ5CTs3NotbhUyDFP0scE+BEN6MhryRSbzUw9ywUWX6cw5uNepX3SN+9Crk6XNt4m1e0DrfDXC4BZtLO/cVaXywHDtSaWxpb/SylLR2s7Y/icIofS+EHuX2AWkN4RMW/B+r9QpumuhNTJrd61K7RIsc4GXxCru5NnJLOrzCvRtxEPtBL8ZMmDqMImQyG4R4wdduzk6fhuBVvcSXVc8C/Q80gFyXPo/goN4MfehDP2CQMztgcLlgi98lNto9aODT6zjciViGhTxWnqnDxF5r5II3ORHlzDvWJhOTdRfO+6dP2QyZoGXzgdnROUrKL28e2vYQAPFIybJTLVXFnl3x+jJRz65KmvRdPtr4Cj/gmBSF8hXGxJxBoZU/ALEG+iau3vejAxuTmQoMUkXAUdVMDFEvEpYaJpDza2RuqCN63+V+GGhJlAYED/urNkPTHmJuqZTcPVshniCxlpTycg7C9LfrZ6Ja3m+r4YyNzbNQYkq2tp7Odrlhx8aMqI44xiazDieiugmsoCqMqO401YLNL4b7UlFfeEE9Dff19B1CJsL7fww+zdIO9BHiLje+iG0eFNGhxe/OduytDzkfEbRS8qMsKY6oQj3AKmbQ9X2b2gi0jqTXLq3PC16liT8mVEuqUQzC5fXlBVKrBcp3dNWky1KuC2fhpCZxn+wi5+5MHB7PjTw5UCZGa5qH5C/Nz745WZjT753EQPeTwyIPAiF56atLhvDJbKeZI2jlXyoNgWT08wDrV0arVQeiqTGUu13O+2enA1aa8XBYxgL4FTKBCn7uCEEE48eOSTDu+r/hHtTAEf+Z2qlVBhQPFsfMAxjuV0hols2QTwEvuWiiimzh/xHutGM6bcEkrJDmJoehsOCGjpFGYUtXtLST9HjRqL7ZjEE6gOc/mN1YzQ5c7UUIaVdLgkzN/ozTM6m9jpoPqze2bR0="
+    },
+    "expected" : "REF_MISMATCH"
+  }, {
+    "name" : "body-ref-matches-but-voucher-ids-do-not",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"7f2c9d10-3b4a-4c5d-9e6f-a1b2c3d4e5f6\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"6df755bc5843a0f4b705baa5fa19ec3b0a6d6dcccd5fd531432715b28a4812dba54ee2e070093333a16ac72f9c5e46307decf7e4ab6fee6dffd16f7767f2b7c0\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AllZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZG8/IaHF9/VzEZs5E/VtPpeE1zl3xZvncgJpGeig1/6P9/ZCTa6u/JXJqwF/mraQmjKannjs58WofD6QQX7laGBsmOgPmSs8YBQcd8Xb9TOrTOhfvWUh30WXp0u0SmPJL2FmGBDe9UWTGMu5LfGtQAkrPa/g4c8/IAYOOZiqCsbG53ulvaOHioQCYBrse5l7H3XsY2LSIfXxw/+04gJXnST3ZwbENKwk/Og2OURceEenHL62m4rkY1q688ZU0SxQR6mn1iMyDqNMx/AFMAz6PKVG+BRvtg0VwLcqmGAenn9FbrGyVGT0Doybi2A0hD9Psf8tTIjP4WEDEIt3zq2sN3cJpJVbS3Dd0sEo8pjLAkVUO7vHsG0kRi1T4W+xoCd0tV6Zd+22kcscbUkVgY0Ri/za3wUbKNYC2hobYKkaYPVbu/75XIgEbLZ0ruWbzNRgffrxncHp2nnI/XLvFRhI9JSs6JLyveWbQbRn8SCwdoQ+DClnvjzpABUYOq1B6aTZzoUiy0y7y6gZQR72FqMxA6P6IRCZZP7aUURmHO1L5j9RruxQEIwaRs3GUG1M059msZyXJ236aHzQRgZWzoe5QsScx/O4fCQzvqHGuGDwxJRC+GvoVqQgMFZrv0lthLOk8SQFHBlLePZLXurrh290tu0gsjSk7WTN3UUQoqbBF2oZSC6G3zv46xWqzqER+keM3T/jr1oZpGyl7ZWNjm8O+pxpwwM39ulss72qqs3xYeRnYSw2Z9HDj5IlPs5UdcVhnRqVp+Hg/02PfY4I4qQJGmfp3SO6ulWeLBMohBXI5ETi8QJu9R1HvVgQLz+Pf5YzVIDFtic1Gmx6e1i6r/RhbPwhhzVAqsookmwWYPtdnblPVTTBVfaADk47K4V0OgItu5zvivIjkAHlLL7qnss3QF/8XPT76iyjKJ25V1+EekFh46dPx2sav93mZjMR+URP4+f834szsPZD1L5qkgwIMk178xrKIRWspUHesoFgtGW0XKvdCoRQ90s6391zrbLYxKPnKxiLrdxm8SDzowy1MMpPf3OFzCu8OdeWs4/jCoNeizhkqf9wBwKdI+tECIi8UqqoRln38nMt/u7GlCcN9qC9m+OeiGnQoPK6rtt8gsJWsaK5t79I7Xdy8y6x2D19BZQZvwkk7Yvy+iYCCt943IwKxr1DlZRwkFvbMTllmnIIeYorIUmgwOyUJmIwbz4YLzFVUAnRpEqZpq9zYBILIq0hrdbRySf4xycZPNlWCfFRUYZsItWGbYOqKi4AdGtB9GmyFcyd2eiJ6ABW/DqM/+tFEscDphyg5YVnMkp0lypL4MVFb3irsj6+H4Bg+OSPpg/rjTEN7lOIB5v+7l5EePiUN2yr1l8gC/DwZO7DDGRm2kCVVAZigDCrpDA2ZrM19Xm4="
+    },
+    "expected" : "REF_MISMATCH"
+  }, {
+    "name" : "unknown-body-key",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"extra\\\":1,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"51351c8979a72a992332552fc244dd9e0e54df262acdeb7aa73eb483c07aa3c2cd731e57508b2b6fb5a54b122f9562a934a33ce6b0ce6e4f2a1272d1fdc39931\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AltbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbOb/o2IcJRQgT7bXQnZmYjiOxno0WM8wfHQlGq31fGDm7RVvFAhPoF6Fpz6i8tL+EVH1dRJt7ifs8sHyyo/fC/4HqShM4iYM5kUsR9QsC6y4syOGVpt5eDXYSNtaLIpqrj1nbKBbY5nurCqKHhjQRQKYg2gbfbtiJnYZ/P1SCHHkRTqkK7YXU0WnzZyvo/1U7zUP7S/ozmZ9eDdC1uwLQUBIojg/SEj8wtOuo9Cm/CltdaSB15CbfdjddpwME/cyMmRgXNAk2iz/PNV6TfjPG+jZptpyjks/1HJid7u3JxS2Xnf9s5TSALvWLJ571QMRHUBTUk6LM+NywBv1qIAy9R8xfEyN4fY5cLak2TXb8pk6olbZR0vn6xMd48gt6ppDMJ1qYju3cCl0MB+4j/05KO4h+AgZq94g/rAUvOlnaNOoSqpXFCl3kq6BpPnxWfjIfncD6k0U2awWmHh7JH8t9ueEzfYch2JvwpSPZ3DXTz+IHx5e98nXAkAovUFfUcXQIa0lCZ2MIjpMGLQnBMhi5viVshsEfnSHyxCf7fAM1VfVa4zVANoqYj/xNPxL5ZSq6w6LQq9zPOGWYaB+6hfKKv8Rro3ANR+dk8iQC8Nx5i0PBfQI9cS3G/wf/eSngNAF8QF3oHLIIqxUtJddWKn+5yqGHFuzcUuFIx9ajLiM+jjRGDc1Z/2jrBu7l2UU2m6RznmW40crKWadcjep0Z/ii8CBjTYU8JBeVKK84FtJreP+iGw+6SXd3nl6VpegiJRvlPOHQ9LkPSQ2AhoAAtfRudzeNQvQ2hvRBwIeCWr3tX15A7T2xZkH1/raWTl/zTRcdAm/E9b6UupmzsqhKFCPWrMPS3EkWZbv3u+BIoOHh5RetVYTvjpDePza5jrGVotJWFnBZljNobSmLY5//I6lAoqndilR7tyfF+TEmXCu7s6c8VIylbl4SZmaCK4tVePm5eLlo7OgCHTXDphhheynVxtBXxW468ZDRyxDDwKWcZRORQARPTWoczQaMcCbwLIFy8oxaF7qAhLVUHxOuzmT3GMptFQGZ2UdjhoaT90eQXK1SCZ/ImYAnKbywkNB6RSwxmB8lmQsbu4gmXVCZ0O4C5Js/KT6hauasQJzUYBhz6QDyFb6/iU0Z53PlSwcrTRO00zYJgZfnQ+nsZRjnwOuT79hexaJHkIlzClqPcEXUtzOXFdLdHVgFKF3bwIkLMbSI5ldw42BUBlig5745jmrYh/Q0jlnKJajogr/GDinD0Tc4kkiDjyW+WlPeHx1QP8lvI5/0fOfRpVbVHxJrg5d4Il6XDxIdDXW0sRbv/dJZjTf174YUyjjMJfiNAKWf5+61/2BCe4OLTpRfeJ5ohRUKe0T0hjYOdisc0xmB8vkC8u5/lApgfwGBVcXvFB3kW5rZqX4="
+    },
+    "expected" : "UNKNOWN_KEY"
+  }, {
+    "name" : "unknown-voucher-key",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"amount\\\":5,\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"efadedf431fe51e16ae79dcd7be34bb1f3b3fed7a586071b0234aead61b0141875b88693ceb3695bb0e47a8c3a6d4e62b56c459d86426e761df4a5a6d6716234\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "Al1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dMNQ9sgK+C9SRXrMB+qHySbJXG1K7M5bF0rTTQqb38rl/OydyhE4UEfHCa/d+o5RCIfIDNNQVLRIirB2G+35MTY4DGizwHMC/ov9k3m2PDHUARxkt7JnioYh2E+fmN3AmWiG7vPpKx7dbYxmtjuHbihKrB0hANYsq96NB6Gf1fi1J1PkZo+I7L1fz6FITfLrwtHuJSHdbtOdWWufyYdzdDkB0T3CKUILinPjlf6FDk0xewGRLEIW+8kG6XbioTRHY+XOqod6ZiCxXiJzvk0L5gLX20t+cIauLl8axky2klClurjKYPDiFZUBcak2lZuo02XYlszmrFaOBvROQiwmWYegbdAdILa4esjj9UQ/XTPdHhyInhFLQepcDT0UDbBxtnNksGwamOhsbYeXQcIdDdvpwRzVPwgYqrQ/D0GZFyYxuXCbvFhaLz+ap3reFfsitjkODGyvfMZV6Lvt/wZsxj4kQ9Rz2GhG5wXJX24Qtrsh3ai5vkoG7vyBkoe9YWw2DOF2unocjTUVin3ZctXf3j1HE/ZHzvEo98cY55v0ameVtQXtH1TsokyCaOOXoJBhhAv9FMH+QwsjjOuMEAsaEA8py/iLYk9webjzu9LQKGIvySEOMoyNGh9aMMigP0Bk0lwiY8jjaL8CLbElbBp8WFy43R3k+/6DLqid2NFwciz9wGVDyG02sZ3JhTG621MJFM3THHsY5zAzpNJyiyJUjWMgd14gWKEKzrBlwOoAUHjk2ZeuPX+rnjrFaZAj+wb3wDgSvPz8MOvYXf5aAb3Kvk5v8DJ/qJzBcR7SSfG0ARldtqe8slkTkDhjWgWcpyc1E4rmZzKRKKU2NJxdWCoAjVQkP+miZs9A2/BlKrSEKkoAUiyg/ulbectDwiX4TvaDMq+6Dx/0SaSht6VnmqBRhxVizHZLImYkGdS7/MninzZjNIwW3h9mPfH9m5QiQuCbFVTBOif85HJAfaX22cckF1NWEnDXTRRgZP+HuBNc0fhJLvDUuAi2JCs84WOaPyUsD3FgQN4HzmZJ21LZ5kSdYDFRkLXwfA8+JliT8Yr3CIkVzqt7d6DRLLQCez2SMTuDG/mASY0TNEULY5bYUP2cPHI1SCbNo6auI2kXyh07XwXtPxG/VBF0SC6YEaD5f5E94LrRFO8AdkqnwKiFSR/easFJGzW1yZTmxM78Oo2jktHRaXYp4BBySjdhh2yI5NG7bWe2NgDMmw1uG3GAMRoxV1IpO8sVuwwXGZssv0lZ5QK71NeS4iXjfPi1DK1deeorBBN6hUOoTMwNmUkgeG1CVDXTApzhO4eRa0GDJwosIdBut6mmmFoW3o7vNIkWgeceNyZF78hsiLXXsLYgfHBgNH9HdPGOLztbQzNsJko36grYUGv0MIYKzZyhoky1j90DHW2w="
+    },
+    "expected" : "UNKNOWN_KEY"
+  }, {
+    "name" : "duplicate-body-key",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"status\\\":\\\"REDEEMED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"0199fa4510e01076772679e3094554103638598b52848515265dbedd511f0aa8f2358276120411302aefcfa0d7c46dea2b6d714336fc313832a4bab75ef49c06\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "Al9fX19fX19fX19fX19fX19fX19fX19fX19fX19fX19fNzSARJt1D2XVFuoWBvxX4gOmmTHDRTagIa0kh8DhEBhH4rbx4DAcyhSRdMmnOki/ukZDB7iyi/QToAvnFEw7vM33MTpNSZVzTEUyjHXlUgnJqMyfGDH+/fkwR5vFnp9CeD2ubTRxQPbfJ6DLwiOyzyu9v5B3ZoVBEzfx+f3rsrXbrZJkF258G8GruEybjoEFVlf+j3CNd9h1kw15urInkP2SFqNCpkEtKaAjeu6jNNDbnsZqC2ivqUPgxQrlr8eYFCNApgR/1DJ/IOPgmBpMaSmd2ErowunfDZG5DZmUEJ2Zoid2oUc0A2iulFYRCgnTnjGdq1EUpRtq9soUC6cwe4mdNw1F+gJmo9yuk0/kwBO7RboKJAWt7L4IuK8AzUPuvREHvC5rH54in7KhyIL8KwmUpcLNFGIH46jpNojXFHVAs8M5E8YFnp1Q4+UHlLjWjjt8rhXyEaC33FY3kSVOBOrpmK76+bF9vaEC57s/a09k/7zKL8gOiyu9dlPLfOh6ekIslXd5YKJoEpvvOdEvFBZ+XZiKIEd9doGKfcMuhP477QSIXTmNheWtsRoUt95ZRgv5aGf6XsQ4qVTuSG3JTvwQwOJmWs3oJVECeaSIHAb1DhbVSAUYMBHNXHVn7UmYmJ7nK1cPrJEN7OLn8ALZlCfp/bRLe0pDFym+xHM3VX+oSlbotqwwlL83nzBltMKCUG57XgZa5KRWmAZ7C7iQYSsGEokBFZyGBfuwPd9QrVNnYGcrhSS5DHJqATrhOqHLztO91X40Pq1ZvZj5JobOUSIOALiwDfMJKiyUQZ1XHaxByG9n7j+uXflCudtWM4KDU2MRa24hZDD6yMfGOsyj1IPsn5KRXYRNBvQG49z+zJQ+Fc2sXc8atSNwaUKaObW+gckiZvtUQNRVaimiasd2U0yIVhdZcrOgTstzE3u1z7TapTjTjula8oa0eUR8cC9KJ3x7AEIvydMnTQV0fQ/6iDOX3VQhcpsFLAT0s91ZICxsjg025kXzMffFABNXyr9P/ZWm/b5Tf/jlnLdP4OF3iVJ3+4rXkcuE6tuHt4X/ZFls7qPRfhc8SoUhwA5KczL8eaZH81BtsKpZmik4qRO8Worm5uvAHlowURqUAAD6x4qZelIc66BHO4+2H71W4CFdnQFL2xayLhz/bw76looPNeJ1qt2dAPT1YUG2TuUP88vYD3Ebw/O0szK2rr2e1F/SeHzZoMwZ7jU0T/798nKnJMgAe5QG1rZUeO7i62kguy56TbDctfS5KjBMgSNlbarZ5ePiEldq8tVdQVbi13TNXPTTQJdG4KUQFVWJBbe1pLa3FB9M7c8iZyp7afCAxDjrfZdZlvL0KAmpQGMcDiELNwryNkKRbSjT88iEK/ua053V1rRRdP8WUzmSgFhsaiTLrVE="
+    },
+    "expected" : "DUPLICATE_KEY"
+  }, {
+    "name" : "expired-status",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"EXPIRED\\\",\\\"seq\\\":2,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"240b1c82c509c26053b2d88c341e98ad5fbe8a3dc2e64878e4e6063ff8069e31e497f727d5f22e16430355d8b56fd10f8d3ba7a88b4958a47da28a983f83c96c\",\"signer\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"pad\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4a98b7e5786b518b60ecd63a83c675cb774be85c4efa3dbc3483c95dec68a9f6",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AmFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhUoB47c3o+fCL78TxrmTAfOthk4TRbb94b/rTQ58Tju7FD6Dwl0RKndm3zSKU8bNPEngKxNmuBWkXgNUBisDt5yfVITjFDg7NIAvILDzjhFHGshps0Ay4SglVgxhxthDrgcSGXC3DSOKFSNJqmD4D2ziA5pAvRL7ZDTI7BIJVRvdFNQb7Vr+k1rNOxIsQyW2VRyRCzI/zZNs7WkICe+WSseiTpJMj/WPVKOrbwfSnyIQlTg1rTKKdxbCbzpJxeTxRGQZM+Dq6tERR/n2nQNsBZdFX/AILJDs7C36xgwF0gavLo6Cy97vaMEyqMIdrd8zrJFqZUcCAXCb9cryM2t/5Wh3pOnz76Hu5Z6uOztyzUlSZJbw+BCIjxf5p2HQxz7F0oRcQ2G6Srv4gluR0rqMrvfPPgcd/nJiiNM6u9DygwLYJCJWmVq6oTVzETuN5r7NDVIQCnrZcCXrN7kQc1l5AQUnaUo4K+CTGhpRkWb//hP8SjpWV73H8gJdTj/C3M4lRBxswfmP1xGu3TCBdQ6f6qmHQ+O0FZsYU/lhosrcMHXD4rTONPzJSoQZeFKRG33voAzlthh5DdY1qKJV11M4oEKhzoARLrle09r0D2oQvQjKD2Aua5S2W7Dgr6SdQwLZLfr4434PbmsRdp4ceJHWU3TgweKkymR3cERfxqnEwVWtGjz4aqkGSCwZmB0+bkOQ7AwHvYRt/edhYvPo6TWNZFtjTtGsD/BIcRstPSkAhen3K5xG/2fq0WbAcsGA8Sv1AaAutKWt+DnraM/sYj8C2SvBVbPfrqSxhx8SGuFtJF9NyeUxbUILO5FwPzmPhqbl60mY53zPBUYrGdr6JbzGw/BeRmoj/lOFDc9GISMs1SuEYx0McEzeIvj96xYhnPyaDfGGg2GqyP/Pry6nHxMKjrAD9roPfg6a5cts+QQ7NK7gEPN00lbhLv2NuRfwehYBAdYpupyZ/uxiW/iTtTE/DVWnkuGbVFKClzY9IUeE33Bmi9O6J1mfSwkC+te1xjrgM/CQmbtv1TIK/JyHkzhoJ0RLqPc9CiV8d/1tuTfnBmVcD4iSKmYVvRzgi1Pf+7vQsEF/vaoJz5vAiZVgvS27xZquE/IJdfmMAUFjmcklm0Aii6zTibIio0S3LUDoz58RBN6ba7MBBbbKkcbKp4X+cuUXq7g4FsuKR4Equsf91kJv5tpB/szSRP9UmLf6YLx55mvLvVsdtg+tCK8xxTqEEEKB2/BsP3ccxHkFvSm7qrREam8zDcSJlpk/rd8y7XSKL0HjZD/J6F0alkSu8xMVd1Ea52kBAC5Ym1NQVp0sBtvcJXR50zfNQnH3/XPuwUjC9WJhDoljlez7JRl9djKOL0jN3ipIC8QdwjsOlyMR2dJwUCNtLgr+lAAfWh1hhME5aT9c="
+    },
+    "expected" : "STATUS_REFUSED"
+  }, {
+    "name" : "wrong-version",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":3,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"1c97f5308de96f15d99b5085a4b58c3e1ca8667bba8d8ec738c2ed99e7642c613a70901ff325dc8589916445b4e2d7385537c1d814531dcccbf42507da0a9807\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AmNjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjeLxRUtB1uAAcPrX5VHJcdGtcRKxFeHp0HVs4O/mBuJgi1dUSqjvhMmxWedjJXwhY0bI4d9mtfEEFzSHaz1xDqihX/MofmmN6ZA9O5fsGzLmbwCzvTevCz12RTqAKDXCT7fcZ1pTzAFrLWTJmP+JU6bm+sZA332VNXqYk8dawI+hAz8P7cHqvlgeMnr5CFGcvFUQHyWo0PHVGRJ3Nuamx7cVCmjoZGPa5HEKrzCLZNztytbjZ8Q5AI+0BjCNLOXw+PAOVUGCtU49hIZ3I3l2mTh8D5catKTXdPcA6/uyOf4WJR5EgHr3DfP1I25VbERJHhVqPH0QyRBN3BXaUz9wuZKKDYEsTE36I+CcFGFYk/QHMaulChgTRvyiUUwaxmmpZE/aE5tSk7vP5CQsXIY6dnHALhoJJDLiSlHBgRvSduu4g7jhoQ9MSVKbeBIJfT9J08rOyBBhVcyHnYI3l8FKQLX5T6RgfmHXBKW5zTW/Y37wC6w4RqN7/7CFDZDb/66LIfNXU4YqkCly91HNlYgVf/t2WDFJCk/+3/iNwIxxFCh6UcWW8s6EdYj5yzuDWQlYRCU+Xu1mfS2aWemZz24Kaatqa4FamM+QLY8FHgHop60Yyzz/2gjraUahiS2kQ9f1jJQfhCojbDgdvin0vw51dFNl+X/HhpppieLfAC03eJtPpvb6fXdadzMe5jqqMMP5AiXvxrdBOxHlqyPchpaStt6p7k6TvfeEJZRb8NMJHjM8G1uBSHXgIROp6Q+QtMTmRX5jae9PiX1IudjQM+ULtsSABJS/2iQuAAJ7F+Vf7yIMp2q8w83gISFXACe6Q7zhiuhbkppzIn7oKIRXndiqbIMgJmeZXZu6bhfSmzBYTTST5JrBGHSnkx6VDrZJ8C4uGs/oGMrNZyME4RjfH46KxkqA1kScrJ8BZ7NZ7+m4tswz8rvZaQ68Ze2Wy5v749ydO1haR/WjdL4ARW5d+HVJx5g9e5Xog7SSZU9zcQ95IGgzwlcB3Aw+Od+8AIaPVUoz4CpBW77Hk1nyn50Eu9xudI9PS/1hGmfnvh/eOFEECFnTRVXvzKC3O3YjgvkckPpY3U+OfK3WTb4XQ6bLM1n+0NRORsGLq4zjN/AC9ExTDnaOzzLxwf0C89gpuoiAGOtp6UTPMVuFoDxNIKf+S/N4AKwHKMZEln/aUx5bYRquCUlUTlKQHlj8hLSoBDxjq+Hw3dN3LFvJRwb6+cd9vt6/NbOshQFdiD6lBL4G7rCHhiEgGdEQ6K0YM4WwleFHMtoc8bfHgn+1BQVfcg9oGPx2qpKdrPMDC/BxHON87bqs1USYpX+yDQQgTGEechpx/6xJl7vdbqelh6mO2DProx89aQMpfn31toX8jBB/zu+9oFeg5skLlXRMrX79ttN17DC+gZU0="
+    },
+    "expected" : "WRONG_VERSION"
+  }, {
+    "name" : "faceValue-as-string",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":\\\"1000\\\",\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"fb303fceddf9c53d6e2f83ddcffb6eef298eb8466a3c1be3fd3ac926afbce3aed21c7e28428b8930547b6e908148ee570ccff361eaf5ac5ccc255cad7d60bd35\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AmVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlnqB+FkGUCfXx+SvvETETS2RF2COXBXB1AFb1KwawmQFuN32PE/ptrjGYtfIFxbONyrIlEH2NzjtCmyEOnOFsZpf7rysokSF/rdjIYl9L0eITIoGK+Bi2txzfhs7UGIAakTkwInwLYypGAIewqOqS8QvB0h/VWTTaVkVCz/d8ffB+irYxnRXIS78Lwfz7wQDJmAu/66A/U7HY1maEhY+IGxIc2NncBnzR3/0KfBuNjmw2W8WJt+BfISW9pye0uWySz+YP8zNVGCUxNrzqjaLiCXniocd5gRckM/E3goQp2vR8RDm2Fr2YroB7pPuCLC4X308T5B3zNVjvTmAIVtOhS2M6868gD/AK2QLuj8/zlaJUFtPoq5r6fTnF8F8t4td3/oQLYfEA4H6FjSvPhrp0p5q1EZQYZS2yZgE9NgIuOuHnIbqqDHY5PDvJkaMmvUUwDKC2RF79hGSCadQcXKIjlbUWg60r3UVoS0MFhjJT8eXZAnP1oJAu8HPqbRYrJ/MVIur0V028ePGCbm+/HsKTMbMlstcN8U1h3fkkB/ME3H3Z4MgV2D9T7wWpMuBScwcHwWmDMsECjPSZycM3DyYGTN2FblihrZqlJcbnKHLMExLEG6vkLCT+oU3JUDoRJANu9MYgcckCQwiQZGI0CC/T7dZT1qpisFrq3e5zbckXIIHURqIGR7ASQreK7U85CMgPuX2Us7g62l/1WEwed8POzf86mIb4lVi+KtNg5M9S4C+pi2sRdtNNaUbBKRRiQddY9o0vyAmG/2aUKROSXYXYCmbIVXjMlguKq7yAu2X2lBv5ndZXVqk0Mo7U1IJxHk9QsR6DnOXBYiYf1xppXcsmf8co1nEL+Kl2nIUN9QJeLqNjkHKCtL1kBPBJHKBC9/Y8RHok3+rS+QcAznzE82VnzdH+XHEnMFeIM8RNi/qQ7GLukk+RzoE7Yt6+ZV5SX6L4eDWTu7WaPn8kuzeX+2JqRhPmQWEjIbHZuRwDlL/X1Vzr7BheXy+56+xeNFOU0zuP7fmKoa2t36F2ote0VgMQ3+lDwXePqCEa1Yx6OrZNv2CATiRft34WJVo665Gu4ftwUl87ZDuwJofP1ex23d93W8sftpwXxWm28Dyfs96dMD5fFh4Qw7vLA6f70IdIqaTwtw478QMVk5cZz+8Zu+g+Rt+ZyK4gK5mOG45JeeFCItpu99Pc+eckHg70nhuQWv8txDRFb9dB7jX6fh72itjF7+a9VLN4smeKePlDEw0e9ojgroHzj5+23YNkxBtfQn2kiSz2/psWRwTJSndu7YHxcB8iXHW6HG2Mvd16cWc66x8T6+TmL82ejKInkPhqIFiDyl6ZZFKPmEakeGdZRZMdXzKHVwR105hpB0YuFKz0UTzjwpJeAPw5cTEPbzlV3qm1s1U="
+    },
+    "expected" : "MALFORMED_BODY"
+  }, {
+    "name" : "uppercase-issuer-in-body",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6AA3DA9B5C1D61956076CB3014FFDAA0996BACDAE29BA4B89E39B4088F86EC78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"324a8cef2e84b706e56aef33090a69b1b3abda151a10b887b99375f8919456bd914d7c82c39f47f0463a64da96f88d0488e1503fe7852a6aeb5c01dd024d618e\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AmdnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnz1MDcolrnNeQVBhXw+J96jbzban8Xqlrgc+7nRedhVsdhjnswXSpUjUBDuJls5D8cFgYzFPiTQ0a6Kd/YPDnHg/h2Q6FbcDzgntqUcYBKFRK2+6PC3V/VJvkI/++g6v40/Kn4d6a0OOFH1SxiD7QMtD3p8UrclgnzVpxTwG01nubdkUJ6zji/ci1fTHprKVVD7JFvrq9NbLmWHFFrXdOjKCUmUHtZE2I//ULiSQhavCbCfyxW77Wr8GnjrKDmn8bBLCqnpCP14x+KseKU3M0Cc2lcyBVTXc6Ld3MNEyBoiZyes0aaQZqz1ANKTSuz+bpiX8AnI/pUWhG5w29+YLP64QGS/Z6g2HCbW5Inhy4n907J2eV/1QdCj6w1mIU1EWG7xZcWmwuG2z3eL9GkR+hOTTX3xXHMW36Cq7du2BYVNdj6zXd/4xvliekAl8CZRhw/1XGNIITWzupERzsNY97kqCKn5TW24qRWBZPvz0CDoQ/SVKEvmEQiDpfHLkvrQta3GDp5QW9zwazMSsRv7d5TcAghDc2Xv7ZA+x04a76QMlxx/udDXaFrTZGZgpljdDIMKJ26rwraP2q431vjUPkldqUzm/wSo7AEwLLQPI/xJ0RtIEFoRKFLl6N3qW3f3+D22PFjbXbeIYfGTn2pAjJ/097/arHQKlR5m7c/pxrGJPfnSuSEQL4VsRom5zWe+u4JD+RE4gaGXlD3NbHQmGIx15JJbnPrwFp1HnYoXf0T4P7O41mBH+MMrCbb/uJNCdf0e+mhgmI4MxCePRANSoPGK9EKcGphMgUeE1ZJM9M6zH9dB4CEa9qf4whDGRQ23+whAXkN3iTFw/pguHA6BxRgzkeEkksq1cL+Q4z5FSiIKb/YEaUe6DRUzt21WJ5d4aYFHYp20ZDaLTn505ToUkYx0IPhEAoapb71CFi4c9LGpe92XBTaUZF9BU1gIxMurLh3MpX71LV7EFCeYT4kYWW0ZrS0M4sCCCmrbWDLHWz0EIiEbKVFEM1ww8gFvzcV6FfBMLUS5a7GKIwIeQsAhymWZuS/8JX5yM3lm4Viw6NRCCXnTisVS8SP1Sh4ftqMCYCJsP5iqdC6gAHP2QCKQc8CVAsCPLWmgpPgBp0E/pRaEhHz3iVJviiVJk6COfqz5oBShDzbyar/gzvryB7baB1tgQS6ApO96kHRNQiWsw+6NHIO7GwS3KHFCp+sJjpCGKLLE7ZTPPim+0e6mpyJM3sVKpLuRZJq4/l8F7VmE2m0qRkvvs3ImPp2fPrT/JSPMIx662SX3Xk9UJZHazAzMuh19IdJL6ujM9Eo2cVYElVN14gd6suM1LoXUzFm4cdw3wu2fTWJByvj/SSohYzYMBMfzePuedBFa7CbIMPNNhxT7nuJtLPpihhH6X/ax8uWQunk3I="
+    },
+    "expected" : "MALFORMED_BODY"
+  }, {
+    "name" : "duplicate-envelope-key",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"85126a7b704f227a66d7975abd585f549d86af6af9d2f6156abcb33f4833c6e76f03d7965d5282d7ddca2673c1bb3bfd8cb4a2469dbeebde4f1d21bb5a40d3df\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AmhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoSOPdtu3eH5WjZgL2mG2YKEa7OZ9OSvtSbacWlEygp6E4tP6Y2HRldKbWgcJI1XLt4JIOrNHm/BgRhy+FEc/8pzAcn/AQKpQcjg4JXlH1NIY11r156vw502tsOhU9R/7eGG9jUjAvRGFEO9u+3fc2wMo6rELE1I5q54FbAnUnkiNKz+lW0GR6LKwqkOJ6q6P7KV1WSc47mjrNCbBhWtbEjKIjJBA2sK9ovrxo2QYVbUhZBvvNz0+iYBUvqDlZhwbrww90ROAPQZE0BN5xtnCxqdrRBbQHFup/adVkTwLRCZhCgqKDPzrWzbDCxGDnw/m8LXspm/4xjkLy3Sv/LrQLnsEbT7xTlki3e+0qh3DgsXpaoYTD6fRzwBtIbhZ3xUUZhs+JVIyVYqkBRWagtr+/zmaHliywzAOH/EZOwsZE32tctiv6yhxpqzIva9SQaIwvi/ASO3vLVCXTFpgfImBW1pWyqD9bzlFMy15vJ3zN560D4Q6EEmSi0bJ/g972ecHSSreEDmh8pQcb2pHwFyEnHByte1LrrN4YJIcB3ws+K6zeZRCBaGwjXzzJuvnd7v6cx4hptLe4vIjKHfcvOv6i8lxO41luVjy/YHLhFFf/frPLFnKGGXFlyS06RTsuBShKkI2q4UmkDfVFOnZONp2QTk9dpEKa8vqDbgW1u25eUfkx/MqbiIfTQlf6hi1vngfzSn59Q7wLhLfeyhvq9zs3dUwHck14Kpw9G0uk8SZQk63Jjfl6jCRJJrHFnjxoK/Ugr4aFmFPaJPsSrP8f3nsai0OXieb70ouNTbNUU9SMy07OMPZ6FSd7oExTPHcul9+F+4jMb71hTul4LMLIco/OMap/ZFiMJhLsAk/DF/Ky6EpnXNGiiQWIKpdcnTvIDaHnpe6BK7naEnAZEJadvWXvrBwcm1xpx9RXXKDBCBDtXiv3K2fbz9a+BUWlH9Jhc7TmPX0CHBApIEy7EhUpTVehbnJMVAZe+ah1MTk6wCql3per/iKwANhPfg04NH7Z9xnZ108CyWoSskuUwoqjGNO0+TuNZTX0xUqkIxXax9aL5+hJbgr8tQwNDF108iYkberZe5ehhKsT9D9F204niWtTL3G48K1rBuur/WmOSIYpyvW2z+ZyDeyAWV0PC0Lv6a28B7Mg+Ap3IIJy+9tghoedMCxzW255+eJab6fzB70AIRSLQI6+RXwLbVmDKCNm/VZGWIQnDnZ1iSi3GVvCpTq+T00dlcgNsPxeQTktTsskOCCQIgddjEbB1aXHfVlaN7wvPfL3OY/BmyqFYVegZR9ZzvAu8x6EHJZeP5JTDY/FAk8SjGNwgmyYt5CadbSzRtiMRRw+7vEsuY9+RHvVxbKrbf0F++P0WOtqvaxgb5RVIs3ID2QJazdVbgXX7Ta+YveW35wZebSirIWGMOkjXfibXodHbMmNDOYKikffpZKbxII24sS9JQv7wy/fmp3piEWDeMnnUQ61diy5FJo1Sz7s1L+O4ed7idYxf30u3TkA/UEX1djrPsl33yCcHZXfZZNO5UGWNEzq6N62odulWJgzJCspouaHRxHF1BRpSa4FATyyY5ws87yMnmQbcrnE/U+zZ2jfRl1VKNvu7QOEWbCpjePiYZU1dPYpc3lI9I+cr97fY4DoGdk07MgeAZubYgj8yckti4/15y3aapbTpuOFizC83LfLE8gqHuAY3Gafn2VH1NA6WzC9sghrytHM2/5ofLxXjsYmDpDcFtW1P8DGqfdm"
+    },
+    "expected" : "DUPLICATE_KEY"
+  }, {
+    "name" : "unknown-envelope-key",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"85126a7b704f227a66d7975abd585f549d86af6af9d2f6156abcb33f4833c6e76f03d7965d5282d7ddca2673c1bb3bfd8cb4a2469dbeebde4f1d21bb5a40d3df\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"x\":\"\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AmlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpAokE5KcCr2wp7YKYFAB+HdfxmWdUN6z/XpYhXF+fiwjjjGeOa60nXD2yo//wolvTl8AEGOnQqH/TgRD8uonIbnDWBr1G1T3J/++nJZcQlvrzHDRtlmOYQGR8QAQXn2LKeUdYuwe0XfqM0v3F2j8CF1aBwTyHbvMvr26PNDK5nk8I2VdGgjcZDNBZ7wtNl4m7R+OJzB+aLg98jP22BXUD7GmiPxmXiKE5gXYdMnMWXLgqwYpkz+CBxAA/8+OsfangB2shsFMzwZomNBnuDj4WntcbOot+M6IsgvpoiOY7qXmkqEUCg/48XES2DJdqC+jVNqz5Qd5BMNqTVVAq9uJLvNzLWf6WFBtbM9lJDS9s/OKtYSNBjwOT1CkVh9dfStofIbFdxaic2juLGLp0lHqsuhiZDnCOzMoDn/jaxjMHrJHKfKimyU/1sduIDM1YtEc+z8+8inyYoZOMVDIrJE/FM1cQOjyFe/b3dr5KYs49mEBxdnRClpdvo0TO+J0Dgf2foQycurwVqv4jPNIafj+wRnkdpVtifx9afDRc9ZeV6JKz0ERPXO43FO4vUnPTap8+LjKoIgycAoKMGlvie90wLizAC1GHC31GWkmiBakBSOFkLNEHlL1XBhzqdiqK1/iMJkZaWbPk1JjHciFw9FkFwgNvjiM6iioWKyjAAl2vsF1IznVjDcPh0tRVcfA+RspUw1QWcUvyQVv+w4lCF+Tc9JK+QtFaKwclfmf/VyNKwoy2KP2e+7iFkIosLmOJhGX60oXZP9gAFdoqc2+4adFMwCc+8XAwa9pbDWN0GQ7KOQ0REyEPb2SaANiJgJg1rKM0rqXZIl65mcNtOzpai6ZjQkqVOeNOB6ulLiVkIVMS/KpYYNCqWruR63EJWI/1gzC3BJGuJuxGVtU4gSc7Zkb1T6moce3APBXkk3veegcmK3qYGPVbECL72ffXmUZLYFSuISSVAKTuhsHhlD4/jbhkpbe5+sGQGUg19HhDBqNqlgwpnJNS2bE/Uc8MRAqpoBRwVHhbihajhu1yV6N9hiIwptshPkHQm0rynOZi7dAuSfwCk2QGaVhhODX97U2hnlsL9MUEfMHbWyW9t5VjZr8skXmGfVoLhDbaH6LRcdoDsU7MjnuGlikatyZtG6oECQb7Uavoq4rH29NfxixjVGLDx6cSyu2VcsdSlrtsOlQICb0SC/Nb6poV9Or1hgX90MPdb40k0iGMP3GA4GeXOv0388Dccn29NQqhdZko2lXtWLJ9dRvW/jlBQPI9u+oLzXl5ooeQNbmWbaIJNoL3uSGkbTZKZxER0NCpuZR0X0vbAG/SyKJAuIR073sB3HWKJZBFimf7tVn3GgrDmgz3EdwfmBkZ3hgHiyxByxOaVrS3iC0RkTye+GtbkaD/Iry9vyptyL0ES4UH27Y29NB//xLrXp3Is8oYUTlN5BQRN/4WkWRgR/dtALtqzkBQreUOrFZ6VTbi+Jp5mav44esa4jIrPFtoD4YmNVoV6viiiKFHiZxKR8l/aonEcQVzG6oYrtFZSeFy11Q/WI3Ge8rnoe2UPxC4krrEVUMPSHBQXO0i7ZbMbk7AKt+fd8snhh6BYsP8TV0VVn6QtQBkeCGe2cpzUMyp23TnxGW7MWIbtPuep8fOdPOF/kOXkWRyFTpZIUkdTTKtDacdETwpOvVg/YpI62pZdwZMrBS5OyEP3g1reXXZljrv/DCjiTNjXaqzXNfcBN58lkXSg29Lar5gRlwzbv+i"
+    },
+    "expected" : "UNKNOWN_KEY"
+  }, {
+    "name" : "tampered-body",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"ho\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"85126a7b704f227a66d7975abd585f549d86af6af9d2f6156abcb33f4833c6e76f03d7965d5282d7ddca2673c1bb3bfd8cb4a2469dbeebde4f1d21bb5a40d3df\",\"signer\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"pad\":\"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AmpqampqampqampqampqampqampqampqampqampqampqzlmVcii0JO2X54E+Rv/qymYcyUWvaAYDXpUy/kQxZgTVufbMZuYw97o08VLjBMKJRx6TeXm4GAIpGlnMCZzjvgDGJCcM868be8jNSFegLDphhNcCzJj61E0r9zvXnAtxEPyb9uE4XUR+LeBkbW2W5/goKZkVEZ0xz5wurrkGwqVI6+HfYnLu+IU/bl4OT6l7/JaTCQnL4/688RlhpsVxga3OAYia2t/X/wjYNQY3KoosTPbeZaOYttreLueKr94V+rBKKLuDXg22+XOj8h14qPEeH9lR/aDiVvkJ0CJuSkkNH7RE75i39gqonzharODAn7qrzx6ZaIKZ8+wzNdFJ56MFyKK6lCHlT6LXy07hhFt0vUDI+rJRlvhQJWxRJbGUgt2GaWw0fyrKVAO+pITRKduLLHSU8Eh3jOQ4ildbOnrnlQcMJjX38G1umKWioRNqWK1Ns4yy3MH/kmlXfwuk8kmSckH3NpPTc0+BXbYHEYfcZsIRW6CPvT1x8QjSip7oqYrNVsgoVHfSZOvf4nSnUojsQEyaaawtXdW8y14Mxlt4uV7MH7j5+NljK9I3+AG7TyZNWAiYeawbt/tdGPL1XQIdRFInXhqTn66H2mANPeM2HaqvtKnlxST6RR4URvhRo8cPyRqJ/kkbVgzEjpE41WYX+nxq6YAAtPk2v5XGAVAInsXcPi8Bs77//qqCUNl5YgoyKlxSqz0vYC3fihcsFcMN/uQY6bLJIJg4tGMP6mVtjw/2GCF341ySNOkKISTX7O3hNjF/Zg412/DTrobSTFXh0VghcfzMNLAgfGkItB4dDquMWeCL1WOQaIbcmtdvokwn6vMMdTBIo9ZaoKrGFcm3bwHFYlbSdzsw1v7WrarrzZtU3PZCSCsLo/1lpjLudLjP8HuMHkAavBOE99CH+y4Hc2veD5+E6h08be/gLq+908SKvK/tqMBa9li+2cBtUaO/tGBbblPbMSnuQvYN4EcwUeOPr7FTEhUugiHScyrinO5EKsxG5X1jcl24s2dJe1sOa0rVC3q2I+PRzuIppmFK+b6FIF2wfZaYzi4tR74K8BDSGQuvUAEO0RG7Ju4QqR0AZTJQcRDPvb1J7O6D4Wvw6wHOuIqaeOT/51sqmvqgySwjxOExJDbTGmX0n0FfPTcsFtYRIsLueBEdz4eCyEJN9aTOKTULesbEhmco51M+wTXjNq968VY1Tg1IyC2TA7fa1H+/TPBSj66IZFnsws7AyXsjLBFcSteSbAxbUJ5Q9K1J0mPz/8bInAQhrV+lFOmLn44i52tewytqTPQ/NyktKONa89+TkQLlLjkDzFHUkL123PAXbOmOUhxGDToTZcoRQzrts+vkX2Qpiw82EoJFiyWbNJKM0xqxCMS8waCFNbOr0jMN2fJ/hCi0sdIr/e0="
+    },
+    "expected" : "BAD_SIGNATURE"
+  }, {
+    "name" : "tampered-ciphertext",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "event" : {
+      "pubkey" : "4b244d2b26d8ebe0e931aed3008dfdf60efe63271677afb03b81e3583ea65219",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ], [ "expiration", "1792627200" ] ],
+      "content" : "AjExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExdjSd/j5w5Qs/GMa/8smFoJGUyQ3OfrhncJfahWn9dSLHebVOZTBSV9OFxYO6GkhwcE61gU0uRYaL1J3BnEdo95lOOIm84j4qAGP00fpCvdFaMLU4oEZW+AIv7ucFURsIEXMjEkDeGkuBA57R1qkkYRnsqqmSS5WwSUoOA3rSJQ7vgUaobNq+ZXsLdh7WXwi7WYFOy8TcVddXmbAwKCj2PsV6pBo+f8k+TNZWnuIt9ZpgzIlixhAkxH5i2bcCQTZHVpSA0TpHBLddkC3GmwHDdxWpbqJ79gGr00zOQxH9jCsiL4L83rWGPAMo0wDn5eZQ0g2atlq8V+sfQ3Oos8CoUGGl+VAPzQRIlrIlJsnhPQJKN4KGRPOxRyIyvuFXNp6o1W5mN7j4zU5lUSs9VOuHA8u24V/zImbPsdLN8J6GrTwWkDsQaaoz5EPRx9h3WPA3d8wffcal5hBCoZJmxeCMt8Dbokrw4NKwz7qX0lFUzLZ1kTMUID864lnxgUewxMJluXhAwXtUYLgfnJvYQkn4i3uIiKJfroqZVyujz9J7k2/zNV+ggDF0V1vXMFsr34IhKBbwoeypBDs+GFuQcqnZBljhh2Q8y7xiTocO9s3aLVHk7u4STyoOzhJM7QAOwESkB8l3cxFCna2bKgQT3Q/7va6Uz/dAe8Sh0jshILbKc1GCipjB78XcGSN7riKXk5DxHt0lziqek0Vjxfa7e7AHQLcV0u8pr2puEnImhL40SgGR6wN9JHFJf5QuJSUi1DkVXt1Au5neQOkol8MUX0o/iZ1Q1Cqp58rDaM4zc/p5xBBM/Ao2Qn1cmTUIcTFjB1PJun5xsiZXOAewXYvpIiOroUPS2H5dV1vxZVQMRQzdj9aepwDTQVS2yvuuCcJzGrfGgHAJYImIZZQsNAeTKzN5BHIsc++YhvYc7s3YHyoKArMzm4i/8bpUJNt4fslM4eyx8x3h+PE4rxi9PdGiv/1kHgPhuxOns2F2jIprDiBzBVqKv9/7eQHMufxqN/hu1YiPYYWdCYmr6G9dmNGl2vGcGEoAhxgeIhRMH3QZtVjGOKnMxMytJhFjbf9BycbkxuNfppHQmS8TF75/J3vhLywLDPhiVpVO4irOcG32NoMJF3C3cOxV7SstS8L972nMn/e6q/fg08GuI2MB0B2AwgcvYO6+kCsfo8UH+eu8mmqtadg/Rpd0vZS5LbznuauWUYzq/j+gq62WnqsnPF6UK6QAbbFeYH2zr81wtnveTKInpft3wMQqaKgy96fnbOL4yLS/v2t8AwHwBdhM9UScWYuNACWNQSOw+z5rPudImJtLwAbZZiPQudXf4FPfHDtgjT1yZtj/XeAPZ7qzy2ErX+FxmiuBoRX7DPnaSDWIW2liwvk8IwMepY+D5GhRZxVM1Gg2KaA="
+    },
+    "expected" : "UNDECRYPTABLE"
+  }, {
+    "name" : "forged-at-same-d-key-from-ref",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"REDEEMED\\\",\\\"seq\\\":2,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":1000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"1b2b4a8790b5f7eba3e91042f5ba84d326b04a464fc6bdb3a000112ab706e2aa080374b522b915b1de4ba19ab7d087c204e359ff287246945e715e6cb8b50ee6\",\"signer\":\"438a4f623099e7c238970a8481b03d449fd45cc2c2185e739b28f28ce5342bb3\",\"pad\":\"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "5fc6b925ef0f69a461a153400fbde1b060139b8ae81e14547f8cc77e8d3cb639",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "AmxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxsbGxs1n8NarhJIPAocE8kLnVNNYebxxtKismTDSDx8aJbzZsLOSDK0G2vNkE9JMdDWP/HMfhfL5VJae+wnhZmIL7m5M9A7Ywn/5A+++dIWRKfqXVb8WCiYZKU7/+tlCO18giu+kHYAfOcjEkFKbMzCqJQWsO+axzanMSy8w8fajuSsH+ScclZaYGKxG7E6U4atMzw+ELo8vsttv43p26+Ghszz3cuFlTt/DpIwEZkmDPExXAARKNmfxHDYjihjNqv4jQmJQzLiQ6lLnt6ohLqt56WaA2Gs8Ds7vGtQGH1XEVkukqN/2DFwsAz13+XG1xHZDw8QyijCIh3Ju3zZpm/Nm+f0gFLpgQnlTbti8TngFCxZcDhb+Uf7yRWbzCm5TUt0+qhYzWc6gnwdz62ZOBx2SAyi3XBjnE00mPDe3AxTfbi1NspI/3kgb9/51argDG8Nho01H5pQu8FzAoYYORivQUnhyx3wWUQcaCPxdh0mAHA1vBnVJ99pYf3hE7y9I0Ay15icbxHQNZVQIGzVItYaRiLnxjU7XQH1xQadrLcJUAr0ObxT+4JvwF9RfPkHRvAXmLCHoJwh2niLnJAXieKiw4U6H4zXnjb3GLYaWw3UMTONZBSozXlhTZY8h/ps3C9A+sYES3r1PjrW2MKNbLtF8isZzBM1YLTTJy1d7fnFE6GLeKyowoFkMqRlvFPFmRmVS8r+OP6eI55F+gbWAmEJ0YuCICWKD6zkQjFxj5M0JR63hNkeAruHmc/9e5PVRQj7wjnbCJn5zzpLjFi7FrhKvuAYhtXnbqjjjXATZA4hh0YYXidNckWT9o66XSOSNWm4UvV75u5Z9aomdlPX/UP+3+iXSYmx3trRLXPfY2TzbXtXe6HWJ6t34PN+u+AU5lfqxPo8HiqQ+hFYMYd5nTVLemJzxRLWdc4xHkJiXwSObA4MusriRDxvU70tN6YJJHFDOwXV/Ak4IvFrXiJYrZSFOnDrcrqcfLj53damdd7dBzdkVHrbhHtVDmdckM7wz59+iKUjG8SvLaKk5OtlKWj+n5hJj5Y//tqiSuLIVS6Mz5LaLaPLcADeWu3kaKbgNj38qfP3XG1ZHC8gZdN/DAkR9/ZqoT2xWcT/Tn1H4PnYWp7gV4lmBjpgQJb9L9YXJEK1D/imFEquynqgOYXn77C5+Ylgn67Q9N+4Nfn0ZACCNb4KdvYfLtF+AklAJJhwIhjKQN8T8WGSbwOFptMOBZTZrURmoSuvtZnSfYmNRcRSROS3CDTzJO/yHiLhwjAwbWZeFRRJCyiOUhzUPIcb88xomuHDRYdObLjOh/gCx6xhPtdNUGCGLr0IwJTLynYlZ2Ij6E7jHun2fup9cQ01tT6g1pAmNGUaR7aycEPcw1eUQxTip5gUxx3S/8iN2udv+Uf0PbGZo8="
+    },
+    "expected" : "UNAUTHORISED_SIGNER",
+    "note" : "outer pubkey is a key derived from ref alone; the outer author is never trusted"
+  }, {
+    "name" : "event-at-another-locator",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "expected" : "NOT_THIS_ADDRESS",
+    "event" : {
+      "pubkey" : "0b6d5ed5a5b386a8eb62e0bbffdeaaf867af1b82750ed52816734c773d20c37c",
+      "kind" : 30078,
+      "tags" : [ [ "d", "b375b90321db762f5aa7baaf5fe634e89fdc8e3b604d6abd8f3eee6ffec556f1" ], [ "expiration", "1792627200" ] ],
+      "content" : "AkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBhRKjsLVUTv4qxfY7+0kQ866Zu+NnFtBhF1R/agFlHSBnt31u4l8KZm2CnGnl5/hrz7vM5CPNxT69F+N8GWjMbz4uGogYn40roI9fvwlXp490+74ESrJnE2QhrFVTRAziwAwADzAj8zHESdiyS0DFEgosAuaZmm+T49ZcGxM8thxTRIhLVS3f2cc51uAAXhUq+FHrNjC++XtUacDr3C6jQRX8QaViYoTbM2k8Xy7+lD4aDu1I6XtA0H0eey2RiU6W8IMP/iwNccEOf2bm4Yr5oFbYLUBlE3jCiLyJPjfE8JrV2uhsz9XtN9BrNf+E7uAej/frroFeOu9iHqBA8UasdL+06hz51hK6AkD1waot0COgCbpmbN3DfxvtV/mKOkdN1Br55wljGKVukBKcxzph9xoK1xWKhhUj+05qJ95NIACsDoMU00shWj52wwflSqw3BAfHyeAdLOVS8xqOx+D2n71mFSfKwTafuTZvdNTm5eNr5DFfesoue7c1sfuLWstJz1vas3T2YvxPO2UE3rgoPX07lGStr/ARAlQnefdUohOpp3wjA5l1JCwt7ubtJgkPsvCoTalG3G7ilt4Tt7ilBVjugk8YgKmdqYcspiInCqmMt3gJ0a1aW1PAdeVZyT/mzgmsSmCS5wlxfNkW+ieh1HZEQWGFjhcQv3N7yDozXGyyoK1hMXVXWAmCCsro1pwBudWw4NqAa9FQypuAUB5Qb1alCtyAsPm+LGwe3TrXASxElYMn4YFLYoiqvm5u4DiM413wxcsHPdZQGIGHj4Yog3f2Hn9NumrJxVaOYE1tvOZRDvBfE3iFa6k2NzmZWM5srT511EpfbmqNLwwSpB1XI5buAukjLACavmCqbBzFXCYPOsX4zeac0uwi4qPbTzQfZDTl3oOzX4BwLQCSObmTeo3h64elG9gFHrTJ9OQ3z+2ORLxS+vpTwigQEZjE/WhyUKFh4oMgHkVVRDhALBfudENNxB+9bB7EskD+rp73NIIf9PfqRNV7I3s2iyDXPrgFUyDsxNno+AcOHS+g1ci7K8AR06rlRZ2YwZ1JIcoXN/SwJ0MHxrN6yRd6+R32ZNtUCjugqju5j6sWxrWcX5Yv+WIXJI8I3I5W4pd9LsF9d7nHxHwq6DAWxUy+a48dAwJ1TlB6CfqbOhWqCTlb/czfhnDCmnrq/JEHxFjVq9IV8TGLqWMTQXUdcOxiD3qBIueuGleGY8F3zThRAFgsDyTNJpQyb/8nFJqB6UJjt/pMhhr1fbSTboeMoz9ke4tYq/PrXw7lcaLeiu3XPPns0P48AAEp0QQ2gSKUKavMlyZCt9gwGceMkeNohdrN0/8lFMzarpgg8ingvFbUxRyUcXbW1VatZJ9FNfvJKrNccPlnGWNKiXPlA7RQ7GW+HJMXphRrus0="
+    },
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ]
+  } ],
+  "resolve" : [ {
+    "name" : "issued-then-redeemed",
+    "expectedStatus" : "REDEEMED",
+    "events" : [ "issued-platform-with-doc", "redeemed-stall" ]
+  }, {
+    "name" : "redeemed-beats-issued-whatever-the-order",
+    "expectedStatus" : "REDEEMED",
+    "events" : [ "redeemed-stall", "issued-platform-expiring" ]
+  }, {
+    "name" : "forgery-ignored",
+    "expectedStatus" : "ISSUED",
+    "events" : [ "issued-platform-expiring", "negative:forged-at-same-d-key-from-ref" ]
+  }, {
+    "name" : "nothing-accepted",
+    "expectedStatus" : null,
+    "events" : [ "negative:redeemed-signed-by-platform" ]
+  } ]
+}
