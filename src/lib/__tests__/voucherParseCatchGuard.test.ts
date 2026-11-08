@@ -74,6 +74,11 @@ const AUDITED = new Set<string>([
   'src/lib/couponTotals.ts#readable#7fa34d6c8a4e',
   'src/lib/dmCrypto.ts#isLinkLockedToken#fd266fd0a09b',
   'src/lib/dmCrypto.ts#unwrapNip17Dm#de4a1944ca06',
+  // #310 (imani-wallet#580): publishRedeemed answers null on any failure, so an unverifiable voucher
+  // publishes no REDEEMED event; dmPoll#redeem's catch only logs a failed ledger publish after the
+  // redemption is done. Neither turns a voucher into plain ecash.
+  'src/lib/attestation.ts#publishRedeemed#3e94eb68289c',
+  'src/lib/dmPoll.ts#redeem#c47258e5bf40',
   'src/lib/dmPoll.ts#attestReceived#98c9b3871002',
   'src/lib/dmPoll.ts#checkSwapAndWrite#c0d3be0c0c76',
   'src/lib/dmPoll.ts#exactOf#e6d14ec06b1e',
