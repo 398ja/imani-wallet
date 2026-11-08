@@ -255,6 +255,37 @@
       "content" : "AgkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJ4jqFmxAG5pwoMLtWSG9jMV18SBq2/VWrgBGjz0bjn70tnG5R4vMKf4FrHM/4xGXq8QAycUNCFiVyxDl3sUJlqGMRI/tJwbh45T7BtsgeNGEAlLJSLpJzj8+71ljwSCL3UaOfRzDmzFEBiAMnG6V7g67tgoaXRXp2cMveGrX9d1F3seK4a2w4OKFQkEJCMaST/LkVC1YUK6fDoLxjqqMpw2cnQW1loSabYY1RzAsElStIevvAw9VmaYOnYSbRGSkC0RVZlnRyazTi4ndrECccdw4saommuJFHBx0b6a7s5p3fk2oMwjYzro0m5z69rotxwx17bx9Js9ISit/0oDSlp8jkiwEf2toVocjLO3maEkvWkoSe4aTg6Wf6/z6eYi+e0VjyIosYVxjXdgQt7J1YtVlv/Zd3+KcWHav1AYxH8wYWDg2CoMHnZQl8kimTG/r5dbtioirjdPR8Qj6zi1WB8Ran0Mgd4yrKcQmHT4XWmdN9RR1xRa01v8/ijoCPxqIF3cHouNo04sh83Vsc8vjw6vItlvr+LDNpy1f2Fhw3fXuFxz+StLdid/WGHffdeSgnXrnSzCsHI0NL1dwpG4CteCPqHmiGHrr0TIBC6d3D1pzPQW4DUCL/Xtcxk0F5dd9v4nwxNN6ExUzmXPjlJfHaVHmGKG1vRW8wda7v1c3/XwUBKFYQpG0mSYSj1v2PfsXo7sEPcfPE3NeNfF1Ki3+Ze/BB/AXizqeFMCeB2LsUNYOFMdbj1te43+X4qQuNWL2xC26lJen0113lvqMecZQ00d/eN7wxAI2RN8TCS++PFFIJ2optqwGEMizLXry9LGra8h4/lSmKt0uKM0kBRpe0V/UhlXc2XMDnJmtlLMkPgOQXVyVRYqbq7v+n1+lHVhb6RgzQgpvdILiRx1TyAMoeiZIBQJFxySRiYI+ol3LFUnnsNoEERpo+uk2ER047Hg52L0yVpgSqeLry/ZtMbnevT88zEev/w6r5Qw/sMPph02VU7VyEqYFaQelPkrZw6wbOZHdMkUVZtq/qtecKvEQf52l50Nm0n2ag1Pcf3voudiuqv1tMPsi0UMsgG5+N27NCtVTVDKHWIaSAMxJtUCnh80cg/MT7HT9lIY/bWkCcNbJjF8AeUf0rxCEDyfFEx97+w7ZAI/c8evNhWT10oWYrhH1M+ept/lMtpRovzKiZYY5chOlb3f/5E1F09iZ30xu63AoPOMrZR4vm4An+cn1mKtVIDLElr+/xb50BmZuYainZemUGiZDmXNsLxxcVHXgBrV+sX0aJipyBSqRShjks3Xb9CAZIbJxXSnHnn0+nJSJgSfdsBRKepJA7ZXhBqMyg40s6bZSOkc7XmWPStiXuit3s/Wih0tro8xXq3QiWeqjG6ANWwPi0yHKIhlr9guQsvtw="
     },
     "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ]
+  }, {
+    "name" : "issued-stall-other-fields",
+    "input" : {
+      "status" : "ISSUED",
+      "signer" : "stall",
+      "root" : "stall",
+      "nip44Nonce" : "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "auxRand" : "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+      "voucher" : {
+        "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+        "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+        "issuerPublicKey" : "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d",
+        "unit" : "sat",
+        "faceValue" : 99000,
+        "faceDecimals" : 2,
+        "expiresAt" : 1790000000,
+        "memo" : "hi",
+        "backingStrategy" : "MINIMAL",
+        "issuanceRatio" : "0.5"
+      }
+    },
+    "body" : "{\"v\":2,\"ref\":\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\",\"status\":\"ISSUED\",\"seq\":1,\"voucher\":{\"voucherId\":\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\",\"issuerId\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"issuerPublicKey\":\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\",\"unit\":\"sat\",\"faceValue\":99000,\"faceDecimals\":2,\"expiresAt\":1790000000,\"memo\":\"hi\",\"backingStrategy\":\"MINIMAL\",\"issuanceRatio\":\"0.5\"}}",
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":99000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"}}\",\"sig\":\"90b55bd193d9996d2f11f9533c8169d1dfa719d25804775c5b8dafdaf4de102deb8baac3084f4b88d35aa3c07d44c860242c3d8b998adc32e04e4122cefcdac2\",\"signer\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"pad\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "envelopeBytes" : 1024,
+    "event" : {
+      "pubkey" : "4a98b7e5786b518b60ecd63a83c675cb774be85c4efa3dbc3483c95dec68a9f6",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ], [ "expiration", "1792627200" ] ],
+      "content" : "AgsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLzIZycaUnZX0z5I0lbD3SdeWVraEji29SDV4rvdlfCrqZAWjpnj+MVPmfl+dgvJJJ1vKmFQw0cTqbBupkJUglIIzkUgQYF4kgwIcvCUuCXb3XQEQPkbzLHyj0UldCmRju9Dz06yMBjtmqaPbwrNM5tEd2CjPBxVp+T/sd3f/eCvZ0HJyiOzD1oL9emdo3Bp6zW8iGEdHJQH9QRde2tGKZihHOFEwDHSy698cRESKKLgV112O5qAekRdGyhMZWj87sNabaUcqRKhkAGEtMjXTamzo23NJk5PsnL3fqDsYRZh4YgDbDL3L9C9Iz7pLOvAQ30y+JEOEe6P6c9I2MqP7JQ5oplJdZ97p7s4KLmc92ALtYMmIn5NKYY21AHsLPWWxS8KtryKPuUo/ubmk8rvhIIvUZG6hQjrvsgo6ohwdA4GhWMdrh4z68uBUmx8M1gr5+msKhs+CJMbn6pNIDhHxr8Xt6CZ3NQjxl5f+OcPe5DpWV9LNQ8tsjgUahYu9+QfLrghqqAgnE7kBg4Ad3FDpqnDcQftlhTPaiqkUDgiGTuocbX0E/bQ8z5ytC0yu45Wi22cAz/TO4Uro//DMYUY7xS+P38bEthJoD3m2DEMxrbMR2j8DkJ/N3q96fRNNtw1OQhGg4LLi+k9bnhTVUjIRHoz5S3CEI4QQC+kjotCmUJD5KRuRJgrHLSb3Mo7lVoNxW1Qw7MTocZ/EOhjTj5o7moj6FEkoBbK1eQXua4ZK3eazTNVulA08ubbWD/2ClzdKbc+n2LYlK6iR7gO+lSK1w66uVF9Y5U2m7O/LbDpjNIxBLRszUEqE9riHaPTijG8P2iUA/+lFgKoWor4UhL8lm0TdQg2lTTG/p0rmeDbEG7JzLf23IloSjXqeBu8/uNBDAGT76zfDFnR9HAVyQUKZNjF4LIA/KYJIqs9XPCPQdC/7BS48BwExlhXFSlQvMcHrkZHDm67PlqXUMVKXNzGYKOlR/qfm3hnoJAOFd/UjAJYsHUNRv63Ic9XdN2ubHRnTVMJecss7XWsd5f/22V0kjZ+CoF2+czzk+pLrETpjMnjiYzXjFW4dQ0EsjxmQa58lx+lVsvjji/xZ6lPvWJpwwpTgHiy9S+gbYi8hHnc3iwsyjqxQdSeAcP7d4BiJt1JIVzv4W/26L5trcSt7MJZ+rAkG8ad44UIvG4aikYx5n2QH///QrS68xS9Dk4LeZ0dEG4YIKrzV7JR3aK8md8egUmrIPbb3RErCUr9KkYfroBFgmEf6xjqSdDsQpMOS4cnfPHnhOD5dTQdC+/gN+U2JSC2ydM/G2AQoaIdco9L2C8+6zb36yHmqgr9yzAYSIqfzGE5dodGOjoReUIOIn+nkZ+a1U721uYJ2VvpUwwQ8uaDQNsO0ZNR30EeUqwcIalVIcPCc="
+    },
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ]
   } ],
   "negativeReads" : [ {
     "name" : "redeemed-signed-by-platform",
@@ -478,6 +509,19 @@
     "expected" : "UNAUTHORISED_SIGNER",
     "note" : "outer pubkey is a key derived from ref alone; the outer author is never trusted"
   }, {
+    "name" : "doc-verifies-but-body-faceValue-differs",
+    "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
+    "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+    "trustedIssuerKeys" : [ "ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d" ],
+    "envelope" : "{\"body\":\"{\\\"v\\\":2,\\\"ref\\\":\\\"df44ebcbacd67d95a332ecb3d4fe675ea1f871e408ce63e5da13d8083702d6f6\\\",\\\"status\\\":\\\"ISSUED\\\",\\\"seq\\\":1,\\\"voucher\\\":{\\\"voucherId\\\":\\\"0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b\\\",\\\"issuerId\\\":\\\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\\\",\\\"issuerPublicKey\\\":\\\"ab5d2e79cfd621b1b027ffb24e2453ed7fb571ba9a841ff0e2473466cabd168d\\\",\\\"unit\\\":\\\"sat\\\",\\\"faceValue\\\":99000,\\\"faceDecimals\\\":2,\\\"expiresAt\\\":1790000000,\\\"memo\\\":\\\"hi\\\",\\\"backingStrategy\\\":\\\"MINIMAL\\\",\\\"issuanceRatio\\\":\\\"0.5\\\"},\\\"doc\\\":\\\"bf69766f75636865724964782430623865336636612d316332642d346535662d386139622d30633164326533663461356268697373756572496478403661613364613962356331643631393536303736636233303134666664616130393936626163646165323962613462383965333962343038386638366563373864756e697463736174696661636556616c75651903e8696578706972657341741a6ab13b80646d656d6f6268696f6261636b696e675374726174656779674d494e494d414c6d69737375616e6365526174696ffb3fe00000000000006c66616365446563696d616c7302656e6f6e63657840303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030306f6973737565725075626c69634b65797840616235643265373963666436323162316230323766666232346532343533656437666235373162613961383431666630653234373334363663616264313638646f6973737565725369676e617475726578803134336365366234316265343635313730303339343066336464383831666533396331303934313565356365616364616639313034373835626332356636316134653164663935653235643935383034396337346238396137633666666639626365383836613133393338313738613761663035323463663432353938346662ff\\\"}\",\"sig\":\"7bf4a7f33084710d5333a1453e69b0053309e2f04f30c594e972cb170c29edc2f482967859f097ddabc4f680a672a6a0885ce8ca79b8a7ea59b113985d913732\",\"signer\":\"6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78\",\"pad\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"}",
+    "event" : {
+      "pubkey" : "4a98b7e5786b518b60ecd63a83c675cb774be85c4efa3dbc3483c95dec68a9f6",
+      "kind" : 30078,
+      "tags" : [ [ "d", "1d52290ceba2e3e7ec6e39e330203d890378752cbcd9e506292b55c2e9bae567" ] ],
+      "content" : "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"
+    },
+    "expected" : "DOC_MISMATCH"
+  }, {
     "name" : "event-at-another-locator",
     "issuerId" : "6aa3da9b5c1d61956076cb3014ffdaa0996bacdae29ba4b89e39b4088f86ec78",
     "voucherId" : "0b8e3f6a-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
@@ -506,5 +550,20 @@
     "name" : "nothing-accepted",
     "expectedStatus" : null,
     "events" : [ "negative:redeemed-signed-by-platform" ]
+  }, {
+    "name" : "platform-issued-beats-stall-issued-platform-first",
+    "expectedStatus" : "ISSUED",
+    "expectedFaceValue" : 1000,
+    "events" : [ "issued-platform-with-doc", "issued-stall-other-fields" ]
+  }, {
+    "name" : "platform-issued-beats-stall-issued-stall-first",
+    "expectedStatus" : "ISSUED",
+    "expectedFaceValue" : 1000,
+    "events" : [ "issued-stall-other-fields", "issued-platform-with-doc" ]
+  }, {
+    "name" : "mismatched-doc-event-ignored",
+    "expectedStatus" : "ISSUED",
+    "expectedFaceValue" : 1000,
+    "events" : [ "negative:doc-verifies-but-body-faceValue-differs", "issued-platform-expiring" ]
   } ]
 }

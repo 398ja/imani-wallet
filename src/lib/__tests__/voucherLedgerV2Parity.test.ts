@@ -38,7 +38,7 @@ import {
 import vectors from './fixtures/voucherLedgerV2Vectors.json'
 import nip44Vectors from './fixtures/nip44Vectors.json'
 
-const FIXTURE_SHA256 = '117920e528d7f211b79f64f81030f5ea89b1abd934efb6e13d3ddd9e2f675de2'
+const FIXTURE_SHA256 = 'e49bebf3b1efcd0055c1315d60686a911f8ab03338d7a5104aca22d66ba7c2db'
 
 interface SealedVector {
   name: string
@@ -190,5 +190,10 @@ describe('resolve', () => {
     expect(first).toBeDefined()
     const result = resolve(v.events.map(byName), voucherRef(ids.issuerId, ids.voucherId), trusted)
     expect(result?.status ?? null).toBe(v.expectedStatus)
+    if (v.expectedFaceValue !== undefined) expect(result?.voucher.faceValue).toBe(v.expectedFaceValue)
+    // Order-independent (imani-wallet#582): the reversed input must fold to the same answer.
+    const reversed = resolve([...v.events].reverse().map(byName), voucherRef(ids.issuerId, ids.voucherId), trusted)
+    expect(reversed?.status ?? null).toBe(v.expectedStatus)
+    expect(reversed?.voucher).toEqual(result?.voucher)
   })
 })

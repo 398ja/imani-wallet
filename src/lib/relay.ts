@@ -225,7 +225,11 @@ export async function allAddressable(pubkey: string, kind: number, dPrefix: stri
  * never the author. Throws `GatewayUnreachableError` when the gateway did not answer.
  */
 export async function eventsByDTag(kind: number, d: string): Promise<Event[]> {
-  const events = await gatewayQuery({ kinds: [kind], tags: { '#d': [d] }, limit: 50 })
+  const events = await gatewayQuery({ kinds: [kind], tags: { '#d': [d] }, limit: GATEWAY_PAGE_LIMIT })
+  // A full page may be a truncated one: answering from it could miss a REVOKED. Fail closed.
+  if (events.length >= GATEWAY_PAGE_LIMIT) {
+    throw new GatewayUnreachableError(`nostr/query answered a full page (${events.length}) at one ledger locator`)
+  }
   const out = new Map<string, Event>()
   for (const event of events) {
     if (out.has(event.id) || event.kind !== kind) continue

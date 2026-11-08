@@ -9,13 +9,18 @@ import { finalizeEvent, nip44 } from 'nostr-tools'
  * this one proves the TypeScript refuses every shape the spec says a reader refuses.
  */
 
-let relayEvents: unknown[] = []
-vi.mock('../relay', () => ({ eventsByDTag: async () => relayEvents }))
+let relayEvents: unknown[] | Error = []
+vi.mock('../relay', () => ({
+  eventsByDTag: async () => {
+    if (relayEvents instanceof Error) throw relayEvents
+    return relayEvents
+  },
+}))
 
 import type { LedgerEventLike, LedgerStatus } from '../voucherLedgerV2'
 
 const L = await import('../voucherLedgerV2')
-const { readVoucherLedgerStatus } = await import('../voucherLedgerV2Status')
+const { capCandidates, MAX_LEDGER_CANDIDATES, readVoucherLedgerStatus } = await import('../voucherLedgerV2Status')
 
 const STALL_SK = hexToBytes('b2'.repeat(32))
 const STALL = bytesToHex(schnorr.getPublicKey(STALL_SK))
@@ -201,5 +206,17 @@ describe('readVoucherLedgerStatus', () => {
     relayEvents = []
     expect(await readVoucherLedgerStatus(STALL, VID, [])).toBeNull()
     await expect(readVoucherLedgerStatus(STALL, 'not-a-uuid', [])).rejects.toThrow()
+  })
+  it('fails closed: a relay that cannot answer throws, never reads as no entry (imani-wallet#582)', async () => {
+    relayEvents = new Error('gateway timed out')
+    await expect(readVoucherLedgerStatus(STALL, VID, [PLATFORM])).rejects.toThrow('gateway timed out')
+  })
+  it('caps candidates at 256, oldest created_at then id first', () => {
+    const many = Array.from({ length: 300 }, (_, i) => ({ created_at: 1000 - i, id: String(i).padStart(3, '0') }))
+    const kept = capCandidates(many)
+    expect(kept).toHaveLength(MAX_LEDGER_CANDIDATES)
+    expect(MAX_LEDGER_CANDIDATES).toBe(256)
+    expect(kept[0].created_at).toBe(701)
+    expect(capCandidates([{ created_at: 1, id: 'b' }, { created_at: 1, id: 'a' }]).map((e) => e.id)).toEqual(['a', 'b'])
   })
 })
