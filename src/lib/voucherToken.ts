@@ -398,6 +398,26 @@ export class VoucherDocumentMissing extends Error {
 }
 
 /**
+ * A token's `v` map (voucher documents) broke a decoder rule: a key that is not hex(sha256(value)),
+ * an empty or oversized value, too many entries, or more than 1 MiB in total. The token is refused.
+ */
+export class VoucherDocumentsInvalid extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'VoucherDocumentsInvalid'
+  }
+}
+
+/**
+ * Whether a parse failure means "a voucher nobody can verify" rather than "not a voucher": a
+ * by-reference proof without its document, or an invalid document map. A caller that falls back
+ * to plain ecash on a parse error must refuse on these instead (cashu-voucher#64).
+ */
+export function isUnverifiableVoucherError(e: unknown): boolean {
+  return e instanceof VoucherDocumentMissing || e instanceof VoucherDocumentsInvalid
+}
+
+/**
  * The `data` hex of an UNLOCKED `VOUCHER` secret when it is a reference: exactly 32 bytes, the
  * SHA-256 of the voucher document. Lowercased. Null for anything else (v1 inline, locked, plain).
  *
@@ -436,20 +456,20 @@ export function validateVoucherDocuments(raw: unknown, maxEntries: number): Map<
   const out = new Map<string, Uint8Array>()
   if (raw === undefined || raw === null) return out
   if (typeof raw !== 'object' || Array.isArray(raw) || raw instanceof Uint8Array) {
-    throw new Error('token voucher documents (v) is not a map')
+    throw new VoucherDocumentsInvalid('token voucher documents (v) is not a map')
   }
   const entries = Object.entries(raw as Record<string, unknown>)
-  if (entries.length > maxEntries) throw new Error('token carries more voucher documents than proofs')
+  if (entries.length > maxEntries) throw new VoucherDocumentsInvalid('token carries more voucher documents than proofs')
   let total = 0
   for (const [, value] of entries) total += value instanceof Uint8Array ? value.length : 0
-  if (total > MAX_VOUCHER_DOCUMENTS_TOTAL_BYTES) throw new Error('voucher documents add up to more than 1 MiB')
+  if (total > MAX_VOUCHER_DOCUMENTS_TOTAL_BYTES) throw new VoucherDocumentsInvalid('voucher documents add up to more than 1 MiB')
   for (const [key, value] of entries) {
-    if (!/^[0-9a-f]{64}$/.test(key)) throw new Error('voucher document key is not 64 lowercase hex')
-    if (!(value instanceof Uint8Array)) throw new Error('voucher document is not a byte string')
+    if (!/^[0-9a-f]{64}$/.test(key)) throw new VoucherDocumentsInvalid('voucher document key is not 64 lowercase hex')
+    if (!(value instanceof Uint8Array)) throw new VoucherDocumentsInvalid('voucher document is not a byte string')
     if (value.length === 0 || value.length > MAX_VOUCHER_DOCUMENT_BYTES) {
-      throw new Error('voucher document is empty or too large')
+      throw new VoucherDocumentsInvalid('voucher document is empty or too large')
     }
-    if (bytesToHex(sha256(value)) !== key) throw new Error('voucher document does not match its key')
+    if (bytesToHex(sha256(value)) !== key) throw new VoucherDocumentsInvalid('voucher document does not match its key')
     out.set(key, value)
   }
   return out
