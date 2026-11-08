@@ -38,7 +38,7 @@ import { announceHeld } from './heldToast'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex } from '@noble/hashes/utils'
 
-import { attestRedemption, nullifierFor } from './attestation'
+import { attestRedemption, nullifierFor, publishRedeemed } from './attestation'
 import { attestationForReceivedCoupon } from './cashAttestation'
 import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
@@ -1530,6 +1530,18 @@ function redemptionAdapter(): RedemptionAdapter {
           // contract ever broke, the rejection would be unhandled rather than
           // visible, and on a completed redemption it must be neither.
           .catch((error) => console.error('[dmPoll] attestation failed', error))
+        // Voucher ledger v2 (#310): the stall's device publishes the encrypted REDEEMED event, from
+        // the same step and with the same fire-and-forget posture. `publishRedeemed` checks the flag,
+        // re-verifies the issuer signature and publishes only this stall's own, non-credential
+        // vouchers. It never rejects; the catch is the same belt-and-braces as above, and the
+        // try covers a synchronous throw, so no failure here can reach the redemption.
+        try {
+          void publishRedeemed({ token, signatureValid: validation?.signatureValid === true }).catch((error) =>
+            console.error('[dmPoll] ledger v2 publish failed', error),
+          )
+        } catch (error) {
+          console.error('[dmPoll] ledger v2 publish failed', error)
+        }
       } else {
         // A CUSTOMER received it, so the only public record this wallet may
         // make is a kind-7378 transfer receipt (#91), never a 7377: see

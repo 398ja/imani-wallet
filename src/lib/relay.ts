@@ -219,6 +219,25 @@ export async function allAddressable(pubkey: string, kind: number, dPrefix: stri
 }
 
 /**
+ * #310: every event of one kind at a `d` tag, from ANY author, whose own id and signature verify,
+ * in one gateway query. For voucher ledger v2, whose events are signed by per-voucher keys nobody
+ * knows in advance, so there is no author to filter on; the reader trusts the inner signature,
+ * never the author. Throws `GatewayUnreachableError` when the gateway did not answer.
+ */
+export async function eventsByDTag(kind: number, d: string): Promise<Event[]> {
+  const events = await gatewayQuery({ kinds: [kind], tags: { '#d': [d] }, limit: 50 })
+  const out = new Map<string, Event>()
+  for (const event of events) {
+    if (out.has(event.id) || event.kind !== kind) continue
+    if (!event.tags.some(([name, value]) => name === 'd' && value === d)) continue
+    const { id, pubkey, created_at, tags, content, sig } = event
+    if (!verifyEvent({ id, pubkey, created_at, kind, tags, content, sig })) continue
+    out.set(event.id, event)
+  }
+  return [...out.values()]
+}
+
+/**
  * The newest parameterised-replaceable event (NIP-33) for a pubkey and `d` tag, or null when the
  * gateway holds none. Throws `GatewayUnreachableError` when it did not answer: null here takes away
  * the merchant role, so "unreachable" must never read as "none".
