@@ -38,6 +38,14 @@ function absolute(path: string): string {
   return new URL(path, window.location.origin).toString()
 }
 
+/** SHA-256 of zero bytes: what the gateway computes for a request with no body. */
+export const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+
+/** Same rule as the gateway's PathPrefixMatcher.isStateChangingMethod. */
+function isStateChanging(method: string): boolean {
+  return !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())
+}
+
 /** Just enough of a signer to authenticate a request. */
 export interface RequestSigner {
   signEvent(template: {
@@ -97,8 +105,15 @@ export async function nip98Header(
     ['method', method.toUpperCase()],
   ]
 
+  // Every state-changing verb carries a payload tag, body or not. The gateway's
+  // Nip98AuthFilter treats anything but GET, HEAD and OPTIONS as a write and
+  // rejects a write with no payload tag (401 AUTH_002), hashing the request body
+  // it received. A bodyless DELETE arrives with zero bytes, so its tag is the
+  // SHA-256 of the empty string (EMPTY_BODY_SHA256).
   if (body !== undefined) {
     tags.push(['payload', bytesToHex(sha256(new TextEncoder().encode(body)))])
+  } else if (isStateChanging(method)) {
+    tags.push(['payload', EMPTY_BODY_SHA256])
   }
 
   // A nonce, because NIP-98 has no other source of uniqueness.
