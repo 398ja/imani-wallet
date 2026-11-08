@@ -1098,6 +1098,16 @@ export function cborFieldIsFloat(map: object, key: string): boolean {
   return FLOAT_KEYS.get(map)?.has(key) ?? false
 }
 
+/**
+ * The voucher fields of a decoded unlocked-voucher CBOR blob, exactly as `parseVoucherToken` reads
+ * them. Exported for voucher ledger v2, which verifies a relay-carried voucher document (`doc`)
+ * with the same reader rather than a second one. Throws when a required field is missing.
+ */
+export function voucherOfBlob(blob: unknown): SignedVoucherFields {
+  if (!blob || typeof blob !== 'object' || Array.isArray(blob)) throw new Error('voucher blob is not a map')
+  return readVoucherFields(blob as Record<string, unknown>)
+}
+
 function readVoucherFields(blob: Record<string, unknown>): SignedVoucherFields {
   const str = (k: string): string | undefined => {
     const v = blob[k]

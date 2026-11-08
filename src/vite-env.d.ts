@@ -27,6 +27,8 @@ interface ImportMetaEnv {
   readonly VITE_WEBSITE_BASE_URL?: string
   /** #402: `on` shows "Use online" (checkout codes). Off by default, so the feature ships dark. */
   readonly VITE_CHECKOUT_CODES?: string
+  /** #310: `true` publishes voucher ledger v2 REDEEMED events from a stall. Off by default (dark). */
+  readonly VITE_VOUCHER_LEDGER_V2?: string
   /** #410: the wallet's return page reads shop-code gifts (`on`), off by default. */
   readonly VITE_GIFTING_CODE_GIFTS?: string
   /** The imani-deploy release this build shipped in (Settings → About). Unset: shown as "dev". */

@@ -691,3 +691,83 @@ export async function reconcileAttestations(
 
   return { checked: local.length, missing: gaps.length, republished }
 }
+
+// ===================================================================== voucher ledger v2 (#310)
+
+/**
+ * Whether the stall publishes voucher ledger v2 REDEEMED events. Off unless the build sets
+ * `VITE_VOUCHER_LEDGER_V2=true`, so the feature ships dark. Read per call so a test can stub it.
+ */
+export function voucherLedgerV2Enabled(): boolean {
+  return String(import.meta.env.VITE_VOUCHER_LEDGER_V2 ?? '').toLowerCase() === 'true'
+}
+
+/**
+ * Publish the encrypted, pseudonymous v2 REDEEMED event for a coupon this stall just redeemed
+ * (cashu-voucher `docs/explanation/voucher-ledger-v2.md`, imani-gateway-customer#310).
+ *
+ * The inner signer is the stall's own key and the event key root is `ledgerSk`, the same
+ * derivation as the attestation's, so both stay inside this module: the borrowed key is copied
+ * once for the inner signature and every buffer is wiped before this returns. Nothing secret is
+ * exported.
+ *
+ * Publishes only when the flag is on, the voucher's issuer signature verifies, its `issuerId` is
+ * this stall's own key and it is not a terminal credential. NEVER THROWS and never blocks a
+ * redemption: the proofs are burnt by the time this runs, so every failure is logged and answered
+ * with null. Returns the event id when at least one relay accepted it.
+ */
+export async function publishRedeemed(params: { token: string; signatureValid: boolean }): Promise<string | null> {
+  try {
+    if (!voucherLedgerV2Enabled() || !params.signatureValid || !params.token) return null
+    const { parseVoucherToken, verifyVoucher } = await import('./voucherToken')
+    const { isTerminalCredential, seal, voucherFieldsOf } = await import('./voucherLedgerV2')
+    const { voucher } = parseVoucherToken(params.token)
+    // Re-verified here rather than trusted off the envelope's flag: this event is signed by the
+    // stall and names the voucher, so it must only ever describe a voucher the stall really issued.
+    if (!verifyVoucher(voucher).signatureValid) return null
+    if (isTerminalCredential(voucher.merchantMetadata)) return null
+    const fields = voucherFieldsOf(voucher)
+
+    const sealed = getSigner().withPrivkey((priv) => {
+      if (bytesToHex(schnorr.getPublicKey(priv)) !== fields.issuerId) {
+        priv.fill(0)
+        return null
+      }
+      const signerSk = priv.slice()
+      let root: Uint8Array | undefined
+      try {
+        // `ledgerKeyFrom` wipes `priv`, hence the copy above for the inner signature.
+        root = ledgerKeyFrom(priv).sk
+        return seal({ status: 'REDEEMED', voucher: fields }, signerSk, root)
+      } finally {
+        signerSk.fill(0)
+        root?.fill(0)
+      }
+    })
+    if (!sealed) return null
+
+    let event: Event
+    try {
+      event = finalizeEvent(
+        {
+          kind: sealed.template.kind,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: sealed.template.tags,
+          content: sealed.template.content,
+        },
+        sealed.eventSecretKey,
+      )
+    } finally {
+      sealed.eventSecretKey.fill(0)
+    }
+    const result = await publish(event)
+    if (result.ok === 0) {
+      console.warn('[ledger-v2] no relay accepted the REDEEMED event', result.errors)
+      return null
+    }
+    return event.id
+  } catch (error) {
+    console.error('[ledger-v2] REDEEMED not published', error)
+    return null
+  }
+}
