@@ -15,6 +15,8 @@ import { encodePlainTokenV4 } from '../plainToken'
 import {
   MAX_VOUCHER_DOCUMENT_BYTES,
   MAX_VOUCHER_DOCUMENTS_TOTAL_BYTES,
+  decodeCbor,
+  isUnverifiableVoucherError,
   isVoucherByReference,
   isVoucherSecret,
   tokenProofs,
@@ -146,6 +148,53 @@ describe('Java by-reference vectors: token documents maps (review L5)', () => {
     if (!m.accepted) {
       expect(() => tokenProofs(m.token)).toThrow()
       expect(() => parseVoucherToken(m.token)).toThrow()
+    }
+  })
+
+  it.each(maps.filter((m) => !m.accepted))('$name: refused as an unverifiable voucher, not plain ecash (review N8)', (m) => {
+    let caught: unknown
+    try {
+      tokenVoucherDocuments(m.token)
+    } catch (e) {
+      caught = e
+    }
+    expect(isUnverifiableVoucherError(caught)).toBe(true)
+    try {
+      tokenProofs(m.token)
+    } catch (e) {
+      caught = e
+    }
+    expect(isUnverifiableVoucherError(caught)).toBe(true)
+  })
+})
+
+interface DocumentCborVector {
+  name: string
+  document_hex: string
+  document_key: string
+  v1_secret: string
+  v2_secret: string
+  readable: boolean
+}
+
+describe('Java by-reference vectors: voucher document CBOR (review N7)', () => {
+  const docs = vectors.documents_cbor as DocumentCborVector[]
+
+  it('covers duplicate and non-text keys', () => {
+    expect(docs.map((d) => d.name)).toEqual(expect.arrayContaining(['well-formed', 'duplicate-key', 'non-text-key']))
+  })
+
+  it.each(docs)('$name: readable exactly when Java reads it', (d) => {
+    const bytes = hexToBytes(d.document_hex)
+    const documents = new Map([[d.document_key, bytes]])
+    if (d.readable) {
+      expect(() => decodeCbor(bytes)).not.toThrow()
+      expect(voucherOfSecret(d.v1_secret)).not.toBeNull()
+      expect(voucherOfSecret(d.v2_secret, documents)).not.toBeNull()
+    } else {
+      expect(() => decodeCbor(bytes)).toThrow()
+      expect(voucherOfSecret(d.v1_secret)).toBeNull()
+      expect(voucherOfSecret(d.v2_secret, documents)).toBeNull()
     }
   })
 })

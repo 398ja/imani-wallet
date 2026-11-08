@@ -45,8 +45,22 @@ class CborReader {
   // The service imports this file for API ticket 02, so it has to be readable
   // by both.
   private readonly b: Uint8Array
-  constructor(b: Uint8Array) {
+  private readonly tokenRoot: boolean
+  /** Keys of the enclosing maps, '[]' for an array: `['v']` is inside a token's `v` map. */
+  private readonly path: string[] = []
+  constructor(b: Uint8Array, tokenRoot = false) {
     this.b = b
+    this.tokenRoot = tokenRoot
+  }
+
+  /**
+   * A refused map key. Inside a token's root `v` map it is a bad voucher documents map, so it
+   * throws `VoucherDocumentsInvalid` and reads as "unverifiable voucher", not "plain ecash"
+   * (cashu-voucher#64, review N8). Anywhere else it is a plain CBOR error.
+   */
+  private refuse(message: string): never {
+    if (this.tokenRoot && this.path.length === 1 && this.path[0] === 'v') throw new VoucherDocumentsInvalid(message)
+    throw new Error(message)
   }
 
   private u8(): number {
@@ -123,9 +137,16 @@ class CborReader {
           ? this.readIndefinite().join('')
           : new TextDecoder().decode(this.take(n))
       case 4: {
-        if (n === null) return this.readIndefinite()
+        if (n === null) {
+          this.path.push('[]')
+          const all = this.readIndefinite()
+          this.path.pop()
+          return all
+        }
         const out: unknown[] = []
+        this.path.push('[]')
         for (let k = 0; k < n; k++) out.push(this.read())
+        this.path.pop()
         return out
       }
       case 5: {
@@ -135,10 +156,12 @@ class CborReader {
         const out = Object.create(null) as Record<string, unknown>
         const floats = new Set<string>()
         const entry = (key: unknown): void => {
-          if (typeof key !== 'string') throw new Error('cbor: map key is not a text string')
-          if (Object.prototype.hasOwnProperty.call(out, key)) throw new Error('cbor: duplicate map key')
+          if (typeof key !== 'string') this.refuse('cbor: map key is not a text string')
+          if (Object.prototype.hasOwnProperty.call(out, key)) this.refuse('cbor: duplicate map key')
           this.lastWasFloat = false
+          this.path.push(key)
           out[key] = this.read()
+          this.path.pop()
           if (this.lastWasFloat) floats.add(String(key))
           this.lastWasFloat = false
         }
@@ -192,6 +215,11 @@ class CborReader {
 
 export function decodeCbor(bytes: Uint8Array): unknown {
   return new CborReader(bytes).read()
+}
+
+/** `decodeCbor` for a whole TokenV4: a refused key inside the root `v` map is `VoucherDocumentsInvalid`. */
+function decodeTokenCbor(bytes: Uint8Array): unknown {
+  return new CborReader(bytes, true).read()
 }
 
 // ---------------------------------------------------------------- base64url
@@ -482,7 +510,7 @@ export function validateVoucherDocuments(raw: unknown, maxEntries: number): Map<
 
 function decodeTokenRoot(token: string): Record<string, unknown> {
   if (!token?.startsWith('cashuB')) throw new Error('not a TokenV4 (cashuB) token')
-  return decodeCbor(base64UrlDecode(token.slice(6))) as Record<string, unknown>
+  return decodeTokenCbor(base64UrlDecode(token.slice(6))) as Record<string, unknown>
 }
 
 function rootProofCount(root: Record<string, unknown>): number {
