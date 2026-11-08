@@ -222,13 +222,15 @@ export async function allAddressable(pubkey: string, kind: number, dPrefix: stri
 export const MAX_LEDGER_EVENTS = 4096
 /** Most gateway pages one locator read walks; beyond it the read throws (review N5). */
 export const MAX_LEDGER_PAGES = Math.ceil(MAX_LEDGER_EVENTS / GATEWAY_PAGE_LIMIT) + 2
+/** A stalled page with this many events in its one second is refused (matches the Java). */
+export const SAME_SECOND_REFUSAL = 10
 
 /**
  * #310: every event of one kind at a `d` tag, from ANY author, whose own id and signature verify,
  * paged through the gateway to exhaustion (inclusive `until`), never truncated. For voucher ledger v2, whose events are signed by per-voucher keys nobody
  * knows in advance, so there is no author to filter on; the reader trusts the inner signature,
  * never the author. Throws `GatewayUnreachableError` when the gateway did not answer.
- * Also throws above `MAX_LEDGER_EVENTS` events, on a full page within one second, or past
+ * Also throws above `MAX_LEDGER_EVENTS` events, on a stalled page with `SAME_SECOND_REFUSAL`+ events in one second, or past
  * `MAX_LEDGER_PAGES` pages.
  */
 export async function eventsByDTag(kind: number, d: string): Promise<Event[]> {
@@ -251,11 +253,16 @@ export async function eventsByDTag(kind: number, d: string): Promise<Event[]> {
       throw new GatewayUnreachableError(`more than ${MAX_LEDGER_EVENTS} events at one ledger locator`)
     }
     if (fresh === 0) {
-      // A full page all in one second cannot be walked past without skipping events.
-      if (batch.length >= GATEWAY_PAGE_LIMIT) throw new GatewayUnreachableError('ledger locator page cannot be exhausted')
+      // Stalled. The relay may cap a REQ below our limit, so a short page is not proof of the end.
+      // A stalled page holds only events at `until`; if it has SAME_SECOND_REFUSAL or more, that
+      // second may hold more than the relay returns, so fail closed. Assumes the relay answers at
+      // least SAME_SECOND_REFUSAL + 1 events per REQ (shared rule with the Java).
+      const atT = batch.filter((e) => e.created_at === until).length
+      if (atT >= SAME_SECOND_REFUSAL) {
+        throw new GatewayUnreachableError(`${atT} events in one second at a ledger locator, cannot page past it`)
+      }
       break
     }
-    if (batch.length < GATEWAY_PAGE_LIMIT && until === undefined) break
     until = Math.min(...batch.map((e) => e.created_at))
   }
   const events = [...seen.values()]
