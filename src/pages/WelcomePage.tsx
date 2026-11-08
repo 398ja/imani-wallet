@@ -5,6 +5,7 @@ import { Button, Panel, Alert } from '../components/ui'
 import type { Profile } from '../lib/profile'
 import { backupFilename, createBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
+import { recordBackup } from '../lib/backupRecord'
 import { handleLabel, handleOf } from '../lib/format'
 import { useDriveBackup } from '../lib/useDriveBackup'
 import { DriveOverwriteWarning } from '../components/DriveOverwriteWarning'
@@ -43,6 +44,7 @@ export function WelcomePage({
     setError(null)
     try {
       await downloadText(backupFilename(profile), createBackup(profile.pubkey))
+      recordBackup(profile.pubkey, 'file')
       setDownloaded(true)
     } catch (e) {
       setError(userMessage(e))

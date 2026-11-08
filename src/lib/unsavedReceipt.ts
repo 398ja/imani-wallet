@@ -1,5 +1,6 @@
 import { toast } from 'sonner'
 
+import { BACKUP_RECORD_PREFIX } from './backupRecord'
 import { removeNotification, upsertNotification } from './notifications/inbox'
 
 /**
@@ -53,9 +54,15 @@ const LIMIT = 50
 
 const storageKey = (pubkey: string) => UNSAVED_RECEIPTS_PREFIX + pubkey
 
-/** The logout sweep's exemption. Only this ledger, only by exact prefix. */
+const KEPT_PREFIXES = [UNSAVED_RECEIPTS_PREFIX, BACKUP_RECORD_PREFIX]
+
+/**
+ * The logout sweep's exemption. Only this ledger and the backup record
+ * (backupRecord.ts: logging out deletes no backup, so it must not forget them),
+ * each only by exact per-pubkey prefix.
+ */
 export function isKeptAcrossLogout(key: string): boolean {
-  return key.startsWith(UNSAVED_RECEIPTS_PREFIX) && key.length > UNSAVED_RECEIPTS_PREFIX.length
+  return KEPT_PREFIXES.some((prefix) => key.startsWith(prefix) && key.length > prefix.length)
 }
 
 function valid(e: unknown): e is UnsavedReceipt {

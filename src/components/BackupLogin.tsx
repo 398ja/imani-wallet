@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { nip19 } from 'nostr-tools'
+import { getPublicKey, nip19 } from 'nostr-tools'
+import { hexToBytes } from '@noble/hashes/utils'
 import { ChevronRight, CloudDownload, FileText, Loader2 } from 'lucide-react'
 
 import { Alert, Button, IdentityInline, Input, Panel } from './ui'
 import { applyBackup, parseBackup, type ParsedBackup } from '../lib/backup'
+import { recordBackup } from '../lib/backupRecord'
 import { refuseIfAnotherWallet } from '../lib/keySlotGuard'
 import { userMessage } from '../lib/userMessage'
 import { listBackups, type DriveBackup } from '../lib/drive'
@@ -127,6 +129,7 @@ export function BackupLogin({
           // The passphrase already opened this envelope, so the proven key is
           // the unlock; the claimed profile replaces the backup's snapshot.
           const { privkeyHex } = await applyBackup({ ...parsed, profile }, async () => missing)
+          recordRestoreSource(privkeyHex, source)
           await onUnlock(privkeyHex)
           navigate('/', { replace: true })
         }}
@@ -153,6 +156,7 @@ export function BackupLogin({
               return hex
             })
             rememberHandle(privkeyHex, nip05)
+            recordRestoreSource(privkeyHex, source)
             await onUnlock(privkeyHex)
             navigate('/', { replace: true })
           } catch (e) {
@@ -311,6 +315,11 @@ function savedLabel(backup: DriveBackup): string {
       ? date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
       : 'an unknown date'
   return backup.revisionId ? `Older backup, saved ${when}` : `Saved ${when}`
+}
+
+/** A restore proves a backup of that kind exists: remember it for the passphrase change. */
+function recordRestoreSource(privkeyHex: string, source: 'drive' | 'file' | null) {
+  if (source) recordBackup(getPublicKey(hexToBytes(privkeyHex)), source)
 }
 
 /** The backup's account as a hex pubkey: from the verified npub, else the profile. */

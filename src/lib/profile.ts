@@ -1,3 +1,4 @@
+import { sanitiseBackupRecord, type BackupRecord } from './backupRecord'
 import { nip19, type EventTemplate } from 'nostr-tools'
 
 import { fetchNewestKind0, imageUrl, str } from './branding'
@@ -24,6 +25,11 @@ import { readTermsAcceptance, type TermsAcceptance } from './terms'
  */
 export interface Profile {
   pubkey: string
+  /**
+   * Where this account was backed up (backupRecord.ts). Only ever set inside a
+   * backup file, so a restore on a new device knows which copies exist.
+   */
+  backups?: BackupRecord
   npub: string
   /** Verified handle, e.g. `alice@imani.local`. Set at registration, read-only after. */
   nip05?: string
@@ -85,10 +91,12 @@ function webUrl(value: unknown): string | undefined {
 
 /** Strip anything unsafe from a profile that came from outside this app. */
 export function sanitiseProfile(profile: Profile): Profile {
-  const { termsAccepted, ...rest } = profile
+  const { termsAccepted, backups, ...rest } = profile
   const terms = readTermsAcceptance(termsAccepted)
+  const record = sanitiseBackupRecord(backups)
   return {
     ...rest,
+    ...(record ? { backups: record } : {}),
     picture: imageUrl(profile.picture),
     banner: imageUrl(profile.banner),
     website: webUrl(profile.website),

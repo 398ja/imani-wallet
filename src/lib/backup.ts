@@ -1,6 +1,7 @@
 import { refuseIfAnotherWallet } from './keySlotGuard'
 import { nip19 } from 'nostr-tools'
 
+import { loadBackupRecord, mergeBackupRecord } from './backupRecord'
 import { loadProfile, sanitiseProfile, saveProfile, type Profile } from './profile'
 import { readTermsAcceptance } from './terms'
 
@@ -87,9 +88,17 @@ export function createBackup(pubkey: string): string {
     npub: nip19.npubEncode(pubkey),
     pubkey,
     key: JSON.parse(key) as unknown,
-    profile: loadProfile(pubkey),
+    profile: withBackupRecord(pubkey),
   }
   return JSON.stringify(file, null, 2)
+}
+
+/** The stored profile plus where this account has been backed up, for a backup file. */
+function withBackupRecord(pubkey: string): Profile | null {
+  const profile = loadProfile(pubkey)
+  if (!profile) return null
+  const backups = loadBackupRecord(pubkey)
+  return backups.drive === undefined && backups.file === undefined ? profile : { ...profile, backups }
 }
 
 export function backupFilename(profile: Profile | null): string {
@@ -216,8 +225,13 @@ export async function applyBackup(
   }
 
   // Only once the key is proven usable is it safe to touch anything else.
-  const profile = backup.profile ? keepEarliestTerms(backup.profile) : null
-  if (profile) saveProfile(profile)
+  // The backup record travels in the file but is stored on its own, not in the profile.
+  const { backups, ...restored } = backup.profile ?? ({} as Profile)
+  const profile = backup.profile ? keepEarliestTerms(restored as Profile) : null
+  if (profile) {
+    saveProfile(profile)
+    mergeBackupRecord(profile.pubkey, backups)
+  }
   return { privkeyHex, profile }
 }
 
