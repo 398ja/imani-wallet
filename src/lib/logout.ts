@@ -185,6 +185,11 @@ export interface LogoutDeps {
    * tab that is busy, does not answer, or cannot be reached refuses the logout.
    */
   pauseTabs?: () => Promise<PauseResult>
+  /**
+   * #558: one more step once the safety checks pass and the user confirmed, before anything is
+   * stopped. Account deletion deletes the handle here. False cancels the logout.
+   */
+  proceed?: () => Promise<boolean>
 }
 
 /** How long logout gives the pending sends to settle before it checks them. */
@@ -495,6 +500,11 @@ export async function attemptLogout(
   if (!(await others.stillPaused().catch(() => false))) {
     return { status: 'blocked', reason: 'other-tab', unconfirmed: [] }
   }
+  // #558: account deletion runs its signed DELETE here, after every reversible check has passed
+  // and before anything irreversible. False cancels: the writers and tabs reopen, nothing erased.
+  // The refusals still possible after this (the stillPaused re-checks below) leave the account
+  // deleted and logged in, which `deleteAccount` reports as deleted-logout-pending.
+  if (deps.proceed && !(await deps.proceed().catch(() => false))) return { status: 'cancelled' }
   wiping = true
 
   // And cancel the push subscription, which is the one piece of this account's
