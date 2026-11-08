@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { createBackup } from './backup'
+import { recordBackup } from './backupRecord'
 import { driveConfigured, putBackup } from './drive'
 
 /**
@@ -47,6 +48,7 @@ export function useDriveBackup(pubkey: string) {
       setDone(false)
       try {
         await putBackup(createBackup(pubkey))
+        recordBackup(pubkey, 'drive')
         setDone(true)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))

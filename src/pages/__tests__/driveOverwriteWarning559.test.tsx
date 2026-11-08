@@ -39,7 +39,7 @@ describe('the Drive overwrite warning (#559)', () => {
     const note = screen.getByText(/Saving to Google Drive replaces/i)
     expect(note.textContent).toMatch(/replaces duran's earlier Drive backup/)
     expect(note.textContent).toMatch(/Other Imani accounts in the same Google account keep their own backups/)
-    expect(note.textContent).toMatch(/update every device/)
+    expect(note.textContent).not.toMatch(/older|update every device/)
   })
 
   it('stays on a terminal, which still backs up to Drive', () => {
