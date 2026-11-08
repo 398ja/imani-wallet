@@ -381,6 +381,9 @@ function voucherBlobHex(secret: string): string | null {
 /** The largest voucher document a token or request may carry, in bytes. */
 export const MAX_VOUCHER_DOCUMENT_BYTES = 65_536
 
+/** The most bytes all documents of one token or request may add up to (1 MiB), checked before hashing. */
+export const MAX_VOUCHER_DOCUMENTS_TOTAL_BYTES = 1_048_576
+
 /**
  * A by-reference proof whose document is not in its token. It decodes, but nothing can verify it,
  * so it is never a verified voucher and never plain sats either: `isVoucherSecret` still says yes.
@@ -409,6 +412,12 @@ export function voucherReferenceOf(secret: string): string | null {
     return null
   }
   if (!Array.isArray(parsed) || parsed[0] !== 'VOUCHER') return null
+  // A reference has EMPTY tags, like every unlocked v1 proof: tags beside a 32-byte data are some
+  // other shape, read as inline (and so unverifiable), never resolved (Java golden vector
+  // `tags-with-32-byte-data`).
+  const second = parsed[1] as { tags?: unknown } | string
+  const tags = typeof second === 'string' ? parsed[3] : second?.tags
+  if (tags !== undefined && !(Array.isArray(tags) && tags.length === 0)) return null
   const hex = voucherBlobHex(secret)
   return hex !== null && /^[0-9a-fA-F]{64}$/.test(hex) ? hex.toLowerCase() : null
 }
@@ -431,6 +440,9 @@ export function validateVoucherDocuments(raw: unknown, maxEntries: number): Map<
   }
   const entries = Object.entries(raw as Record<string, unknown>)
   if (entries.length > maxEntries) throw new Error('token carries more voucher documents than proofs')
+  let total = 0
+  for (const [, value] of entries) total += value instanceof Uint8Array ? value.length : 0
+  if (total > MAX_VOUCHER_DOCUMENTS_TOTAL_BYTES) throw new Error('voucher documents add up to more than 1 MiB')
   for (const [key, value] of entries) {
     if (!/^[0-9a-f]{64}$/.test(key)) throw new Error('voucher document key is not 64 lowercase hex')
     if (!(value instanceof Uint8Array)) throw new Error('voucher document is not a byte string')
