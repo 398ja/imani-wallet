@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { finalizeEvent, nip44 } from 'nostr-tools'
@@ -208,6 +208,31 @@ describe('readVoucherLedgerStatus', () => {
     relayEvents = []
     expect(await readVoucherLedgerStatus(STALL, VID, [])).toBeNull()
     await expect(readVoucherLedgerStatus(STALL, 'not-a-uuid', [])).rejects.toThrow()
+  })
+  describe('trusts the platform key from VITE_VOUCHER_ISSUER_PUBKEYS by default', () => {
+    afterEach(() => vi.unstubAllEnvs())
+    it('accepts a gateway-signed ISSUED when its key is in the issuer allowlist', async () => {
+      vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', `ffff${'0'.repeat(60)}, ${PLATFORM.toUpperCase()}`)
+      relayEvents = [signed('ISSUED', PLATFORM_SK)]
+      expect((await readVoucherLedgerStatus(STALL, VID))?.status).toBe('ISSUED')
+    })
+    it('refuses it when the allowlist names other keys', async () => {
+      vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', 'ffff'.repeat(16))
+      relayEvents = [signed('ISSUED', PLATFORM_SK)]
+      expect(await readVoucherLedgerStatus(STALL, VID)).toBeNull()
+    })
+    it('refuses it when the allowlist is unset, while the stall’s own events still count', async () => {
+      vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', '')
+      relayEvents = [signed('ISSUED', PLATFORM_SK)]
+      expect(await readVoucherLedgerStatus(STALL, VID)).toBeNull()
+      relayEvents = [signed('ISSUED', PLATFORM_SK), signed('REDEEMED', STALL_SK)]
+      expect((await readVoucherLedgerStatus(STALL, VID))?.status).toBe('REDEEMED')
+    })
+    it('an explicit list still overrides the allowlist', async () => {
+      vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', PLATFORM)
+      relayEvents = [signed('ISSUED', PLATFORM_SK)]
+      expect(await readVoucherLedgerStatus(STALL, VID, [])).toBeNull()
+    })
   })
   it('fails closed: a relay that cannot answer throws, never reads as no entry (imani-wallet#582)', async () => {
     relayEvents = new Error('gateway timed out')
