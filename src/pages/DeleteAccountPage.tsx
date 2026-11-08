@@ -12,6 +12,7 @@ import { publish } from '../lib/relay'
 import { userMessage } from '../lib/userMessage'
 import {
   DELETE_COPY,
+  REASON_COPY,
   DELETED_PENDING_COPY,
   handleDeleted,
   deleteAccount,
@@ -87,7 +88,7 @@ export function DeleteAccountPage({
     if (outcome.status === 'done') onDeleted()
     else if (outcome.status === 'deleted-logout-pending') setPending(true)
     else if (outcome.status === 'blocked') setBlocked(outcome.logout)
-    else setError(outcome.reason === 'not-owner' ? DELETE_COPY.notOwner : outcome.reason === 'unknown' ? DELETE_COPY.unknown : DELETE_COPY.network)
+    else setError(DELETE_COPY[REASON_COPY[outcome.reason]])
   }
 
   if (pending) {

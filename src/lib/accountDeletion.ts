@@ -46,7 +46,7 @@ export function liabilityBlock(
   return { amount, unit, lastExpiry }
 }
 
-export type DeleteHandleResult = 'deleted' | 'not-owner' | 'unknown' | 'network'
+export type DeleteHandleResult = 'deleted' | 'not-owner' | 'unknown' | 'unauthorized' | 'unavailable' | 'network'
 
 /** The signed DELETE of the handle. Never throws. */
 export async function deleteHandle(nip05: string, signer?: RequestSigner): Promise<DeleteHandleResult> {
@@ -61,6 +61,8 @@ export async function deleteHandle(nip05: string, signer?: RequestSigner): Promi
     if (response.status === 204 || response.ok) return 'deleted'
     if (response.status === 403) return 'not-owner'
     if (response.status === 404) return 'unknown'
+    if (response.status === 401) return 'unauthorized'
+    if (response.status === 501) return 'unavailable'
     return 'network'
   } catch {
     return 'network'
@@ -70,8 +72,19 @@ export async function deleteHandle(nip05: string, signer?: RequestSigner): Promi
 export const DELETE_COPY = {
   notOwner: 'This name belongs to a different account, so nothing was deleted.',
   unknown: 'We could not find your name on Imani, so nothing was deleted.',
+  unauthorized: 'We could not confirm it is you. Nothing was deleted.',
+  unavailable: 'Deleting accounts is not available yet. Nothing was deleted.',
   network: 'We could not reach Imani. Nothing was deleted. Check your connection and try again.',
 } as const
+
+/** Which DELETE_COPY line explains each failed result. */
+export const REASON_COPY: Record<Exclude<DeleteHandleResult, 'deleted'>, keyof typeof DELETE_COPY> = {
+  'not-owner': 'notOwner',
+  unknown: 'unknown',
+  unauthorized: 'unauthorized',
+  unavailable: 'unavailable',
+  network: 'network',
+}
 
 export type DeletionOutcome =
   | { status: 'done' }
