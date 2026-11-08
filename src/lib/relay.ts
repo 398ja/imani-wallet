@@ -218,22 +218,27 @@ export async function allAddressable(pubkey: string, kind: number, dPrefix: stri
   return newestByD(matching)
 }
 
-/**
- * #310: every event of one kind at a `d` tag, from ANY author, whose own id and signature verify,
- * in one gateway query. For voucher ledger v2, whose events are signed by per-voucher keys nobody
- * knows in advance, so there is no author to filter on; the reader trusts the inner signature,
- * never the author. Throws `GatewayUnreachableError` when the gateway did not answer.
- */
 /** Most events read at one ledger v2 locator; above it the read throws (matches the Java). */
 export const MAX_LEDGER_EVENTS = 4096
+/** Most gateway pages one locator read walks; beyond it the read throws (review N5). */
+export const MAX_LEDGER_PAGES = Math.ceil(MAX_LEDGER_EVENTS / GATEWAY_PAGE_LIMIT) + 2
 
+/**
+ * #310: every event of one kind at a `d` tag, from ANY author, whose own id and signature verify,
+ * paged through the gateway to exhaustion (inclusive `until`), never truncated. For voucher ledger v2, whose events are signed by per-voucher keys nobody
+ * knows in advance, so there is no author to filter on; the reader trusts the inner signature,
+ * never the author. Throws `GatewayUnreachableError` when the gateway did not answer.
+ * Also throws above `MAX_LEDGER_EVENTS` events, on a full page within one second, or past
+ * `MAX_LEDGER_PAGES` pages.
+ */
 export async function eventsByDTag(kind: number, d: string): Promise<Event[]> {
   // No truncation (imani-wallet#582): the gateway caps every answer at GATEWAY_PAGE_LIMIT, so walk
   // back with an inclusive `until` until a page brings nothing new. Any page failing throws, and
   // more than MAX_LEDGER_EVENTS at one locator throws: never answer from a partial set.
   const seen = new Map<string, Event>()
   let until: number | undefined
-  for (;;) {
+  for (let page = 0; ; page++) {
+    if (page >= MAX_LEDGER_PAGES) throw new GatewayUnreachableError(`ledger locator not exhausted in ${MAX_LEDGER_PAGES} pages`)
     const batch = await gatewayQuery({ kinds: [kind], tags: { '#d': [d] }, limit: GATEWAY_PAGE_LIMIT, ...(until === undefined ? {} : { until }) })
     let fresh = 0
     for (const event of batch) {

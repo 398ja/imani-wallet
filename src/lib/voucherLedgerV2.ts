@@ -807,6 +807,8 @@ export function resolve(events: readonly LedgerEventLike[], ref: Uint8Array, tru
   const rank = (o: Opened): number => (trusted.has(o.signer) ? 0 : 2) + (o.doc !== undefined ? 0 : 1)
   const issued = accepted.filter((o) => o.status === 'ISSUED').sort((a, b) => rank(a) - rank(b) || bySig(a, b))
   const source = issued[0] ?? winner
-  const doc = source.doc ?? accepted.filter((o) => o.doc !== undefined).sort(bySig)[0]?.doc
+  // N4: a fallback doc only from an event naming exactly the source's voucher fields, else none.
+  const doc =
+    source.doc ?? accepted.filter((o) => o.doc !== undefined && sameFields(o.voucher, source.voucher)).sort(bySig)[0]?.doc
   return { status: winner.status, voucher: source.voucher, doc, accepted }
 }
