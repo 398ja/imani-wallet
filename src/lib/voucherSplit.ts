@@ -35,7 +35,7 @@ import {
 } from './cashlinkLock'
 import { voucherSplitsKey } from './inFlightMoney'
 import { planSplit } from './voucherSplitPlan'
-import { creditableFaceValue, parseVoucherToken, voucherOfSecret, type TokenProof } from './voucherToken'
+import { creditableFaceValue, parseVoucherToken, voucherOfProof, type TokenProof } from './voucherToken'
 import type { BlindedOutput, UnblindedProof } from './walletSwap'
 
 const { mintOf, proofBody, burnOutputsBody, restoreMine, swapOrRestore, signRoute, notYet, refusalOf, tokenOf, keepAsSats } = cashlinkSteps
@@ -250,7 +250,7 @@ async function run(ports: SplitPorts, pubkey: string, intent: SplitIntent, K: Ui
   }
 
   // 5. The parts, asked with the same body until the gateway answers for good.
-  const bearer = voucherOfSecret(intent.proof.secret)!
+  const bearer = voucherOfProof(intent.proof)!
   const proposals = proposalsOf(K, intent)
   let signed = intent.signed
   if (!signed) {

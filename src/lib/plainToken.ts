@@ -1,5 +1,6 @@
 import { hexToBytes } from '@noble/hashes/utils'
 
+import { referencedDocuments, type VoucherDocuments } from './voucherToken'
 import type { UnblindedProof } from './walletSwap'
 
 /**
@@ -12,9 +13,21 @@ import type { UnblindedProof } from './walletSwap'
  *
  * NUT-00 V4: a CBOR map `{m: mint, u: unit, t: [{i: keyset id bytes, p: [{a, s, c}]}]}`, proofs
  * grouped by keyset. Definite lengths only, which is what every reader accepts.
+ *
+ * Voucher documents (cashu-voucher#64): when any proof is an unlocked voucher BY REFERENCE, the
+ * token gains a last key `v: {hex sha256(D): bstr D}` holding exactly the documents its proofs
+ * reference, keys ascending. Each document comes from the proof's own `document` or from
+ * `documents`. A reference with no document throws: a token that drops it would make the coupon
+ * unverifiable. With no by-reference proof the output is byte-identical to before.
  */
-export function encodePlainTokenV4(mintUrl: string, unit: string, proofs: UnblindedProof[]): string {
+export function encodePlainTokenV4(
+  mintUrl: string,
+  unit: string,
+  proofs: Array<UnblindedProof & { document?: string }>,
+  documents?: VoucherDocuments,
+): string {
   if (proofs.length === 0) throw new Error('a token needs at least one proof')
+  const referenced = referencedDocuments(proofs, documents)
 
   const byKeyset = new Map<string, UnblindedProof[]>()
   for (const proof of proofs) {
@@ -58,7 +71,24 @@ export function encodePlainTokenV4(mintUrl: string, unit: string, proofs: Unblin
     ),
   )
 
-  const root = concat(head(5, 3), text('m'), text(mintUrl), text('u'), text(unit), text('t'), head(4, entries.length), ...entries)
+  const v = referenced
+    ? [
+        text('v'),
+        head(5, Object.keys(referenced).length),
+        ...Object.entries(referenced).flatMap(([key, doc]) => [text(key), byteString(hexToBytes(doc))]),
+      ]
+    : []
+  const root = concat(
+    head(5, referenced ? 4 : 3),
+    text('m'),
+    text(mintUrl),
+    text('u'),
+    text(unit),
+    text('t'),
+    head(4, entries.length),
+    ...entries,
+    ...v,
+  )
   return `cashuB${base64Url(root)}`
 }
 

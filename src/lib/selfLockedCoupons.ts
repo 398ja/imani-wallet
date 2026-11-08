@@ -42,7 +42,7 @@ import {
   unlockedProposal,
   xOnlyPub,
 } from './cashlinkLock'
-import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret, type TokenProof } from './voucherToken'
+import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfProof, voucherOfSecret, type TokenProof } from './voucherToken'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
@@ -197,7 +197,7 @@ async function unlockOne(ports: SelfLockPorts, mintUrl: string, proof: TokenProo
     burn_outputs: burnOutputsBody(outs),
   })
   const signed = answer.body?.signed_secret
-  const locked = voucherOfSecret(proof.secret)!
+  const locked = voucherOfProof(proof)!
   if (answer.status === 200 && typeof signed === 'string' && isTheSuccessorAskedFor(signed, locked)) {
     // An earlier run may have minted it already: mintCarrier restores before it swaps.
     const coupon = await mintCarrier(ports, mintUrl, plain, signed, K, 'self-unlock-mint', proof)

@@ -21,7 +21,7 @@
  */
 import { faceSharesOf } from './faceSplit'
 import { encodePlainTokenV4 } from './plainToken'
-import { exactFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret, type TokenProof } from './voucherToken'
+import { exactFaceValue, parseVoucherToken, tokenProofs, voucherOfProof, type TokenProof } from './voucherToken'
 
 /** Contract §3 and the gateway's own `MAX_PARTS`. */
 const MAX_SPLIT_PARTS = 20
@@ -84,11 +84,11 @@ export function planSplit(token: string, amount: number): SplitPlan | null {
   if (!(ratio > 0)) return null
   const mintUrl = parsed.mintUrl
   const plain = (ps: TokenProof[]) =>
-    encodePlainTokenV4(mintUrl, 'sat', ps.map((p) => ({ amount: p.amount, id: p.id, secret: p.secret, C: p.C, ...(p.dleq ? { dleq: p.dleq } : {}) })))
+    encodePlainTokenV4(mintUrl, 'sat', ps.map((p) => ({ amount: p.amount, id: p.id, secret: p.secret, C: p.C, ...(p.dleq ? { dleq: p.dleq } : {}), ...(p.document ? { document: p.document } : {}) })))
   const order = [...proofs].sort((a, b) => b.amount - a.amount)
   for (const proof of order) {
     // Bearer only (the route's input), with its amount proof (the route proves the burn by it).
-    const v = voucherOfSecret(proof.secret)
+    const v = voucherOfProof(proof)
     if (!v || v.lockKey || !proof.dleq) continue
     let share: number
     try {

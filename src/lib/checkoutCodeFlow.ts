@@ -55,7 +55,7 @@ import {
   type CheckoutCodeStatus,
   type CheckoutPartRecord,
 } from './checkoutCodeRecords'
-import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret, type TokenProof } from './voucherToken'
+import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfProof, type TokenProof } from './voucherToken'
 import { withQueuedLock } from './webLock'
 
 const { mintOf, proofBody, burnOutputsBody, restoreMine, swapOrRestore, signRoute, notYet, tokenOf, mintCarrier } = cashlinkSteps
@@ -607,7 +607,7 @@ async function unlockOne(ports: CheckoutPorts, mintUrl: string, proof: TokenProo
     burn_outputs: burnOutputsBody(outs),
   })
   const signed = answer.body?.signed_secret
-  const locked = voucherOfSecret(proof.secret)!
+  const locked = voucherOfProof(proof)!
   if (answer.status === 200 && typeof signed === 'string' && isTheSuccessorAskedFor(signed, locked)) {
     const coupon = await mintCarrier(ports, mintUrl, plain, signed, R, 'mint-unlock', proof)
     if (!coupon) return 'pending'
@@ -1050,7 +1050,7 @@ export function successorProblem(record: CheckoutCodeRecord, part: CheckoutPartR
   } catch {
     return 'unreadable'
   }
-  const ids = new Set(tokenProofs(token).map((p) => voucherOfSecret(p.secret)?.voucherId))
+  const ids = new Set(tokenProofs(token).map((p) => voucherOfProof(p)?.voucherId))
   if (ids.size !== 1 || !ids.has(old.voucher.voucherId)) return 'wrong_voucher'
   if (fresh.voucher.issuerPublicKey.toLowerCase() !== old.voucher.issuerPublicKey.toLowerCase()) return 'wrong_signer'
   if (fresh.voucher.issuerId.toLowerCase() !== record.stall || fresh.voucher.unit.toUpperCase() !== record.unit.toUpperCase()) return 'wrong_stall'

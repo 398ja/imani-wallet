@@ -25,7 +25,7 @@ export function carveProofs(token: string, amount: number): { part: string; rest
   }
   const chosen = pick(0, amount)
   if (!chosen || chosen.length === 0) return null
-  const plain = (ps: typeof proofs) => encodePlainTokenV4(mintUrl, 'sat', ps.map((p) => ({ amount: p.amount, id: p.id, secret: p.secret, C: p.C, ...(p.dleq ? { dleq: p.dleq } : {}) })))
+  const plain = (ps: typeof proofs) => encodePlainTokenV4(mintUrl, 'sat', ps.map((p) => ({ amount: p.amount, id: p.id, secret: p.secret, C: p.C, ...(p.dleq ? { dleq: p.dleq } : {}), ...(p.document ? { document: p.document } : {}) })))
   const taken = new Set(chosen)
   const rest = proofs.filter((_, n) => !taken.has(n))
   return { part: plain(proofs.filter((_, n) => taken.has(n))), rest: rest.length ? plain(rest) : null }

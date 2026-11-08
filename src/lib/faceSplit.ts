@@ -36,7 +36,7 @@ export function faceSharesOf(token: string): Map<string, number> | undefined {
   try {
     const mintUrl = mintOfToken(token)
     const proofs = tokenProofs(token)
-    const exact = proofs.map((p) => exactFaceValue(parseVoucherToken(encodePlainTokenV4(mintUrl, 'sat', [{ amount: p.amount, id: p.id, secret: p.secret, C: p.C }]))))
+    const exact = proofs.map((p) => exactFaceValue(parseVoucherToken(encodePlainTokenV4(mintUrl, 'sat', [{ amount: p.amount, id: p.id, secret: p.secret, C: p.C, ...(p.document ? { document: p.document } : {}) }]))))
     const shares = apportion(exact)
     return new Map(proofs.map((p, n) => [p.secret, shares[n]]))
   } catch {
