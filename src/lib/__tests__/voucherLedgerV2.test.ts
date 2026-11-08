@@ -11,6 +11,8 @@ import { finalizeEvent, nip44 } from 'nostr-tools'
 
 let relayEvents: unknown[] | Error = []
 vi.mock('../relay', () => ({
+  MAX_LEDGER_EVENTS: 4096,
+  GatewayUnreachableError: class GatewayUnreachableError extends Error {},
   eventsByDTag: async () => {
     if (relayEvents instanceof Error) throw relayEvents
     return relayEvents
@@ -20,7 +22,7 @@ vi.mock('../relay', () => ({
 import type { LedgerEventLike, LedgerStatus } from '../voucherLedgerV2'
 
 const L = await import('../voucherLedgerV2')
-const { capCandidates, MAX_LEDGER_CANDIDATES, readVoucherLedgerStatus } = await import('../voucherLedgerV2Status')
+const { readVoucherLedgerStatus } = await import('../voucherLedgerV2Status')
 
 const STALL_SK = hexToBytes('b2'.repeat(32))
 const STALL = bytesToHex(schnorr.getPublicKey(STALL_SK))
@@ -211,12 +213,15 @@ describe('readVoucherLedgerStatus', () => {
     relayEvents = new Error('gateway timed out')
     await expect(readVoucherLedgerStatus(STALL, VID, [PLATFORM])).rejects.toThrow('gateway timed out')
   })
-  it('caps candidates at 256, oldest created_at then id first', () => {
-    const many = Array.from({ length: 300 }, (_, i) => ({ created_at: 1000 - i, id: String(i).padStart(3, '0') }))
-    const kept = capCandidates(many)
-    expect(kept).toHaveLength(MAX_LEDGER_CANDIDATES)
-    expect(MAX_LEDGER_CANDIDATES).toBe(256)
-    expect(kept[0].created_at).toBe(701)
-    expect(capCandidates([{ created_at: 1, id: 'b' }, { created_at: 1, id: 'a' }]).map((e) => e.id)).toEqual(['a', 'b'])
+  it('never truncates: 4094 junk events with earlier created_at do not hide a genuine REVOKED (4096 total)', async () => {
+    // The relay layer verifies outer signatures; here only the fold is under test, so junk is unsigned.
+    const junk = Array.from({ length: 4094 }, (_, i) => ({ kind: 30078, tags: [['d', D]], content: 'junk', created_at: i, id: `j${i}` }))
+    relayEvents = [...junk, signed('ISSUED', PLATFORM_SK), { ...(signed('REVOKED', STALL_SK) as object), created_at: 999999 }]
+    expect((await readVoucherLedgerStatus(STALL, VID, [PLATFORM]))?.status).toBe('REVOKED')
+  })
+  it('fails closed above 4096 candidates rather than dropping any', async () => {
+    const one = signed('ISSUED', PLATFORM_SK) as object
+    relayEvents = Array.from({ length: 4097 }, (_, i) => ({ ...one, id: `e${i}` }))
+    await expect(readVoucherLedgerStatus(STALL, VID, [PLATFORM])).rejects.toThrow('4096')
   })
 })
