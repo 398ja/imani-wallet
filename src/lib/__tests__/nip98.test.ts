@@ -53,7 +53,9 @@ describe('the signed event', () => {
     const without = decode(await nip98Header('/v1/x', 'POST', undefined, signerFor()))
 
     expect(tag(withBody, 'payload')).toMatch(/^[0-9a-f]{64}$/)
-    expect(tag(without, 'payload')).toBeUndefined()
+    // A write with no body still carries a payload tag: the hash of zero bytes, which is what
+    // the gateway computes for it (#558).
+    expect(tag(without, 'payload')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
   })
 })
 

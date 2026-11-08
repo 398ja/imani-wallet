@@ -80,11 +80,13 @@ describe('terminal credential confirm and cancel pass the gateway NIP-98 filter'
 
 describe('the server check itself', () => {
   // The check must refuse the exact request 0.14.1 sent, or the tests above prove nothing.
-  it('refuses a signed POST with no payload tag, as staging did', async () => {
+  // A bodyless write used to go out with no payload tag and was refused with
+  // 'NIP-98 payload tag required'. It now carries the empty-body hash and passes (#558).
+  it('accepts a signed POST with no body, via the empty-body payload hash', async () => {
     const { signedFetch } = await import('../nip98')
     await signedFetch('/api/v1/x', 'POST')
 
-    expect(nip98Refusal(sent[0])).toBe('NIP-98 payload tag required for POST')
+    expect(nip98Refusal(sent[0])).toBeNull()
   })
 
   // And a body that is not the one that was signed.
