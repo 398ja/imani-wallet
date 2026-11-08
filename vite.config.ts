@@ -521,6 +521,8 @@ export default defineConfig({
       'perf/**/*.test.{ts,tsx}',
       // The real-day load test's pure parts (#550): scheduler, ledger, redaction, report.
       'loadtest/**/*.test.ts',
+      // The staging harness's pure helpers (#566: whether a setup sale is sold again).
+      'e2e/lib/**/*.test.ts',
       // `deploy/` ships the container's nginx.conf, and its CSP is application
       // behaviour, not decoration: `worker-src 'self'` there silently disabled
       // every QR scan in the app. Tested here so a header change is a failing
