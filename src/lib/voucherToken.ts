@@ -376,6 +376,142 @@ function voucherBlobHex(secret: string): string | null {
   return null
 }
 
+// ---------------------------------------------------------------- by reference (cashu-voucher#64)
+
+/** The largest voucher document a token or request may carry, in bytes. */
+export const MAX_VOUCHER_DOCUMENT_BYTES = 65_536
+
+/**
+ * A by-reference proof whose document is not in its token. It decodes, but nothing can verify it,
+ * so it is never a verified voucher and never plain sats either: `isVoucherSecret` still says yes.
+ */
+export class VoucherDocumentMissing extends Error {
+  readonly digest: string
+  constructor(digest: string) {
+    super(`voucher document ${digest} is missing: the proof is by reference and cannot be verified`)
+    this.name = 'VoucherDocumentMissing'
+    this.digest = digest
+  }
+}
+
+/**
+ * The `data` hex of an UNLOCKED `VOUCHER` secret when it is a reference: exactly 32 bytes, the
+ * SHA-256 of the voucher document. Lowercased. Null for anything else (v1 inline, locked, plain).
+ *
+ * The discriminator is the length alone. A real document holds a 36-character voucher id, so it
+ * is always longer than 32 bytes, and either reading is fully verified afterwards.
+ */
+export function voucherReferenceOf(secret: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(secret)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(parsed) || parsed[0] !== 'VOUCHER') return null
+  const hex = voucherBlobHex(secret)
+  return hex !== null && /^[0-9a-fA-F]{64}$/.test(hex) ? hex.toLowerCase() : null
+}
+
+/** Whether this secret is an unlocked voucher that references its document (v2). */
+export function isVoucherByReference(secret: string): boolean {
+  return voucherReferenceOf(secret) !== null
+}
+
+/**
+ * Validates a `v` map (hex key -> document bytes) exactly as the spec's decoder rule says, and
+ * returns it as a Map. Throws on a key that is not `hex(sha256(value))`, an empty or oversized
+ * value, or more entries than `maxEntries`.
+ */
+export function validateVoucherDocuments(raw: unknown, maxEntries: number): Map<string, Uint8Array> {
+  const out = new Map<string, Uint8Array>()
+  if (raw === undefined || raw === null) return out
+  if (typeof raw !== 'object' || Array.isArray(raw) || raw instanceof Uint8Array) {
+    throw new Error('token voucher documents (v) is not a map')
+  }
+  const entries = Object.entries(raw as Record<string, unknown>)
+  if (entries.length > maxEntries) throw new Error('token carries more voucher documents than proofs')
+  for (const [key, value] of entries) {
+    if (!/^[0-9a-f]{64}$/.test(key)) throw new Error('voucher document key is not 64 lowercase hex')
+    if (!(value instanceof Uint8Array)) throw new Error('voucher document is not a byte string')
+    if (value.length === 0 || value.length > MAX_VOUCHER_DOCUMENT_BYTES) {
+      throw new Error('voucher document is empty or too large')
+    }
+    if (bytesToHex(sha256(value)) !== key) throw new Error('voucher document does not match its key')
+    out.set(key, value)
+  }
+  return out
+}
+
+function decodeTokenRoot(token: string): Record<string, unknown> {
+  if (!token?.startsWith('cashuB')) throw new Error('not a TokenV4 (cashuB) token')
+  return decodeCbor(base64UrlDecode(token.slice(6))) as Record<string, unknown>
+}
+
+function rootProofCount(root: Record<string, unknown>): number {
+  return ((root.t ?? []) as Array<Record<string, unknown>>).reduce(
+    (n, e) => n + ((e?.p ?? []) as unknown[]).length,
+    0,
+  )
+}
+
+/** The validated voucher documents a TokenV4 carries in `v`, keyed by hex SHA-256. Throws when invalid. */
+export function tokenVoucherDocuments(token: string): Map<string, Uint8Array> {
+  const root = decodeTokenRoot(token)
+  return validateVoucherDocuments(root.v, rootProofCount(root))
+}
+
+/** Documents as `{hex key: hex doc}` or a Map of bytes: both forms callers hold. */
+export type VoucherDocuments = ReadonlyMap<string, Uint8Array> | Readonly<Record<string, string>>
+
+function documentHexFor(digest: string, documents: VoucherDocuments | undefined): string | null {
+  if (!documents) return null
+  if (documents instanceof Map) {
+    const doc = documents.get(digest)
+    if (!doc) return null
+    return bytesToHex(sha256(doc)) === digest ? bytesToHex(doc) : null
+  }
+  const hex = (documents as Record<string, string>)[digest]
+  if (typeof hex !== 'string' || !/^([0-9a-fA-F]{2})+$/.test(hex)) return null
+  const doc = hexToBytes(hex)
+  if (doc.length > MAX_VOUCHER_DOCUMENT_BYTES) return null
+  return bytesToHex(sha256(doc)) === digest ? bytesToHex(doc) : null
+}
+
+/**
+ * The voucher blob hex of a secret, resolving a reference through `documents` (hash checked).
+ * Throws `VoucherDocumentMissing` for a reference with no matching document.
+ */
+function resolvedBlobHex(secret: string, documents: VoucherDocuments | undefined): string | null {
+  const digest = voucherReferenceOf(secret)
+  if (digest === null) return voucherBlobHex(secret)
+  const hex = documentHexFor(digest, documents)
+  if (hex === null) throw new VoucherDocumentMissing(digest)
+  return hex
+}
+
+/**
+ * The documents a set of proofs references, as `{hex key: hex doc}` with keys sorted ascending,
+ * or undefined when none is by reference. Only referenced documents, so an unused one is dropped.
+ * Throws `VoucherDocumentMissing` when a reference has no document anywhere.
+ */
+export function referencedDocuments(
+  proofs: ReadonlyArray<{ secret: string; document?: string }>,
+  documents?: VoucherDocuments,
+): Record<string, string> | undefined {
+  const found = new Map<string, string>()
+  for (const p of proofs) {
+    const digest = voucherReferenceOf(p.secret)
+    if (digest === null) continue
+    const own = p.document ? documentHexFor(digest, { [digest]: p.document }) : null
+    const hex = own ?? documentHexFor(digest, documents)
+    if (hex === null) throw new VoucherDocumentMissing(digest)
+    found.set(digest, hex.toLowerCase())
+  }
+  if (found.size === 0) return undefined
+  return Object.fromEntries([...found.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+}
+
 /**
  * The NUT-10 secret of every proof in a TokenV4.
  *
@@ -469,6 +605,12 @@ export interface TokenProof {
    * else: nothing but the Cashlink routes asks for it.
    */
   dleq?: { e: string; s: string; r: string }
+  /**
+   * The voucher document (hex) this proof references, when it is by reference (cashu-voucher#64)
+   * and its token carried it. Travels WITH the proof so every re-encode, swap and stored intent
+   * carries it too. Absent on v1, locked and plain proofs, so their shapes are unchanged.
+   */
+  document?: string
 }
 
 function dleqOf(raw: unknown): TokenProof['dleq'] {
@@ -489,8 +631,8 @@ function dleqOf(raw: unknown): TokenProof['dleq'] {
  * app uses, which is exactly the substitution these probes exist to avoid.
  */
 export function tokenProofs(token: string): TokenProof[] {
-  if (!token?.startsWith('cashuB')) throw new Error('not a TokenV4 (cashuB) token')
-  const root = decodeCbor(base64UrlDecode(token.slice(6))) as Record<string, unknown>
+  const root = decodeTokenRoot(token)
+  const documents = validateVoucherDocuments(root.v, rootProofCount(root))
   const entries = (root.t ?? []) as Array<Record<string, unknown>>
 
   return entries.flatMap((entry) => {
@@ -503,26 +645,28 @@ export function tokenProofs(token: string): TokenProof[] {
       if (typeof p.s !== 'string') throw new Error('proof has no NUT-10 secret')
       const c = p.c
       const dleq = dleqOf(p.d)
+      const digest = voucherReferenceOf(p.s)
+      const doc = digest === null ? undefined : documents.get(digest)
       return {
         amount: Number(p.a ?? 0),
         id,
         secret: p.s,
         C: c instanceof Uint8Array ? bytesToHex(c) : String(c ?? ''),
         ...(dleq ? { dleq } : {}),
+        ...(doc ? { document: bytesToHex(doc) } : {}),
       }
     })
   })
 }
 
 export function parseVoucherToken(token: string): ParsedVoucherToken {
-  if (!token?.startsWith('cashuB')) {
-    throw new Error('not a TokenV4 (cashuB) token')
-  }
-  const root = decodeCbor(base64UrlDecode(token.slice(6))) as Record<string, unknown>
+  const root = decodeTokenRoot(token)
 
   const entries = (root.t ?? []) as Array<Record<string, unknown>>
   const proofs = entries.flatMap((e) => (e.p ?? []) as Array<Record<string, unknown>>)
   if (proofs.length === 0) throw new Error('token carries no proofs')
+  // v2 proofs resolve through these (cashu-voucher#64). Validated first: a bad map refuses the token.
+  const documents = validateVoucherDocuments(root.v, proofs.length)
 
   const secret = proofs[0].s
   if (typeof secret !== 'string') throw new Error('proof has no NUT-10 secret')
@@ -537,7 +681,10 @@ export function parseVoucherToken(token: string): ParsedVoucherToken {
    * kind's `data` field is the LOCK KEY, so there is no blob to decode.
    */
   const locked = lockedVoucherFrom(secret)
-  const dataHex = locked ? null : voucherBlobHex(secret)
+  // Resolved: a by-reference proof compares and decodes as the document it references, so the
+  // checks below are the v1 checks, unchanged. Missing document: throws VoucherDocumentMissing.
+  const rawHex = locked ? null : resolvedBlobHex(secret, documents)
+  const dataHex = rawHex === null ? null : rawHex.toLowerCase()
   if (locked === null && dataHex === null) {
     throw new Error('token is not a voucher (NUT-10 kind is not VOUCHER or P2PK_VOUCHER)')
   }
@@ -576,7 +723,7 @@ export function parseVoucherToken(token: string): ParsedVoucherToken {
     }
     // Through the same reader as above, so a bundle whose proofs use the object
     // form is compared on its blobs rather than rejected outright.
-    const otherHex = voucherBlobHex(p.s)
+    const otherHex = resolvedBlobHex(p.s, documents)?.toLowerCase() ?? null
     if (otherHex === null) throw new Error('proof secret is not a NUT-10 secret')
     if (otherHex !== dataHex) throw new Error('token mixes proofs from more than one voucher')
   }
@@ -698,15 +845,27 @@ function creditedSats(parsed: ParsedVoucherToken): number {
  * Exported for the Cashlink lock (#295 phase 4), which re-forms a gift proof's terms into the
  * link-locked successor and back, and must read them exactly as `parseVoucherToken` does.
  */
-export function voucherOfSecret(secret: string): SignedVoucherFields | null {
+export function voucherOfSecret(secret: string, documents?: VoucherDocuments): SignedVoucherFields | null {
   try {
     const locked = lockedVoucherFrom(secret)
     if (locked) return locked
-    const dataHex = voucherBlobHex(secret)
+    // A reference resolves through `documents` (hash checked). Without its document it is null
+    // here, the same as unreadable: never a voucher anyone can verify. `isVoucherSecret` still
+    // says yes, so no guard reads it as plain sats.
+    const dataHex = resolvedBlobHex(secret, documents)
     return dataHex === null ? null : readVoucherFields(decodeCbor(hexToBytes(dataHex)) as Record<string, unknown>)
   } catch {
     return null
   }
+}
+
+/**
+ * The voucher one proof carries, resolving a by-reference secret through the document the proof
+ * travels with (`TokenProof.document`). Null when it is not a voucher or its document is missing.
+ */
+export function voucherOfProof(proof: { secret: string; document?: string }): SignedVoucherFields | null {
+  const digest = voucherReferenceOf(proof.secret)
+  return voucherOfSecret(proof.secret, digest && proof.document ? { [digest]: proof.document } : undefined)
 }
 
 /**

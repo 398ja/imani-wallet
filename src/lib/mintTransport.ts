@@ -1,5 +1,6 @@
 import type { MintTransport, ReceivableProof } from './receiveSwap'
 import type { BlindSignatureResponse } from './walletSwap'
+import { referencedDocuments } from './voucherToken'
 
 /**
  * Talking to the mint over HTTP.
@@ -164,6 +165,9 @@ export function createMintTransport(options: MintTransportOptions = {}): MintTra
       mintUrl: string,
       { inputs, outputs }: { inputs: ReceivableProof[]; outputs: { amount: number; id: string; B_: string }[] },
     ): Promise<{ signatures: BlindSignatureResponse[] }> {
+      // cashu-voucher#64: the documents by-reference inputs point at, once each. Only when needed,
+      // so a request without one is byte-identical to before.
+      const vouchers = referencedDocuments(inputs)
       return postJson(
         mintUrl,
         '/v1/swap',
@@ -179,6 +183,7 @@ export function createMintTransport(options: MintTransportOptions = {}): MintTra
           // otherwise send its secret and blinding factor, which is precisely what
           // must never leave the wallet.
           outputs: outputs.map(({ amount, id, B_ }) => ({ amount, id, B_ })),
+          ...(vouchers ? { vouchers } : {}),
         },
         'the swap',
       )

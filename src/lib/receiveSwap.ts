@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 
-import { isVoucherSecret } from './voucherToken'
+import { isVoucherSecret, referencedDocuments } from './voucherToken'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
 import {
@@ -191,6 +191,10 @@ export async function receiveByOwnSwap(
     )
   }
 
+  // A by-reference voucher input without its document can never be swapped (the mint needs it in
+  // `vouchers`). Refused here, before an intent is written for a request that cannot succeed.
+  referencedDocuments(proofs)
+
   const total = proofs.reduce((sum, proof) => sum + proof.amount, 0)
   // `splitIntoDenominations` refuses a non-positive total, but reaching it via
   // this path would mean an intent had already been written for a swap that can
@@ -239,12 +243,15 @@ export async function receiveByOwnSwap(
     // locked input without its witness is both a different request and one the
     // mint would refuse, so dropping it would leave replay silently unavailable
     // for exactly the customer-to-customer transfer case.
-    inputs: proofs.map(({ amount, id, secret, C, witness }) => ({
+    // And the voucher document of a by-reference input (cashu-voucher#64): the replayed request
+    // carries it in `vouchers`, so without it the replay would differ or be refused.
+    inputs: proofs.map(({ amount, id, secret, C, witness, document }) => ({
       amount,
       id,
       secret,
       C,
       ...(witness === undefined ? {} : { witness }),
+      ...(document === undefined ? {} : { document }),
     })),
     outputs,
     at: Date.now(),

@@ -115,7 +115,7 @@ export function checkLockedGift(
 // One proof's own token, so each proof's signature is checked, not only the first's.
 function encodeOne(token: string, p: ReturnType<typeof tokenProofs>[number]): string {
   const mintUrl = parseVoucherToken(token).mintUrl
-  return encodePlainTokenV4(mintUrl, 'sat', [{ amount: p.amount, id: p.id, secret: p.secret, C: p.C, ...(p.dleq ? { dleq: p.dleq } : {}) } as never])
+  return encodePlainTokenV4(mintUrl, 'sat', [{ amount: p.amount, id: p.id, secret: p.secret, C: p.C, ...(p.dleq ? { dleq: p.dleq } : {}), ...(p.document ? { document: p.document } : {}) } as never])
 }
 
 /**
