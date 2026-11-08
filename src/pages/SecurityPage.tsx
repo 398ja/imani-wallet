@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Screen, BackLink, PageHeader, ListSection, Button, Input, Alert } from '../components/ui'
 import { keyStore } from '../lib/nap'
 import { useDriveBackup } from '../lib/useDriveBackup'
+import { listBackups } from '../lib/drive'
 import { loadBackupRecord, recordBackup } from '../lib/backupRecord'
 import { backupFilename, createBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
@@ -166,7 +167,8 @@ function DecommissionPanel({ pubkey }: { pubkey: string }) {
  *
  * So a Drive copy is rewritten as part of the change, not left to the
  * customer to remember, but only when this account HAS a Drive backup
- * (backupRecord.ts). Writing one it never made would create a backup the
+ * (backupRecord.ts), or, with nothing recorded (a backup made before records
+ * existed), when `listBackups` finds this account's file there. Writing one it never made would create a backup the
  * person did not ask for, behind an account chooser they did not expect. Google will show its account chooser, which cannot be
  * suppressed, so this is not silent; what it must not be is skipped. If it
  * fails or is cancelled the passphrase change still stands — it already
@@ -174,8 +176,8 @@ function DecommissionPanel({ pubkey }: { pubkey: string }) {
  * rather than reporting a failure that did not happen.
  *
  * A file downloaded earlier is stale in the same way and cannot be reached, so
- * when one is recorded the person is offered a new file right there. With no
- * backup recorded at all, nothing is said about backups.
+ * the person is offered a new file right there. A file record that is missing
+ * cannot be checked, so then the line is neutral ("If you saved...").
  */
 function ChangePassphrase({ pubkey }: { pubkey: string }) {
   const drive = useDriveBackup(pubkey)
@@ -183,6 +185,8 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
   const record = loadBackupRecord(pubkey)
   const hasDrive = record.drive !== undefined
   const [fileStale, setFileStale] = useState(false)
+  const [fileKnown, setFileKnown] = useState(false)
+  const [driveUnchecked, setDriveUnchecked] = useState(false)
   const [fileSaved, setFileSaved] = useState(false)
   const [fileError, setFileError] = useState<string | null>(null)
   const [current, setCurrent] = useState('')
@@ -204,8 +208,9 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
     setFileSaved(false)
     setFileError(null)
     // Decided before the change: what existed then is what is now stale.
-    const rewriteDrive = drive.configured && hasDrive
+    let rewriteDrive = drive.configured && hasDrive
     const hadFile = record.file !== undefined
+    setDriveUnchecked(false)
     try {
       // Decrypt with the old, re-encrypt with the new. nap owns the crypto —
       // this is not a second key-handling implementation, it is two calls to the
@@ -217,7 +222,23 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
       setCurrent('')
       setNext('')
       setConfirm('')
-      setFileStale(hadFile)
+      setFileStale(true)
+      setFileKnown(hadFile)
+
+      // No Drive record (e.g. backed up before records existed): ask Drive
+      // rather than assume. Rewrite only a file that is already there; never
+      // create one the person did not make.
+      if (drive.configured && !hasDrive) {
+        try {
+          const found = await listBackups()
+          if (found.some((b) => !b.revisionId && b.pubkey === pubkey)) {
+            recordBackup(pubkey, 'drive')
+            rewriteDrive = true
+          }
+        } catch {
+          setDriveUnchecked(true)
+        }
+      }
 
       // After the local record, never before it: a Drive write that succeeded
       // against a rotation that then failed would leave Drive holding a
@@ -299,12 +320,17 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
                 Back up again under Settings → Backup.
               </Alert>
             )}
+            {driveUnchecked && (
+              <Alert>We could not check Google Drive. If you backed up there, back up again under Settings &gt; Backup.</Alert>
+            )}
             {fileStale && (
               <div className="space-y-2">
                 <p className="text-xs text-mono-500">
                   {fileSaved
                     ? 'New backup file saved. It opens with your new passphrase.'
-                    : 'Your backup file still opens with your old passphrase.'}
+                    : fileKnown
+                      ? 'Your backup file still opens with your old passphrase.'
+                      : 'If you saved a backup file before, it still opens with your old passphrase.'}
                 </p>
                 {!fileSaved && (
                   <Button variant="secondary" className="w-full" onClick={() => void saveFile()}>
