@@ -1,5 +1,5 @@
 import { encodePlainTokenV4 } from './plainToken'
-import { decodeCbor, tokenProofs, voucherOfSecret, type TokenProof } from './voucherToken'
+import { decodeCbor, tokenProofs, voucherOfProof, type TokenProof } from './voucherToken'
 
 /**
  * A TokenV4 cut into one token per voucher (and lock key), proofs in their original order.
@@ -20,7 +20,7 @@ export function splitTokenByVoucher(token: string): string[] {
     const proofs = tokenProofs(token)
     const groups = new Map<string, TokenProof[]>()
     for (const p of proofs) {
-      const v = voucherOfSecret(p.secret)
+      const v = voucherOfProof(p)
       if (!v) return [token]
       const key = `${v.voucherId}\u0000${v.lockKey ?? ''}`
       groups.set(key, [...(groups.get(key) ?? []), p])

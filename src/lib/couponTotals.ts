@@ -16,7 +16,7 @@
  * what a spend may draw is `spendableTotal`: the smaller of the per-row sum and this total.
  */
 import type { VoucherRow } from '@imani/wallet-storage'
-import { creditableFaceValue, exactFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } from './voucherToken'
+import { creditableFaceValue, exactFaceValue, parseVoucherToken, tokenProofs, voucherOfProof } from './voucherToken'
 
 type Row = Pick<VoucherRow, 'token' | 'face_value'> & { voucher_id?: string | null; status?: string | null }
 
@@ -26,7 +26,7 @@ function readable(row: Row): { voucherId: string; exact: number; credit: number;
     // Only active money is rounded together: anything else counts as stored.
     const status = String(row.status ?? '').toLowerCase()
     if (status !== '' && status !== 'active') return null
-    if (tokenProofs(row.token).some((p) => voucherOfSecret(p.secret)?.lockKey)) return null
+    if (tokenProofs(row.token).some((p) => voucherOfProof(p)?.lockKey)) return null
     const parsed = parseVoucherToken(row.token)
     const { faceValue: credit } = creditableFaceValue(parsed)
     // A stored figure that is not the token's own credit (give or take the gateway's rounding of a
