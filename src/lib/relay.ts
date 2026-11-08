@@ -224,12 +224,36 @@ export async function allAddressable(pubkey: string, kind: number, dPrefix: stri
  * knows in advance, so there is no author to filter on; the reader trusts the inner signature,
  * never the author. Throws `GatewayUnreachableError` when the gateway did not answer.
  */
+/** Most events read at one ledger v2 locator; above it the read throws (matches the Java). */
+export const MAX_LEDGER_EVENTS = 4096
+
 export async function eventsByDTag(kind: number, d: string): Promise<Event[]> {
-  const events = await gatewayQuery({ kinds: [kind], tags: { '#d': [d] }, limit: GATEWAY_PAGE_LIMIT })
-  // A full page may be a truncated one: answering from it could miss a REVOKED. Fail closed.
-  if (events.length >= GATEWAY_PAGE_LIMIT) {
-    throw new GatewayUnreachableError(`nostr/query answered a full page (${events.length}) at one ledger locator`)
+  // No truncation (imani-wallet#582): the gateway caps every answer at GATEWAY_PAGE_LIMIT, so walk
+  // back with an inclusive `until` until a page brings nothing new. Any page failing throws, and
+  // more than MAX_LEDGER_EVENTS at one locator throws: never answer from a partial set.
+  const seen = new Map<string, Event>()
+  let until: number | undefined
+  for (;;) {
+    const batch = await gatewayQuery({ kinds: [kind], tags: { '#d': [d] }, limit: GATEWAY_PAGE_LIMIT, ...(until === undefined ? {} : { until }) })
+    let fresh = 0
+    for (const event of batch) {
+      if (!seen.has(event.id)) {
+        seen.set(event.id, event)
+        fresh++
+      }
+    }
+    if (seen.size > MAX_LEDGER_EVENTS) {
+      throw new GatewayUnreachableError(`more than ${MAX_LEDGER_EVENTS} events at one ledger locator`)
+    }
+    if (fresh === 0) {
+      // A full page all in one second cannot be walked past without skipping events.
+      if (batch.length >= GATEWAY_PAGE_LIMIT) throw new GatewayUnreachableError('ledger locator page cannot be exhausted')
+      break
+    }
+    if (batch.length < GATEWAY_PAGE_LIMIT && until === undefined) break
+    until = Math.min(...batch.map((e) => e.created_at))
   }
+  const events = [...seen.values()]
   const out = new Map<string, Event>()
   for (const event of events) {
     if (out.has(event.id) || event.kind !== kind) continue
