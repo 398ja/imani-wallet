@@ -53,6 +53,7 @@ export type LedgerRefusal =
   | 'STATUS_REFUSED'
   | 'SEQ_MISMATCH'
   | 'UNAUTHORISED_SIGNER'
+  | 'DOC_MISMATCH'
   | 'TERMINAL_CREDENTIAL'
   | 'TOO_LARGE'
 
@@ -550,6 +551,8 @@ export interface Opened {
   doc?: Uint8Array
   /** x-only hex of the inner signer. */
   signer: string
+  /** Lowercase hex of the inner signature, the deterministic tie-break in `resolve`. */
+  sig: string
   /** True when a `doc` was present but did not verify. */
   docDropped: boolean
 }
@@ -648,15 +651,15 @@ function readVoucher(vo: JObj): VoucherFields {
   return fields
 }
 
-/** The document bytes when `hex` is a signed unlocked voucher blob for this voucher; else undefined. */
-function verifiedDoc(hex: string, fields: VoucherFields): Uint8Array | undefined {
+/** The signed voucher when `hex` is a signed unlocked voucher blob for this voucher; else undefined. */
+function verifiedDoc(hex: string, fields: VoucherFields): SignedVoucherFields | undefined {
   if (!EVEN_HEX.test(hex)) return undefined
   try {
     const bytes = hexToBytes(hex)
     const v = voucherOfBlob(decodeCbor(bytes))
     if (!UUID_CANONICAL.test(v.voucherId) || v.voucherId.toLowerCase() !== fields.voucherId) return undefined
     if (v.issuerId.toLowerCase() !== fields.issuerId) return undefined
-    return verifyVoucher(v).signatureValid ? bytes : undefined
+    return verifyVoucher(v).signatureValid ? v : undefined
   } catch {
     return undefined
   }
@@ -744,11 +747,38 @@ export function read(event: LedgerEventLike, ref: Uint8Array, trustedIssuerKeys:
   let doc: Uint8Array | undefined
   let docDropped = false
   if (typeof docNode === 'string') {
-    doc = verifiedDoc(docNode, fields)
-    docDropped = doc === undefined
+    const docVoucher = verifiedDoc(docNode, fields)
+    let signed: VoucherFields | undefined
+    if (docVoucher) {
+      try {
+        signed = voucherFieldsOf(docVoucher)
+      } catch {
+        signed = undefined
+      }
+    }
+    if (signed === undefined) {
+      docDropped = true
+    } else if (!sameFields(signed, fields)) {
+      // M3 (imani-wallet#582): a genuine doc must not lend its signature to other fields.
+      throw new LedgerRefusedError('DOC_MISMATCH', 'voucher fields differ from the signed doc')
+    } else {
+      doc = hexToBytes(docNode)
+    }
   }
-  return { status, seq: seqOf(status), voucher: fields, doc, signer, docDropped }
+  return { status, seq: seqOf(status), voucher: fields, doc, signer, sig, docDropped }
 }
+
+const FIELD_KEYS = [
+  'voucherId', 'issuerId', 'issuerPublicKey', 'unit', 'faceValue', 'faceDecimals', 'expiresAt', 'memo',
+  'backingStrategy', 'issuanceRatio', 'merchantMetadata', 'issuanceWarrant',
+] as const satisfies readonly (keyof VoucherFields)[]
+
+/** Java `VoucherFields.equals`: every field equal, absent on both sides counting as equal. */
+function sameFields(a: VoucherFields, b: VoucherFields): boolean {
+  return FIELD_KEYS.every((k) => a[k] === b[k])
+}
+
+const bySig = (a: Opened, b: Opened): number => (a.sig < b.sig ? -1 : a.sig > b.sig ? 1 : 0)
 
 /** `read` that answers null instead of throwing. */
 export function open(event: LedgerEventLike, ref: Uint8Array, trustedIssuerKeys: readonly string[] = []): Opened | null {
@@ -763,8 +793,8 @@ const RANK: Record<LedgerStatus, number> = { ISSUED: 1, REDEEMED: 2, REVOKED: 3 
 
 /**
  * Folds every event at a voucher's locator: highest `seq`, ties REVOKED > REDEEMED > ISSUED.
- * Voucher fields come from the first accepted ISSUED with a verified doc, else the first ISSUED,
- * else the winner. Null when nothing is accepted. The outer author is never consulted.
+ * Voucher fields come from one ISSUED chosen independently of input order: a trusted (platform)
+ * signer first, then one with a verified doc, then the lowest inner sig; else the winner. Null when nothing is accepted. The outer author is never consulted.
  */
 export function resolve(events: readonly LedgerEventLike[], ref: Uint8Array, trustedIssuerKeys: readonly string[] = []): Resolved | null {
   const accepted = events.map((e) => open(e, ref, trustedIssuerKeys)).filter((o): o is Opened => o !== null)
@@ -773,8 +803,10 @@ export function resolve(events: readonly LedgerEventLike[], ref: Uint8Array, tru
   for (const o of accepted) {
     if (o.seq > winner.seq || (o.seq === winner.seq && RANK[o.status] > RANK[winner.status])) winner = o
   }
-  const issued = accepted.filter((o) => o.status === 'ISSUED')
-  const source = issued.find((o) => o.doc !== undefined) ?? issued[0] ?? winner
-  const doc = source.doc ?? accepted.find((o) => o.doc !== undefined)?.doc
+  const trusted = new Set(trustedIssuerKeys.filter((x) => typeof x === 'string').map((x) => x.toLowerCase()))
+  const rank = (o: Opened): number => (trusted.has(o.signer) ? 0 : 2) + (o.doc !== undefined ? 0 : 1)
+  const issued = accepted.filter((o) => o.status === 'ISSUED').sort((a, b) => rank(a) - rank(b) || bySig(a, b))
+  const source = issued[0] ?? winner
+  const doc = source.doc ?? accepted.filter((o) => o.doc !== undefined).sort(bySig)[0]?.doc
   return { status: winner.status, voucher: source.voucher, doc, accepted }
 }
