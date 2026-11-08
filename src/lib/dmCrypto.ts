@@ -26,6 +26,7 @@ import {
   TRANSFER_SIGNATURE_TYPE,
 } from './transferSignature'
 import {
+  isUnverifiableVoucherError,
   parseVoucherToken,
   tokenProofs,
   verifyVoucher,
@@ -227,7 +228,14 @@ function verifiedVoucherFrom(token: string | undefined):
   let parsed: ParsedVoucherToken
   try {
     parsed = parseVoucherToken(token)
-  } catch {
+  } catch (e) {
+    // A by-reference voucher whose document is missing, or whose document map is invalid, IS a
+    // voucher that cannot be verified. Never plain ecash (cashu-voucher#64). Every other failure
+    // is unchanged: not a voucher, so it keeps flowing.
+    if (isUnverifiableVoucherError(e)) {
+      console.warn('[dmCrypto] rejecting by-reference voucher that cannot be verified:', (e as Error).message)
+      return REJECTED
+    }
     return undefined
   }
 
