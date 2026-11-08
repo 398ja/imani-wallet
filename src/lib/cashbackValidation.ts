@@ -21,6 +21,7 @@
 import { checkIssuer } from './issuerAllowlist'
 import { buildValidationRecord } from './voucherValidationRecord'
 import {
+  isUnverifiableVoucherError,
   isVoucherSecret,
   parseVoucherToken,
   proofSecrets,
@@ -69,14 +70,23 @@ function check(token: string): VoucherValidation | undefined {
   let parsed: ReturnType<typeof parseVoucherToken>
   try {
     parsed = parseVoucherToken(token)
-  } catch {
+  } catch (e) {
+    // A by-reference voucher with a missing document or an invalid document map is a coupon that
+    // cannot be verified (cashu-voucher#64). An invalid map also makes `proofSecrets` throw below,
+    // which would read as plain ecash, so it is answered first.
+    if (isUnverifiableVoucherError(e)) {
+      console.warn('[cashback] by-reference coupon cannot be verified')
+      return { ...UNREADABLE }
+    }
     // Plain ecash makes no issuer claim. But a token whose proofs DO carry a
     // voucher that cannot be read (a missing or malformed signature) is a
     // coupon that failed its check, and must not fall through to silence.
     let carriesVoucher = false
     try {
       carriesVoucher = proofSecrets(token).some(isVoucherSecret)
-    } catch {
+    } catch (inner) {
+      // Unverifiable on its own terms (review N9), not "plain ecash", whatever the outer parse said.
+      if (isUnverifiableVoucherError(inner)) return { ...UNREADABLE }
       carriesVoucher = false
     }
     if (!carriesVoucher) return undefined

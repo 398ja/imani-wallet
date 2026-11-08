@@ -79,7 +79,7 @@ import {
 import { linkKeySigner, linkPubOf, secretFromText, type GiftToken, type ProofState } from './giftLink'
 import { nip98Header, type RequestSigner } from './nip98'
 import { encodePlainTokenV4 } from './plainToken'
-import { parseVoucherToken, tokenProofs, voucherOfSecret, type TokenProof } from './voucherToken'
+import { parseVoucherToken, referencedDocuments, tokenProofs, voucherOfProof, type TokenProof } from './voucherToken'
 import { splitTokenByVoucher } from './tokenSplit'
 import { splitIntoDenominations, unblindOutputs, type BlindSignatureResponse, type BlindedOutput, type UnblindedProof } from './walletSwap'
 import { cashlinkClaimsKey } from './inFlightMoney'
@@ -894,7 +894,7 @@ async function lockOne(
     throw new Error('the mint could not say whether the gift is spent')
   }
 
-  const gift = voucherOfSecret(proof.secret)!
+  const gift = voucherOfProof(proof)!
   const ask = { linkPub, refundPub, x: ctx.x, maxSats: proof.amount }
   const body = lockBody(ctx, proof, linkPub, refundPub, burnOuts)
   const carrierFor = (signed: string) => derivedCarrier(ctx.refundSecret, 'mint-link', proof.secret, signed, proof.amount, burnt[0].id)
@@ -1365,7 +1365,7 @@ async function reform(
     predecessor_proof: proofBody(locked),
     burn_outputs: burnOutputsBody(spentInto),
   })
-  const lockedVoucher = voucherOfSecret(locked.secret)!
+  const lockedVoucher = voucherOfProof(locked)!
   // #384: this proof's share of the WHOLE gift, so the returned rows add up to what was sent.
   const share = faceShareOf(ctx.lockedToken, locked.secret)
   const signed = answer.body?.signed_secret
@@ -1584,7 +1584,7 @@ async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uin
     predecessor_proof: proofBody(proof),
     burn_outputs: burnOutputsBody(outputs),
   })
-  const locked = voucherOfSecret(proof.secret)!
+  const locked = voucherOfProof(proof)!
   const signed = answer.body?.signed_secret
   if (answer.status === 200 && typeof signed === 'string' && isTheSuccessorAskedFor(signed, locked)) {
     // 3. Mint it, with the blinding factor written down before the burn.
@@ -1827,6 +1827,8 @@ export function httpCashlinkMint(): CashlinkMint {
           inputs: inputs.map(({ amount, id, secret, C, witness }) => ({ amount, id, secret, C, ...(witness ? { witness } : {}) })),
           // Projected: a secret or blinding factor never leaves the wallet.
           outputs: outputs.map(({ amount, id, B_ }) => ({ amount, id, B_ })),
+          // cashu-voucher#64: documents of by-reference inputs, only when some input is one.
+          ...((v) => (v ? { vouchers: v } : {}))(referencedDocuments(inputs)),
         }),
       )
       const body = (await r.json().catch(() => null)) as { signatures?: BlindSignatureResponse[]; code?: number; detail?: string } | null

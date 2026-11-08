@@ -40,7 +40,7 @@ import { spendable, toVoucher } from './merchants'
 import { withoutInFlight } from './pay'
 import { canCarve } from './checkoutCarve'
 import { canSplit } from './voucherSplitPlan'
-import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } from './voucherToken'
+import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfProof } from './voucherToken'
 import { spendableTotal } from './couponTotals'
 
 /** Contract §3: 1 ≤ parts ≤ 20. */
@@ -120,7 +120,7 @@ function candidateOf(row: VoucherRow, x: number, nowS: number, payer: string): C
   let expiresAt: number | undefined
   for (const proof of proofs) {
     // #402: locked to this wallet's own key alone (a split voucher's part) is ours to lock.
-    if (voucherOfSecret(proof.secret)?.lockKey && !isSelfLocked(proof.secret, payer)) return 'already_locked'
+    if (voucherOfProof(proof)?.lockKey && !isSelfLocked(proof.secret, payer)) return 'already_locked'
     const found = lockableVoucher(proof.secret, payer)
     if ('problem' in found) return 'not_lockable'
     expiresAt = found.voucher.expiresAt
