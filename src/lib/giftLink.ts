@@ -32,6 +32,7 @@ import { terminalCredentialFromToken } from './notMoney'
 import {
   creditableFaceValue,
   parseVoucherToken,
+  isUnverifiableVoucherError,
   tokenProofs,
   verifyVoucher,
   type ParsedVoucherToken,
@@ -616,7 +617,10 @@ export function giftExclusion(
   let parsed: ParsedVoucherToken | undefined
   try {
     parsed = parseVoucherToken(token)
-  } catch {
+  } catch (e) {
+    // A by-reference coupon without its document cannot be checked for a lock, ratio or expiry,
+    // so it never goes in a link (cashu-voucher#64).
+    if (isUnverifiableVoucherError(e)) return 'not_money'
     // Plain ecash or unreadable: no voucher lock, ratio or expiry to speak of.
   }
   if (parsed?.voucher.lockKey) return 'locked'

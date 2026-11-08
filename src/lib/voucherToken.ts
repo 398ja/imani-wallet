@@ -129,11 +129,16 @@ class CborReader {
         return out
       }
       case 5: {
-        const out: Record<string, unknown> = {}
+        // Null prototype, so a "__proto__" key is an ordinary entry, not a prototype change.
+        // Text keys only and no duplicates, as cashu-voucher's vectors demand (#64, review L5):
+        // stringifying a number key or keeping the last of two would accept what Java refuses.
+        const out = Object.create(null) as Record<string, unknown>
         const floats = new Set<string>()
         const entry = (key: unknown): void => {
+          if (typeof key !== 'string') throw new Error('cbor: map key is not a text string')
+          if (Object.prototype.hasOwnProperty.call(out, key)) throw new Error('cbor: duplicate map key')
           this.lastWasFloat = false
-          out[String(key)] = this.read()
+          out[key] = this.read()
           if (this.lastWasFloat) floats.add(String(key))
           this.lastWasFloat = false
         }
