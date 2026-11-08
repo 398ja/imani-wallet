@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.61.1] - 2026-11-08
+
+### Fixed
+
+- **Delete my account works** (#558, #577). The signed `DELETE /api/v1/nip05` carried no NIP-98
+  `payload` tag because it has no body, and the gateway refuses any write without one (401). Every
+  state-changing request now signs a payload tag, the SHA-256 of the empty string when there is no
+  body, without sending a body. With imani-gateway-core 0.38.1 the full deletion now works on
+  staging. A refused signature or an unavailable server get their own plain messages instead of
+  "We could not reach Imani".
+- The postdeploy harness sells a setup voucher again only when the customer's balance did not rise
+  (#566, #576). A slow "sent" screen no longer issues a second voucher.
+
 ## [0.61.0] - 2026-11-08
 
 ### Added
