@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-11-08
+
+### Added
+
+- **Delete my account** (#558, #573), in Settings > Security > Danger zone, never on a terminal.
+  The key belongs to the user, so deleting removes what Imani holds for the account: the handle,
+  which the server retires so nobody can claim it again, and the push registration. Then the app
+  logs out as usual. The user types their handle to confirm. Every logout safety check runs first,
+  and a blocked logout blocks the deletion with the same message. The signed `DELETE
+  /api/v1/nip05` runs at the last moment before the wipe. If logout still refuses after it, the app
+  says "Your account is deleted" and a Finish button logs out without deleting again. Needs
+  imani-gateway-core 0.38.0 (owner-only delete, retired handles).
+- **A merchant with vouchers still out cannot delete** (#558). The app shows the amount and the
+  date the last one expires, and offers **Close my stall** instead: selling stops (Sell, card sales,
+  terminals), redeeming and receiving go on, and the stall's public record says it no longer sells.
+  On a new device, the check waits until the sales history is restored.
+- **Google Play store listing** (#558, #572): `play-listing/` holds the store icon, the feature
+  graphic, 8 phone screenshots, the texts and a script that rebuilds them.
+
+### Changed
+
+- **The app icon is the Imani mark** (#558, #572). The Android launcher icon was still the app
+  template's. It is now the rounded mark on #fafafa: a vector adaptive icon with a monochrome layer
+  for themed icons, and images for Android 7.
+- **A passphrase change updates only the backups that exist** (#574). Google Drive is rewritten
+  only when this account has a Drive backup. For a backup made before the app kept this record, it
+  asks Drive and rewrites only a copy that is there. It never creates one, and it says when it could
+  not check. A downloaded file cannot be rewritten, so the app offers "Save new backup file". The
+  record of where backups were made survives logout and travels in the backup file.
+- The Drive backup note no longer mentions older app versions (#574).
+
 ## [0.60.0] - 2026-11-07
 
 ### Changed
