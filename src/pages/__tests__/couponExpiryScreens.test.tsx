@@ -66,9 +66,9 @@ const openCoupon = (id: string) =>
 
 const openList = () =>
   render(
-    <MemoryRouter initialEntries={[`/merchants/${STALL}/coupons`]}>
+    <MemoryRouter initialEntries={[`/merchants/${STALL}/vouchers`]}>
       <Routes>
-        <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
+        <Route path="/merchants/:pubkey/vouchers" element={<CouponsPage />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -196,5 +196,35 @@ describe('coupon list (#265)', () => {
     openList()
     await screen.findByText('No vouchers you can still use.')
     expect(screen.getByText('Expired (1)')).toBeTruthy()
+  })
+})
+
+describe('one voucher held as several rows reads as ONE voucher', () => {
+  // A checkout code's change, a Cashlink take-back: one voucher, one row per proof (faceSplit.ts).
+  const sixPieces = () =>
+    [566, 283, 35, 9, 4, 1].map((face, i) =>
+      row(`piece-${i}`, 30 * DAY, { voucher_id: 'v-one', face_value: face, amount: face }),
+    )
+
+  it('the list counts it once, shows its whole value, and links to one row', async () => {
+    h.rows = sixPieces()
+    openList()
+    await screen.findByText('1 voucher')
+    expect(screen.queryByText('6 vouchers')).toBeNull()
+    expect(couponLinks()).toEqual(['/coupon/piece-0'])
+    expect(screen.getByText('€8.98')).toBeTruthy()
+  })
+
+  it('still lists two different vouchers as two', async () => {
+    h.rows = [...sixPieces(), row('other', 30 * DAY)]
+    openList()
+    await screen.findByText('2 vouchers')
+    expect(couponLinks()).toHaveLength(2)
+  })
+
+  it('the detail screen shows the whole voucher, opened from any of its rows', async () => {
+    h.rows = sixPieces()
+    openCoupon('piece-3')
+    await waitFor(() => expect(screen.getAllByText('€8.98').length).toBeGreaterThan(0))
   })
 })

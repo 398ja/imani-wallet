@@ -4,6 +4,7 @@ import { readExpiry } from '@imani/wallet-core'
 import { formatDate, toEpochMs } from './format'
 import { issuerKey, spendable } from './merchants'
 import { tokenProofs } from './voucherToken'
+import { asOneVoucher, groupByVoucher } from './voucherCount'
 import { spendingKeys, xOnly } from './witness'
 
 /**
@@ -165,8 +166,11 @@ export function reminderId(tokenId: string, threshold: Threshold): string {
  * stale the moment it was filed.
  */
 export function reminderCandidates(rows: VoucherRow[], me: string, now = Date.now()): ReminderCandidate[] {
+  // One per VOUCHER (voucherCount.ts): a voucher filed as six rows is one reminder, one banner
+  // count and one line, at its whole value. Its rows share the voucher's signed expiry.
   const out: ReminderCandidate[] = []
-  for (const row of heldByMe(rows, me)) {
+  for (const voucher of groupByVoucher(heldByMe(rows, me))) {
+    const row = asOneVoucher(voucher)
     const state = expiryState(row, now)
     if (!isExpiringSoon(state)) continue
     out.push({ row, state, threshold: state.tone === 'urgent' ? '1d' : '7d' })

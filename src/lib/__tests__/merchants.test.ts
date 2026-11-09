@@ -14,6 +14,7 @@ import {
   totalForUnit,
   unitHoldings,
 } from '../merchants'
+import { countVouchers } from '../voucherCount'
 import type { WalletTransaction } from '../transactions'
 import { formatSats } from '../format'
 
@@ -466,5 +467,19 @@ describe('holdingForUnit / totalForUnit (#460)', () => {
     const options = unitHoldings(merchants)
     expect(options).toHaveLength(1)
     expect(options[0].totalFaceValue).toBe(1200)
+  })
+})
+
+describe('voucherCount counts vouchers, not stored rows', () => {
+  it('a voucher filed as six rows is one voucher on the merchant card, and agrees with the list', () => {
+    const rows = [566, 283, 35, 9, 4, 1].map((face) => row({ issuer_id: PUBKEY_A, voucher_id: 'v-one', face_value: face }))
+    const merchant = findMerchant(rows, PUBKEY_A)!
+    expect(merchant.voucherCount).toBe(1)
+    expect(countVouchers(couponsFor(rows, PUBKEY_A))).toBe(merchant.voucherCount)
+  })
+
+  it('two vouchers are still two', () => {
+    const rows = [row({ issuer_id: PUBKEY_A, voucher_id: 'v-1' }), row({ issuer_id: PUBKEY_A, voucher_id: 'v-2' })]
+    expect(findMerchant(rows, PUBKEY_A)!.voucherCount).toBe(2)
   })
 })

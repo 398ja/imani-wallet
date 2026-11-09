@@ -35,6 +35,7 @@ import {
   SendOutcomeUnknownError,
   sendVouchers,
   splitObstacle,
+  usedVouchers,
   withoutInFlight,
   type SendResult,
 } from '../lib/pay'
@@ -301,7 +302,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                     // it: it qualifies how the payment went, so it belongs to
                     // the sentence that says the payment went. Matches the
                     // recipient's "€6.00 received (2 vouchers)".
-                    sent.parts > 1 ? ` as ${sent.parts} vouchers` : ''
+                    usedVouchers(sent) > 1 ? ` as ${usedVouchers(sent)} vouchers` : ''
                   }.${asMerchant ? '' : ' It is in their wallet now.'}`}
             </p>
           </div>
@@ -319,7 +320,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               </Alert>
             ) : (
               <Alert>
-                {sent.parts > 1 ? `${sent.parts} vouchers went before the rest stopped. ` : ''}
+                {usedVouchers(sent) > 1 ? `${usedVouchers(sent)} vouchers went before the rest stopped. ` : ''}
                 The rest was not sent and your remaining vouchers are untouched — send
                 the difference again if you still mean to.
                 {sent.shortfall ? ` (${sent.shortfall})` : ''}

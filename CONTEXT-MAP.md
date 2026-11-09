@@ -12,8 +12,8 @@ alone" is how two copies come to disagree.
 ## Contexts
 
 - **[Wallet](./CONTEXT.md)** — `imani-wallet`. The customer's browser wallet and
-  the stall's own surface. Holds the glossary the whole domain speaks: Coupon,
-  Stall, Terminal, Takings, Purchase, Obligation.
+  the stall's own surface. Holds the glossary the whole domain speaks: Voucher,
+  Coupon code, Stall, Terminal, Takings, Purchase, Obligation.
 - **Woo** — `imani-woo`. A WooCommerce plugin selling coupons online. Reached
   the delegated-issuance and fulfilment problems first, so its ADRs are load
   bearing well outside it.

@@ -1410,12 +1410,22 @@ export type SendResult = {
    */
   inFlight?: number
   parts: number
+  /**
+   * How many VOUCHERS those parts drew on. A part is one stored row, and one voucher can be filed
+   * as several rows (`voucherCount.ts`), so this, not `parts`, is what the screen says.
+   */
+  vouchers?: number
   /** Why the rest did not go (or is not confirmed), when `delivered` fell short. */
   shortfall?: string
 }
 
 /** Bundle correlation for one part. All five fields or none — the gateway rejects half a set. */
 type BundleTag = { bundleId: string; total: number; index: number; count: number }
+
+/** Vouchers a send drew on, for the screen. Falls back to `parts` for a result without the count. */
+export function usedVouchers(result: Pick<SendResult, 'parts' | 'vouchers'>): number {
+  return result.vouchers ?? result.parts
+}
 
 /** Everything a part needs that does not change between parts. */
 type SendContext = {
@@ -1740,7 +1750,7 @@ async function deliverCounted(
   const single = selectVouchers(vouchers, amount)
   if (single.length > 0) {
     const sendId = await sendPart(ctx, single, amount, null)
-    return { id: sendId, requested: amount, delivered: amount, parts: 1 }
+    return { id: sendId, requested: amount, delivered: amount, parts: 1, vouchers: 1 }
   }
 
   const plan = planParts(vouchers, amount)
@@ -1753,6 +1763,8 @@ async function deliverCounted(
   }
 
   const bundleId = newBundleId()
+  // Vouchers, not parts, for the screen: see `SendResult.vouchers`.
+  const vouchersIn = (n: number) => new Set(plan.parts.slice(0, n).map((p) => p.voucher.voucher_id)).size
   let delivered = 0
   for (const [index, part] of plan.parts.entries()) {
     try {
@@ -1776,10 +1788,11 @@ async function deliverCounted(
         delivered,
         ...(unknownOutcome ? { inFlight: part.amount } : {}),
         parts: unknownOutcome ? index + 1 : index,
+        vouchers: vouchersIn(unknownOutcome ? index + 1 : index),
         shortfall: error instanceof Error ? error.message : String(error),
       }
     }
   }
 
-  return { id: bundleId, requested: amount, delivered, parts: plan.parts.length }
+  return { id: bundleId, requested: amount, delivered, parts: plan.parts.length, vouchers: vouchersIn(plan.parts.length) }
 }

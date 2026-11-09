@@ -22,10 +22,12 @@ import { present } from '../lib/detailRows'
 import {
   getVoucherRow,
   getTransactionRow,
+  listVouchers,
   onWalletChanged,
   recheckCashbackRowOnOpen,
   recordCashbackStatus,
 } from '../lib/wallet'
+import { asOneVoucher, groupByVoucher, siblingsOf } from '../lib/voucherCount'
 import { issuanceRatioOf, isSpent } from '../lib/merchants'
 import { countdown, expiryState, isExpiringSoon } from '../lib/couponExpiry'
 import { formatFace, formatDate, formatSats } from '../lib/format'
@@ -80,6 +82,9 @@ function ratioLabel(row: VoucherRow): string | undefined {
 export function CouponPage() {
   const { tokenId = '' } = useParams()
   const [row, setRow] = useState<VoucherRow | null | undefined>(undefined)
+  // Every row this voucher is filed as (voucherCount.ts). The list links here with the voucher's
+  // first row; the screen is about the voucher, so it shows the voucher's whole value.
+  const [siblings, setSiblings] = useState<VoucherRow[]>([])
   /*
     Seeded from what this device already knows about the stall, so a coupon you
     have opened before names its issuer on the first frame instead of showing a
@@ -94,6 +99,7 @@ export function CouponPage() {
     const load = async () => {
       const found = await getVoucherRow(tokenId)
       setRow(found)
+      setSiblings(found ? siblingsOf(found, await listVouchers()) : [])
     }
     load()
     // A coupon can be spent from another screen while this one is open.
@@ -103,6 +109,7 @@ export function CouponPage() {
   if (row === undefined) return <Centered>Loading…</Centered>
   if (row === null) return <Centered>This voucher is no longer in your wallet.</Centered>
 
+  const voucher = siblings.length > 1 ? asOneVoucher(groupByVoucher(siblings)[0]!) : row
   const backTo = row.issuer_id ? `/merchants/${row.issuer_id}` : '/'
   // #265: read once per render from the clock. An expired coupon is not "active" whatever its
   // stored status says: storage keeps the status of the proofs, and they are unspent; what ended
@@ -147,7 +154,7 @@ export function CouponPage() {
           asks who they are and offers to buy from them.
         */}
         <Pass
-          pass={toCouponPass(row, branding ?? EMPTY_BRANDING)}
+          pass={toCouponPass(voucher, branding ?? EMPTY_BRANDING)}
           loadingIssuer={loadingIssuer}
           issuerTo={row.issuer_id ? `/profile/${row.issuer_id}` : undefined}
         />

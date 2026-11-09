@@ -16,6 +16,7 @@ import {
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged, walletIsOpen } from '../lib/wallet'
 import { findMerchantWithHistory, couponsFor, type Merchant } from '../lib/merchants'
+import { countVouchers } from '../lib/voucherCount'
 import { soonestExpiring } from '../lib/couponExpiry'
 import { StallExpiryCue } from '../components/ui/ExpiryBadge'
 import { useExpiryClock } from '../hooks/useExpiryReminders'
@@ -100,8 +101,9 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
       // merchant." — over a screen whose whole other half is the history with them.
       setMerchant(findMerchantWithHistory(rows, history, pubkey) ?? null)
       // Rows, not merchant.groups[].vouchers — only the row carries token_id, and
-      // that is what addresses a coupon's detail screen.
-      setCouponCount(couponsFor(rows, pubkey).length)
+      // that is what addresses a coupon's detail screen. Counted as VOUCHERS, so a voucher
+      // filed as several rows is "1 voucher" here as on its list (voucherCount.ts).
+      setCouponCount(countVouchers(couponsFor(rows, pubkey)))
       setSoonest(soonestExpiring(rows, pubkey))
       setTransactions(history)
     }
@@ -182,7 +184,7 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
           <Pass
             pass={toMerchantPass(merchant, branding)}
             loadingIssuer={loadingIssuer}
-            to={`/merchants/${pubkey}/coupons`}
+            to={`/merchants/${pubkey}/vouchers`}
           />
           <p className="mt-2 text-center text-sm text-mono-500">
             {couponCount === 1 ? '1 voucher' : `${couponCount} vouchers`} · tap to see them
