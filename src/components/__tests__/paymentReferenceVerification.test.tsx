@@ -45,4 +45,27 @@ describe('PaymentReferenceBlock verification', () => {
     expect(await renderBlock()).toBe('unknown')
     expect(screen.getByText(/^Could not check with Stripe right now/)).toBeTruthy()
   })
+
+  it.each([
+    ['refunded', /^Refunded on Stripe\./],
+    ['disputed', /^Disputed on Stripe\./],
+  ])('shows an amber, non-genuine state for %s', async (result, sentence) => {
+    serverSays(200, { result, refunded_minor: 500 })
+    expect(await renderBlock()).toBe(result)
+    const mark = screen.getByTestId('reference-verification')
+    expect(mark.getAttribute('class')).toContain('text-amber-600')
+    expect(mark.getAttribute('aria-label')).toBe(result === 'refunded' ? 'Refunded on Stripe' : 'Disputed on Stripe')
+    const line = screen.getByText(sentence)
+    expect(line.textContent).toMatch(/voucher was still issued/)
+    expect(line.textContent).toMatch(/not handled automatically/)
+    expect(line.getAttribute('class')).toContain('text-amber-600')
+  })
+
+  it('keeps unknown grey, never red', async () => {
+    serverSays(429, {})
+    expect(await renderBlock()).toBe('unknown')
+    const mark = screen.getByTestId('reference-verification')
+    expect(mark.getAttribute('class')).toContain('text-mono-500')
+    expect(mark.getAttribute('class')).not.toContain('red')
+  })
 })
