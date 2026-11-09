@@ -80,6 +80,31 @@ import { passedOver, planParts, selectVouchers, splitObstacle } from '@imani/wal
  * building, NIP-98 signing and idempotency rather than re-rolling any of it.
  */
 
+/**
+ * How many dead sends a retry walks past on one coupon before giving up. Each is one earlier
+ * press of Pay that failed with the coupon untouched; more than a handful means something else
+ * is wrong, and the FAILED answer is then shown as it is.
+ */
+const MAX_DEAD_REPLAY_SKIPS = 5
+
+/** Dead and harmless to walk past: the mint moved nothing, so the coupon is still spendable. */
+const DEAD_STATES = ['FAILED', 'SPLIT_ERROR', 'EXPIRED', 'CANCELLED']
+/** Failures that say the coupon itself is spent or capped. A fresh key would fail the same way. */
+const COUPON_GONE_CODES = ['SOURCE_PROOFS_NOT_UNSPENT', 'PHANTOM_SPEND', 'SPLIT_PROOFS_SPENT']
+
+/**
+ * An initiate answered with a dead send. A NEW send is never terminal at initiate (it starts
+ * INITIATED and is split asynchronously), so a terminal-failed answer can only be the gateway
+ * replaying an earlier send under the same idempotency key.
+ */
+export function isDeadReplay(answer: unknown): boolean {
+  if (!answer || typeof answer !== 'object') return false
+  const a = answer as SendStatus
+  if (!DEAD_STATES.includes(String(a.status))) return false
+  if (a.error_code && COUPON_GONE_CODES.includes(a.error_code)) return false
+  return !isVoucherFullyRedeemed(a)
+}
+
 /** Terminal saga states, copied from atomicSendIntegration.js's own list. */
 const TERMINAL = [
   'COMPLETED',
@@ -1033,11 +1058,23 @@ async function initiateOnFirstFree(
   let lastRefusal: Error | null = null
 
   for (const candidate of candidates) {
-    const key = keyFor(candidate)
+    const baseKey = keyFor(candidate)
+    let key = baseKey
     try {
       let initiated
       try {
         initiated = await api.initiateAtomicSend(buildParams(candidate), key)
+        // A redemption's key is a pure function of (request, source token), so paying the same
+        // request again after a send that FAILED replays that dead send: the gateway answers
+        // FAILED at once and no new saga ever starts. Nothing is held on a dead send (it is not
+        // reclaimable) and the coupon is still whole, so walk to the next key in a fixed
+        // sequence. Deterministic, so a double-tap still converges on one key; the gateway's
+        // one-active-send-per-voucher and request-already-paid guards still apply to each.
+        for (let attempt = 1; attempt <= MAX_DEAD_REPLAY_SKIPS && isDeadReplay(initiated); attempt++) {
+          answered(key)
+          key = `${baseKey}~${attempt}`
+          initiated = await api.initiateAtomicSend(buildParams(candidate), key)
+        }
       } catch (error) {
         // #179: only a definite refusal frees the key. A lost answer keeps it, so the retry
         // (now, or after a reload) carries the SAME key and the gateway replays the first send.
