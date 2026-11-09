@@ -27,7 +27,7 @@ import {
   Switch,
 } from '../components/ui'
 import { present } from '../lib/detailRows'
-import { CopyReferenceButton, PaymentReferenceBlock } from '../components/PaymentReference'
+import { CardReferenceMark, CopyReferenceButton, PaymentReferenceBlock } from '../components/PaymentReference'
 import { cardReferenceOf } from '../lib/paymentReference'
 import { onWalletChanged } from '../lib/wallet'
 import { handlerFor } from '../lib/terminalAttribution'
@@ -884,6 +884,7 @@ function IssuedCouponRow({ tx, now, stallPubkey }: { tx: WalletTransaction; now:
       {link}
       <div className="-mt-3 flex items-center gap-1 px-4 pb-3 pl-11 text-xs text-mono-500">
         <span>Card</span>
+        <CardReferenceMark reference={cardRef} />
         <CopyReferenceButton reference={cardRef} compact />
       </div>
     </div>
