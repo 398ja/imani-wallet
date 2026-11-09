@@ -13,6 +13,7 @@ import {
   payRequest,
   SendOutcomeUnknownError,
   splitObstacle,
+  usedVouchers,
   withoutInFlight,
   withoutTombstoned,
   type SendResult,
@@ -187,7 +188,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           {formatFace(status.result.delivered, denom)}
           {partial ? ` of ${formatFace(status.result.requested, denom)}` : ''} to {issuerLabel}
           {/* In the sentence, not a second line: see SendPage (#94). */}
-          {!partial && status.result.parts > 1 ? ` as ${status.result.parts} vouchers` : ''}
+          {!partial && usedVouchers(status.result) > 1 ? ` as ${usedVouchers(status.result)} vouchers` : ''}
         </p>
         {partial && inFlight > 0 && (
           <Alert>
@@ -201,7 +202,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         )}
         {partial && inFlight === 0 && (
           <Alert>
-            {status.result.parts > 1 ? `${status.result.parts} vouchers went before the rest stopped. ` : ''}
+            {usedVouchers(status.result) > 1 ? `${usedVouchers(status.result)} vouchers went before the rest stopped. ` : ''}
             The rest was not paid and your remaining vouchers are untouched — the
             merchant's request is still open for the difference.
             {status.result.shortfall ? ` (${status.result.shortfall})` : ''}

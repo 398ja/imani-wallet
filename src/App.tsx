@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useParams } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { NapProvider, useNapSession, useNapCallbacks } from '@imani/nap-react'
@@ -128,6 +128,12 @@ const OWNER_REGISTER = registerRequestTerms()
 // and the poller outlive an unmount (a lapsed session shows the passphrase
 // dialog with AuthedApp gone), and a release then must still drain first.
 setBeforeWalletRelease(() => releaseWalletForOtherTab())
+
+/** `/merchants/:pubkey/coupons` (the list's old address) to `/merchants/:pubkey/vouchers`. */
+function VouchersRedirect() {
+  const { pubkey = '' } = useParams()
+  return <Navigate to={`/merchants/${encodeURIComponent(pubkey)}/vouchers`} replace />
+}
 
 /**
  * Everything behind the NAP session gate.
@@ -710,7 +716,10 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/buy/cancelled" element={<BuyCancelledPage />} />
         <Route path="/buy/:pubkey" element={<BuyPage buyerPubkey={pubkey} />} />
         <Route path="/merchants/:pubkey" element={<MerchantPage viewerPubkey={pubkey} />} />
-        <Route path="/merchants/:pubkey/coupons" element={<CouponsPage />} />
+        <Route path="/merchants/:pubkey/vouchers" element={<CouponsPage />} />
+        {/* The list's old address. A voucher is what this page holds; "coupon" now names the
+            checkout code (#402). Kept so a saved link or an older build's notification lands. */}
+        <Route path="/merchants/:pubkey/coupons" element={<VouchersRedirect />} />
         <Route path="/coupons/expiring" element={<ExpiringCouponsPage pubkey={pubkey} />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
         <Route path="/coupon/:tokenId" element={<CouponPage />} />

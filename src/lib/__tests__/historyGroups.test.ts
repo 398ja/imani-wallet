@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { entryKey, groupHistory, worstValidation } from '../historyGroups'
+import { entryKey, entryVoucherCount, groupHistory, worstValidation } from '../historyGroups'
 import type { WalletTransaction } from '../transactions'
 
 /**
@@ -94,5 +94,30 @@ describe('review fixes', () => {
     const bad = { signatureValid: false } as never
     expect(worstValidation([tx('a', { voucherId: 'v', validation: ok }), tx('b', { voucherId: 'w', validation: bad })])).toBe(bad)
     expect(worstValidation([tx('a'), tx('b')])).toBeUndefined()
+  })
+})
+
+describe('entryVoucherCount: the folded line counts vouchers, not rows', () => {
+  const M = 'f'.repeat(64)
+  it('six rows of one voucher (a checkout code change, one per proof) are 1 voucher', () => {
+    const rows = [566, 283, 35, 9, 4, 1].map((amount, i) =>
+      tx(`r${i}`, { amount, bundleId: 'b1', merchantId: M, voucherId: 'v-one' }),
+    )
+    const [entry] = groupHistory(rows)
+    expect(entry!.kind).toBe('bundle')
+    expect(entryVoucherCount(entry!)).toBe(1)
+  })
+
+  it('a payment drawn from two different vouchers is 2 vouchers', () => {
+    const [entry] = groupHistory([
+      tx('a', { bundleId: 'b2', merchantId: M, voucherId: 'v-a' }),
+      tx('b', { bundleId: 'b2', merchantId: M, voucherId: 'v-b' }),
+    ])
+    expect(entryVoucherCount(entry!)).toBe(2)
+  })
+
+  it('rows with no voucher id are never merged into one', () => {
+    const [entry] = groupHistory([tx('a', { bundleId: 'b3' }), tx('b', { bundleId: 'b3' })])
+    expect(entryVoucherCount(entry!)).toBe(2)
   })
 })
