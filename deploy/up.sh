@@ -154,9 +154,13 @@ if [ $# -eq 0 ]; then
       '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
       imani-mint-rest-test 2>/dev/null || true)"
     if [ -n "$mint_ip" ]; then
-      echo "mint is at $mint_ip; pointing gateway-customer at it"
+      # EVERY service carrying the alias, not just gateway-customer. gateway-core
+      # does atomic-send's SPLIT against the token's own mint URL; left pinned to
+      # the mint's previous IP it fails every pay with "Connection refused" on
+      # /v1/keysets and the wallet shows "did not complete (SPLIT_ERROR)".
+      echo "mint is at $mint_ip; pointing gateway-customer, gateway-core and account-app at it"
       MINT_HOST_IP="$mint_ip" MINT_URL="${MINT_URL:-http://127.0.0.1.mint:7777}" \
-        compose up -d --force-recreate --no-deps gateway-customer
+        compose up -d --force-recreate --no-deps gateway-customer gateway-core account-app
     fi
   fi
 
