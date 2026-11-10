@@ -9,6 +9,8 @@
  * Its `relay_url` is deliberately NOT read here. See lib/relay.ts.
  */
 
+import { nip19 } from 'nostr-tools'
+
 export interface GatewayConfig {
   /** The domain handles are claimed under, e.g. `imani.local`. */
   nip05Domain: string
@@ -82,6 +84,9 @@ interface RawConfig {
   cashback_expiry_days?: unknown
   mint_url?: unknown
   token_mint_urls?: unknown
+  support_blossom_url?: unknown
+  support_npub?: unknown
+  support_blossom_ttl_seconds?: unknown
 }
 
 function str(value: unknown): string | undefined {
@@ -182,6 +187,40 @@ export function gatewayConfig(): Promise<GatewayConfig> {
 export function gatewayMintConfig(options: { fresh?: boolean } = {}): Promise<GatewayMintConfig> {
   if (options.fresh) pending = undefined
   return rawConfig().then(parseMints)
+}
+
+/**
+ * The support snapshot settings (#589): where snapshots are uploaded, the key the handoff DM is
+ * sealed to, and the blob TTL. Null unless BOTH the URL and a valid npub are served, which hides
+ * the feature (criterion 13). Parsed on their own so a config without them breaks nothing else.
+ */
+export interface SupportSnapshotConfig {
+  blossomUrl: string
+  supportPubkey: string
+  ttlSeconds: number
+}
+
+export function parseSupportSnapshot(raw: Record<string, unknown>): SupportSnapshotConfig | null {
+  const url = str(raw.support_blossom_url)
+  const npub = str(raw.support_npub)
+  if (!url || !npub || !/^https?:\/\//.test(url)) return null
+  let pubkey: string
+  try {
+    const d = nip19.decode(npub)
+    if (d.type !== 'npub') return null
+    pubkey = d.data
+  } catch {
+    return null
+  }
+  return {
+    blossomUrl: url.replace(/\/+$/, ''),
+    supportPubkey: pubkey,
+    ttlSeconds: positiveInt(raw.support_blossom_ttl_seconds) ?? 7 * 86400,
+  }
+}
+
+export function supportSnapshotConfig(): Promise<SupportSnapshotConfig | null> {
+  return rawConfig().then((r) => parseSupportSnapshot(r as Record<string, unknown>))
 }
 
 /** Exported for tests, which must not share a cache between cases. */

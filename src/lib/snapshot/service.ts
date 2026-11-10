@@ -48,14 +48,17 @@ export interface ValidatedCode {
 /** Signed POST, as nip98.signedFetch does. Injected so tests stub it. */
 export type SignedPost = (path: string, body: unknown) => Promise<Response>
 
+/** NIP-98 signed by the wallet key, so the service learns which pubkey is asking. */
+export const defaultPost: SignedPost = async (path, body) => (await import('../nip98')).signedFetch(path, 'POST', body)
+
 export async function validateSnapshotCode(typed: string, post?: SignedPost): Promise<ValidatedCode> {
   const n = normaliseSnapshotCode(typed)
   if (!n.ok) throw new SnapshotCodeError('mistyped')
   if (typeof navigator !== 'undefined' && navigator.onLine === false) throw new SnapshotCodeError('offline')
-  const send = post ?? (await import('../nip98')).signedFetch.bind(null) as unknown as SignedPost
+  const send: SignedPost = post ?? defaultPost
   let res: Response
   try {
-    res = post ? await send(VALIDATE_PATH, { code: n.canonical }) : await (send as unknown as (p: string, m: string, b: unknown) => Promise<Response>)(VALIDATE_PATH, 'POST', { code: n.canonical })
+    res = await send(VALIDATE_PATH, { code: n.canonical })
   } catch {
     throw new SnapshotCodeError('unavailable')
   }

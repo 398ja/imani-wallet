@@ -203,6 +203,9 @@ const portalEdgeAuth = (): Plugin => ({
  */
 export const proxy = {
   '/api/v1/auth': { target: 'http://localhost:28081', changeOrigin: true },
+  // #589: the support snapshot code service (imani-support-agent, published on 127.0.0.1:28091 in
+  // the test stack). NIP-98 signed by the wallet, so the Host header must stay the browser's own.
+  '/api/v1/support/snapshot-codes': { target: 'http://localhost:28091', changeOrigin: false },
   // The escrowed send saga lives on account-app, NOT customer-wallet, which
   // 404s it. This mirrors imani-apps' own nginx.conf.template, where
   // `location /api/` proxies to account-app:8081 — the vanilla send screen has
