@@ -52,6 +52,11 @@ export class FleetScheduler {
     this.timer = null
   }
 
+  /** Resolves when no beat is running (tests and opt-in wait on the first beat). */
+  idle(): Promise<void> {
+    return this.inflight ?? Promise.resolve()
+  }
+
   /** Beat now if one is due and the app is visible; otherwise make sure a timer is waiting. */
   poke(): void {
     if (!this.running || this.inflight) return

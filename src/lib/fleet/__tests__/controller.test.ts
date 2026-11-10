@@ -197,6 +197,28 @@ describe('criterion 2 (client): opting in registers once and records consent_ver
     expect(h.c.status().optedIn).toBe(false)
   })
 
+  it('opting out while a register is in flight sends nothing more after the DELETE', async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const h = harness({ 'POST /api/v1/support/fleet/clients': () => new Response(JSON.stringify({ heartbeat_seconds: 900, jitter_seconds: 120 }), { status: 201 }) })
+    const slow = h.deps.fetch
+    h.deps.fetch = (async (u: RequestInfo | URL, i?: RequestInit) => {
+      if (String(u).endsWith('/fleet/clients') && i?.method === 'POST') await gate
+      return slow(u, i)
+    }) as typeof fetch
+    const c = new (await import('../controller')).FleetController(h.deps)
+    const opting = c.optIn()
+    await vi.advanceTimersByTimeAsync(0)
+    const out = c.optOut()
+    release()
+    await opting.catch(() => undefined)
+    await out
+    await vi.advanceTimersByTimeAsync(3_600_000)
+    const methods = h.calls.map((x) => `${x.method} ${x.url.split('/').pop()}`)
+    expect(methods[methods.length - 1]).toBe('DELETE self')
+    expect(methods.filter((m) => m.endsWith('heartbeat')).length).toBe(0)
+  })
+
   it('lock stops heartbeats', async () => {
     const h = harness()
     await h.c.optIn()
@@ -242,7 +264,7 @@ describe('requests and history (criteria 6, 12)', () => {
       { round: 'F202611072300', at: Date.parse('2026-11-07T23:10:00Z'), state: 'sent', counted: true },
       { round: 'F202611062300', at: Date.parse('2026-11-06T23:10:00Z'), state: 'not_sent', counted: false },
     ] })
-    expect(fleetHistoryLines(readFleet(WALLET), 'en-GB')).toEqual([
+    expect(fleetHistoryLines(readFleet(WALLET), 'en-GB', 'UTC')).toEqual([
       'Health check on 9 Nov 2026: deleted from server',
       'Health check on 8 Nov 2026: received',
       'Health check on 7 Nov 2026: sent',
