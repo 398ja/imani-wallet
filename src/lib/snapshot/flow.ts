@@ -45,9 +45,22 @@ export class SnapshotFlow {
     this.now = deps.now ?? Date.now
   }
 
-  async validate(typed: string): Promise<ValidatedCode> {
-    this.code = await validateSnapshotCode(typed, this.deps.post)
-    return this.code
+  private inflight = new Map<string, Promise<unknown>>()
+
+  /** One request per action at a time: a double tap must not spend two rate-limit attempts or upload twice. */
+  private once<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const running = this.inflight.get(key) as Promise<T> | undefined
+    if (running) return running
+    const p = fn().finally(() => this.inflight.delete(key))
+    this.inflight.set(key, p)
+    return p
+  }
+
+  validate(typed: string): Promise<ValidatedCode> {
+    return this.once('validate', async () => {
+      this.code = await validateSnapshotCode(typed, this.deps.post)
+      return this.code
+    })
   }
 
   /** Build, verify our own output, encrypt. Requires a validated code. */
@@ -94,7 +107,12 @@ export class SnapshotFlow {
   }
 
   /** "Upload now": the only place anything leaves the device. */
-  async upload(): Promise<HandoffBody> {
+  upload(): Promise<HandoffBody> {
+    return this.once('upload', () => this.uploadOnce())
+  }
+
+  private async uploadOnce(): Promise<HandoffBody> {
+    if (this.dm) return this.dm
     if (!this.code || !this.sealed || !this.built || !this.fileName) throw new Error('Nothing to upload.')
     if (this.code.grantExpiresAt * 1000 < this.now()) throw new Error('The upload permission expired. Enter the code again.')
     const { url } = await uploadSnapshot(this.deps.config.blossomUrl, this.sealed, this.code.grant, this.deps.signer, this.deps.fetch, this.now())

@@ -71,6 +71,7 @@ export function SupportSnapshotPage({ pubkey, stall }: { pubkey: string; stall: 
 
   const typed = normaliseSnapshotCode(code)
   const run = async (fn: () => Promise<void>) => {
+    if (busy) return
     setError(null)
     setBusy(true)
     try {

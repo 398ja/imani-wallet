@@ -90,6 +90,18 @@ describe('the flow, end to end without a network', () => {
     expect(readRecords(SELF)[0].state).toBe('shared')
   })
 
+  it('a double tap validates once and uploads once (found in the local e2e: two validations count against the rate limit)', async () => {
+    const h = harness()
+    const [a, b] = await Promise.all([h.flow.validate(CODE), h.flow.validate(CODE)])
+    expect(a).toBe(b)
+    expect(h.calls.filter((c) => c.endsWith('/validate'))).toHaveLength(1)
+    await h.flow.prepare(false)
+    const [d1, d2] = await Promise.all([h.flow.upload(), h.flow.upload()])
+    expect(d1).toBe(d2)
+    expect(h.calls.filter((c) => c.startsWith('PUT '))).toHaveLength(1)
+    expect(h.calls.filter((c) => c.startsWith('DM '))).toHaveLength(1)
+  })
+
   it('criteria 9, 17: nothing is built or sent without a validated code', async () => {
     const { flow, calls } = harness()
     await expect(flow.prepare(false)).rejects.toThrow(/validated code/)
