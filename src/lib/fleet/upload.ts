@@ -98,6 +98,8 @@ export function runFleetUpload(env: UploadEnv): Promise<UploadOutcome> {
 }
 
 function finish(env: UploadEnv, req: HeldRequest, state: FleetUploadState, counted: boolean): void {
+  // After an opt-out the local state is gone and must stay gone.
+  if (!readFleet(env.walletPubkey, env.storage).optIn) return
   updateFleet(env.walletPubkey, (s) => recordUpload({ ...s, held: null }, { round: req.round, at: env.now(), state, counted }), env.storage)
 }
 
@@ -121,7 +123,13 @@ async function attempt(env: UploadEnv): Promise<UploadOutcome> {
   if (d === 'hold') return 'held'
 
   const doFetch = omitCredentials(env.fetch)
-  const post = fleetPost(env.signer, doFetch)
+  // Opting out mid-upload stops it before the next request (the opt-in record is gone).
+  const live = () => readFleet(env.walletPubkey, env.storage).optIn?.install_nonce === st.optIn!.install_nonce
+  const guarded = ((input: RequestInfo | URL, init?: RequestInit) => {
+    if (!live()) return Promise.reject(new Error('opted out'))
+    return doFetch(input, init)
+  }) as typeof fetch
+  const post = fleetPost(env.signer, guarded)
   let uploaded = false
   try {
     const code = await validateSnapshotCode(req.code, post)
@@ -149,7 +157,7 @@ async function attempt(env: UploadEnv): Promise<UploadOutcome> {
     const sealed = await encryptSnapshot(built.zip)
     if (sealed.ciphertext.length > maxBytes) throw new Error('too large')
     if (code.grantExpiresAt * 1000 < env.now()) throw new Error('grant expired')
-    const { url } = await uploadSnapshot(env.support.blossomUrl, sealed, code.grant, env.signer, doFetch, env.now())
+    const { url } = await uploadSnapshot(env.support.blossomUrl, sealed, code.grant, env.signer, guarded, env.now())
     uploaded = true
     const body = await handoffBody({
       ticket: req.round,
@@ -162,6 +170,7 @@ async function attempt(env: UploadEnv): Promise<UploadOutcome> {
       expiresAt: built.manifest.expires_at,
       now: env.now(),
     })
+    if (!live()) throw new Error('opted out')
     const sent = await env.publish(env.signer.wrap(env.support.supportPubkey, JSON.stringify(body)))
     if (!sent) throw new Error('dm')
     await post(COMPLETE_PATH, { upload_grant: code.grant, sha256: sealed.sha256 }).catch(() => undefined)

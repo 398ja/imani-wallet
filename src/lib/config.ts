@@ -87,6 +87,8 @@ interface RawConfig {
   support_blossom_url?: unknown
   support_npub?: unknown
   support_blossom_ttl_seconds?: unknown
+  fleet_enabled?: unknown
+  fleet_heartbeat_seconds?: unknown
 }
 
 function str(value: unknown): string | undefined {
@@ -221,6 +223,28 @@ export function parseSupportSnapshot(raw: Record<string, unknown>): SupportSnaps
 
 export function supportSnapshotConfig(): Promise<SupportSnapshotConfig | null> {
   return rawConfig().then((r) => parseSupportSnapshot(r as Record<string, unknown>))
+}
+
+/**
+ * Fleet snapshots (#591 contract C6): on only when the gateway serves `fleet_enabled: true`
+ * (exactly the boolean) AND the support snapshot settings are valid. Anything else, including an
+ * absent field, is off. `fleet_heartbeat_seconds` is informational: the support service's own
+ * answer to register and heartbeat sets the interval, and the client clamps both.
+ */
+export interface FleetConfig {
+  enabled: boolean
+  support: SupportSnapshotConfig | null
+  heartbeatSeconds?: number
+}
+
+export function parseFleetConfig(raw: Record<string, unknown>): FleetConfig {
+  const support = parseSupportSnapshot(raw)
+  const enabled = raw.fleet_enabled === true && support !== null
+  return enabled ? { enabled, support, heartbeatSeconds: positiveInt(raw.fleet_heartbeat_seconds) } : { enabled: false, support: null }
+}
+
+export function fleetConfig(): Promise<FleetConfig> {
+  return rawConfig().then((r) => parseFleetConfig(r as Record<string, unknown>), () => ({ enabled: false, support: null }))
 }
 
 /** Exported for tests, which must not share a cache between cases. */
