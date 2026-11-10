@@ -187,6 +187,16 @@ describe('criterion 21: AI-safe data layer', () => {
     expect(JSON.stringify(env)).not.toContain('Pixel')
   })
 
+  it('keeps the app version when it carries a build suffix, and still refuses anything else', async () => {
+    // Found in the e2e: appVersion() is "0.41.0 (dev)", which read as "other" and lost the version.
+    for (const [raw, want] of [['0.41.0 (dev)', '0.41.0 (dev)'], ['0.41.0-rc.2', '0.41.0-rc.2'], ['0.41.0', '0.41.0'], ['0.41.0 (Eric)', 'other'], ['x', 'other']]) {
+      const s = seededSources()
+      s.environment.appVersion = raw
+      const { zip } = await buildSnapshot(s, baseOptions())
+      expect(JSON.parse(archiveText(zip).files['data/environment.json']).app_version).toBe(want)
+    }
+  })
+
   it('an infrastructure URL whose host is or embeds an IP address is reduced, not a reason to refuse', async () => {
     // Found in the local e2e: the test stack's mint is http://127.0.0.1.mint:7777, and a self-hosted
     // gateway may be a LAN address. Neither may abort the snapshot or reach data/ as an address.
