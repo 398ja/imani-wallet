@@ -101,6 +101,8 @@ import { FinishProfilePrompt } from './components/FinishProfilePrompt'
 import { claimProfileWith } from './lib/profileGate'
 import { SettingsPage } from './pages/SettingsPage'
 import { SupportSnapshotPage } from './pages/SupportSnapshotPage'
+import { FleetSnapshotPage } from './pages/FleetSnapshotPage'
+import { fleetController } from './lib/fleet/app'
 import { DeleteAccountPage } from './pages/DeleteAccountPage'
 import { AboutPage } from './pages/AboutPage'
 import { LedgerPage } from './pages/LedgerPage'
@@ -479,6 +481,17 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
   // #265: "voucher about to expire" bell entries, filed while the wallet is open. Local only.
   useExpiryReminders(pubkey, ready)
 
+  // #591: fleet snapshots. AuthedApp is mounted only while the key is unlocked, so this is the
+  // unlock / lock pair: the loop runs only while opted in, unlocked and visible. Inert (no request
+  // of any kind) unless the gateway serves fleet_enabled and this wallet opted in.
+  const isStall = merchant !== null
+  useEffect(() => {
+    if (!ready) return
+    const c = fleetController(pubkey, isStall)
+    void c.unlock().catch(() => undefined)
+    return () => c.lock()
+  }, [ready, pubkey, isStall])
+
   // Reconcile the local copy with the relay, as bottin does on every login.
   // Never throws — an unreachable relay leaves the stored profile in place.
   useEffect(() => {
@@ -757,6 +770,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/settings/about" element={<AboutPage />} />
         {/* #589: only reachable with a support snapshot code; the page hides itself when unconfigured. */}
         <Route path="/settings/help/snapshot" element={<SupportSnapshotPage pubkey={pubkey} stall={merchant !== null} />} />
+        <Route path="/settings/help/improve" element={<FleetSnapshotPage pubkey={pubkey} stall={merchant !== null} />} />
         <Route
           path="/settings/merchant"
           element={

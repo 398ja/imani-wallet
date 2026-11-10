@@ -74,7 +74,7 @@ export interface FleetSigner extends SnapshotSigner {
 
 export function fleetSigner(lender: KeyLender, installNonce: Uint8Array | string): FleetSigner {
   const nonceHex = typeof installNonce === 'string' ? installNonce : bytesToHex(installNonce)
-  const use = <T,>(f: (fleetSk: Uint8Array) => T): T =>
+  const borrow = <T,>(f: (fleetSk: Uint8Array) => T): T =>
     lender.withPrivkey((walletSk) => {
       const nonce = hexToBytes(nonceHex)
       const fk = deriveFleetKey(walletSk, nonce)
@@ -85,10 +85,10 @@ export function fleetSigner(lender: KeyLender, installNonce: Uint8Array | string
         fk.fill(0)
       }
     })
-  const pubkey = use((fk) => getPublicKey(fk))
+  const pubkey = borrow((fk) => getPublicKey(fk))
   return {
     pubkey,
-    signEvent: async (t: UnsignedEvent) => use((fk) => finalizeEvent({ ...t, tags: t.tags.map((x) => [...x]) }, fk)) as SignedNostrEvent,
-    wrap: (recipient, content) => use((fk) => wrapMessage(fk, recipient, content)),
+    signEvent: async (t: UnsignedEvent) => borrow((fk) => finalizeEvent({ ...t, tags: t.tags.map((x) => [...x]) }, fk)) as SignedNostrEvent,
+    wrap: (recipient, content) => borrow((fk) => wrapMessage(fk, recipient, content)),
   }
 }
