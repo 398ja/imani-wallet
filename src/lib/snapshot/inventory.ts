@@ -11,6 +11,7 @@
  * fails when one has no rule (criterion 2).
  */
 import type { PseudonymType } from './ids'
+import { closed } from './enums'
 
 /** What a reducer may use: pseudonyms, the salted hash, and the free-text scrubber. */
 export interface ReduceContext {
@@ -36,14 +37,9 @@ type Rec = Record<string, unknown>
 const isRec = (v: unknown): v is Rec => !!v && typeof v === 'object' && !Array.isArray(v)
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : isRec(v) ? Object.values(v) : [])
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
-/**
- * An enum-shaped value written by code (a state, role, kind): lowercase snake or kebab, one token.
- * Anything with a space or a capital is treated as something a person typed and dropped, because a
- * name cannot be told from a state by pattern, and this text can reach a model.
- */
-const str = (v: unknown, max = 32) => (typeof v === 'string' && v.length <= max && /^[a-z][a-z0-9_-]*$/.test(v) ? v : undefined)
-/** A currency or unit code: ISO-4217-shaped or one of the wallet's units. */
-const unit = (v: unknown) => (typeof v === 'string' && /^([A-Za-z]{3}|sat|msat|usd|eur)$/.test(v) ? v.toLowerCase() : undefined)
+/** Closed-set values only (enums.ts): anything the code does not write becomes 'other'. */
+const st = (r: Rec) => closed('recordState', r.state ?? r.status)
+const unit = (v: unknown) => closed('unit', v)
 const bool = (v: unknown) => (typeof v === 'boolean' ? v : undefined)
 const time = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' && /^\d{4}-\d\d-\d\d/.test(v) ? v : undefined)
 
@@ -54,7 +50,7 @@ function moneyList(v: unknown) {
   return {
     count: rows.length,
     amounts: rows.map((r) => num(r.amount) ?? 0),
-    states: rows.map((r) => str(r.state) ?? str(r.status) ?? null),
+    states: rows.map((r) => st(r) ?? null),
     oldest: times.length ? Math.min(...times) : null,
     newest: times.length ? Math.max(...times) : null,
   }
@@ -76,7 +72,7 @@ function pendingSends(v: unknown, ctx: ReduceContext) {
     recipient: ctx.id('customer', r.recipientPubkey),
     request: ctx.id('request', r.paymentRequestId),
     voucher: ctx.id('voucher', r.voucherId),
-    state: str(r.state) ?? str(r.status),
+    state: closed('sendState', r.state ?? r.status),
     attempts: num(r.attempts),
     created_at: time(r.createdAt),
   }))
@@ -85,8 +81,8 @@ function pendingSends(v: unknown, ctx: ReduceContext) {
 function terminals(v: unknown, ctx: ReduceContext) {
   return arr(v).filter(isRec).map((r) => ({
     terminal: ctx.id('terminal', r.terminalPubkey),
-    role: str(r.role),
-    state: str(r.state) ?? (r.revokedAt ? 'revoked' : r.waitingUntil ? 'waiting' : 'enrolled'),
+    role: closed('terminalRole', r.role),
+    state: closed('terminalState', r.state ?? (r.revokedAt ? 'revoked' : r.waitingUntil ? 'waiting' : 'enrolled')),
     enrolled_at: time(r.enrolledAt),
     last_used_at: time(r.lastUsedAt),
     revoked_at: time(r.revokedAt),
@@ -100,7 +96,7 @@ function paymentRequests(v: unknown, ctx: ReduceContext) {
     request: ctx.id('request', r.id),
     amount: num(r.amount),
     unit: unit(r.unit),
-    state: str(r.state) ?? str(r.status),
+    state: st(r),
     created_at: time(r.createdAt),
     payment: ctx.id('payment', r.stripe ?? r.paymentIntentId),
   }))
@@ -108,7 +104,7 @@ function paymentRequests(v: unknown, ctx: ReduceContext) {
 
 function notifications(v: unknown, ctx: ReduceContext) {
   return arr(v).filter(isRec).map((r) => ({
-    type: str(r.type),
+    type: closed('notificationType', r.type),
     at: time(r.at) ?? time(r.timestamp),
     read: bool(r.read),
     event: ctx.id('event', r.eventId),
@@ -128,7 +124,7 @@ function profile(v: unknown) {
     has_nip05: typeof r.nip05 === 'string' && r.nip05 !== '',
     has_picture: typeof r.picture === 'string' && r.picture !== '',
     has_about: typeof r.about === 'string' && r.about !== '',
-    backups: arr(r.backups).filter(isRec).map((b) => ({ kind: str(b.kind), at: time(b.at) })),
+    backups: arr(r.backups).filter(isRec).map((b) => ({ kind: closed('backupKind', b.kind), at: time(b.at) })),
   }
 }
 
@@ -143,12 +139,22 @@ function merchantFlags(v: unknown) {
   }
 }
 
-/** Settings: scalar flags only, any string that is not a short enum-like token is dropped. */
+/**
+ * Setting names the wallet writes. A key outside this list is counted, never named: a key can be
+ * typed text too (a review probe used one), and data/ holds only closed-set words.
+ */
+export const SETTING_KEYS = new Set(['haptics', 'sound', 'theme_dark', 'compact', 'sort', 'reduced_motion', 'notifications',
+  'expiry_reminders', 'use_profile_service', 'consent', 'nap_consent', 'show_sats'])
+
+/** Settings: booleans and numbers under known names only; strings are dropped, unknown names counted. */
 function flags(v: unknown) {
   if (!isRec(v)) return typeof v === 'boolean' || typeof v === 'number' ? v : null
   const out: Rec = {}
   for (const [k, x] of Object.entries(v)) {
-    if (!/^[a-zA-Z_]{1,40}$/.test(k)) continue
+    if (!SETTING_KEYS.has(k)) {
+      out.other_settings = (typeof out.other_settings === 'number' ? out.other_settings : 0) + 1
+      continue
+    }
     // Booleans and numbers only: a string setting may be something the person typed.
     if (typeof x === 'boolean' || typeof x === 'number') out[k] = x
   }
@@ -156,14 +162,14 @@ function flags(v: unknown) {
 }
 
 function stateOnly(v: unknown) {
-  if (isRec(v)) return { state: str(v.state) ?? str(v.status), at: time(v.at) ?? time(v.createdAt), expires_at: time(v.expiresAt) ?? time(v.expires_at) }
+  if (isRec(v)) return { state: st(v), at: time(v.at) ?? time(v.createdAt), expires_at: time(v.expiresAt) ?? time(v.expires_at) }
   return { present: v !== null && v !== undefined }
 }
 
 function codes(v: unknown, ctx: ReduceContext) {
   return arr(v).map((r) =>
     isRec(r)
-      ? { code: ctx.hash(r.code), amount: num(r.amount), state: str(r.state) ?? str(r.status), created_at: time(r.createdAt) }
+      ? { code: ctx.hash(r.code), amount: num(r.amount), state: st(r), created_at: time(r.createdAt) }
       : { code: ctx.hash(r) },
   )
 }
@@ -172,7 +178,7 @@ function secretsRecords(v: unknown, ctx: ReduceContext) {
   return arr(v).filter(isRec).map((r) => ({
     id: ctx.hash(r.id ?? r.ref),
     amount: num(r.amount),
-    state: str(r.state) ?? str(r.status),
+    state: st(r),
     created_at: time(r.createdAt),
     expires_at: time(r.expiresAt),
   }))

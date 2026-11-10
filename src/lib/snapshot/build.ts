@@ -5,8 +5,9 @@ import { nip19 } from 'nostr-tools'
 import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 
 import { Pseudonyms, saltedHash, type PseudonymType } from './ids'
-import { reportableKeyName, ruleFor, type ReduceContext } from './inventory'
+import { IDB_STORES, RULES, SETTING_KEYS, reportableKeyName, ruleFor, type ReduceContext } from './inventory'
 import { findPattern, PII_SCRUBBER_VERSION, scrub } from './scrub'
+import { closed, ENUMS, knownFrame, knownTemplate } from './enums'
 import type { BuildOptions, BuiltSnapshot, EnvironmentFacts, ErrorEntry, Manifest, SnapshotSources } from './types'
 
 /** Owner decision: 20 MB of ciphertext. AES-GCM adds 16 bytes, so the zip cap leaves room for the tag. */
@@ -67,10 +68,15 @@ function infraUrl(u: string | null | undefined): string | null {
   }
 }
 
+/** A deploy ref the build stamps: dev, a version tag, or a git describe. Anything else is 'other'. */
+function buildRef(v: string): string {
+  return /^(dev|v?\d+\.\d+\.\d+[\w.-]*|imani-deploy-v[\w.-]+|[0-9a-f]{7,12})$/.test(v) ? v : 'other'
+}
+
 function environment(env: EnvironmentFacts) {
   return {
-    app_version: env.appVersion,
-    build_ref: env.buildRef,
+    app_version: /^\d+\.\d+\.\d+$/.test(env.appVersion) ? env.appVersion : 'other',
+    build_ref: buildRef(env.buildRef),
     gateway_url: infraUrl(env.gatewayUrl),
     mint_urls: env.mintUrls.map(infraUrl).filter(Boolean),
     relay_urls: env.relayUrls.map(infraUrl).filter(Boolean),
@@ -145,9 +151,6 @@ function counterpartyType(v: unknown, stalls: Set<string>, self: string): Pseudo
 
 const timeStr = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d\d-\d\dT[\d:.]+Z?$/.test(v) ? v : undefined)
 const numOr = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
-/** Code-written enum values only (see inventory.ts `str`); a typed value is dropped, never scrubbed. */
-const enumStr = (v: unknown) => (typeof v === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(v) ? v : undefined)
-const unitStr = (v: unknown) => (typeof v === 'string' && /^([A-Za-z]{3}|sat|msat)$/.test(v) ? v.toLowerCase() : undefined)
 
 function voucherRow(v: VoucherRow, ctx: ReduceContext, shape: SnapshotSources['proofShapes']) {
   const r = v as unknown as Rec
@@ -163,11 +166,11 @@ function voucherRow(v: VoucherRow, ctx: ReduceContext, shape: SnapshotSources['p
     token_amount: numOr(v.token_amount),
     proof_sum: s ? s.amounts.reduce((a, b) => a + b, 0) : numOr(r.proof_sum),
     face_value: numOr(v.face_value),
-    face_unit: unitStr(v.face_unit),
+    face_unit: closed('unit', v.face_unit),
     face_decimals: numOr(v.face_decimals),
-    backing_strategy: enumStr(v.backing_strategy),
-    status: enumStr(v.status),
-    source_transport: enumStr(r.source_transport),
+    backing_strategy: closed('backingStrategy', v.backing_strategy),
+    status: closed('voucherStatus', v.status),
+    source_transport: closed('sourceTransport', r.source_transport),
     expires_at: numOr(v.expires_at) ?? timeStr(v.expires_at),
     created_at: timeStr(v.created_at),
     updated_at: timeStr(v.updated_at),
@@ -186,13 +189,13 @@ function transactionRow(t: TransactionRow, ctx: ReduceContext, stalls: Set<strin
   const r = t as unknown as Rec
   return {
     tx: ctx.id('tx', t.id),
-    type: enumStr(t.type),
-    direction: t.direction,
+    type: closed('txType', t.type),
+    direction: closed('direction', t.direction),
     timestamp: t.timestamp,
     amount: numOr(t.amount),
     face_value: numOr(t.face_value),
-    face_unit: unitStr(t.face_unit),
-    delivery_state: t.delivery_state,
+    face_unit: closed('unit', t.face_unit),
+    delivery_state: closed('deliveryState', t.delivery_state),
     delivered_at: numOr(t.delivered_at),
     bundle_most_recent_part_at: timeStr(t.bundle_most_recent_part_at),
     voucher: ctx.id('voucher', t.voucher_id),
@@ -205,7 +208,7 @@ function transactionRow(t: TransactionRow, ctx: ReduceContext, stalls: Set<strin
       voucher: ctx.id('voucher', p.voucherId),
       amount: p.amount,
       timestamp: p.timestamp,
-      redemption_status: enumStr(p.redemptionStatus),
+      redemption_status: closed('redemptionStatus', p.redemptionStatus),
     })),
     memo_summary: memoSummary(t.memo, ctx),
   }
@@ -227,13 +230,15 @@ function memoSummary(memo: unknown, ctx: ReduceContext) {
   }
 }
 
-function errorRow(e: ErrorEntry, known: Set<string>) {
+function errorRow(e: ErrorEntry) {
+  // Only what the code itself wrote: a closed set of class names and codes, a registered template,
+  // frames naming a module of this build. A message carrying something a person typed is '<message>'.
   return {
-    at: e.at,
-    name: /^[A-Za-z]{1,40}$/.test(e.name) ? e.name : 'Error',
-    code: enumStr(e.code),
-    template: scrub(String(e.template), known).slice(0, 300),
-    frames: e.frames.filter((f) => /^[\w./-]{1,80}:\d{1,6}(:\d{1,6})?$/.test(f)).slice(0, 12),
+    at: typeof e.at === 'number' ? e.at : undefined,
+    name: closed('errorName', e.name) ?? 'Error',
+    code: closed('errorCode', e.code),
+    template: knownTemplate(e.template),
+    frames: (Array.isArray(e.frames) ? e.frames : []).map(knownFrame).filter((f): f is string => !!f).slice(0, 12),
   }
 }
 
@@ -331,7 +336,7 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
       if (m !== undefined && p) operatorMemos[p] = m
     })
   }
-  const errors = sources.errors.map((e) => errorRow(e, known))
+  const errors = sources.errors.map((e) => errorRow(e))
 
   // derived.json: the balance check and money in flight (#589 section 4).
   const balances: Record<string, { count: number; amount: number }> = {}
@@ -372,7 +377,7 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
     'data/environment.json': json(environment(sources.environment)),
     'data/vouchers.json': json({ rows: vouchers }),
     'data/transactions.json': json({ rows: transactions }),
-    'data/storage.json': json({ keys: storage, unknown_key_count: unknownKeys.length, idb_stores: sources.idbStores.filter((s) => /^[a-z_]{1,40}$/.test(s)) }),
+    'data/storage.json': json({ keys: storage, unknown_key_count: unknownKeys.length, idb_stores: sources.idbStores.filter((s) => IDB_STORES[s] !== undefined) }),
     'data/derived.json': json(derived),
     'data/errors.json': json({ rows: errors }),
   }
@@ -427,11 +432,70 @@ export function finalScan(files: Record<string, string>, known: Iterable<string>
       throw new SnapshotLeakError(file, 'unparseable')
     }
     for (const s of strings(doc)) {
+      // A salted hash or pseudonym is ours by construction; a digit run inside one is not a phone number.
+      if (HASH_RE.test(s) || PSEUDONYM_RE.test(s)) continue
       const kind = findPattern(s)
       if (kind) throw new SnapshotLeakError(file, kind)
+      if (!classified(s)) throw new SnapshotLeakError(file, 'unclassified')
     }
   }
 }
+
+/** Field names the builder writes, and every closed-set value: the only bare words data/ may hold. */
+const VOCABULARY = new Set<string>([
+  ...Object.values(ENUMS).flatMap((v) => [...v]),
+  ...Object.keys(IDB_STORES),
+  'other', 'self', 'Error', '<message>',
+])
+const KEY = /^[a-z][a-z0-9_]{0,40}$/
+const PSEUDONYM_RE = /^(self|[a-z_]+#\d{1,6})$/
+const HASH_RE = /^h:[0-9a-f]{16}$/
+const DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{3})?Z)?$/
+const VERSION_RE = /^(dev|v?\d+\.\d+\.\d+[\w.-]*|imani-deploy-v[\w.-]+|[0-9a-f]{7,12})$/
+const BROWSER_RE = /^(Chrome|Firefox|Edge|Safari|Other)( \d{1,4})? \/ (Android|iOS|Windows|macOS|Linux|Other)$/
+const LANG_RE = /^[a-z]{0,3}$/
+const FRAME_RE = /^(src|packages|assets)\/[\w./-]{1,120}:\d{1,6}(:\d{1,6})?$/
+const STORAGE_KEY_RE = /^(imani|imani-wallet|imani_)[\w:<>.#-]{0,90}$/
+
+/**
+ * Whether a string in data/ is one of the things the builder can legitimately write (review: closed
+ * sets, not shapes). A string nothing here recognises aborts generation as 'unclassified', so a field
+ * that starts carrying typed text fails closed instead of leaking.
+ */
+function classified(s: string): boolean {
+  if (VOCABULARY.has(s) || PSEUDONYM_RE.test(s) || HASH_RE.test(s) || DATE_RE.test(s)) return true
+  if (knownTemplate(s) === s) return true
+  // Compound keys the builder makes: "<status>:<unit>" and "<YYYY-MM-DD>:<unit>", both parts classified.
+  const parts = s.split(':')
+  if (parts.length === 2 && (VOCABULARY.has(parts[0]) || /^\d{4}-\d{2}-\d{2}$/.test(parts[0])) && VOCABULARY.has(parts[1])) return true
+  if (VERSION_RE.test(s) || BROWSER_RE.test(s) || LANG_RE.test(s) || FRAME_RE.test(s)) return true
+  if (/^[0-9a-f]{2,20}$/i.test(s)) return true // keyset ids: public mint data
+  if (s.startsWith('http') || s.startsWith('ws')) return isInfraUrl(s)
+  if (STORAGE_KEY_RE.test(s) && RULES.some((r) => s.startsWith(r.prefix.replace(/:$/, '')))) return true
+  return KEY.test(s) && FIELD_NAMES.has(s)
+}
+
+function isInfraUrl(s: string): boolean {
+  try {
+    const u = new URL(s)
+    return /^(https?|wss?):$/.test(u.protocol) && u.search === '' && u.hash === '' && u.username === ''
+  } catch {
+    return false
+  }
+}
+
+/** Object keys the builder emits. Collected from a dry build of the seeded fixture would be circular, so listed. */
+const FIELD_NAMES = new Set<string>(('rows keys unknown_key_count idb_stores balances proof_sum_mismatches money_in_flight ' +
+  'pending_sends cashback cashback_stash cashlink_claims cashlink_moving checkout_codes stall terminals takings ' +
+  'payment_requests count amount amounts states oldest newest token voucher template bundle purchase issuer ' +
+  'token_amount proof_sum face_value face_unit face_decimals backing_strategy status source_transport expires_at ' +
+  'created_at updated_at swap_completed_at materialized_at received_via keyset_ids swap_proofs proof_count ' +
+  'proof_amounts has_dleq tx type direction timestamp delivery_state delivered_at bundle_most_recent_part_at send ' +
+  'request payment counterparty bundle_parts redemption_status memo_summary length words has_digits has_url ' +
+  'has_email at name code template frames app_version build_ref gateway_url mint_urls relay_urls blossom_url browser ' +
+  'standalone language storage_usage_mb storage_quota_gb recipient unit decimals state attempts terminal role ' +
+  'enrolled_at last_used_at revoked_at shop has_credential read event has_name has_nip05 has_picture has_about ' +
+  'backups kind open accepts_cards has_shop categories currency present events id other_settings ' + [...SETTING_KEYS].join(' ')).split(' '))
 
 const README = `Imani support snapshot.
 
@@ -475,7 +539,7 @@ export async function buildSnapshot(sources: SnapshotSources, opts: BuildOptions
       format: 'imani-support-snapshot',
       schema_version: 1,
       app_version: sources.environment.appVersion,
-      build_ref: sources.environment.buildRef,
+      build_ref: buildRef(sources.environment.buildRef),
       created_at: createdAt,
       expires_at: Math.floor(now / 1000) + opts.ttlSeconds,
       wallet_pubkey: opts.signer.pubkey,
