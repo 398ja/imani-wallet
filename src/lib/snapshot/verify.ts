@@ -55,5 +55,18 @@ export function verifyArchive(zip: Uint8Array): VerifyResult {
     if (manifest.files[p] !== bytesToHex(sha256(files[p]))) return { ok: false, reason: 'file_hash' }
   }
   for (const p of Object.keys(manifest.files)) if (!files[p]) return { ok: false, reason: 'missing_file' }
+  // A fleet snapshot (#591 C5): its round is its ticket, and it carries no memos and no K values.
+  if (manifest.reason !== undefined) {
+    if (manifest.reason !== 'fleet' || typeof manifest.round !== 'string' || manifest.round !== manifest.ticket_id) return { ok: false, reason: 'fleet_round' }
+    if (files['envelope/operator_only/memos.json'] || manifest.redaction?.memos_included !== false) return { ok: false, reason: 'fleet_memos' }
+    let corr: unknown
+    try {
+      corr = JSON.parse(strFromU8(files['envelope/correlation.json'] ?? new Uint8Array()))
+    } catch {
+      return { ok: false, reason: 'fleet_correlation' }
+    }
+    const entries = (corr as { entries?: unknown } | null)?.entries
+    if (!entries || typeof entries !== 'object' || Object.keys(entries).length > 0) return { ok: false, reason: 'fleet_correlation' }
+  } else if (manifest.round !== undefined) return { ok: false, reason: 'fleet_round' }
   return { ok: true, manifest }
 }
