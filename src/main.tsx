@@ -15,6 +15,8 @@ import { NapSignerPage } from './pages/NapSignerPage'
 import { initNative, hideSplash } from './lib/native'
 import { loadTrustedMints } from './lib/trustedMint'
 import { installStaleBuildReload } from './lib/staleBuild'
+import { installErrorRing } from './lib/snapshot/errorRing'
+import { installConsoleRing } from './lib/snapshot/consoleRing'
 import './index.css'
 
 const queryClient = new QueryClient()
@@ -36,6 +38,13 @@ installStaleBuildReload({
 
 // Android back button, status bar. No-op in a browser.
 initNative()
+
+// #589 phase 1b: recent errors, kept only as redacted templates, for a support snapshot.
+// Console capture too (owner decision 2026-11-10: on by default), reduced on the way in.
+if (!SIGNER_PAGE) {
+  installErrorRing()
+  installConsoleRing()
+}
 
 // Ask the gateway which mint is ours before anything can receive a coupon (#133).
 // Started here so it is usually done by the time login finishes; `startDmPoll`

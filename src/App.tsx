@@ -100,6 +100,7 @@ import { ProfilePage } from './pages/ProfilePage'
 import { FinishProfilePrompt } from './components/FinishProfilePrompt'
 import { claimProfileWith } from './lib/profileGate'
 import { SettingsPage } from './pages/SettingsPage'
+import { SupportSnapshotPage } from './pages/SupportSnapshotPage'
 import { DeleteAccountPage } from './pages/DeleteAccountPage'
 import { AboutPage } from './pages/AboutPage'
 import { LedgerPage } from './pages/LedgerPage'
@@ -754,6 +755,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/settings" element={<SettingsPage merchant={merchant !== null} />} />
         {/* Every role: what is running, the legal pages, support (no predicate). */}
         <Route path="/settings/about" element={<AboutPage />} />
+        {/* #589: only reachable with a support snapshot code; the page hides itself when unconfigured. */}
+        <Route path="/settings/help/snapshot" element={<SupportSnapshotPage pubkey={pubkey} stall={merchant !== null} />} />
         <Route
           path="/settings/merchant"
           element={
