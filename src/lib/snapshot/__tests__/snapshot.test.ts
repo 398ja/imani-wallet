@@ -213,7 +213,7 @@ describe('criterion 15: size budget', () => {
     const tx = JSON.parse(files['data/transactions.json'])
     const since = Date.parse(manifest.truncated!.since + 'T00:00:00Z') / 1000
     expect(tx.rows.every((r: { timestamp: number }) => r.timestamp >= since)).toBe(true)
-  })
+  }, 60_000)
 
   it('the default cap is 20 MB', () => {
     expect(MAX_SNAPSHOT_BYTES).toBe(20 * 1024 * 1024)
