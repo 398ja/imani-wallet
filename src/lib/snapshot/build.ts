@@ -5,7 +5,7 @@ import { nip19 } from 'nostr-tools'
 import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 
 import { Pseudonyms, saltedHash, type PseudonymType } from './ids'
-import { IDB_STORES, RULES, SETTING_KEYS, reportableKeyName, ruleFor, type ReduceContext } from './inventory'
+import { IDB_STORES, RULES, SETTING_KEYS, isInventoryKeyName, reportableKeyName, ruleFor, unknownKeyFamily, type InventoryRule, type ReduceContext } from './inventory'
 import { findPattern, PII_SCRUBBER_VERSION, scrub } from './scrub'
 import { closed, ENUMS, ERROR_TEMPLATES, knownFrame, knownTemplate } from './enums'
 import type { BuildOptions, BuiltSnapshot, EnvironmentFacts, ErrorEntry, Manifest, SnapshotSources } from './types'
@@ -280,11 +280,11 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
 
   // Storage: which keys, by rule, before ids are collected.
   const unknownKeys: Array<{ key: string; bytes: number }> = []
-  const kept: Array<{ name: string; value: unknown; rule: NonNullable<ReturnType<typeof ruleFor>> }> = []
+  const kept: Array<{ key: string; value: unknown; rule: InventoryRule }> = []
   for (const [key, raw] of [...sources.storage].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const rule = ruleFor(key)
     if (!rule) {
-      unknownKeys.push({ key: scrub(reportableKeyName(key), known), bytes: new TextEncoder().encode(raw).length })
+      unknownKeys.push({ key: unknownKeyFamily(key), bytes: new TextEncoder().encode(raw).length })
       continue
     }
     if (rule.action === 'exclude' || (rule.stallOnly && !sources.stall)) continue
@@ -302,7 +302,7 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
       })
       rowsOmitted += before - (value as unknown[]).length
     }
-    kept.push({ name: reportableKeyName(key), value, rule })
+    kept.push({ key, value, rule })
   }
 
   // Pass 1: collect every real id. Pass 2: name them.
@@ -322,9 +322,23 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
   const transactions = tx.map((t) => transactionRow(t, name, stalls, self))
   const storage: Rec = {}
   const reduced: Record<string, unknown> = {}
-  for (const { name: n, value, rule } of kept) {
+  const pseudonymOf = (pk: string): string | undefined => {
+    for (const t of ['stall', 'customer', 'terminal'] as const) {
+      try {
+        const n = ps.name(t, pk)
+        if (n) return n
+      } catch {
+        /* not collected under this type */
+      }
+    }
+    return undefined
+  }
+  for (const { key, value, rule } of kept) {
+    const n = reportableKeyName(key, rule, self, pseudonymOf)
     let label = n
-    for (let i = 2; label in storage; i++) label = `${n}#${i}`
+    // Two keys under one prefix: <id>, then <id#2>, <id#3> (a bare prefix gets <id#n> too).
+    const base = /<([a-z_]+)>$/.test(n) ? n : n + '<id>'
+    for (let i = 2; label in storage; i++) label = base.replace(/<([a-z_]+)>$/, `<$1#${i}>`)
     storage[label] = rule.reduce!(value, name)
     reduced[rule.prefix] = storage[label]
   }
@@ -455,7 +469,6 @@ const VERSION_RE = /^(dev|v?\d+\.\d+\.\d+[\w.-]*|imani-deploy-v[\w.-]+|[0-9a-f]{
 const BROWSER_RE = /^(Chrome|Firefox|Edge|Safari|Other)( \d{1,4})? \/ (Android|iOS|Windows|macOS|Linux|Other)$/
 const LANG_RE = /^[a-z]{0,3}$/
 const FRAME_RE = /^(src|packages|assets)\/[\w./-]{1,120}:\d{1,6}(:\d{1,6})?$/
-const STORAGE_KEY_RE = /^(imani|imani-wallet|imani_)[\w:<>.#-]{0,90}$/
 
 /**
  * Whether a string in data/ is one of the things the builder can legitimately write (review: closed
@@ -471,7 +484,7 @@ function classified(s: string): boolean {
   if (VERSION_RE.test(s) || BROWSER_RE.test(s) || LANG_RE.test(s) || FRAME_RE.test(s)) return true
   if (/^[0-9a-f]{2,20}$/i.test(s)) return true // keyset ids: public mint data
   if (s.startsWith('http') || s.startsWith('ws')) return isInfraUrl(s)
-  if (STORAGE_KEY_RE.test(s) && RULES.some((r) => s.startsWith(r.prefix.replace(/:$/, '')))) return true
+  if (isInventoryKeyName(s) || /^(imani-wallet|imani|imani_dm|imani)[:_-]<unknown>$|^<unknown>$/.test(s)) return true
   return KEY.test(s) && FIELD_NAMES.has(s)
 }
 
@@ -485,8 +498,8 @@ function isInfraUrl(s: string): boolean {
 }
 
 /** The vocabulary, for the support side's matching check (exported; see vocabulary.test.ts). */
-export function dataVocabulary(): { words: string[]; fields: string[]; templates: string[] } {
-  return { words: [...VOCABULARY].sort(), fields: [...FIELD_NAMES].sort(), templates: ERROR_TEMPLATES.map((r) => r.source) }
+export function dataVocabulary(): { words: string[]; fields: string[]; templates: string[]; key_prefixes: string[] } {
+  return { words: [...VOCABULARY].sort(), fields: [...FIELD_NAMES].sort(), templates: ERROR_TEMPLATES.map((r) => r.source), key_prefixes: RULES.map((r) => r.prefix).sort() }
 }
 
 /** Object keys the builder emits. Collected from a dry build of the seeded fixture would be circular, so listed. */

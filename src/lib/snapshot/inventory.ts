@@ -310,7 +310,32 @@ export function ruleFor(key: string): InventoryRule | undefined {
   return best
 }
 
-/** A key name safe to report: the rule prefix, or the key with any id-like suffix replaced. */
-export function reportableKeyName(key: string): string {
-  return key.replace(/[0-9a-f]{64}/gi, '<pubkey>').replace(/[0-9a-f]{16,}/gi, '<id>').slice(0, 80)
+/** Placeholders a key suffix may become in data/: never the suffix itself (#589 review). */
+export const KEY_SUFFIX_RE = /^<(self|pubkey|id|[a-z_]+)(#\d{1,6})?>$/
+
+/**
+ * The name a kept key is shown under in data/: its rule's prefix, then a typed placeholder for any
+ * suffix. A suffix is this wallet's pubkey (`<self>`), another 64-hex key (its pseudonym, or
+ * `<pubkey>`), or anything else (`<id>`). The suffix's text never appears.
+ */
+export function reportableKeyName(key: string, rule: InventoryRule, self: string, pseudonymOf: (pk: string) => string | undefined): string {
+  const suffix = key.slice(rule.prefix.length)
+  if (suffix === '') return rule.prefix
+  if (suffix.toLowerCase() === self.toLowerCase()) return rule.prefix + '<self>'
+  if (/^[0-9a-f]{64}$/i.test(suffix)) {
+    const p = pseudonymOf(suffix.toLowerCase())
+    return rule.prefix + (p ? `<${p}>` : '<pubkey>')
+  }
+  return rule.prefix + '<id>'
+}
+
+/** An unknown key, reported by namespace family only: `imani-wallet:<unknown>`, `imani:<unknown>`, or `<unknown>`. */
+export function unknownKeyFamily(key: string): string {
+  const m = /^(imani-wallet|imani|imani_dm|imani)([:_-])/.exec(key)
+  return m ? `${m[1]}${m[2]}<unknown>` : '<unknown>'
+}
+
+/** Whether a data/ key name is exactly a known prefix plus at most one placeholder. */
+export function isInventoryKeyName(s: string): boolean {
+  return RULES.some((r) => s === r.prefix || (s.startsWith(r.prefix) && KEY_SUFFIX_RE.test(s.slice(r.prefix.length))))
 }
