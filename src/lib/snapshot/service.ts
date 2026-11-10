@@ -176,11 +176,12 @@ export async function uploadSnapshot(
     body: sealed.ciphertext.slice().buffer as ArrayBuffer,
   })
   if (!res.ok) throw new SnapshotUploadError(res.status)
-  let url = `${blossomUrl.replace(/\/+$/, '')}/${sealed.sha256}`
+  // The DM names the configured server and the hash, never the URL the server answers: behind an
+  // edge it reports its own Host and adds an extension, and support allowlists the configured host.
+  const url = `${blossomUrl.replace(/\/+$/, '')}/${sealed.sha256}`
   try {
-    const d = (await res.json()) as { url?: unknown; sha256?: unknown }
+    const d = (await res.json()) as { sha256?: unknown }
     if (d.sha256 && d.sha256 !== sealed.sha256) throw new SnapshotUploadError(502)
-    if (typeof d.url === 'string') url = d.url
   } catch (e) {
     if (e instanceof SnapshotUploadError) throw e
   }

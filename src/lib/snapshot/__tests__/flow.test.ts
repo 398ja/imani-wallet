@@ -102,6 +102,20 @@ describe('the flow, end to end without a network', () => {
     expect(h.calls.filter((c) => c.startsWith('DM '))).toHaveLength(1)
   })
 
+  it('the DM names the configured server and the hash, whatever URL the server answers (found in the local e2e)', async () => {
+    const h = harness()
+    const inner = h.deps.fetch
+    h.deps.fetch = (async (u: RequestInfo | URL, i?: RequestInit) => {
+      const r = await inner(u, i)
+      const d = await r.json()
+      return new Response(JSON.stringify({ ...d, url: `http://localhost/${d.sha256}.bin` }), { status: 201 })
+    }) as typeof fetch
+    await h.flow.validate(CODE)
+    await h.flow.prepare(false)
+    const dm = await h.flow.upload()
+    expect(dm.url).toBe(`http://localhost:28090/${dm.sha256}`)
+  })
+
   it('criteria 9, 17: nothing is built or sent without a validated code', async () => {
     const { flow, calls } = harness()
     await expect(flow.prepare(false)).rejects.toThrow(/validated code/)
