@@ -279,6 +279,7 @@ export const RULES: InventoryRule[] = [
   R('imani:issued:', counted, 'issued records'),
   R('imani-wallet:snapshots', counted, 'support snapshot records'),
   X('imani-wallet:error-ring', 'read through errorRing.ts into data/errors.json, not as storage'),
+  X('imani-wallet:console-ring', 'read through consoleRing.ts into data/console.json, not as storage'),
   // accountStore.ts stores, keyed `imani-wallet:<name>:<pubkey>`.
   X('imani-wallet:held-coupons:', 'held coupons carry tokens'),
   X('imani-wallet:refused-coupons:', 'refused coupons carry tokens'),

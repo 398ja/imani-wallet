@@ -20,6 +20,7 @@ export const ALLOWED_PATHS = new Set([
   'data/storage.json',
   'data/derived.json',
   'data/errors.json',
+  'data/console.json',
   'README.txt',
 ])
 

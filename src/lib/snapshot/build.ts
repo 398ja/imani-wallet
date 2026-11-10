@@ -7,7 +7,8 @@ import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 import { Pseudonyms, saltedHash, type PseudonymType } from './ids'
 import { IDB_STORES, RULES, SETTING_KEYS, isInventoryKeyName, reportableKeyName, ruleFor, unknownKeyFamily, type InventoryRule, type ReduceContext } from './inventory'
 import { findPattern, PII_SCRUBBER_VERSION, scrub } from './scrub'
-import { closed, ENUMS, ERROR_TEMPLATES, knownFrame, knownTemplate } from './enums'
+import { closed, consoleMessageForms, ENUMS, ERROR_TEMPLATES, knownConsoleMessage, knownFrame, knownTemplate } from './enums'
+import type { ConsoleEntry } from './consoleRing'
 import type { BuildOptions, BuiltSnapshot, EnvironmentFacts, ErrorEntry, Manifest, SnapshotSources } from './types'
 
 /** Owner decision: 20 MB of ciphertext. AES-GCM adds 16 bytes, so the zip cap leaves room for the tag. */
@@ -240,6 +241,27 @@ function memoSummary(memo: unknown, ctx: ReduceContext) {
   }
 }
 
+/**
+ * A console entry for data/console.json. Already reduced at capture (consoleRing.ts); here the
+ * level, tag and message pass the closed sets again, and an id arg becomes its pseudonym.
+ */
+function consoleRow(e: ConsoleEntry, ps: Pseudonyms) {
+  return {
+    at: typeof e.at === 'number' ? e.at : undefined,
+    level: closed('consoleLevel', e.level) ?? 'other',
+    tag: closed('consoleTag', e.tag) ?? 'other',
+    message: knownConsoleMessage(e.message),
+    args: (Array.isArray(e.args) ? e.args : []).slice(0, 8).map((a) => {
+      if (a.t === 'number' && typeof a.v === 'number') return { t: 'number', v: a.v }
+      if (a.t === 'boolean' && typeof a.v === 'boolean') return { t: 'boolean', v: a.v }
+      if (a.t === 'error') return { t: 'error', name: closed('errorName', a.name) ?? 'Error' }
+      if (a.t === 'array') return { t: 'array', n: typeof a.n === 'number' ? a.n : 0 }
+      if (a.t === 'id') return a.ref ? { t: 'id', ref: ps.nameAny(a.ref) ?? 'other' } : { t: 'id' }
+      return { t: closed('consoleArg', a.t) ?? 'other' }
+    }),
+  }
+}
+
 function errorRow(e: ErrorEntry) {
   // Only what the code itself wrote: a closed set of class names and codes, a registered template,
   // frames naming a module of this build. A message carrying something a person typed is '<message>'.
@@ -320,6 +342,11 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
   sources.vouchers.forEach((v) => voucherRow(v, collect, sources.proofShapes))
   tx.forEach((t) => transactionRow(t, collect, stalls, self))
   kept.forEach(({ value, rule }) => rule.reduce!(value, collect))
+  // Console args shaped like ids: register them, so one already named elsewhere keeps that name and a
+  // new one gets `logged#n`. The real value is known to the final scan either way.
+  const consoleRows = (sources.console ?? []).filter((e) => sinceSeconds === null || secs(e.at) >= sinceSeconds)
+  rowsOmitted += (sources.console?.length ?? 0) - consoleRows.length
+  for (const e of consoleRows) for (const a of e.args) if (a.t === 'id' && a.ref) collect.id('logged', a.ref)
   // Names people gave things, so the memo scrubber and final scan can recognise them.
   for (const [k, raw] of sources.storage) {
     if (!/profile:|pending-sends:|merchant/.test(k)) continue
@@ -361,6 +388,7 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
     })
   }
   const errors = sources.errors.map((e) => errorRow(e))
+  const consoleOut = consoleRows.map((e) => consoleRow(e, ps))
 
   // derived.json: the balance check and money in flight (#589 section 4).
   const balances: Record<string, { count: number; amount: number }> = {}
@@ -404,6 +432,7 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
     'data/storage.json': json({ keys: storage, unknown_key_count: unknownKeys.length, idb_stores: sources.idbStores.filter((s) => IDB_STORES[s] !== undefined) }),
     'data/derived.json': json(derived),
     'data/errors.json': json({ rows: errors }),
+    'data/console.json': json({ rows: consoleOut }),
   }
   return {
     data,
@@ -415,6 +444,7 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
       transactions: transactions.length,
       pendingSends: pending.length,
       errors: errors.length,
+      consoleEntries: consoleOut.length,
       terminals: sources.stall ? ((reduced['imani-wallet:terminals:'] as unknown[] | undefined)?.length ?? 0) : null,
       truncatedSince: sinceSeconds === null ? null : dayOf(sinceSeconds),
     },
@@ -488,6 +518,7 @@ const FRAME_RE = /^(src|packages|assets)\/[\w./-]{1,120}:\d{1,6}(:\d{1,6})?$/
 function classified(s: string): boolean {
   if (VOCABULARY.has(s) || PSEUDONYM_RE.test(s) || HASH_RE.test(s) || DATE_RE.test(s)) return true
   if (knownTemplate(s) === s) return true
+  if (knownConsoleMessage(s) === s && s !== '<message>') return true
   // Compound keys the builder makes: "<status>:<unit>" and "<YYYY-MM-DD>:<unit>", both parts classified.
   const parts = s.split(':')
   if (parts.length === 2 && (VOCABULARY.has(parts[0]) || /^\d{4}-\d{2}-\d{2}$/.test(parts[0])) && VOCABULARY.has(parts[1])) return true
@@ -508,8 +539,8 @@ function isInfraUrl(s: string): boolean {
 }
 
 /** The vocabulary, for the support side's matching check (exported; see vocabulary.test.ts). */
-export function dataVocabulary(): { words: string[]; fields: string[]; templates: string[]; key_prefixes: string[] } {
-  return { words: [...VOCABULARY].sort(), fields: [...FIELD_NAMES].sort(), templates: ERROR_TEMPLATES.map((r) => r.source), key_prefixes: RULES.map((r) => r.prefix).sort() }
+export function dataVocabulary(): { words: string[]; fields: string[]; templates: string[]; key_prefixes: string[]; console_messages: string[] } {
+  return { words: [...VOCABULARY].sort(), fields: [...FIELD_NAMES].sort(), templates: ERROR_TEMPLATES.map((r) => r.source), key_prefixes: RULES.map((r) => r.prefix).sort(), console_messages: consoleMessageForms() }
 }
 
 /** Object keys the builder emits. Collected from a dry build of the seeded fixture would be circular, so listed. */
@@ -523,7 +554,8 @@ const FIELD_NAMES = new Set<string>(('rows keys unknown_key_count idb_stores bal
   'has_email at name code template frames app_version build_ref gateway_url mint_urls relay_urls blossom_url browser ' +
   'standalone language storage_usage_mb storage_quota_gb recipient unit decimals state attempts terminal role ' +
   'enrolled_at last_used_at revoked_at shop has_credential read event has_name has_nip05 has_picture has_about ' +
-  'backups kind open accepts_cards has_shop categories currency present events id other_settings ' + [...SETTING_KEYS].join(' ')).split(' '))
+  'backups kind open accepts_cards has_shop categories currency present events id other_settings ' +
+  'level tag message args t v n ref ' + [...SETTING_KEYS].join(' ')).split(' '))
 
 const README = `Imani support snapshot.
 

@@ -40,6 +40,8 @@ export interface SnapshotSources {
   /** localStorage, as [key, value] pairs. */
   storage: Array<[string, string]>
   errors: ErrorEntry[]
+  /** Console capture (consoleRing.ts), already reduced on the way in. Absent in older callers. */
+  console?: import('./consoleRing').ConsoleEntry[]
   idbStores: string[]
   environment: EnvironmentFacts
   /**
@@ -126,6 +128,8 @@ export interface SnapshotSummary {
   transactions: number
   pendingSends: number
   errors: number
+  /** Console entries in the snapshot. */
+  consoleEntries?: number
   terminals: number | null
   truncatedSince: string | null
 }

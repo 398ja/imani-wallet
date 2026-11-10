@@ -23,9 +23,26 @@ export function correlate(kCorr: Uint8Array, x: string): string {
   return bytesToHex(hmac(sha256, kCorr, enc.encode('imani-snapshot-corr-v1' + x))).slice(0, 16)
 }
 
+export const HEX64_RE = /^[0-9a-f]{64}$/i
+
+/**
+ * A string shaped like an identifier the wallet logs: a 64-hex key or event id, a bech32 entity,
+ * a UUID, or a prefixed id (`as_`, `v_`, `pi_`, `pur_`, `cs_`, `acct_`, `tx-`). Console capture
+ * (consoleRing.ts) keeps these only as pseudonyms; any other string is just its type.
+ */
+export function isIdLike(s: string): boolean {
+  return (
+    HEX64_RE.test(s) ||
+    /^[0-9a-f]{16,63}$/i.test(s) ||
+    /^(npub|nprofile|nevent|naddr|note)1[02-9ac-hj-np-z]{20,}$/.test(s) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) ||
+    /^(as|v|pi|pur|cs|acct|ch|in|bundle|send|tx|req|pay|cl|code)[_-][A-Za-z0-9_-]{4,80}$/.test(s)
+  )
+}
+
 export type PseudonymType =
   | 'stall' | 'customer' | 'terminal' | 'send' | 'voucher' | 'event' | 'payment' | 'purchase'
-  | 'bundle' | 'template' | 'request' | 'tx' | 'gift_link' | 'party' | 'token' | 'proof' | 'cashlink' | 'code'
+  | 'bundle' | 'template' | 'request' | 'tx' | 'gift_link' | 'party' | 'token' | 'proof' | 'cashlink' | 'code' | 'logged'
 
 /**
  * Pseudonyms for one snapshot. Collect every real id first (`see`), then `freeze` numbers them per
@@ -76,6 +93,17 @@ export class Pseudonyms {
     const n = this.names.get(this.key(type, String(real)))
     if (!n) throw new Error(`Pseudonyms: ${type} id was not collected`)
     return n
+  }
+
+  /** The pseudonym already given to this real id under ANY type, for console args (which carry no type). */
+  nameAny(real: string): string | undefined {
+    if (!this.names) throw new Error('Pseudonyms: nameAny() before freeze()')
+    const r = real.toLowerCase() === this.selfPubkey.toLowerCase() ? null : real
+    if (r === null) return 'self'
+    for (const { type, real: x } of this.seen.values()) {
+      if (x === r && type !== 'logged') return this.names.get(this.key(type, x))
+    }
+    return this.names.get(this.key('logged', r))
   }
 
   /** pseudonym -> K(real id), for `envelope/correlation.json`. Pure hash ids (token, proof) excluded. */

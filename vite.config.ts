@@ -454,6 +454,31 @@ function snapshotModules(): string[] {
   return out
 }
 
+/**
+ * #589 console capture: the messages the wallet's own code logs, read from the source at build
+ * time. A console message is kept in a support snapshot only if it is one of these (a plain string
+ * literal) or matches one of these with each `${...}` as a placeholder (a template literal), so
+ * anything a person typed into a logged value can never be mistaken for a message the code wrote.
+ */
+function snapshotConsoleMessages(): { literals: string[]; templates: string[] } {
+  const literals = new Set<string>()
+  const templates = new Set<string>()
+  const call = /console\.(?:log|info|warn|error|debug)\(\s*(?:'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`)/g
+  for (const file of snapshotModules()) {
+    for (const m of readFileSync(file, 'utf8').matchAll(call)) {
+      if (m[1] !== undefined) literals.add(m[1].replace(/\\'/g, "'"))
+      // A template counts only when it starts with a fixed `[tag] ` and its fixed text says something
+      // on its own. `${prefix} ${formatted}` would match any line at all, and some CLI templates print
+      // memos and names, so those stay '<message>'.
+      else if (m[2] !== undefined && !m[2].includes('\n') && /^\[[a-zA-Z0-9_-]{1,40}\] /.test(m[2])) {
+        const fixed = m[2].replace(/^\[[a-zA-Z0-9_-]{1,40}\] /, '').replace(/\$\{[^}]*\}/g, '').replace(/[^A-Za-z]/g, '')
+        if (fixed.length >= 8) templates.add(m[2])
+      }
+    }
+  }
+  return { literals: [...literals].sort(), templates: [...templates].sort() }
+}
+
 export default defineConfig({
   plugins: [react(), portalEdgeAuth(), sharedDynamicImports()],
   // The version, reachable at runtime.
@@ -469,6 +494,8 @@ export default defineConfig({
     __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
     // #589: module paths in this build, so a support snapshot keeps only stack frames that name one.
     __SNAPSHOT_MODULES__: JSON.stringify(snapshotModules()),
+    // #589: console messages the code itself writes, so a captured log keeps only those.
+    __SNAPSHOT_CONSOLE__: JSON.stringify(snapshotConsoleMessages()),
   },
   // Scoped to src/, because `packages/` now lives in this repo and ships its own
   // suites — dm-poll's and wallet-storage's among them, the latter wanting
