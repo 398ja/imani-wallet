@@ -119,6 +119,48 @@ describe('criterion 21: AI-safe data layer', () => {
     for (const f of forms('Ottoline')) expect(data.includes(f), f).toBe(false)
   })
 
+  describe('a lowercase name typed into any string field never reaches data/ (closed sets)', () => {
+    const N = 'brackenridge'
+    type Mut = (s: ReturnType<typeof seededSources>) => void
+    const cases: Array<[string, Mut]> = [
+      ['voucher.backing_strategy', (s) => void ((s.vouchers[0] as Record<string, unknown>).backing_strategy = N)],
+      ['voucher.source_transport', (s) => void ((s.vouchers[0] as Record<string, unknown>).source_transport = N)],
+      ['voucher.status', (s) => void ((s.vouchers[0] as Record<string, unknown>).status = N)],
+      ['voucher.face_unit', (s) => void ((s.vouchers[0] as Record<string, unknown>).face_unit = N)],
+      ['tx.type', (s) => void ((s.transactions[0] as Record<string, unknown>).type = N)],
+      ['tx.delivery_state', (s) => void ((s.transactions[0] as Record<string, unknown>).delivery_state = N)],
+      ['tx.direction', (s) => void ((s.transactions[0] as Record<string, unknown>).direction = N)],
+      ['tx.face_unit', (s) => void ((s.transactions[0] as Record<string, unknown>).face_unit = N)],
+      ['bundle_part.redemptionStatus', (s) => void ((s.transactions[0] as Record<string, unknown>).bundle_parts = [{ voucherId: 'v1', amount: 1, timestamp: 1, redemptionStatus: N }])],
+      ['error.name', (s) => void (s.errors[0].name = N)],
+      ['error.code', (s) => void (s.errors[0].code = N)],
+      ['error.frame', (s) => void (s.errors[0].frames = [N + '.ts:1'])],
+      ['error.template', (s) => void (s.errors[0].template = 'thanks ' + N)],
+      ['settings.theme', (s) => void s.storage.push(['imani:settings', JSON.stringify({ theme: N })])],
+      ['pending send state', (s) => void s.storage.push(['imani-wallet:pending-sends:' + SELF, JSON.stringify([{ sendId: 's1', amount: 1, state: N, unit: 'eur' }])])],
+      ['terminal role', (s) => void s.storage.push(['imani-wallet:terminals:' + SELF, JSON.stringify([{ terminalPubkey: TERMINAL, role: N, state: N, enrolledAt: 1 }])])],
+      ['notification type', (s) => void s.storage.push(['imani-wallet:notifications:' + SELF, JSON.stringify([{ type: N, at: 1 }])])],
+      ['backup kind', (s) => void s.storage.push(['imani-wallet:profile:' + SELF, JSON.stringify({ backups: [{ kind: N, at: 1 }] })])],
+      ['environment build ref', (s) => void (s.environment.buildRef = N)],
+      ['idb store name', (s) => void s.idbStores.push(N)],
+    ]
+    for (const [field, mut] of cases) {
+      it(field, async () => {
+        const s = seededSources()
+        mut(s)
+        const { zip } = await buildSnapshot(s, baseOptions())
+        expect(archiveText(zip).data.toLowerCase()).not.toContain(N)
+      })
+    }
+  })
+
+  it('finalScan aborts on any string it cannot classify', () => {
+    expect(() => finalScan({ 'data/x.json': '{"status":"brackenridge"}' }, [])).toThrow(/unclassified/)
+    // An unknown key is as unclassified as an unknown value.
+    expect(() => finalScan({ 'data/x.json': '{"brackenridge":1}' }, [])).toThrow(/unclassified/)
+    expect(() => finalScan({ 'data/x.json': '{"send":"send#1","token":"h:0011223344556677","created_at":"2026-11-09T22:00:00Z","status":"active"}' }, [])).not.toThrow()
+  })
+
   it('coarsens the fingerprint: user agent family, language only, rounded storage', async () => {
     const { zip } = await buildSnapshot(seededSources(), baseOptions())
     const env = JSON.parse(archiveText(zip).files['data/environment.json'])

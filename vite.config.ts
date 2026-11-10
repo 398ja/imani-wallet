@@ -8,7 +8,7 @@ import react from '@vitejs/plugin-react'
 
 const pkg = createRequire(import.meta.url)('./package.json') as { version: string }
 import { fileURLToPath } from 'node:url'
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import type { ClientRequest } from 'node:http'
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
@@ -440,6 +440,20 @@ function sharedDynamicImports(): Plugin {
   }
 }
 
+function snapshotModules(): string[] {
+  const out: string[] = []
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const p = `${dir}/${name}`
+      if (/node_modules|dist|__tests__/.test(p)) continue
+      if (statSync(p).isDirectory()) walk(p)
+      else if (/\.(ts|tsx)$/.test(name) && !/\.test\./.test(name)) out.push(p)
+    }
+  }
+  for (const d of ['src', 'packages']) if (existsSync(d)) walk(d)
+  return out
+}
+
 export default defineConfig({
   plugins: [react(), portalEdgeAuth(), sharedDynamicImports()],
   // The version, reachable at runtime.
@@ -453,6 +467,8 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
     // When this bundle was built, for Settings → About (src/lib/about.ts).
     __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
+    // #589: module paths in this build, so a support snapshot keeps only stack frames that name one.
+    __SNAPSHOT_MODULES__: JSON.stringify(snapshotModules()),
   },
   // Scoped to src/, because `packages/` now lives in this repo and ships its own
   // suites — dm-poll's and wallet-storage's among them, the latter wanting
