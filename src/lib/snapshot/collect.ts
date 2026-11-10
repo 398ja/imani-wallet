@@ -1,4 +1,4 @@
-import { tokenProofs } from '../voucherToken'
+import { isUnverifiableVoucherError, tokenProofs } from '../voucherToken'
 import { getSigner } from '../nap'
 import { listVouchers, getWallet } from '../wallet'
 import { appVersion, deployVersion } from '../about'
@@ -28,8 +28,10 @@ export async function collectSources(pubkey: string, stall: boolean): Promise<Sn
         keysets: [...new Set(proofs.map((p) => p.id))],
         hasDleq: proofs.some((p) => !!p.dleq),
       }
-    } catch {
-      /* not a TokenV4 this reader knows: the row still goes in, without its shape */
+    } catch (e) {
+      // An unverifiable voucher, or a token this reader does not know: the row still goes in, without
+      // its shape. Never treated as plain ecash: the snapshot only describes, it never spends or credits.
+      if (isUnverifiableVoucherError(e)) continue
     }
   }
   const storage: Array<[string, string]> = []
