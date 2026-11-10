@@ -186,6 +186,21 @@ describe('criterion 21: AI-safe data layer', () => {
     expect(env.storage_usage_mb).toBe(12)
     expect(JSON.stringify(env)).not.toContain('Pixel')
   })
+
+  it('an infrastructure URL whose host is or embeds an IP address is reduced, not a reason to refuse', async () => {
+    // Found in the local e2e: the test stack's mint is http://127.0.0.1.mint:7777, and a self-hosted
+    // gateway may be a LAN address. Neither may abort the snapshot or reach data/ as an address.
+    const s = seededSources()
+    s.environment.mintUrls = ['http://127.0.0.1.mint:7777', 'https://mint.imani.casa']
+    s.environment.gatewayUrl = 'http://192.168.1.20:8081/api'
+    s.environment.relayUrls = ['ws://[fd00::1]:7777']
+    const { zip } = await buildSnapshot(s, baseOptions())
+    const env = JSON.parse(archiveText(zip).files['data/environment.json'])
+    expect(env.mint_urls).toEqual(['http://ip-host:7777', 'https://mint.imani.casa'])
+    expect(env.gateway_url).toBe('http://ip-host:8081/api')
+    expect(env.relay_urls).toEqual(['ws://ip-host:7777'])
+    expect(archiveText(zip).data).not.toMatch(/192\.168|127\.0\.0\.1|fd00/)
+  })
 })
 
 describe('criterion 11: public ids and K values', () => {
