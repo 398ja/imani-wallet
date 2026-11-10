@@ -71,7 +71,9 @@ function summary(over: Record<string, unknown> = {}) {
     unit: 'EUR',
     decimals: 2,
     memo: null,
-    expiresAt: '2026-11-10T12:00:00Z',
+    // Always in the future. A fixed date here expired on 2026-11-10 at noon and turned 51 tests red
+    // (the page reads the link as expired and hides Add).
+    expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
     claimedAt: null,
     revokedAt: null,
     issuerPubkey: ISSUER,
@@ -141,7 +143,7 @@ describe('opening a claim link never redeems', () => {
     const body = document.body.textContent ?? ''
     expect(body).toContain('Mama Ngozi Grill')
     expect(body).toMatch(/€5\.00|5\.00\s*EUR|EUR\s*5\.00/)
-    expect(body).toMatch(/Claim by .*2026/)
+    expect(body).toMatch(/Claim by .*20\d\d/)
   })
 
   it('reads only the non-destructive metadata before Accept', async () => {
