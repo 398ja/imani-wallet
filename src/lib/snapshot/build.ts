@@ -163,6 +163,16 @@ function counterpartyType(v: unknown, stalls: Set<string>, self: string): Pseudo
 const timeStr = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d\d-\d\dT[\d:.]+Z?$/.test(v) ? v : undefined)
 const numOr = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
 
+/**
+ * A v2 keyset id (NUT-02: 01 followed by a 32-byte hash, 66 hex) as its short id, the first 8 bytes,
+ * which v2 tokens carry and which names the keyset just as well. Only that exact form is shortened;
+ * any other string is returned unchanged, so a long hex value that is not a keyset id still meets
+ * the final scan and aborts generation.
+ */
+function shortKeysetId(k: string): string {
+  return /^01[0-9a-f]{64}$/.test(k) ? k.slice(0, 16) : k
+}
+
 function voucherRow(v: VoucherRow, ctx: ReduceContext, shape: SnapshotSources['proofShapes']) {
   const r = v as unknown as Rec
   const s = shape?.[v.token_id]
@@ -188,7 +198,7 @@ function voucherRow(v: VoucherRow, ctx: ReduceContext, shape: SnapshotSources['p
     swap_completed_at: timeStr(v.swap_completed_at),
     materialized_at: timeStr(r.materialized_at),
     received_via: ctx.id('event', v.received_via_event_id),
-    keyset_ids: s?.keysets ?? (Array.isArray(r.keyset_ids) ? (r.keyset_ids as unknown[]).filter((k) => typeof k === 'string' && /^[0-9a-f]{2,20}$/i.test(k)) : undefined),
+    keyset_ids: (s?.keysets ?? (Array.isArray(r.keyset_ids) ? (r.keyset_ids as unknown[]).filter((k): k is string => typeof k === 'string').map(shortKeysetId).filter((k) => /^[0-9a-f]{2,20}$/i.test(k)) : undefined))?.map(shortKeysetId),
     swap_proofs: v.swap_proof_ids?.map((p) => ctx.hash(p)),
     proof_count: s?.amounts.length,
     proof_amounts: s?.amounts,

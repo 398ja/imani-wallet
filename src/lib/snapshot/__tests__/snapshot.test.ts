@@ -187,6 +187,28 @@ describe('criterion 21: AI-safe data layer', () => {
     expect(JSON.stringify(env)).not.toContain('Pixel')
   })
 
+  it('a v2 keyset id (01 + 64 hex, NUT-02) goes in as its short id, and is never a reason to refuse', async () => {
+    // Found in the post-merge e2e: the local mint's keyset is 01 + 64 hex. The 32+ hex pattern
+    // refused every snapshot of a wallet holding a voucher from it. NUT-02's short id (the first
+    // 8 bytes) names the keyset just as well and passes the scan unchanged.
+    const v2 = '01ef5b830da1f32acd88bdf30c246627833672eb53112b7e2962a608ba96773aa9'
+    const v1 = '009a1f293253e41e'
+    const s = seededSources()
+    s.proofShapes = { 'tid-own-1': { amounts: [512, 256], keysets: [v2, v1], hasDleq: true } }
+    const { zip } = await buildSnapshot(s, baseOptions())
+    const rows = JSON.parse(archiveText(zip).files['data/vouchers.json']).rows as { keyset_ids?: string[] }[]
+    expect(rows.find((r) => r.keyset_ids)?.keyset_ids).toEqual(['01ef5b830da1f32a', v1])
+  })
+
+  it('a keyset-id field still refuses a hex string that is not a keyset id', async () => {
+    // Only 01 + 64 lower-case hex is shortened. Any other long hex (a pubkey, a secret) stays and is refused.
+    for (const bad of ['d5'.repeat(32), '02' + 'd5'.repeat(32), '01' + 'd5'.repeat(31), '01' + 'D5'.repeat(32)]) {
+      const s = seededSources()
+      s.proofShapes = { 'tid-own-1': { amounts: [1], keysets: [bad], hasDleq: false } }
+      await expect(buildSnapshot(s, baseOptions()), bad.slice(0, 6)).rejects.toThrow(SnapshotLeakError)
+    }
+  })
+
   it('keeps the app version when it carries a build suffix, and still refuses anything else', async () => {
     // Found in the e2e: appVersion() is "0.41.0 (dev)", which read as "other" and lost the version.
     for (const [raw, want] of [['0.41.0 (dev)', '0.41.0 (dev)'], ['0.41.0-rc.2', '0.41.0-rc.2'], ['0.41.0', '0.41.0'], ['0.41.0 (Eric)', 'other'], ['x', 'other']]) {
