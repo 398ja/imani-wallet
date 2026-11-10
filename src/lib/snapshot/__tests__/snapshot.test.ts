@@ -143,6 +143,8 @@ describe('criterion 21: AI-safe data layer', () => {
       ['backup kind', (s) => void s.storage.push(['imani-wallet:profile:' + SELF, JSON.stringify({ backups: [{ kind: N, at: 1 }] })])],
       ['environment build ref', (s) => void (s.environment.buildRef = N)],
       ['idb store name', (s) => void s.idbStores.push(N)],
+      ['storage key suffix', (s) => void s.storage.push(['imani-wallet:notifications:' + N, '[]'])],
+      ['storage key suffix on an excluded key', (s) => void s.storage.push(['imani-wallet:pending-sends:' + N, '[]'])],
     ]
     for (const [field, mut] of cases) {
       it(field, async () => {
@@ -152,6 +154,21 @@ describe('criterion 21: AI-safe data layer', () => {
         expect(archiveText(zip).data.toLowerCase()).not.toContain(N)
       })
     }
+  })
+
+  it('unknown keys are reported as a family and a size, never a suffix', async () => {
+    const s = seededSources()
+    s.storage.push(['imani-wallet:brand-new:brackenridge', 'x'], ['brackenridge-app:settings', 'y'])
+    const { zip, manifest } = await buildSnapshot(s, baseOptions())
+    expect(JSON.stringify(manifest.redaction.unknown_keys).toLowerCase()).not.toContain('brackenridge')
+    expect(archiveText(zip).all.toLowerCase()).not.toContain('brackenridge')
+    expect(manifest.redaction.unknown_keys).toContainEqual({ key: 'imani-wallet:<unknown>', bytes: 1 })
+    expect(manifest.redaction.unknown_keys).toContainEqual({ key: '<unknown>', bytes: 1 })
+  })
+
+  it('finalScan accepts an inventory key only as prefix plus placeholder', () => {
+    expect(() => finalScan({ 'data/x.json': '{"keys":{"imani-wallet:notifications:<self>":1}}' }, [])).not.toThrow()
+    expect(() => finalScan({ 'data/x.json': '{"keys":{"imani-wallet:notifications:brackenridge":1}}' }, [])).toThrow(/unclassified/)
   })
 
   it('finalScan aborts on any string it cannot classify', () => {
@@ -191,9 +208,10 @@ describe('criteria 2 and 3: inventory', () => {
   it('unknown keys are reported by name and size only', async () => {
     const { zip, manifest } = await buildSnapshot(seededSources(), baseOptions())
     const unknown = manifest.redaction.unknown_keys
-    expect(unknown).toContainEqual({ key: 'some-third-party-key', bytes: expect.any(Number) })
-    // The key NAME carries the pubkey suffix; the inventory reduces it to the prefix.
-    expect(unknown.map((u) => u.key)).toContain('imani-wallet:brand-new-feature:<pubkey>')
+    // Reported by namespace family and byte length: a key's suffix may be typed text (review), so
+    // "name" in criterion 3 is the family, e.g. imani-wallet:<unknown>.
+    expect(unknown).toContainEqual({ key: '<unknown>', bytes: expect.any(Number) })
+    expect(unknown.map((u) => u.key)).toContain('imani-wallet:<unknown>')
     expect(archiveText(zip).all).not.toContain('opaque value')
   })
 })
