@@ -73,6 +73,11 @@ function infraUrl(u: string | null | undefined): string | null {
   }
 }
 
+/** Semver with a closed build suffix: " (dev)", " (preview)" or "-rc.N". Anything else is 'other'. */
+function appVersion(v: string): string {
+  return /^\d+\.\d+\.\d+( \((dev|preview)\)|-rc\.\d+)?$/.test(v) ? v : 'other'
+}
+
 /** A deploy ref the build stamps: dev, a version tag, or a git describe. Anything else is 'other'. */
 function buildRef(v: string): string {
   return /^(dev|v?\d+\.\d+\.\d+[\w.-]*|imani-deploy-v[\w.-]+|[0-9a-f]{7,12})$/.test(v) ? v : 'other'
@@ -80,7 +85,7 @@ function buildRef(v: string): string {
 
 function environment(env: EnvironmentFacts) {
   return {
-    app_version: /^\d+\.\d+\.\d+$/.test(env.appVersion) ? env.appVersion : 'other',
+    app_version: appVersion(env.appVersion),
     build_ref: buildRef(env.buildRef),
     gateway_url: infraUrl(env.gatewayUrl),
     mint_urls: env.mintUrls.map(infraUrl).filter(Boolean),
@@ -470,7 +475,7 @@ const KEY = /^[a-z][a-z0-9_]{0,40}$/
 const PSEUDONYM_RE = /^(self|[a-z_]+#\d{1,6})$/
 const HASH_RE = /^h:[0-9a-f]{16}$/
 const DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{3})?Z)?$/
-const VERSION_RE = /^(dev|v?\d+\.\d+\.\d+[\w.-]*|imani-deploy-v[\w.-]+|[0-9a-f]{7,12})$/
+const VERSION_RE = /^(dev|\d+\.\d+\.\d+ \((dev|preview)\)|v?\d+\.\d+\.\d+[\w.-]*|imani-deploy-v[\w.-]+|[0-9a-f]{7,12})$/
 const BROWSER_RE = /^(Chrome|Firefox|Edge|Safari|Other)( \d{1,4})? \/ (Android|iOS|Windows|macOS|Linux|Other)$/
 const LANG_RE = /^[a-z]{0,3}$/
 const FRAME_RE = /^(src|packages|assets)\/[\w./-]{1,120}:\d{1,6}(:\d{1,6})?$/
@@ -561,7 +566,7 @@ export async function buildSnapshot(sources: SnapshotSources, opts: BuildOptions
     const manifest: Manifest = {
       format: 'imani-support-snapshot',
       schema_version: 1,
-      app_version: sources.environment.appVersion,
+      app_version: appVersion(sources.environment.appVersion),
       build_ref: buildRef(sources.environment.buildRef),
       created_at: createdAt,
       expires_at: Math.floor(now / 1000) + opts.ttlSeconds,
