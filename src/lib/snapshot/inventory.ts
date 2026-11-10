@@ -36,7 +36,14 @@ type Rec = Record<string, unknown>
 const isRec = (v: unknown): v is Rec => !!v && typeof v === 'object' && !Array.isArray(v)
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : isRec(v) ? Object.values(v) : [])
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
-const str = (v: unknown, max = 40) => (typeof v === 'string' && v.length <= max && /^[a-z0-9_:.\- ]*$/i.test(v) ? v : undefined)
+/**
+ * An enum-shaped value written by code (a state, role, kind): lowercase snake or kebab, one token.
+ * Anything with a space or a capital is treated as something a person typed and dropped, because a
+ * name cannot be told from a state by pattern, and this text can reach a model.
+ */
+const str = (v: unknown, max = 32) => (typeof v === 'string' && v.length <= max && /^[a-z][a-z0-9_-]*$/.test(v) ? v : undefined)
+/** A currency or unit code: ISO-4217-shaped or one of the wallet's units. */
+const unit = (v: unknown) => (typeof v === 'string' && /^([A-Za-z]{3}|sat|msat|usd|eur)$/.test(v) ? v.toLowerCase() : undefined)
 const bool = (v: unknown) => (typeof v === 'boolean' ? v : undefined)
 const time = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' && /^\d{4}-\d\d-\d\d/.test(v) ? v : undefined)
 
@@ -63,7 +70,7 @@ function pendingSends(v: unknown, ctx: ReduceContext) {
     send: ctx.id('send', r.sendId),
     token: ctx.hash(r.tokenId),
     amount: num(r.amount),
-    unit: str(r.unit),
+    unit: unit(r.unit),
     decimals: num(r.decimals),
     issuer: ctx.id(r.merchantPubkey === undefined ? 'party' : 'stall', r.merchantPubkey),
     recipient: ctx.id('customer', r.recipientPubkey),
@@ -92,7 +99,7 @@ function paymentRequests(v: unknown, ctx: ReduceContext) {
   return arr(v).filter(isRec).map((r) => ({
     request: ctx.id('request', r.id),
     amount: num(r.amount),
-    unit: str(r.unit),
+    unit: unit(r.unit),
     state: str(r.state) ?? str(r.status),
     created_at: time(r.createdAt),
     payment: ctx.id('payment', r.stripe ?? r.paymentIntentId),
@@ -132,18 +139,18 @@ function merchantFlags(v: unknown) {
     accepts_cards: bool(r.acceptsCards),
     has_shop: bool(r.hasShop) ?? bool(r.onlineShop),
     categories: arr(r.categories).length,
-    currency: str(r.currency, 8),
+    currency: unit(r.currency),
   }
 }
 
 /** Settings: scalar flags only, any string that is not a short enum-like token is dropped. */
 function flags(v: unknown) {
-  if (!isRec(v)) return typeof v === 'boolean' || typeof v === 'number' ? v : str(v, 24) ?? null
+  if (!isRec(v)) return typeof v === 'boolean' || typeof v === 'number' ? v : null
   const out: Rec = {}
   for (const [k, x] of Object.entries(v)) {
     if (!/^[a-zA-Z_]{1,40}$/.test(k)) continue
+    // Booleans and numbers only: a string setting may be something the person typed.
     if (typeof x === 'boolean' || typeof x === 'number') out[k] = x
-    else if (typeof x === 'string' && /^[a-z][a-z0-9_-]{0,23}$/.test(x)) out[k] = x
   }
   return out
 }
