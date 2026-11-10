@@ -88,6 +88,12 @@ export interface BuildOptions {
   maxBytes?: number
   /** Test seam: mutate the serialised data/ files just before the final scan (criterion 22). */
   afterData?: (files: Record<string, string>) => void
+  /**
+   * Fleet profile (#591 contract C5/C6). When set: memos are forbidden whatever `includeMemos`
+   * says, the correlation map is empty, history is trimmed to `historyDays`, and the manifest
+   * carries `reason: "fleet"` and `round`. Absent for a ticket snapshot, which is unchanged.
+   */
+  fleet?: { round: string; historyDays: number }
 }
 
 export interface Manifest {
@@ -101,6 +107,10 @@ export interface Manifest {
   ticket_id: string
   code_ref: string
   support_pubkey: string
+  /** Fleet snapshots only (#591): `"fleet"`. Absent on a ticket snapshot. */
+  reason?: 'fleet'
+  /** Fleet snapshots only: the round id, equal to `ticket_id`. */
+  round?: string
   stall: boolean
   counts: { vouchers: number; transactions: number; storage_keys: number }
   files: Record<string, string>

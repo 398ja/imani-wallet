@@ -585,15 +585,23 @@ async function zipAll(files: Record<string, string>, mtime: Date): Promise<Uint8
  * Build, redact, pseudonymise, scan and sign a snapshot. Nothing leaves the device here: the caller
  * encrypts the result (crypto.ts) and uploads it only after the user confirms (service.ts).
  */
-export async function buildSnapshot(sources: SnapshotSources, opts: BuildOptions): Promise<BuiltSnapshot> {
+export async function buildSnapshot(sources: SnapshotSources, given: BuildOptions): Promise<BuiltSnapshot> {
+  const fleet = given.fleet
+  // Fleet profile (#591 C6): memos are forbidden, whatever the caller asked for.
+  const opts: BuildOptions = fleet ? { ...given, includeMemos: false } : given
   const now = opts.now ?? Date.now()
   const kCorr = opts.kCorr ?? randomBytes(32)
   const salt = opts.salt ?? randomBytes(16)
   const cap = (opts.maxBytes ?? MAX_SNAPSHOT_BYTES) - GCM_TAG
   const created = new Date(Math.floor(now / 1000) * 1000)
 
-  const attempt = async (since: number | null) => {
+  // Fleet: history never reaches further back than `historyDays`, whatever trimming picks below.
+  const floor = fleet ? Math.floor(now / 1000) - Math.max(0, Math.floor(fleet.historyDays)) * 86400 : null
+  const attempt = async (asked: number | null) => {
+    const since = floor === null ? asked : Math.max(asked ?? floor, floor)
     const a = assemble(sources, opts, kCorr, salt, since)
+    // Fleet: no K values support could match against gateway logs (#591 C1).
+    if (fleet) a.correlation = {}
     opts.afterData?.(a.data)
     finalScan(a.data, a.known)
     const createdAt = created.toISOString().replace(/\.\d{3}Z$/, 'Z')
@@ -616,6 +624,7 @@ export async function buildSnapshot(sources: SnapshotSources, opts: BuildOptions
       ticket_id: opts.ticket,
       code_ref: opts.codeRef,
       support_pubkey: opts.supportPubkey,
+      ...(fleet ? { reason: 'fleet' as const, round: fleet.round } : {}),
       stall: sources.stall,
       counts: a.counts,
       files,
