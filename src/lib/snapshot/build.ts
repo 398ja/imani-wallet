@@ -7,7 +7,7 @@ import type { TransactionRow, VoucherRow } from '@imani/wallet-storage'
 import { Pseudonyms, saltedHash, type PseudonymType } from './ids'
 import { IDB_STORES, RULES, SETTING_KEYS, reportableKeyName, ruleFor, type ReduceContext } from './inventory'
 import { findPattern, PII_SCRUBBER_VERSION, scrub } from './scrub'
-import { closed, ENUMS, knownFrame, knownTemplate } from './enums'
+import { closed, ENUMS, ERROR_TEMPLATES, knownFrame, knownTemplate } from './enums'
 import type { BuildOptions, BuiltSnapshot, EnvironmentFacts, ErrorEntry, Manifest, SnapshotSources } from './types'
 
 /** Owner decision: 20 MB of ciphertext. AES-GCM adds 16 bytes, so the zip cap leaves room for the tag. */
@@ -482,6 +482,11 @@ function isInfraUrl(s: string): boolean {
   } catch {
     return false
   }
+}
+
+/** The vocabulary, for the support side's matching check (exported; see vocabulary.test.ts). */
+export function dataVocabulary(): { words: string[]; fields: string[]; templates: string[] } {
+  return { words: [...VOCABULARY].sort(), fields: [...FIELD_NAMES].sort(), templates: ERROR_TEMPLATES.map((r) => r.source) }
 }
 
 /** Object keys the builder emits. Collected from a dry build of the seeded fixture would be circular, so listed. */
