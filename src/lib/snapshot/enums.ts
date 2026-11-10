@@ -8,6 +8,39 @@
 
 const set = (...v: string[]) => new Set(v)
 
+/**
+ * Console messages the code itself writes, read from the source at build time (vite.config.ts
+ * `__SNAPSHOT_CONSOLE__`). The capture side (consoleRing.ts) and the builder both hold a message to
+ * these, so a message carrying something a person typed is never kept.
+ */
+declare const __SNAPSHOT_CONSOLE__: { literals: string[]; templates: string[] } | undefined
+export const CONSOLE_MESSAGES = typeof __SNAPSHOT_CONSOLE__ !== 'undefined' ? __SNAPSHOT_CONSOLE__ : { literals: [], templates: [] }
+const CONSOLE_TAGS = [...CONSOLE_MESSAGES.literals, ...CONSOLE_MESSAGES.templates]
+  .map((m) => /^\[([a-zA-Z0-9_-]{1,40})\]/.exec(m)?.[1])
+  .filter((t): t is string => !!t)
+/** A template literal's static parts with each `${...}` as `<n>` or `<value>`, the only forms a captured message takes. */
+const CONSOLE_SHAPES = new Set<string>(
+  CONSOLE_MESSAGES.templates.flatMap((t) => {
+    const parts = t.split(/\$\{[^}]*\}/)
+    if (parts.length > 5) return []
+    // Every combination of <n>/<value> per hole, so the builder can check a captured message exactly.
+    let shapes = [parts[0]]
+    for (const p of parts.slice(1)) shapes = shapes.flatMap((s) => [s + '<n>' + p, s + '<value>' + p])
+    return shapes
+  }),
+)
+
+/** A captured console message, kept only if the code writes it; '<message>' otherwise. */
+export function knownConsoleMessage(m: unknown): string {
+  if (typeof m !== 'string') return '<message>'
+  return CONSOLE_MESSAGES.literals.includes(m) || CONSOLE_SHAPES.has(m) ? m : '<message>'
+}
+
+/** Every console message form data/ may hold, for the classifier and the support side's vocabulary. */
+export function consoleMessageForms(): string[] {
+  return [...new Set([...CONSOLE_MESSAGES.literals, ...CONSOLE_SHAPES])].sort()
+}
+
 export const ENUMS = {
   voucherStatus: set('active', 'pending', 'spent', 'redeemed', 'fully_redeemed', 'reserved', 'outstanding', 'claimed',
     'cancelled', 'expired', 'swapped_to_sats', 'reclaimed', 'minting', 'locking', 'returning', 'returned', 'blocked',
@@ -36,6 +69,10 @@ export const ENUMS = {
   /** ISO-4217 codes the wallet handles, plus its own units. */
   unit: set('sat', 'msat', 'sats', 'btc', 'eur', 'usd', 'gbp', 'chf', 'jpy', 'aud', 'cad', 'brl', 'mxn', 'krw', 'vnd', 'zar',
     'ngn', 'kes', 'ghs', 'tzs', 'ugx', 'xof', 'xaf', 'cfa', 'fcfa'),
+  /** Console capture (consoleRing.ts). Tags are the `[tag]` prefixes the code logs, from the build. */
+  consoleLevel: set('log', 'info', 'warn', 'error', 'debug'),
+  consoleTag: set('untagged', ...CONSOLE_TAGS),
+  consoleArg: set('number', 'boolean', 'null', 'undefined', 'error', 'id', 'string', 'object', 'array', 'other'),
 } as const
 
 export type EnumName = keyof typeof ENUMS
@@ -44,7 +81,7 @@ export type EnumName = keyof typeof ENUMS
 export function closed(name: EnumName, v: unknown): string | undefined {
   if (v === undefined || v === null || v === '') return undefined
   if (typeof v !== 'string') return 'other'
-  const s = name === 'errorName' || name === 'errorCode' ? v : v.toLowerCase()
+  const s = name === 'errorName' || name === 'errorCode' || name === 'consoleTag' ? v : v.toLowerCase()
   return (ENUMS[name] as Set<string>).has(s) ? s : 'other'
 }
 

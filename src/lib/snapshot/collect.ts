@@ -8,6 +8,7 @@ import { wrapMessage } from '../giftWrap'
 import { ownerPublisher } from '../terminalDeliveryNet'
 import type { SupportSnapshotConfig } from '../config'
 import { recentErrors } from './errorRing'
+import { flushConsole, recentConsole } from './consoleRing'
 import { defaultPost } from './service'
 import type { FlowDeps } from './flow'
 import type { SnapshotSigner, SnapshotSources } from './types'
@@ -55,6 +56,7 @@ export async function collectSources(pubkey: string, stall: boolean): Promise<Sn
     transactions,
     storage,
     errors: recentErrors(),
+    console: (flushConsole(), recentConsole()),
     idbStores: ['wallet_vouchers', 'wallet_transactions'],
     proofShapes,
     environment: {
