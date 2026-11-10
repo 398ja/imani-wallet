@@ -1,0 +1,18 @@
+{
+  "comment": "Shared with imani-wallet src/lib/snapshot/__tests__/scrub-vectors.json: every input must come out with none of its 'secret' substrings and with the named placeholder kind.",
+  "vectors": [
+    {"in": "mail alice.canary@example.org now", "secret": "alice.canary", "kind": "email"},
+    {"in": "call +31 6 12345678 today", "secret": "12345678", "kind": "phone"},
+    {"in": "iban NL91ABNA0417164300 ok", "secret": "NL91ABNA0417164300", "kind": "iban"},
+    {"in": "card 4111 1111 1111 1111", "secret": "4111 1111", "kind": "card"},
+    {"in": "lives at 221 Baker Street", "secret": "Baker Street", "kind": "address"},
+    {"in": "from 203.0.113.77 port", "secret": "203.0.113.77", "kind": "ip"},
+    {"in": "see https://shop.example.org/o?id=8812&x=y", "secret": "id=8812", "kind": "url"},
+    {"in": "pi_3CANARYstripeIntent9 failed", "secret": "pi_3CANARYstripeIntent9", "kind": "stripe"},
+    {"in": "auth Nostr eyJpZCI6ImFiYyIsInB1YmtleSI6ImRlZiJ9", "secret": "eyJpZCI6", "kind": "auth"},
+    {"in": "tok cashuBo2FteCJodHRwOi8vbG9jYWxob3N0", "secret": "cashuBo2Fte", "kind": "token"},
+    {"in": "npub1sg6plzptd64u62a878hep2kev88swjh3tw00gjsfl8f237lmu63q0uf63m x", "secret": "npub1sg6pl", "kind": "bech32"},
+    {"in": "pk e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1", "secret": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1", "kind": "hex"},
+    {"in": "code IMANI-7KQ4-M2XD-9WPC used", "secret": "7KQ4-M2XD", "kind": "code"}
+  ]
+}
