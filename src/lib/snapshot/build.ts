@@ -56,13 +56,18 @@ export function coarseBrowser(ua: string): string {
   return `${fam} / ${os}`
 }
 
-/** Infrastructure URLs are kept, but only scheme, host, port and path. */
+/** A host that is, or embeds, an IPv4 or IPv6 address (127.0.0.1.mint, 192.168.1.20, [fd00::1]). */
+const IP_HOST = /(^|\.)(\d{1,3}\.){3}\d{1,3}(\.|$)|^\[.*\]$/
+
+/** Infrastructure URLs are kept, but only scheme, host, port and path; an address host becomes ip-host. */
 function infraUrl(u: string | null | undefined): string | null {
   if (!u) return null
   try {
     const p = new URL(u)
     if (!/^(https?|wss?):$/.test(p.protocol)) return null
-    return `${p.protocol}//${p.host}${p.pathname === '/' ? '' : p.pathname}`
+    // An address says where a user's own server lives; the support case needs only that it was one.
+    const host = IP_HOST.test(p.hostname) ? `ip-host${p.port ? `:${p.port}` : ''}` : p.host
+    return `${p.protocol}//${host}${p.pathname === '/' ? '' : p.pathname}`
   } catch {
     return null
   }
