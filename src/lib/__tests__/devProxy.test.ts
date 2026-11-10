@@ -45,6 +45,8 @@ const TEST_STACK: Record<number, string> = {
   28086: 'bottin-api',
   28087: 'payment-adapter',
   28088: 'merchant-service',
+  // #589: support-snapshot (imani-support-agent code service), published on 127.0.0.1 only.
+  28091: 'support-snapshot',
   28186: 'cashback-claim',
   27777: 'imani-mint-rest',
   // Not in the compose stack: purchase-issuer is run from this repo on its own default port.

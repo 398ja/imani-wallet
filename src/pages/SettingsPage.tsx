@@ -1,5 +1,8 @@
 import { Link } from 'react-router-dom'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info, LifeBuoy } from 'lucide-react'
+
+import { supportSnapshotConfig } from '../lib/config'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
@@ -114,10 +117,28 @@ export function SettingsPage({
       <div className="mt-6">
         <ListSection title="Imani">
           <AboutRow />
+          <SupportSnapshotRow />
         </ListSection>
       </div>
     </Screen>
   )
+}
+
+/**
+ * Settings > Help > Share a support snapshot (#589). Shown only when the gateway names a support
+ * Blossom and npub, so a deployment without the feature shows nothing (criterion 13).
+ */
+function SupportSnapshotRow() {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    let live = true
+    supportSnapshotConfig().then((c) => live && setOn(c !== null), () => undefined)
+    return () => {
+      live = false
+    }
+  }, [])
+  if (!on) return null
+  return <SettingRow to="/settings/help/snapshot" icon={LifeBuoy} label="Share a support snapshot" hint="Only when Imani support asks" />
 }
 
 /** The row into Settings → About. Shared with the terminal's Settings, so every role has the same one. */
