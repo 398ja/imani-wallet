@@ -13,6 +13,7 @@ export const ALLOWED_PATHS = new Set([
   'envelope/manifest.json',
   'envelope/manifest.sig.json',
   'envelope/correlation.json',
+  'envelope/operator_only/memos.json',
   'data/environment.json',
   'data/vouchers.json',
   'data/transactions.json',

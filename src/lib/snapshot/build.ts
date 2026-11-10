@@ -145,7 +145,9 @@ function counterpartyType(v: unknown, stalls: Set<string>, self: string): Pseudo
 
 const timeStr = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d\d-\d\dT[\d:.]+Z?$/.test(v) ? v : undefined)
 const numOr = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
-const enumStr = (v: unknown) => (typeof v === 'string' && /^[a-z0-9_\-:.]{1,40}$/i.test(v) ? v : undefined)
+/** Code-written enum values only (see inventory.ts `str`); a typed value is dropped, never scrubbed. */
+const enumStr = (v: unknown) => (typeof v === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(v) ? v : undefined)
+const unitStr = (v: unknown) => (typeof v === 'string' && /^([A-Za-z]{3}|sat|msat)$/.test(v) ? v.toLowerCase() : undefined)
 
 function voucherRow(v: VoucherRow, ctx: ReduceContext, shape: SnapshotSources['proofShapes']) {
   const r = v as unknown as Rec
@@ -161,7 +163,7 @@ function voucherRow(v: VoucherRow, ctx: ReduceContext, shape: SnapshotSources['p
     token_amount: numOr(v.token_amount),
     proof_sum: s ? s.amounts.reduce((a, b) => a + b, 0) : numOr(r.proof_sum),
     face_value: numOr(v.face_value),
-    face_unit: enumStr(v.face_unit),
+    face_unit: unitStr(v.face_unit),
     face_decimals: numOr(v.face_decimals),
     backing_strategy: enumStr(v.backing_strategy),
     status: enumStr(v.status),
@@ -189,7 +191,7 @@ function transactionRow(t: TransactionRow, ctx: ReduceContext, stalls: Set<strin
     timestamp: t.timestamp,
     amount: numOr(t.amount),
     face_value: numOr(t.face_value),
-    face_unit: enumStr(t.face_unit),
+    face_unit: unitStr(t.face_unit),
     delivery_state: t.delivery_state,
     delivered_at: numOr(t.delivered_at),
     bundle_most_recent_part_at: timeStr(t.bundle_most_recent_part_at),
@@ -205,14 +207,30 @@ function transactionRow(t: TransactionRow, ctx: ReduceContext, stalls: Set<strin
       timestamp: p.timestamp,
       redemption_status: enumStr(p.redemptionStatus),
     })),
-    memo: ctx.memo(t.memo),
+    memo_summary: memoSummary(t.memo, ctx),
+  }
+}
+
+/**
+ * An opted-in memo's SHAPE, for data/ (2b rule 3): no word of it. A regex cannot find a person's
+ * name, so the text itself never reaches the model; the scrubbed text goes to the operator-only
+ * envelope instead (envelope/operator_only/memos.json), which the agent's tools cannot read.
+ */
+function memoSummary(memo: unknown, ctx: ReduceContext) {
+  if (ctx.memo(memo) === undefined || typeof memo !== 'string') return undefined
+  return {
+    length: memo.length,
+    words: memo.trim().split(/\s+/).filter(Boolean).length,
+    has_digits: /\d/.test(memo),
+    has_url: /https?:\/\/|www\./i.test(memo),
+    has_email: /@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(memo),
   }
 }
 
 function errorRow(e: ErrorEntry, known: Set<string>) {
   return {
     at: e.at,
-    name: enumStr(e.name) ?? 'Error',
+    name: /^[A-Za-z]{1,40}$/.test(e.name) ? e.name : 'Error',
     code: enumStr(e.code),
     template: scrub(String(e.template), known).slice(0, 300),
     frames: e.frames.filter((f) => /^[\w./-]{1,80}:\d{1,6}(:\d{1,6})?$/.test(f)).slice(0, 12),
@@ -239,6 +257,8 @@ interface Assembled {
   summary: BuiltSnapshot['summary']
   known: Set<string>
   rowsOmitted: number
+  /** Scrubbed opted-in memo text by tx pseudonym, for the human operator only; null when not opted in. */
+  operatorMemos: Record<string, string> | null
 }
 
 function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Array, salt: Uint8Array, sinceSeconds: number | null): Assembled {
@@ -303,6 +323,14 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
     storage[label] = rule.reduce!(value, name)
     reduced[rule.prefix] = storage[label]
   }
+  const operatorMemos: Record<string, string> = {}
+  if (opts.includeMemos) {
+    tx.forEach((t, i) => {
+      const m = name.memo(t.memo)
+      const p = transactions[i].tx
+      if (m !== undefined && p) operatorMemos[p] = m
+    })
+  }
   const errors = sources.errors.map((e) => errorRow(e, known))
 
   // derived.json: the balance check and money in flight (#589 section 4).
@@ -363,6 +391,7 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
     },
     known: new Set([...known, ...ps.realIds]),
     rowsOmitted,
+    operatorMemos: opts.includeMemos ? operatorMemos : null,
   }
 }
 
@@ -437,6 +466,7 @@ export async function buildSnapshot(sources: SnapshotSources, opts: BuildOptions
     const others: Record<string, string> = {
       ...a.data,
       'envelope/correlation.json': json({ v: 1, entries: a.correlation }),
+      ...(a.operatorMemos ? { 'envelope/operator_only/memos.json': json({ v: 1, memos: a.operatorMemos }) } : {}),
       'README.txt': README,
     }
     const files: Record<string, string> = {}

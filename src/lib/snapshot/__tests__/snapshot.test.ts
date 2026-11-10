@@ -73,12 +73,50 @@ describe('criterion 21: AI-safe data layer', () => {
     expect(data).toMatch(/stall#1/)
     expect(data).toMatch(/send#1/)
     expect(data).toMatch(/terminal#1/)
-    // Memo opted in: it is present, scrubbed to placeholders.
+    // Memo opted in: data/ has only its shape; the scrubbed text is in the operator-only envelope.
     const tx = JSON.parse(files['data/transactions.json'])
-    const memo: string = tx.rows.find((r: { send?: string }) => r.send)?.memo
+    const row = tx.rows.find((r: { send?: string }) => r.send)
+    expect(row.memo_summary.has_email).toBe(true)
+    const memo: string = JSON.parse(files['envelope/operator_only/memos.json']).memos[row.tx]
     expect(memo).toContain('<email>')
     expect(memo).toContain('<card>')
     expect(memo).toContain('<address>')
+  })
+
+  it('an opted-in memo with a name the wallet never stored stays out of data/ (operator-only envelope)', async () => {
+    const sources = seededSources({ memo: 'thanks Ottoline Brackenridge' })
+    const { zip } = await buildSnapshot(sources, { ...baseOptions(), includeMemos: true })
+    const { data, files } = archiveText(zip)
+    for (const f of forms('Ottoline')) expect(data.includes(f)).toBe(false)
+    const tx = JSON.parse(files['data/transactions.json'])
+    const row = tx.rows.find((r: { send?: string }) => r.send)
+    expect(row.memo).toBeUndefined()
+    expect(row.memo_summary).toEqual({ length: 28, words: 3, has_digits: false, has_url: false, has_email: false })
+    const op = JSON.parse(files['envelope/operator_only/memos.json'])
+    expect(op.memos[row.tx]).toBe('thanks Ottoline Brackenridge')
+  })
+
+  it('without the opt-in there is no memo anywhere, not even for the operator', async () => {
+    const { zip } = await buildSnapshot(seededSources({ memo: 'thanks Ottoline Brackenridge' }), baseOptions())
+    expect(archiveText(zip).all).not.toContain('Ottoline')
+    expect(Object.keys(unzipSync(zip))).not.toContain('envelope/operator_only/memos.json')
+  })
+
+  it('no user-entered string reaches data/: terminal labels, request descriptions, shop names, or text in enum-shaped fields', async () => {
+    const sources = seededSources()
+    const name = 'Ottoline Brackenridge'
+    sources.storage.push(
+      ['imani-wallet:terminals:' + SELF, JSON.stringify([{ terminalPubkey: TERMINAL, name, label: name, role: name, state: name, enrolledAt: 1 }])],
+      ['imani-wallet:payment-requests:' + SELF, JSON.stringify([{ id: 'r9', amount: 1, description: name, note: name, state: 'Ottoline', unit: name }])],
+      ['imani-wallet:merchant:' + SELF, JSON.stringify({ name, shopName: name, currency: 'Ottoline', open: true })],
+      ['imani-wallet:notifications:' + SELF, JSON.stringify([{ type: name, at: 2, body: name }])],
+      ['imani:settings', JSON.stringify({ nickname: 'ottoline', greeting: name })],
+    )
+    sources.transactions[0] = { ...sources.transactions[0], type: name, face_unit: 'Ottoline' } as never
+    sources.vouchers[0] = { ...sources.vouchers[0], status: name, backing_strategy: 'Ottoline' } as never
+    const { zip } = await buildSnapshot(sources, { ...baseOptions(), includeMemos: true })
+    const { data } = archiveText(zip)
+    for (const f of forms('Ottoline')) expect(data.includes(f), f).toBe(false)
   })
 
   it('coarsens the fingerprint: user agent family, language only, rounded storage', async () => {

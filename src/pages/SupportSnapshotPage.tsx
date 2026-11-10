@@ -20,7 +20,7 @@ import type { SnapshotSummary } from '../lib/snapshot/types'
  * leaves the device until Upload now.
  */
 export const CONSENT_TEXT =
-  'Share a support snapshot? It contains your vouchers\u2019 amounts and dates, your transaction history, your settings and recent errors (and, for a stall, your takings and terminals), so Imani support can see what went wrong. It never contains your key, your vouchers themselves, gift links, coupon codes, your email or your messages. Nobody can spend your money with it. It is encrypted so only Imani support can open it, and it is deleted from the upload server within 7 days (sooner once support collects it). Imani\u2019s support assistant (an AI) and a support person may read it. Before the AI sees anything, every name, address, key and id in it is replaced by a placeholder on your phone, so the AI services Imani uses (Anthropic, and possibly OpenAI) never see who you are. Support keeps it until 30 days after your ticket is closed, and deletes it sooner if you ask.'
+  'Share a support snapshot? It contains your vouchers\u2019 amounts and dates, your transaction history, your settings and recent errors (and, for a stall, your takings and terminals), so Imani support can see what went wrong. It never contains your key, your vouchers themselves, gift links, coupon codes, your email or your messages. Nobody can spend your money with it. It is encrypted so only Imani support can open it, and it is deleted from the upload server within 7 days (sooner once support collects it). Imani\u2019s support assistant (an AI) and a support person may read it. Before the AI sees anything, every name, address, key and id in it is replaced by a placeholder on your phone, so the AI services Imani uses (Anthropic, and possibly OpenAI) never see who you are. If you include memos, they are shown only to a support person, never to the AI. Support keeps it until 30 days after your ticket is closed, and deletes it sooner if you ask.'
 
 type Step =
   | { kind: 'code' }
@@ -119,7 +119,7 @@ export function SupportSnapshotPage({ pubkey, stall }: { pubkey: string; stall: 
         <Panel>
           <p className="text-sm" data-testid="snapshot-consent">{CONSENT_TEXT}</p>
           <div className="mt-3">
-            <Switch label="Include memos" hint="Off unless you turn it on. Names and numbers in them are replaced." checked={memos} onChange={setMemos} />
+            <Switch label="Include memos" hint="Off unless you turn it on. Memos are shown only to a support person, never to the AI." checked={memos} onChange={setMemos} />
           </div>
           <div className="mt-3 flex gap-2">
             <Button variant="secondary" onClick={() => setStep({ kind: 'code' })}>Cancel</Button>
