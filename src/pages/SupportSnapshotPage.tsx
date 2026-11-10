@@ -58,7 +58,7 @@ export function SupportSnapshotPage({ pubkey, stall }: { pubkey: string; stall: 
 
   const flow = useMemo(() => (config ? new SnapshotFlow(appDeps(config, stall)) : null), [config, stall])
 
-  if (config === undefined) return <Screen><BackLink to="/settings" label="Settings" /><p className="text-mono-500">Loading\u2026</p></Screen>
+  if (config === undefined) return <Screen><BackLink to="/settings" label="Settings" /><p className="text-mono-500">Loading…</p></Screen>
   if (config === null || !flow) {
     return (
       <Screen>
@@ -144,7 +144,7 @@ export function SupportSnapshotPage({ pubkey, stall }: { pubkey: string; stall: 
         </Panel>
       )}
 
-      {step.kind === 'building' && <Panel><p>Creating the snapshot on this device\u2026</p></Panel>}
+      {step.kind === 'building' && <Panel><p>Creating the snapshot on this device…</p></Panel>}
 
       {step.kind === 'size' && (
         <Panel>
@@ -172,7 +172,7 @@ export function SupportSnapshotPage({ pubkey, stall }: { pubkey: string; stall: 
         </Panel>
       )}
 
-      {step.kind === 'uploading' && <Panel><p>Uploading, then sending to support\u2026</p></Panel>}
+      {step.kind === 'uploading' && <Panel><p>Uploading, then sending to support…</p></Panel>}
       {step.kind === 'sent' && <Notice tone="success"><span data-testid="snapshot-sent">Sent to support for ticket {step.ticket}.</span></Notice>}
       {step.kind === 'kept' && <Notice tone="success">Kept on this device until the code expires. Nothing was sent.</Notice>}
 
