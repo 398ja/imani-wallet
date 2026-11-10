@@ -265,6 +265,7 @@ export const RULES: InventoryRule[] = [
   R('imani:verification:', stateOnly, 'verification status'),
   R('imani:issued:', counted, 'issued records'),
   R('imani-wallet:snapshots', counted, 'support snapshot records'),
+  X('imani-wallet:error-ring', 'read through errorRing.ts into data/errors.json, not as storage'),
   // accountStore.ts stores, keyed `imani-wallet:<name>:<pubkey>`.
   X('imani-wallet:held-coupons:', 'held coupons carry tokens'),
   X('imani-wallet:refused-coupons:', 'refused coupons carry tokens'),
@@ -284,6 +285,8 @@ export const IDB_STORES: Record<string, 'vouchers' | 'transactions' | 'cursor' |
   wrap: 'exclude',
   cache: 'exclude',
   follows: 'exclude',
+  // The "Not now" ciphertext itself (collect.ts, DB imani-wallet-snapshots): never re-snapshotted.
+  kept: 'exclude',
 }
 
 export function ruleFor(key: string): InventoryRule | undefined {

@@ -20,7 +20,8 @@ function subtle(): SubtleCrypto {
   return s
 }
 
-const buf = (b: Uint8Array) => b.slice().buffer as ArrayBuffer
+/** A fresh, exactly-sized copy, typed as WebCrypto's BufferSource. */
+const buf = (b: Uint8Array) => new Uint8Array(b) as Uint8Array<ArrayBuffer>
 
 export async function encryptSnapshot(zip: Uint8Array): Promise<SealedSnapshot> {
   const key = globalThis.crypto.getRandomValues(new Uint8Array(32))
