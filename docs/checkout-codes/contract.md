@@ -319,8 +319,10 @@ checks codes itself (Shopify gift cards) polls this and creates each code there.
 ### `POST /v1/checkout-codes/{code}/ready` (shop, #405)
 
 Body `{"ref": "gid://shopify/GiftCard/…"}` (the platform's id, at most 256 characters, kept for
-audit). Sets `shop_ready` and leaves the feed. Idempotent: the same call again answers the same
-`200 {"shop_ready": true}`. `404` for another shop's code, as everywhere (R2).
+audit). Sets `shop_ready` and leaves the feed. Idempotent: any later `/ready` answers the same
+`200 {"shop_ready": true}` and keeps the first `ref`. It does not look at the code's status: a code
+that was never provisioned, or is no longer `reserved`, also answers 200. `404` for another shop's
+code, as everywhere (R2).
 
 ### `GET /v1/checkout-codes/exposure?shop_key={S}` (stall)
 
