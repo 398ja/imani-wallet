@@ -38,8 +38,12 @@ were completed by the gateway's own retry afterwards.
 
 A retried part takes about one to two minutes. That is gateway-core's DM retry sweep
 (`retryStuckDmDeliveries`, every 120 s by default), and it is why the fixed wallet waits up to
-150 s on a retry state (`RETRY_WAIT_MS`). Under the pre-fix wallet (20 s, then give up), every one
-of the 42 retried parts would have stopped its bundle part-paid. That is the 2026-11-07 incident.
+150 s on a retry state (`RETRY_WAIT_MS`). The pre-fix wallet listed `DM_ERROR` as terminal, so it
+stopped on the first read that showed it, called reclaim (422) and ended the bundle. All 42
+retried parts reached `DM_ERROR` (that is how they were counted), so under the old wallet each of
+their bundles would have stopped part-paid, however quickly the retry then delivered. That is the
+2026-11-07 incident. This comparison is inferred from the old code, not measured: the old wallet
+was not run against the proxy.
 
 ## Not about #552
 
