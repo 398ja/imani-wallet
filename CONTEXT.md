@@ -208,6 +208,33 @@ The link a guest buyer is given to take an unclaimed gift back. It carries the
 gift's refund key, which only the buyer holds; it is never the claim link.
 _Avoid_: Refund link, claim link
 
+### Diagnostics
+
+**Support snapshot**:
+A point-in-time, pseudonymised copy of what the wallet knows about its own
+state, encrypted to Imani support and shared once, for one ticket, after the
+customer types the code support gave them and taps Upload now.
+_Avoid_: Dump, export, log bundle
+
+**Fleet snapshot**:
+A support snapshot built for no ticket: the customer opted in once, and the
+support service picked this install at random for a round. Never carries memos
+or correlation values, holds at most seven days of history, and is signed only
+by the fleet key.
+_Avoid_: Telemetry, crash report, sample
+
+**Fleet key**:
+A per-install key derived from the customer's key and a random nonce made at
+opt-in. The only identity a fleet snapshot or a health check carries, so
+support never learns the customer's key. Opting out deletes the nonce, and
+opting back in makes a new, unrelated fleet key.
+_Avoid_: Device key, client id, telemetry id
+
+**Health check**:
+What the customer sees of a fleet snapshot: one line in Snapshot history per
+upload, reading sent, received, deleted from server, or not sent.
+_Avoid_: Diagnostic, ping, heartbeat
+
 ### A note on Stall and Merchant
 
 **Stall** is the word, and everything a customer ever reads says it.

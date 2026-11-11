@@ -61,6 +61,11 @@ function counted(v: unknown) {
   return { count: rows.length }
 }
 
+/** Presence and serialised size only: nothing of the value. */
+function present(v: unknown) {
+  return { present: v !== null && v !== undefined, length: v === null || v === undefined ? 0 : JSON.stringify(v).length }
+}
+
 function pendingSends(v: unknown, ctx: ReduceContext) {
   return arr(v).filter(isRec).map((r) => ({
     send: ctx.id('send', r.sendId),
@@ -278,6 +283,9 @@ export const RULES: InventoryRule[] = [
   R('imani:verification:', stateOnly, 'verification status'),
   R('imani:issued:', counted, 'issued records'),
   R('imani-wallet:snapshots', counted, 'support snapshot records'),
+  // #591: the fleet opt-in record (install nonce), a held request (its code) and fleet history.
+  // Reported by family and size only: never a value, so neither the nonce nor a code reaches data/.
+  R('imani-wallet:fleet:', present, 'fleet opt-in state: presence only'),
   X('imani-wallet:error-ring', 'read through errorRing.ts into data/errors.json, not as storage'),
   X('imani-wallet:console-ring', 'read through consoleRing.ts into data/console.json, not as storage'),
   // accountStore.ts stores, keyed `imani-wallet:<name>:<pubkey>`.

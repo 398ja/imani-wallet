@@ -11,6 +11,8 @@ import {
 } from '../lib/snapshot/service'
 import { normaliseSnapshotCode } from '../lib/snapshot/code'
 import type { SnapshotSummary } from '../lib/snapshot/types'
+import { fleetHistoryLines } from '../lib/fleet/controller'
+import { readFleet } from '../lib/fleet/state'
 
 /**
  * Settings > Help > Share a support snapshot (#589 section 11).
@@ -177,16 +179,22 @@ export function SupportSnapshotPage({ pubkey, stall }: { pubkey: string; stall: 
       {step.kind === 'sent' && <Notice tone="success"><span data-testid="snapshot-sent">Sent to support for ticket {step.ticket}.</span></Notice>}
       {step.kind === 'kept' && <Notice tone="success">Kept on this device until the code expires. Nothing was sent.</Notice>}
 
-      {records.length > 0 && (
-        <Panel className="mt-4">
-          <p className="mb-2 font-medium">Your snapshots</p>
-          <ul className="text-sm" data-testid="snapshot-records">
-            {records.map((r) => (
-              <li key={r.sha256}>Ticket {r.ticket}: {stateLabel(r.state)} ({formatBytes(r.size)})</li>
-            ))}
-          </ul>
-        </Panel>
-      )}
+      {(() => {
+        // #591: fleet health checks share this history (criterion 12).
+        const fleet = fleetHistoryLines(readFleet(pubkey))
+        if (records.length === 0 && fleet.length === 0) return null
+        return (
+          <Panel className="mt-4">
+            <p className="mb-2 font-medium">Your snapshots</p>
+            <ul className="text-sm" data-testid="snapshot-records">
+              {records.map((r) => (
+                <li key={r.sha256}>Ticket {r.ticket}: {stateLabel(r.state)} ({formatBytes(r.size)})</li>
+              ))}
+              {fleet.map((l, i) => <li key={`fleet-${i}`}>{l}</li>)}
+            </ul>
+          </Panel>
+        )
+      })()}
     </Screen>
   )
 }
