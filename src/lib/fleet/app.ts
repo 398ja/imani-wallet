@@ -57,13 +57,27 @@ function moneyBusy(pubkey: string): boolean {
   return m.sends + m.swaps + m.cashlinks + m.codes > 0
 }
 
+/**
+ * The wallet key, lent only while the session signer IS this wallet. A controller cached across an
+ * account switch must never derive a fleet key from another wallet's key.
+ */
+export function appLender(walletPubkey: string) {
+  return {
+    withPrivkey<T>(f: (k: Uint8Array) => T): T {
+      const s = getSigner()
+      if (s.pubkey !== walletPubkey) throw new Error('fleet: signer is not this wallet')
+      return s.withPrivkey(f)
+    },
+  }
+}
+
 const controllers = new Map<string, FleetController>()
 
 export function fleetController(pubkey: string, stall: boolean): FleetController {
   const id = `${pubkey}:${stall}`
   let c = controllers.get(id)
   if (c) return c
-  const lender = { withPrivkey: <T,>(f: (k: Uint8Array) => T): T => getSigner().withPrivkey(f) }
+  const lender = appLender(pubkey)
   c = new FleetController({
     walletPubkey: pubkey,
     lender,

@@ -272,3 +272,34 @@ describe('requests and history (criteria 6, 12)', () => {
     ])
   })
 })
+
+describe('pending deregister expiry (review round 1)', () => {
+  it('a DELETE that never succeeds is dropped 30 days after opt-out', async () => {
+    const h = harness({ 'DELETE /api/v1/support/fleet/clients/self': () => new Response('', { status: 503 }) })
+    await h.c.optIn()
+    await h.c.optOut()
+    expect(readFleet(WALLET).deregisterNonce).not.toBeNull()
+    vi.setSystemTime(NOW + 29 * 86400_000)
+    await h.c.unlock()
+    expect(readFleet(WALLET).deregisterNonce).not.toBeNull()
+    vi.setSystemTime(NOW + 30 * 86400_000 + 1)
+    const n = h.calls.length
+    await h.c.unlock()
+    expect(readFleet(WALLET).deregisterNonce).toBeNull()
+    expect(localStorage.getItem(fleetKeyName(WALLET))).toBeNull()
+    expect(h.calls.length).toBe(n)
+  })
+  it('also dropped when fleet was switched off server-side (unlock returns early)', async () => {
+    let on = true
+    const h = harness({ 'DELETE /api/v1/support/fleet/clients/self': () => new Response('', { status: 503 }) }, {
+      config: async () => (on ? { enabled: true, support: { blossomUrl: 'http://localhost:28090', supportPubkey: SUPPORT, ttlSeconds: 604800 } } : { enabled: false, support: null }),
+    })
+    await h.c.optIn()
+    await h.c.optOut()
+    on = false
+    vi.setSystemTime(NOW + 31 * 86400_000)
+    await h.c.unlock()
+    expect(readFleet(WALLET).deregisterNonce).toBeNull()
+    expect(h.calls.filter((c) => c.method === 'DELETE').length).toBe(1)
+  })
+})

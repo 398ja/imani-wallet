@@ -4,14 +4,13 @@ import { Alert, BackLink, Button, PageHeader, Panel, Screen } from '../component
 import { fleetController } from '../lib/fleet/app'
 import { fleetHistoryLines, type FleetController } from '../lib/fleet/controller'
 import type { FleetState } from '../lib/fleet/state'
-import { CONSENT_TEXT } from './SupportSnapshotPage'
 
 /**
  * Settings > Help > Help improve Imani (#591 section 3). Off by default. One consent screen:
- * the fleet text below plus the #589 consent text. Turning it off deregisters and forgets at once.
+ * the fleet-specific text below (not the #589 ticket text). Turning it off deregisters and forgets at once.
  */
 export const FLEET_CONSENT_TEXT =
-  'Help improve Imani: share an anonymised snapshot now and then. Your wallet may be picked at random a few times a month. It then sends a snapshot like the one described below, on Wi-Fi only. You can turn this off at any time, and you will see each time it happens. Health check snapshots never include memos, and they are sent under a separate key made for this alone, so they are not linked to your wallet.'
+  'Help improve Imani by sharing an anonymised health check now and then. Your wallet may be picked at random, at most twice a month. It then sends, on Wi-Fi only, a snapshot of your vouchers\u2019 amounts and dates, your transaction history, your settings, recent errors and the app\u2019s recent technical log (and, for a stall, your takings and terminals). It never contains your key, your vouchers themselves, gift links, coupon codes, your email, your messages or your memos. Nobody can spend your money with it. It is encrypted so only Imani support can open it, and it is deleted from the upload server within 7 days (sooner once support collects it). Imani\u2019s support assistant (an AI) reads it, and a support person may too. Before the AI sees anything, every name, address, key and id in it is replaced by a placeholder on your phone, so the AI services Imani uses (Anthropic, and possibly OpenAI) never see who you are. Support keeps it for 14 days, then deletes it. Health checks are sent under a separate key made only for this, so they do not carry your wallet\u2019s identity. Each one appears in your snapshot history. You can turn this off at any time, and the server then forgets this device.'
 
 type Controller = Pick<FleetController, 'available' | 'status' | 'optIn' | 'optOut'>
 
@@ -83,7 +82,6 @@ export function FleetSnapshotView({ controller }: { controller: Controller }) {
         <Panel>
           <div data-testid="fleet-consent" className="space-y-3 text-sm">
             <p>{FLEET_CONSENT_TEXT}</p>
-            <p>{CONSENT_TEXT}</p>
           </div>
           <div className="mt-3 flex gap-2">
             <Button variant="secondary" data-testid="fleet-cancel" onClick={() => setAsking(false)}>Not now</Button>
