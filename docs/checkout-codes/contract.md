@@ -133,7 +133,9 @@ integers in the unit's **minor units**. Times are epoch **seconds**.
 - `"provision": true` (optional, #405): the shop must create the code on its own platform before
   it can be typed there (Shopify: a gift card). The code is stored with `shop_ready: false` and
   appears on the shop's `/provisioning` feed (below). The wallet sends it when the stall's
-  `online_shop.platform` is `shopify`.
+  `online_shop.platform` is `shopify`. The platform debits any amount from 1 to the balance, so
+  every part must be splittable: a part with `splittable: false` refuses the whole deposit with
+  `422 {"refusal": "NOT_SPLITTABLE", "part": i}` (the first such part).
 
 `201 {"code": "IMANI-…", "status": "reserved", "expires_at": …}`. The same
 `idempotency_key` from the same caller replays the same answer, including a deposit that
@@ -147,7 +149,8 @@ Refusals (`422 {"refusal": NAME, "part": i}`): `MALFORMED`, `TOO_MANY_PARTS`,
 `AMOUNT_MISMATCH`, `UNIT_MISMATCH`, `NOT_AUTHENTIC`, `WRONG_ISSUER`,
 `WRONG_LOCK_KEY`, `NOT_A_LOCK` (shape), `LOCKTIME_WITHOUT_REFUND`,
 `MIXED_EXPIRY`, `EXPIRY_OUT_OF_WINDOW`, `ALREADY_SPENT` (NUT-07),
-`DUPLICATE_PART`. `409 MINT_UNAVAILABLE` is retryable.
+`DUPLICATE_PART`, `NOT_SPLITTABLE` (#405, `provision: true` only).
+`409 MINT_UNAVAILABLE` is retryable.
 
 ### `GET /v1/checkout-codes/{code}`: look up (shop)
 
