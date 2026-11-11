@@ -53,6 +53,8 @@ export interface FleetState {
   held: HeldRequest | null
   uploads: FleetUpload[]
   deregisterNonce: string | null
+  /** Epoch ms of the opt-out that left `deregisterNonce`; dropped 30 days later (server forgets anyway). */
+  optedOutAt?: number
   /** The server accepted a register for the current opt-in. A 410 clears it (re-register once). */
   registered?: boolean
 }
@@ -94,6 +96,7 @@ export function readFleet(walletPubkey: string, store: Storage = localStorage): 
     held: parseHeld(raw.held),
     uploads: Array.isArray(raw.uploads) ? raw.uploads.map(parseUpload).filter((u): u is FleetUpload => !!u) : [],
     deregisterNonce: typeof raw.deregisterNonce === 'string' && HEX32.test(raw.deregisterNonce) ? raw.deregisterNonce : null,
+    optedOutAt: typeof raw.optedOutAt === 'number' ? raw.optedOutAt : undefined,
     registered: raw.registered === true && parseOptIn(raw.optIn) !== null,
   }
 }

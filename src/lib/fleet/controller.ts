@@ -4,7 +4,7 @@ import type { FleetConfig, SupportSnapshotConfig } from '../config'
 import { deregister, heartbeat, register, type FleetHttp, type Platform, type Timing } from './client'
 import { canLendKey, fleetSigner, type FleetSigner, type KeyLender } from './key'
 import { FleetScheduler } from './scheduler'
-import { readFleet, updateFleet, writeFleet, type FleetState, type FleetUploadState } from './state'
+import { THIRTY_DAYS_MS, readFleet, updateFleet, writeFleet, type FleetState, type FleetUploadState } from './state'
 import type { UploadOutcome } from './upload'
 
 /**
@@ -77,13 +77,18 @@ export class FleetController {
 
   /** On unlock: finish a pending deregister, then run the loop if opted in. */
   async unlock(): Promise<void> {
+    // FLEET_FORGET_AFTER: past 30 days the server has dropped the row; the old nonce has no use left.
+    const st = this.state()
+    if (st.deregisterNonce && (st.optedOutAt === undefined || this.deps.now() - st.optedOutAt > THIRTY_DAYS_MS)) {
+      writeFleet(this.deps.walletPubkey, { ...st, deregisterNonce: null, optedOutAt: undefined }, this.deps.storage)
+    }
     const c = await this.deps.config().catch(() => ({ enabled: false, support: null }) as FleetConfig)
     if (!c.enabled || !c.support) return
     this.support = c.support
     const pending = this.state().deregisterNonce
     if (pending) {
       const ok = await this.deregisterWith(pending)
-      if (ok) updateFleet(this.deps.walletPubkey, (s) => ({ ...s, deregisterNonce: s.deregisterNonce === pending ? null : s.deregisterNonce }), this.deps.storage)
+      if (ok) updateFleet(this.deps.walletPubkey, (s) => ({ ...s, deregisterNonce: s.deregisterNonce === pending ? null : s.deregisterNonce, optedOutAt: s.deregisterNonce === pending ? undefined : s.optedOutAt }), this.deps.storage)
     }
     if (!this.current()) return
     this.scheduler.start()
@@ -122,12 +127,12 @@ export class FleetController {
   async optOut(): Promise<void> {
     this.scheduler.stop()
     const nonce = this.state().optIn?.install_nonce ?? this.state().deregisterNonce
-    writeFleet(this.deps.walletPubkey, { optIn: null, held: null, uploads: [], deregisterNonce: nonce ?? null }, this.deps.storage)
+    writeFleet(this.deps.walletPubkey, { optIn: null, held: null, uploads: [], deregisterNonce: nonce ?? null, optedOutAt: nonce ? this.deps.now() : undefined }, this.deps.storage)
     // A beat already in flight could register AFTER our DELETE and bring the row back: let it end.
     await this.scheduler.idle().catch(() => undefined)
     if (!nonce) return
     const ok = await this.deregisterWith(nonce)
-    if (ok) updateFleet(this.deps.walletPubkey, (s) => ({ ...s, deregisterNonce: s.deregisterNonce === nonce ? null : s.deregisterNonce }), this.deps.storage)
+    if (ok) updateFleet(this.deps.walletPubkey, (s) => ({ ...s, deregisterNonce: s.deregisterNonce === nonce ? null : s.deregisterNonce, optedOutAt: s.deregisterNonce === nonce ? undefined : s.optedOutAt }), this.deps.storage)
   }
 
   private async deregisterWith(nonce: string): Promise<boolean> {

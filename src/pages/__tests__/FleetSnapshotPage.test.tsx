@@ -44,15 +44,13 @@ describe('Help improve Imani', () => {
     expect(c.optIn).not.toHaveBeenCalled()
   })
 
-  it('turning it on shows the one consent screen first, with both texts, and only then opts in', async () => {
+  it('turning it on shows the one fleet consent screen first, and only then opts in', async () => {
     const c = fake()
     draw(c)
     fireEvent.click(await screen.findByTestId('fleet-toggle'))
     const consent = await screen.findByTestId('fleet-consent')
-    expect(consent.textContent).toContain('Your wallet may be picked at random a few times a month.')
-    expect(consent.textContent).toContain('on Wi-Fi only')
-    expect(consent.textContent).toContain(CONSENT_TEXT.slice(0, 60))
-    expect(FLEET_CONSENT_TEXT).toContain('never include memos')
+    expect(consent.textContent).toBe(FLEET_CONSENT_TEXT)
+    expect(consent.textContent).not.toContain(CONSENT_TEXT.slice(0, 60))
     expect(c.optIn).not.toHaveBeenCalled()
     fireEvent.click(screen.getByTestId('fleet-agree'))
     await waitFor(() => expect(c.optIn).toHaveBeenCalledTimes(1))
@@ -105,5 +103,16 @@ describe('Support snapshot page history', () => {
     const src = (await import('node:fs')).readFileSync('src/pages/SupportSnapshotPage.tsx', 'utf8')
     expect(src).toContain('fleetHistoryLines')
     expect(typeof fleetHistoryLines).toBe('function')
+  })
+})
+
+describe('fleet consent text (review round 1)', () => {
+  it('is fleet-specific and accurate', async () => {
+    const c = fake()
+    draw(c)
+    fireEvent.click(await screen.findByTestId('fleet-toggle'))
+    const t = (await screen.findByTestId('fleet-consent')).textContent!
+    for (const s of ['14 days', 'at most twice a month', 'Wi-Fi', 'within 7 days', 'Anthropic', 'OpenAI', 'memos', 'separate key', 'snapshot history', 'forgets this device', 'takings and terminals', 'Nobody can spend']) expect(t, s).toContain(s)
+    for (const s of ['ticket', 'memos are shown', '30 days after', 'not linked', 'a few times a month']) expect(t.toLowerCase(), s).not.toContain(s.toLowerCase())
   })
 })
