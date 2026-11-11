@@ -6,7 +6,7 @@
  * and the code screen shows the code in the platform's form with Copy and Cancel.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type { VoucherRow } from '@imani/wallet-storage'
 
@@ -14,7 +14,7 @@ vi.mock('../../lib/trustedMint', () => ({ checkTokenBacking: () => ({ outcome: '
 
 const { UseOnlinePage } = await import('../UseOnlinePage')
 const W = await import('../../lib/__tests__/cashlinkWorld')
-const { checkSymbol } = await import('../../lib/checkoutCode')
+const { checkSymbol, display } = await import('../../lib/checkoutCode')
 type Deps = import('../UseOnlinePage').UseOnlineDeps
 type Rec = import('../../lib/checkoutCodeRecords').CheckoutCodeRecord
 
@@ -222,10 +222,46 @@ describe('Use online', () => {
     expect(link.textContent).not.toContain('/shop/checkout')
   })
 
-  it('Shopify gets the compact form', () => {
+  it('#405: Shopify gets the hyphenated form too', () => {
     codes = [record({ platform: 'shopify' })]
     at('/online/code/r1')
-    expect(screen.getByTestId('checkout-code').textContent).toBe(CODE)
+    expect(screen.getByTestId('checkout-code').textContent).toBe(display(CODE))
+  })
+
+  it('#405: a Shopify code is hidden while its shop prepares it, then shown', async () => {
+    vi.useFakeTimers()
+    try {
+      codes = [record({ platform: 'shopify', shopReady: false })]
+      let passes = 0
+      deps.reconcile = vi.fn(async () => {
+        if (++passes === 2) codes = [record({ platform: 'shopify', shopReady: true })]
+        return 0
+      })
+      at('/online/code/r1')
+      expect(screen.queryByTestId('checkout-code')).toBeNull()
+      expect(screen.queryByText('Copy')).toBeNull()
+      expect(screen.getByTestId('shop-preparing').textContent).toContain('Preparing your code for')
+      await act(async () => void (await vi.advanceTimersByTimeAsync(3_000)))
+      expect(screen.queryByTestId('checkout-code')).toBeNull()
+      await act(async () => void (await vi.advanceTimersByTimeAsync(3_000)))
+      expect(screen.getByTestId('checkout-code').textContent).toBe(display(CODE))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('#405: still not ready after ~2 minutes: says so', async () => {
+    vi.useFakeTimers()
+    try {
+      codes = [record({ platform: 'shopify', shopReady: false })]
+      deps.reconcile = vi.fn(async () => 0)
+      at('/online/code/r1')
+      await act(async () => void (await vi.advanceTimersByTimeAsync(121_000)))
+      expect(screen.getByTestId('shop-preparing').textContent).toContain('Still preparing')
+      expect(screen.queryByTestId('checkout-code')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

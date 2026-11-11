@@ -9,7 +9,8 @@ import { toMerchants } from '../lib/merchants'
 import { fetchMerchantRecord } from '../lib/merchant'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import { availableOf, checkoutPlan, maxExpiryFor, type CheckoutExclusion, type CheckoutPlan } from '../lib/checkoutPlan'
-import { compact, display } from '../lib/checkoutCode'
+import { display } from '../lib/checkoutCode'
+import { reconcileCheckoutCodesNow } from '../lib/checkoutCodesApp'
 import { loadCheckoutCodes, remainingOf, type CheckoutCodeRecord } from '../lib/checkoutCodeRecords'
 import { CHECKOUT_CODES_PATH, startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
 import { asCheckoutCodeSnapshot, checkoutTxId, CHECKOUT_STATUS_WORDS } from '../lib/checkoutCodeHistory'
@@ -50,6 +51,8 @@ export interface UseOnlineDeps {
   historyRow?: (txId: string) => Promise<Record<string, unknown> | null>
   /** #557: the store's `GET /mine`, for that code's current status. Null when it did not answer. */
   mine?: () => Promise<Array<Record<string, unknown>> | null>
+  /** #405: one catch-up pass (`/mine`), so a Shopify code waiting for its shop turns ready. */
+  reconcile?: (pubkey: string) => Promise<number>
 }
 
 const realDeps: UseOnlineDeps = {
@@ -72,7 +75,12 @@ const realDeps: UseOnlineDeps = {
   warm: () => {
     for (const url of trustedMintUrls()) warmMint(url)
   },
+  reconcile: reconcileCheckoutCodesNow,
 }
+
+/** #405: how often, and how long, a code waiting for its shop is re-checked. */
+export const SHOP_READY_POLL_MS = 3_000
+export const SHOP_READY_GIVE_UP_MS = 120_000
 
 const DAY_S = 86_400
 export const EXPIRY_CHOICES = [1, 7, 30] as const
@@ -145,6 +153,7 @@ const EXCLUSION_WORDS: Record<CheckoutExclusion, string> = {
   already_locked: 'is already locked',
   not_lockable: 'cannot be used online',
   expires_too_soon: 'expires too soon to use online',
+  not_splittable_for_shop: 'cannot be used at this shop',
 }
 
 export function UseOnlinePage({ pubkey, deps = realDeps }: { pubkey: string; deps?: UseOnlineDeps }) {
@@ -252,7 +261,7 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
   const denom = { unit, decimals }
   const x = loaded.nowS + days * DAY_S
   const amount = parseAmountToMinor(amountText, decimals) ?? 0
-  const plan: CheckoutPlan = checkoutPlan({ rows: loaded.rows, payer: pubkey, stallId: stall, unit, amount, x, nowS: loaded.nowS })
+  const plan: CheckoutPlan = checkoutPlan({ rows: loaded.rows, payer: pubkey, stallId: stall, unit, amount, x, nowS: loaded.nowS, requireSplittable: shop.platform === 'shopify' })
   const usable = availableOf(plan.usable)
   const latest = maxExpiryFor(plan.plan ?? plan.usable, loaded.nowS)
   const offered = EXPIRY_CHOICES.filter((d) => latest !== null && loaded.nowS + d * DAY_S <= latest)
@@ -412,8 +421,30 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
 }
 
 function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: UseOnlineDeps }) {
-  const [record] = useState<CheckoutCodeRecord | undefined>(() => deps.codes(pubkey).find((r) => r.id === id))
+  const [record, setRecord] = useState<CheckoutCodeRecord | undefined>(() => deps.codes(pubkey).find((r) => r.id === id))
   const [copied, setCopied] = useState(false)
+  const [gaveUp, setGaveUp] = useState(false)
+  const waiting = record?.shopReady === false
+  // #405: a Shopify code is hidden until the shop has made its gift card; re-check until it has.
+  useEffect(() => {
+    if (!waiting) return
+    let stopped = false
+    let tries = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = async () => {
+      await deps.reconcile?.(pubkey).catch(() => 0)
+      if (stopped) return
+      const now = deps.codes(pubkey).find((r) => r.id === id)
+      if (now && now.shopReady !== false) return setRecord({ ...now })
+      if (++tries * SHOP_READY_POLL_MS >= SHOP_READY_GIVE_UP_MS) return setGaveUp(true)
+      timer = setTimeout(() => void tick(), SHOP_READY_POLL_MS)
+    }
+    timer = setTimeout(() => void tick(), SHOP_READY_POLL_MS)
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+    }
+  }, [waiting, deps, pubkey, id])
   if (!record) return <CodeFromHistory id={id} deps={deps} />
   const shop = hostOf(record.shopUrl)
   const denom = { unit: record.unit, decimals: record.decimals }
@@ -433,7 +464,22 @@ function CodeScreen({ pubkey, id, deps }: { pubkey: string; id: string; deps: Us
       </Screen>
     )
   }
-  const shown = record.platform === 'shopify' ? compact(record.code) : display(record.code)
+  if (record.shopReady === false) {
+    return (
+      <Screen>
+        <BackLink to={`/merchants/${record.stall}`} label="Done" />
+        <PageHeader title="Your code" subtitle={record.shopUrl ? `Only works at ${shop}` : undefined} />
+        <StallCard stall={record.stall} shopUrl={record.shopUrl} linkToProfile />
+        <Notice tone="warning">
+          <span data-testid="shop-preparing">
+            {gaveUp ? 'Still preparing. Keep Imani open; it carries on where it stopped.' : `Preparing your code for ${shop}…`}
+          </span>
+        </Notice>
+      </Screen>
+    )
+  }
+  // #405: Shopify's checkout takes the hyphenated form too (dev store, 2026-11-11).
+  const shown = display(record.code)
   const onCopy = async () => {
     try {
       await navigator.clipboard.writeText(shown)
