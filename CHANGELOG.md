@@ -21,7 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     going through", kept in the pending ledger and finished at the next login, never reclaimed;
   - the wallet never calls reclaim. A send the gateway gives up on (`RECLAIM_READY`, then
     `RECLAIMED`) has its change applied and acked, and the gateway returns the voucher by DM;
-  - the screens no longer say "your remaining vouchers are untouched" of a part on its way back.
+  - the screens no longer say "your remaining vouchers are untouched" of a part on its way back;
+  - while a send or payment is in flight, the screen says which voucher of a bundle is going and,
+    once the gateway is retrying one, that it can take a few minutes and nothing is lost, instead
+    of "This takes a few seconds" for the whole wait.
 
 ## [0.61.1] - 2026-11-08
 

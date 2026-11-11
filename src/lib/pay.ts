@@ -1246,6 +1246,8 @@ async function awaitAndSettle(
   payer: string,
   pending: PendingSend,
   initialStatus: SendStatus,
+  /** Called once, when the gateway is first seen retrying this part (#552). */
+  onRetrying?: () => void,
 ): Promise<void> {
   // ponytail: poll rather than subscribe. The saga also streams over SSE
   // (api.subscribeAtomicSendEvents), which is what the vanilla app uses — but
@@ -1293,7 +1295,14 @@ async function awaitAndSettle(
     // #552: a step the gateway is retrying gets the longer wait, read less often. The gateway
     // retries a failed relay publish by itself and usually delivers within its two-minute
     // sweep; stopping at 20 s is what left the 2026-11-07 bundle paid in part.
-    if (GATEWAY_RETRYING.includes(String(status.status))) sawRetry = true
+    if (GATEWAY_RETRYING.includes(String(status.status)) && !sawRetry) {
+      sawRetry = true
+      try {
+        onRetrying?.()
+      } catch {
+        // The screen's concern; the send goes on regardless.
+      }
+    }
     if (!sawRetry && reads >= POLL_ATTEMPTS) break
     const wait = sawRetry ? Math.max(delayMs, RETRY_POLL_INTERVAL_MS) : delayMs
     if (Date.now() + wait > (sawRetry ? startedAt + RETRY_WAIT_MS : waitEndsAt)) break
@@ -1406,11 +1415,14 @@ export async function payRequest({
   request,
   merchant,
   payer,
+  onProgress,
 }: {
   request: NUT18VRequest
   raw: string
   merchant: Merchant
   payer: string
+  /** Where the payment is, for the screen (#552). */
+  onProgress?: (progress: SendProgress) => void
 }): Promise<SendResult> {
   // Checked HERE and not only on the screen, because this is the one door the
   // money leaves by. PayPage reads the clock when it loads — a request that
@@ -1454,6 +1466,7 @@ export async function payRequest({
       rowOf,
       unit: request.unit,
       paymentRequestId: request.paymentId,
+      onProgress,
     },
     inUnit,
     request.amount,
@@ -1542,6 +1555,31 @@ type SendContext = {
    * than a send. See `sendPart`.
    */
   paymentRequestId?: string
+  /** See `SendProgress`. Optional; never awaited, and a throw from it is ignored. */
+  onProgress?: (progress: SendProgress) => void
+}
+
+/**
+ * Where a send is, for the screen (#552). A part the gateway is retrying can take minutes
+ * (its DM retry sweep runs every two minutes), and a bundle waits for each part in turn, so
+ * "This takes a few seconds" was not true of it and the customer had no way to know it was
+ * still working.
+ */
+export type SendProgress = {
+  /** 1-based part being sent, and how many. 1 of 1 for a single coupon. */
+  part: number
+  parts: number
+  /** True while the gateway is retrying this part's delivery by itself. */
+  retrying: boolean
+}
+
+function report(onProgress: ((p: SendProgress) => void) | undefined, progress: SendProgress): void {
+  try {
+    onProgress?.(progress)
+  } catch {
+    // The progress line is cosmetic: a screen that cannot draw it must never stop money moving.
+    // Deliberately not logged, so the shared support-agent vocabulary (data/) is unchanged.
+  }
 }
 
 /**
@@ -1647,6 +1685,12 @@ async function sendPart(
       bundleId: bundle?.bundleId,
     },
     status,
+    () =>
+      report(ctx.onProgress, {
+        part: bundle ? bundle.index + 1 : 1,
+        parts: bundle ? bundle.count : 1,
+        retrying: true,
+      }),
   )
 
   return sendId
@@ -1715,6 +1759,7 @@ export async function sendVouchers({
   amount,
   memo,
   link,
+  onProgress,
 }: {
   payer: string
   /** Who gets it. `name` is stored on the row; see `buildSentTransaction`. */
@@ -1736,6 +1781,8 @@ export async function sendVouchers({
    * key. The rows this writes carry the link, and no ADR 0014 transfer signature is sent (Q7).
    */
   link?: GiftLinkRecord
+  /** Where the send is, for the screen (#552). */
+  onProgress?: (progress: SendProgress) => void
 }): Promise<SendResult> {
   // Refused here and not only on the screen, for the same reason the expiry
   // check lives in `payRequest`: this is the door money leaves by. A send to
@@ -1756,7 +1803,7 @@ export async function sendVouchers({
   if (link && issuerKey(merchant.pubkey) === issuerKey(payer)) throw new Error(OWN_STALL_COPY)
   const sendable = link ? inUnit.filter((v) => giftExclusion(v.token, v.issuer_id, payer) === null) : inUnit
 
-  return deliver({ api, payer, recipient, merchant, memo, rowOf, unit, link }, sendable, amount, unit)
+  return deliver({ api, payer, recipient, merchant, memo, rowOf, unit, link, onProgress }, sendable, amount, unit)
 }
 
 /**
@@ -1846,6 +1893,7 @@ async function deliverCounted(
   // carrying every payment on this stack since the beginning.
   const single = selectVouchers(vouchers, amount)
   if (single.length > 0) {
+    report(ctx.onProgress, { part: 1, parts: 1, retrying: false })
     const sendId = await sendPart(ctx, single, amount, null)
     return { id: sendId, requested: amount, delivered: amount, parts: 1, vouchers: 1 }
   }
@@ -1864,6 +1912,7 @@ async function deliverCounted(
   const vouchersIn = (n: number) => new Set(plan.parts.slice(0, n).map((p) => p.voucher.voucher_id)).size
   let delivered = 0
   for (const [index, part] of plan.parts.entries()) {
+    report(ctx.onProgress, { part: index + 1, parts: plan.parts.length, retrying: false })
     try {
       await sendPart(ctx, [part.voucher], part.amount, {
         bundleId,

@@ -1257,6 +1257,45 @@ describe('sendVouchers and payRequest', () => {
     expect(loadPendingSends(PAYER).map((p) => p.sendId)).toContain('as_1')
   })
 
+  // #552: the screen is told which voucher is going and when the gateway is retrying one, so a
+  // send that takes minutes does not sit under "This takes a few seconds".
+  it('reports each part, and the retry, to the screen', async () => {
+    stubs.rows = trio()
+    let retryingUntil = 0
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => {
+        const index = Number(params.bundlePartIndex)
+        if (index === 1) retryingUntil = Date.now() + 30_000
+        return { send_id: `as_${index}`, status: 'PENDING' }
+      },
+      getAtomicSendStatus: async (sendId: string) =>
+        sendId === 'as_1' && Date.now() < retryingUntil ? { status: 'DM_ERROR' } : { status: 'COMPLETED' },
+      ackKeepToken: async () => {},
+    })
+    wallet(trio())
+    const seen: Array<{ part: number; parts: number; retrying: boolean }> = []
+    vi.useFakeTimers()
+    try {
+      const sending = sendVouchers({
+        payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 1000,
+        onProgress: (p) => {
+          seen.push(p)
+          if (seen.length === 1) throw new Error('a broken screen must not stop the send')
+        },
+      })
+      await vi.runAllTimersAsync()
+      expect(await sending).toMatchObject({ delivered: 1000, parts: 3 })
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(seen).toEqual([
+      { part: 1, parts: 3, retrying: false },
+      { part: 2, parts: 3, retrying: false },
+      { part: 2, parts: 3, retrying: true },
+      { part: 3, parts: 3, retrying: false },
+    ])
+  })
+
   // #125: a gateway that cannot be read at all leaves the outcome UNKNOWN. That is the
   // "still going through" answer, which keeps the send in the ledger, never a failure.
   it('says a send is still going through when its status cannot be read at all', async () => {
