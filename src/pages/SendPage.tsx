@@ -321,8 +321,10 @@ export function SendPage({ pubkey }: { pubkey: string }) {
             ) : (
               <Alert>
                 {usedVouchers(sent) > 1 ? `${usedVouchers(sent)} vouchers went before the rest stopped. ` : ''}
-                The rest was not sent and your remaining vouchers are untouched — send
-                the difference again if you still mean to.
+                {/* #552: the part that stopped may be on its way back by DM rather than still
+                    in the wallet, so "untouched" was not true of it. */}
+                The rest was not sent. Its vouchers stay in your wallet or come back to it —
+                send the difference again if you still mean to.
                 {sent.shortfall ? ` (${sent.shortfall})` : ''}
               </Alert>
             )}

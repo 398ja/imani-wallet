@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A send the gateway is retrying is no longer called failed, and a bundle no longer stops
+  part-paid because one part's relay publish failed once (#552).** The wallet took `DM_ERROR`,
+  `SPLIT_ERROR` and `RECLAIM_READY` as the end of a send, gave up after 20 s, asked the gateway to
+  reclaim (which always answered 422) and forgot the send, while the gateway went on to deliver it.
+  On 2026-11-07 that left a stall with €21 of €31. Now:
+  - a send in `DM_ERROR`, `DM_RETRY_PENDING` or `SPLIT_ERROR` is waited out for up to 150 s, read
+    every 2 s, so the bundle goes on once the gateway's retry delivers it; past that it is "still
+    going through", kept in the pending ledger and finished at the next login, never reclaimed;
+  - the wallet never calls reclaim. A send the gateway gives up on (`RECLAIM_READY`, then
+    `RECLAIMED`) has its change applied and acked, and the gateway returns the voucher by DM;
+  - the screens no longer say "your remaining vouchers are untouched" of a part on its way back.
+
 ## [0.61.1] - 2026-11-08
 
 ### Fixed

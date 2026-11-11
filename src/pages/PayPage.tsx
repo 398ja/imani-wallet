@@ -203,7 +203,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         {partial && inFlight === 0 && (
           <Alert>
             {usedVouchers(status.result) > 1 ? `${usedVouchers(status.result)} vouchers went before the rest stopped. ` : ''}
-            The rest was not paid and your remaining vouchers are untouched — the
+            {/* #552: see SendPage. The part that stopped may be on its way back by DM. */}
+            The rest was not paid. Its vouchers stay in your wallet or come back to it — the
             merchant's request is still open for the difference.
             {status.result.shortfall ? ` (${status.result.shortfall})` : ''}
           </Alert>

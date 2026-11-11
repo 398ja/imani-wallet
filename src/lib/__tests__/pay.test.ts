@@ -8,8 +8,11 @@ import {
   sendVouchers,
   loadPendingSends,
   payRequest,
+  POLL_ATTEMPTS,
+  POLL_INTERVAL_MS,
   reconcilePendingSends,
   replaceVoucherToken,
+  RETRY_WAIT_MS,
   SendOutcomeUnknownError,
   signedPartOf,
   unreclaimableNote,
@@ -517,6 +520,97 @@ describe('reconcilePendingSends', () => {
     // A network answer is not a payment answer.
     expect(loadPendingSends(PK)).toHaveLength(1)
     error.mockRestore()
+  })
+
+  // #552: the gateway retries these by itself, so they are still in flight, not an end. Before,
+  // reconcile took DM_ERROR and SPLIT_ERROR as terminal, tried a reclaim that always failed, and
+  // dropped the record, losing track of a send the gateway delivered a minute later.
+  it.each(['DM_ERROR', 'DM_RETRY_PENDING', 'SPLIT_ERROR'])(
+    'keeps waiting on a send the gateway is retrying (%s), and never reclaims it',
+    async (state) => {
+      store.set(KEY, JSON.stringify([pending()]))
+      const reclaims: string[] = []
+      Object.assign(stubs.api, {
+        getAtomicSendStatus: async () => ({ status: state, keep_token: KEEP_TOKEN, keep_face_value: 900 }),
+        ackKeepToken: async () => {},
+        reclaimAtomicSend: async (id: string) => void reclaims.push(id),
+      })
+      const { saved, transactions, removed } = wallet(sourceRow)
+
+      expect(await reconcilePendingSends(PK)).toBe(0)
+
+      expect([saved, transactions, removed, reclaims]).toEqual([[], [], [], []])
+      expect(loadPendingSends(PK)).toHaveLength(1)
+    },
+  )
+
+  // #552: a send the gateway gave back has its change applied and acked, with no reclaim call
+  // and no row for the returned part (that arrives as a DM and dm-poll files it).
+  it.each(['RECLAIM_READY', 'RECLAIMED'])(
+    'applies the change of a send the gateway gave back (%s), and forgets it',
+    async (state) => {
+      store.set(KEY, JSON.stringify([pending()]))
+      const reclaims: string[] = []
+      const acked: string[] = []
+      Object.assign(stubs.api, {
+        getAtomicSendStatus: async () => ({
+          status: state,
+          keep_token: KEEP_TOKEN,
+          keep_face_value: 900,
+          is_full_send: false,
+        }),
+        ackKeepToken: async (id: string) => void acked.push(id),
+        reclaimAtomicSend: async (id: string) => void reclaims.push(id),
+      })
+      const { saved, transactions, removed } = wallet(sourceRow)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      expect(await reconcilePendingSends(PK)).toBe(0)
+
+      expect(saved).toHaveLength(1)
+      expect(saved[0]).toMatchObject({ token: KEEP_TOKEN, face_value: 900, issuer_id: sourceRow.issuer_id })
+      expect(removed).toEqual([sourceRow.token_id])
+      expect(transactions).toEqual([])
+      expect(reclaims).toEqual([])
+      expect(acked).toEqual(['as_fc6bd90785a74a9e'])
+      expect(loadPendingSends(PK)).toEqual([])
+      warn.mockRestore()
+    },
+  )
+
+  it('removes the source of a returned full send, and writes nothing for the part', async () => {
+    store.set(KEY, JSON.stringify([pending({ amount: 1200 })]))
+    Object.assign(stubs.api, {
+      getAtomicSendStatus: async () => ({ status: 'RECLAIMED', is_full_send: true }),
+      ackKeepToken: async () => {},
+    })
+    const { saved, transactions, removed } = wallet(sourceRow)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await reconcilePendingSends(PK)
+
+    expect(removed).toEqual([sourceRow.token_id])
+    expect(saved).toEqual([])
+    expect(transactions).toEqual([])
+    warn.mockRestore()
+  })
+
+  // Nothing says what the source is worth now, so it stays: a coupon shown but spent is refused
+  // by the mint on its next use, one deleted while it holds value is money the customer loses.
+  it('leaves the source alone when a returned partial send carries no change', async () => {
+    store.set(KEY, JSON.stringify([pending()]))
+    const acked: string[] = []
+    Object.assign(stubs.api, {
+      getAtomicSendStatus: async () => ({ status: 'RECLAIMED' }),
+      ackKeepToken: async (id: string) => void acked.push(id),
+    })
+    const { saved, removed } = wallet(sourceRow)
+    const quiet = [vi.spyOn(console, 'warn'), vi.spyOn(console, 'error')].map((s) => s.mockImplementation(() => {}))
+
+    await reconcilePendingSends(PK)
+
+    expect([saved, removed, acked]).toEqual([[], [], []])
+    quiet.forEach((s) => s.mockRestore())
   })
 })
 
@@ -1090,6 +1184,77 @@ describe('sendVouchers and payRequest', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // #552, the 2026-11-07 staging incident: one part's relay publish failed (DM_ERROR) and the
+  // gateway delivered it by itself 57 s later. The wallet used to call DM_ERROR the end, stop
+  // the bundle and leave the stall paid in part. It now waits the retry out and sends the rest.
+  it('waits out a part the gateway is retrying and delivers the whole bundle', async () => {
+    stubs.rows = trio()
+    const tried: number[] = []
+    const reclaims: string[] = []
+    let retryingUntil = 0
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => {
+        const index = Number(params.bundlePartIndex)
+        tried.push(index)
+        if (index === 1) retryingUntil = Date.now() + 57_000
+        return { send_id: `as_${index}`, status: 'PENDING' }
+      },
+      getAtomicSendStatus: async (sendId: string) =>
+        sendId === 'as_1' && Date.now() < retryingUntil
+          ? { status: 'DM_ERROR', error_code: 'RELAY_PUBLISH_FAILED' }
+          : { status: 'COMPLETED' },
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async (id: string) => void reclaims.push(id),
+    })
+    wallet(trio())
+    vi.useFakeTimers()
+    try {
+      const sending = sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 1000 })
+      await vi.runAllTimersAsync()
+      const result = await sending
+
+      expect(result).toMatchObject({ requested: 1000, delivered: 1000, parts: 3 })
+      expect(result.shortfall).toBeUndefined()
+      expect(tried).toEqual([0, 1, 2])
+      expect(reclaims).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #552: a retry that outlasts even the longer wait is reported as in flight, never as a
+  // failure, and nothing after it is tried: it may still arrive.
+  it('reports a part still retrying after the longer wait as in flight, not as unsent', async () => {
+    stubs.rows = trio()
+    const tried: number[] = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (params: Record<string, unknown>) => {
+        tried.push(Number(params.bundlePartIndex))
+        return { send_id: `as_${String(params.bundlePartIndex)}`, status: 'PENDING' }
+      },
+      getAtomicSendStatus: async (sendId: string) =>
+        sendId === 'as_1' ? { status: 'DM_RETRY_PENDING' } : { status: 'COMPLETED' },
+      ackKeepToken: async () => {},
+    })
+    wallet(trio())
+    vi.useFakeTimers()
+    try {
+      const startedAt = Date.now()
+      const sending = sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 1000 })
+      await vi.runAllTimersAsync()
+      const result = await sending
+
+      expect(result).toMatchObject({ requested: 1000, delivered: 400, inFlight: 400, parts: 2 })
+      expect(result.shortfall).toMatch(/still going through.*retrying the delivery by itself/s)
+      expect(tried).toEqual([0, 1])
+      // Bounded: the screen is not held past the retry window.
+      expect(Date.now() - startedAt).toBeLessThanOrEqual(RETRY_WAIT_MS + POLL_ATTEMPTS * POLL_INTERVAL_MS)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(loadPendingSends(PAYER).map((p) => p.sendId)).toContain('as_1')
   })
 
   // #125: a gateway that cannot be read at all leaves the outcome UNKNOWN. That is the
@@ -1853,7 +2018,8 @@ describe('sendVouchers and payRequest', () => {
       expect(reclaims).toEqual([])
     })
 
-    it.each(['FAILED', 'SPLIT_ERROR', 'EXPIRED'])('%s without a code: no reclaim attempted', async (state) => {
+    // SPLIT_ERROR left this list in #552: the gateway retries it, see the DM_ERROR case below.
+    it.each(['FAILED', 'EXPIRED', 'CANCELLED'])('%s without a code: no reclaim attempted', async (state) => {
       stubs.rows = [row()]
       const reclaims = ending({ status: state })
       wallet([row()])
@@ -1862,20 +2028,43 @@ describe('sendVouchers and payRequest', () => {
       expect(reclaims).toEqual([])
     })
 
-    // TOKEN_HELD / DM_RETRY_PENDING are reclaimable too but not terminal, so the
-    // poll never settles on them; the terminal held states are exercised here.
-    it.each(['DM_ERROR', 'RECLAIM_READY'])(
-      '%s: reclaims, and says the voucher is held by the gateway when that fails',
+    // #552: the wallet never asks the gateway to reclaim. RECLAIM_READY means the gateway is
+    // returning the voucher by DM by itself; the wallet applies the change and says so.
+    it.each(['RECLAIM_READY', 'RECLAIMED'])(
+      '%s: no wallet reclaim, says the voucher is coming back, never "held by the gateway"',
       async (state) => {
         stubs.rows = [row()]
-        const reclaims = ending({ status: state })
+        const reclaims = ending({ status: state, keep_token: 'cashuBchange', keep_face_value: 250, is_full_send: false })
         wallet([row()])
         const err = await send().catch((e: Error) => e)
-        expect(reclaims.length).toBeGreaterThan(0)
-        expect(new Set(reclaims)).toEqual(new Set(['as_1']))
-        expect(String(err)).toMatch(/Your voucher is held by the gateway \(send as_1\)/)
+        expect(reclaims).toEqual([])
+        expect(String(err)).toMatch(/gateway is returning the voucher to your wallet/)
+        expect(String(err)).not.toMatch(/held by the gateway/)
       },
     )
+
+    // #552: DM_ERROR is a retry at the gateway, not an end. A wait that runs out on it is
+    // "still going through", the send stays in the ledger, and nothing is reclaimed.
+    it.each(['DM_ERROR', 'DM_RETRY_PENDING', 'SPLIT_ERROR'])('%s to the end of the wait: still going through, kept in the ledger, no reclaim', async (state) => {
+      stubs.rows = [row()]
+      const reclaims = ending({ status: state, error_code: 'RELAY_PUBLISH_FAILED' })
+      wallet([row()])
+      vi.useFakeTimers()
+      try {
+        const sending = send()
+        const outcome = expect(sending).rejects.toThrow(SendOutcomeUnknownError)
+        await vi.runAllTimersAsync()
+        await outcome
+        await sending.catch((e: Error) => {
+          expect(e.message).toMatch(/retrying the delivery by itself/)
+          expect(e.message).not.toMatch(/held by the gateway/)
+        })
+      } finally {
+        vi.useRealTimers()
+      }
+      expect(reclaims).toEqual([])
+      expect(loadPendingSends(PAYER).map((p) => p.sendId)).toContain('as_1')
+    })
 
     it('unreclaimableNote is empty for an unknown code', () => {
       expect(unreclaimableNote({ status: 'FAILED', error_code: 'X' }, 's')).toBe('')

@@ -105,17 +105,36 @@ export function isDeadReplay(answer: unknown): boolean {
   return !isVoucherFullyRedeemed(a)
 }
 
-/** Terminal saga states, copied from atomicSendIntegration.js's own list. */
-const TERMINAL = [
-  'COMPLETED',
-  'FAILED',
-  'EXPIRED',
-  'DM_ERROR',
-  'RECLAIM_READY',
-  'RECLAIMED',
-  'CANCELLED',
-  'SPLIT_ERROR',
-]
+/**
+ * Saga states the gateway will not move on from by itself. Mirrors gateway-core's
+ * `SendState.isTerminal()`.
+ *
+ * #552: this used to be imani-apps' list, which also named DM_ERROR, SPLIT_ERROR and
+ * RECLAIM_READY. The gateway retries the first two and returns the third to the sender by
+ * itself, so the wallet gave up on sends the gateway went on to deliver: on 2026-11-07 a part
+ * whose relay publish failed once was delivered 57 s later, while the wallet had already called
+ * it failed, tried to reclaim it and stopped the bundle.
+ */
+const TERMINAL = ['COMPLETED', 'FAILED', 'EXPIRED', 'RECLAIMED', 'CANCELLED']
+
+/**
+ * States in which the gateway is retrying a step that failed (gateway-core's `isRetryable()`).
+ * The live wait gives these longer: `retryStuckDmDeliveries` runs every two minutes by default.
+ */
+const GATEWAY_RETRYING = ['SPLIT_ERROR', 'DM_ERROR', 'DM_RETRY_PENDING']
+
+/**
+ * Delivery gave up, and the gateway is sending the token back to the sender by NIP-17 self-DM
+ * (`SendReclaimService`, fired on entering this state). Not terminal: RECLAIMED follows. The
+ * wallet must not reclaim it as well, or the same money arrives twice.
+ */
+const RETURNING = 'RECLAIM_READY'
+
+/** Whether the wait for a send can stop: the gateway has a final answer, or is giving it back. */
+function isSettledAnswer(status: SendStatus): boolean {
+  const state = String(status.status)
+  return TERMINAL.includes(state) || state === RETURNING
+}
 
 export type SendStatus = {
   status?: string
@@ -187,24 +206,8 @@ function satsInToken(token: string): number | null {
 }
 
 /**
- * Pick the coupon to spend.
- *
- * Exact face value first: that makes it a FULL send, so the backend performs no
- * split and returns no keep_token — the one path that needs nothing from the
- * split endpoints this tier refuses. Otherwise the smallest coupon that covers
- * the amount, which is the ordinary split-and-change case.
- */
-/**
- * States where the backend really holds a token and will accept a reclaim.
- * Mirrors gateway-core's `SendState.isReclaimable()`. FAILED / SPLIT_ERROR /
- * EXPIRED are NOT here: the gateway refuses to reclaim them, and on those
- * states no token is held, so saying "held by the gateway" would be false.
- */
-const RECLAIMABLE = ['TOKEN_HELD', 'DM_ERROR', 'DM_RETRY_PENDING', 'RECLAIM_READY']
-
-/**
- * What to tell the user about their voucher when a send ended in a state that
- * cannot be reclaimed. Keyed on gateway-core's `error_code` (#117).
+ * What to tell the user about their voucher when a send ended without delivering and without
+ * anything to give back. Keyed on gateway-core's `error_code` (#117).
  */
 export function unreclaimableNote(status: SendStatus, sendId: string): string {
   switch (status.error_code) {
@@ -226,6 +229,15 @@ export function unreclaimableNote(status: SendStatus, sendId: string): string {
 
 export const POLL_ATTEMPTS = 40
 export const POLL_INTERVAL_MS = 500
+/**
+ * #552: how long the live wait keeps going while the gateway reports a retry
+ * (`GATEWAY_RETRYING`), counted from the start of the wait. Past gateway-core's default
+ * two-minute DM retry sweep, so a part whose relay publish failed once is seen through to its
+ * delivery and the bundle goes on, instead of stopping part-paid.
+ */
+export const RETRY_WAIT_MS = 150_000
+/** Reads during that longer wait are spaced out: the answer changes on the gateway's sweep. */
+export const RETRY_POLL_INTERVAL_MS = 2_000
 
 /**
  * Swap a coupon's token for a replacement (split change, or a reclaimed token).
@@ -296,43 +308,74 @@ export async function replaceVoucherToken(
   carryExpiryReminders(tokenId, newTokenId)
 }
 
+/** Whether the gateway gave up delivering this send and is giving (or has given) it back. */
+function isReturnedSend(status: SendStatus): boolean {
+  return status.status === RETURNING || status.status === 'RECLAIMED'
+}
+
 /**
- * Take the money back after a failed send.
+ * The local side of a send the gateway gave back to the sender instead of delivering (#552).
  *
- * `reclaimed_token` replaces the source coupon's token — the original proofs
- * were spent during the split, so the row must carry the new token or the
- * coupon is a listing for money that no longer exists. `token_id` is
- * content-derived, so it has to be recomputed rather than carried over.
+ * The split already spent the source coupon's proofs. What is left of them is the change
+ * (`keep_token`), which only this wallet can claim, and the part that was meant for the
+ * recipient, which the gateway returns by a NIP-17 DM to the sender (`SendReclaimService`) and
+ * dm-poll receives like any other coupon. So the source row becomes the change, or goes on a
+ * full send, and nothing else is written here: writing the returned part as well would list it
+ * twice once its DM arrives.
+ *
+ * The wallet never asks the gateway to reclaim. A reclaim of a part the gateway was still
+ * retrying raced that retry (the token could reach the recipient and come back to the sender
+ * at once), and the old reclaim replaced the source with the returned part, dropping the change.
+ *
+ * Returns the note for the user. Never throws: the caller is reporting a send that did not go
+ * through, and a failed write must not replace that.
  */
-async function reclaim(
-  api: { reclaimAtomicSend(sendId: string): Promise<{ reclaimed_token?: string }> },
+async function settleReturnedSend(
+  api: { ackKeepToken(sendId: string): Promise<void> },
   wallet: ReturnType<typeof getWallet>,
-  sendId: string,
-  tokenId: string,
+  payer: string,
+  pending: PendingSend,
   status: SendStatus,
 ): Promise<string> {
-  if (!RECLAIMABLE.includes(String(status.status))) return unreclaimableNote(status, sendId)
-  try {
-    const result = await api.reclaimAtomicSend(sendId)
-    if (!result?.reclaimed_token) {
-      return ' The gateway reported nothing to return.'
-    }
-
-    await replaceVoucherToken(wallet, tokenId, result.reclaimed_token)
-    notifyWalletChanged()
-    return ' Your voucher has been returned to your wallet.'
-  } catch (error) {
-    // Best-effort by design. A throw here would REPLACE the real failure with a
-    // secondary one, hiding why the payment failed at all. On this stack reclaim
-    // is itself unavailable ("Reclaim requires HTTP receive endpoint which is
-    // not yet available"), so this is the expected branch, and the user needs to
-    // be told the coupon is parked rather than silently gone.
-    console.error('[pay] reclaim failed', error)
-    return (
-      ` Your voucher is held by the gateway (send ${sendId}) and could not be` +
-      ` returned automatically: ${error instanceof Error ? error.message : String(error)}`
-    )
+  const returning =
+    ' It was not delivered, and the gateway is returning the voucher to your wallet:' +
+    ' it shows up again in a moment.'
+  // #461: an answer about some other send is never applied to this coupon.
+  const replay = replayedSendReason(payer, pending, status)
+  if (replay) {
+    console.error('[pay] not applying a returned send, coupon kept:', pending.sendId, replay)
+    return returning
   }
+  try {
+    const source = await wallet.getVoucher(pending.tokenId)
+    // Already applied (another tab, or a reconcile racing the live path).
+    if (!source) return returning
+    if (status.keep_token) {
+      await replaceVoucherToken(
+        wallet,
+        pending.tokenId,
+        status.keep_token,
+        status.keep_face_value ?? pending.sourceFaceValue - pending.amount,
+      )
+    } else if (status.is_full_send === true) {
+      if (!(await wallet.removeVoucher(pending.tokenId))) {
+        console.error('[pay] returned full send: coupon was not removed, key:', pending.tokenId)
+      }
+    } else {
+      // Neither change nor a full send: nothing says what the source is worth now, so it stays.
+      // A coupon shown but spent is refused by the mint on its next use; one deleted while it
+      // still holds value is money the customer cannot see.
+      console.error('[pay] returned send without its change, coupon kept:', pending.sendId)
+      return returning
+    }
+    notifyWalletChanged()
+  } catch (error) {
+    console.error('[pay] could not apply a returned send', pending.sendId, error)
+    return returning
+  }
+  // After the local write, never before, exactly as `settleSend` does.
+  await api.ackKeepToken(pending.sendId).catch(() => {})
+  return returning
 }
 
 /**
@@ -747,7 +790,6 @@ async function reconcileOnce(pubkey: string): Promise<number> {
   let api: {
     getAtomicSendStatus(sendId: string): Promise<SendStatus>
     ackKeepToken(sendId: string): Promise<void>
-    reclaimAtomicSend(sendId: string): Promise<{ reclaimed_token?: string }>
   }
   try {
     api = (await legacyApi()) as never
@@ -764,8 +806,8 @@ async function reconcileOnce(pubkey: string): Promise<number> {
     try {
       const status = await api.getAtomicSendStatus(send.sendId)
 
-      if (!TERMINAL.includes(String(status.status))) {
-        // Still in flight at the gateway. Keep waiting — but not forever: a send
+      if (!isSettledAnswer(status)) {
+        // Still in flight at the gateway, retries included (#552). Keep waiting — but not forever: a send
         // the gateway no longer recognises would otherwise be retried on every
         // login for the life of the wallet. The saga's own expiry is well inside
         // this window, so anything still non-terminal after a week is a row that
@@ -788,11 +830,11 @@ async function reconcileOnce(pubkey: string): Promise<number> {
         continue
       }
 
-      // Terminal but not completed. Same reasoning as the live path: the saga
-      // has already burnt the source coupon's proofs and is holding the
-      // replacement, so failing without reclaiming leaves the money in an escrow
-      // the customer cannot see.
-      const note = await reclaim(api, wallet, send.sendId, send.tokenId, status)
+      // Not delivered. Same rule as the live path (#552): a send the gateway gave back has its
+      // change applied here and its part returned by DM; any other end held nothing to return.
+      const note = isReturnedSend(status)
+        ? await settleReturnedSend(api, wallet, pubkey, send, status)
+        : unreclaimableNote(status, send.sendId)
       console.warn(`[pay] pending send ${send.sendId} ended as ${status.status}.${note}`)
     } catch (error) {
       // A status call that fails is a network answer, not a payment answer —
@@ -876,7 +918,6 @@ type SendApi = {
   ): Promise<{ send_id?: string; sendId?: string; status?: string }>
   getAtomicSendStatus(sendId: string): Promise<SendStatus>
   ackKeepToken(sendId: string): Promise<void>
-  reclaimAtomicSend(sendId: string): Promise<{ status?: string; reclaimed_token?: string }>
 }
 
 /**
@@ -1239,12 +1280,24 @@ async function awaitAndSettle(
   let polled = false
   let unreadable: unknown
   let delayMs = POLL_INTERVAL_MS
+  let reads = 0
+  // Once a retry is seen, the rest of the wait runs on the longer deadline: the gateway's retry
+  // passes back through TOKEN_HELD on its way to DM_SENT, and the short deadline has long gone
+  // by then, so reading that moment as "unknown" would stop the bundle anyway.
+  let sawRetry = false
   // The whole wait is bounded in time, not only in reads: a 429 asking for longer than is left
   // ends the wait with the outcome unknown, rather than holding the screen on "Sending".
-  const waitEndsAt = Date.now() + (POLL_ATTEMPTS + 1) * POLL_INTERVAL_MS
-  for (let i = 0; i < POLL_ATTEMPTS && !TERMINAL.includes(String(status.status)); i += 1) {
-    if (Date.now() + delayMs > waitEndsAt) break
-    await new Promise((resolve) => setTimeout(resolve, delayMs))
+  const startedAt = Date.now()
+  const waitEndsAt = startedAt + (POLL_ATTEMPTS + 1) * POLL_INTERVAL_MS
+  while (!isSettledAnswer(status)) {
+    // #552: a step the gateway is retrying gets the longer wait, read less often. The gateway
+    // retries a failed relay publish by itself and usually delivers within its two-minute
+    // sweep; stopping at 20 s is what left the 2026-11-07 bundle paid in part.
+    if (GATEWAY_RETRYING.includes(String(status.status))) sawRetry = true
+    if (!sawRetry && reads >= POLL_ATTEMPTS) break
+    const wait = sawRetry ? Math.max(delayMs, RETRY_POLL_INTERVAL_MS) : delayMs
+    if (Date.now() + wait > (sawRetry ? startedAt + RETRY_WAIT_MS : waitEndsAt)) break
+    await new Promise((resolve) => setTimeout(resolve, wait))
     const read = await readStatusOrKeepLast(api, pending.sendId, status)
     if (read.unreadable !== undefined && unreadable === undefined) {
       console.warn('[pay] send status unreadable, still waiting:', pending.sendId, read.unreadable)
@@ -1253,6 +1306,7 @@ async function awaitAndSettle(
     unreadable = read.unreadable
     delayMs = nextReadDelayMs(unreadable)
     polled = true
+    reads += 1
     if (isPermanentHttpError(unreadable)) break
   }
 
@@ -1279,9 +1333,8 @@ async function awaitAndSettle(
   // Running out of polls is NOT a failure, and must not be reported as one. A
   // saga still mid-flight has a non-terminal status, which used to fall into the
   // branch below and tell the customer "Payment did not complete" — while the
-  // recipient went on to receive the coupon moments later. `reclaim` could not
-  // soften it either: a non-terminal status is not in RECLAIMABLE, so it
-  // returned '' and nothing was reclaimed.
+  // recipient went on to receive the coupon moments later. #552: the same for a
+  // send the gateway is retrying, which is mid-flight too.
   //
   // The local coupon is deliberately left untouched: we do not know the outcome,
   // and deleting a coupon for a send that may yet fail is worse than showing one
@@ -1289,15 +1342,20 @@ async function awaitAndSettle(
   // the pending ledger so `reconcilePendingSends` can finish it on the next
   // login. Before that, a saga that completed late completed only at the
   // gateway; see that function for what it cost.
-  if (!TERMINAL.includes(String(status.status))) {
+  if (!isSettledAnswer(status)) {
     const cause =
       unreadable === undefined
         ? ''
         : ` We could not confirm it with the gateway (${unreadable instanceof Error ? unreadable.message : String(unreadable)}).`
+    // #552: a send the gateway is retrying is said to be retrying, so the customer is not
+    // left to read DM_ERROR as a failure. It is still kept in the ledger, like any unknown.
+    const retrying = GATEWAY_RETRYING.includes(String(status.status))
+      ? ' The gateway is retrying the delivery by itself.'
+      : ''
     throw new SendOutcomeUnknownError(
       `This ${noun} is still going through at the gateway (send ${pending.sendId}, ` +
         `${status.status ?? 'no status'}). It has NOT failed and your voucher is ` +
-        `unchanged here — check your history again in a moment before retrying.${cause}`,
+        `unchanged here — check your history again in a moment before retrying.${retrying}${cause}`,
       pending.sendId,
     )
   }
@@ -1311,12 +1369,14 @@ async function awaitAndSettle(
   }
 
   if (status.status !== 'COMPLETED') {
-    // The saga has already burned the source coupon's proofs by this point and
-    // is holding the replacement (TOKEN_HELD). Failing without reclaiming would
-    // leave the customer's money in an escrow they cannot see — the coupon
-    // would still be listed locally while being unspendable. The backend says
-    // as much on DM_ERROR: "sender should reclaim via RECLAIM_FROM_DM_ERROR".
-    const note = await reclaim(api, wallet, pending.sendId, pending.tokenId, status)
+    // #552: a send the gateway gave up on comes back to the sender by itself (RECLAIM_READY,
+    // then RECLAIMED). The change is applied here; the returned part arrives as a DM. Forgotten
+    // once applied: the gateway's return does not depend on this record, and keeping it would
+    // refuse every further send to this person until it cleared.
+    // Any other end (FAILED, EXPIRED, CANCELLED) held no token to give back: see #117.
+    const note = isReturnedSend(status)
+      ? await settleReturnedSend(api, wallet, payer, pending, status)
+      : unreclaimableNote(status, pending.sendId)
     forgetPendingSend(payer, pending.sendId)
     throw new Error(
       `This ${noun} did not complete (${status.status ?? 'no status'})` +
