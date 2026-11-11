@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info, LifeBuoy } from 'lucide-react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info, LifeBuoy, HeartPulse } from 'lucide-react'
 
-import { supportSnapshotConfig } from '../lib/config'
+import { fleetConfig, supportSnapshotConfig } from '../lib/config'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
@@ -118,6 +118,7 @@ export function SettingsPage({
         <ListSection title="Imani">
           <AboutRow />
           <SupportSnapshotRow />
+          <FleetRow />
         </ListSection>
       </div>
     </Screen>
@@ -139,6 +140,23 @@ function SupportSnapshotRow() {
   }, [])
   if (!on) return null
   return <SettingRow to="/settings/help/snapshot" icon={LifeBuoy} label="Share a support snapshot" hint="Only when Imani support asks" />
+}
+
+/**
+ * Settings > Help > Help improve Imani (#591). Shown only when the gateway serves fleet_enabled: true
+ * and a support npub; otherwise nothing, and nothing is sent.
+ */
+function FleetRow() {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    let live = true
+    fleetConfig().then((c) => live && setOn(c.enabled), () => undefined)
+    return () => {
+      live = false
+    }
+  }, [])
+  if (!on) return null
+  return <SettingRow to="/settings/help/improve" icon={HeartPulse} label="Help improve Imani" hint="Share an anonymised health check now and then" />
 }
 
 /** The row into Settings → About. Shared with the terminal's Settings, so every role has the same one. */

@@ -15,6 +15,7 @@ import {
   type UnconfirmedCoupon,
 } from './voucherRecords'
 import { sweepAppStorage } from './appStorage'
+import { stopAllFleet } from './fleet/app'
 import { carryPendingClaimsAcrossLogout } from './pendingClaim'
 import { moneyInFlight } from './inFlightMoney'
 import { strandedCashlinks } from './transactions'
@@ -599,6 +600,8 @@ export async function attemptLogout(
   //
   // And where each account was backed up (backupRecord.ts): logout deletes no
   // backup, so forgetting them would make the next passphrase change skip one.
+  // #591: stop every fleet loop before its record is swept, so nothing more is ever sent for it.
+  stopAllFleet()
   carryPendingClaimsAcrossLogout(() => sweepAppStorage(isKeptAcrossLogout))
 
   // And the coupons, the transaction history and the issued-coupon records.
