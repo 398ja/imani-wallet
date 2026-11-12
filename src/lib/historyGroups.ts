@@ -82,6 +82,23 @@ export function entryKey(entry: HistoryEntry): string {
 }
 
 /**
+ * How many VOUCHERS a folded line is, for its "N vouchers" chip.
+ *
+ * Not `parts.length`: a row is one token, and one voucher can come back as several (a checkout
+ * code's change, a Cashlink take-back, one row per proof), so a single €8.99 voucher read as
+ * "6 vouchers". Rows naming the same `voucherId` (and stall) are one voucher. A row with no
+ * `voucherId` is counted on its own, never merged into another.
+ */
+export function entryVoucherCount(entry: HistoryEntry): number {
+  if (entry.kind === 'single') return 1
+  const ids = new Set<string>()
+  for (const [i, tx] of entry.parts.entries()) {
+    ids.add(tx.voucherId ? `v:${(tx.merchantId ?? '').toLowerCase()}:${tx.voucherId}` : `row:${i}`)
+  }
+  return ids.size
+}
+
+/**
  * Fold rows that belong to one bundle into one entry, keeping list order.
  *
  * The group takes the position of its first (newest, in a newest-first list)

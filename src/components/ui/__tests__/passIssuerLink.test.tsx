@@ -89,10 +89,10 @@ describe('reaching the stall from its coupon', () => {
    * The outer one wins, so the card keeps the stronger promise it already made.
    */
   it('never nests the issuer link inside a whole-card link', () => {
-    draw(<Pass pass={coupon()} to="/merchants/x/coupons" issuerTo={`/profile/${ISSUER}`} />)
+    draw(<Pass pass={coupon()} to="/merchants/x/vouchers" issuerTo={`/profile/${ISSUER}`} />)
 
     const links = screen.getAllByRole('link')
     expect(links).toHaveLength(1)
-    expect(links[0].getAttribute('href')).toBe('/merchants/x/coupons')
+    expect(links[0].getAttribute('href')).toBe('/merchants/x/vouchers')
   })
 })

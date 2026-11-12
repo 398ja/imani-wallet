@@ -10,9 +10,10 @@
 /**
  * "1 voucher", "2 vouchers".
  *
- * "Voucher", not CONTEXT.md's "coupon", by product decision on #94: it is the
- * word the send screens and the rest of the notification copy already use,
- * and one payment described in two vocabularies would read as two things.
+ * "Voucher", CONTEXT.md's own word for what the customer holds (#94 chose it first, and the
+ * glossary now agrees; "coupon" names the checkout code). One payment described in two
+ * vocabularies would read as two things. Callers pass a count of VOUCHERS, not of stored rows
+ * or proofs (voucherCount.ts).
  */
 export const vouchers = (n: number) => `${n} voucher${n === 1 ? '' : 's'}`
 

@@ -16,6 +16,8 @@ import {
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
 import { couponsFor, fullyRedeemedRows, issuerKey, redeemedFor } from '../lib/merchants'
+import { asOneVoucher, groupByVoucher } from '../lib/voucherCount'
+import { vouchers as voucherNoun } from '../lib/bundleWording'
 import {
   expiredFor,
   reminderCandidates,
@@ -131,6 +133,10 @@ export function CouponsPage() {
   }, [pubkey, clock])
 
   const coupons = useMemo(() => sortCoupons(rows, sort), [rows, sort])
+  // One item per VOUCHER (voucherCount.ts): a voucher filed as several rows is one voucher to
+  // its holder, listed once at its whole value, in the position of its first row in this order.
+  const held = useMemo(() => groupByVoucher(coupons), [coupons])
+  const heldRedeemed = useMemo(() => groupByVoucher(redeemed), [redeemed])
   const chooseSort = (next: CouponSort) => {
     setSort(next)
     try {
@@ -150,8 +156,8 @@ export function CouponsPage() {
    * as it does when the whole list fits on one.
    */
   const { visible, page, pageCount, setPage } = usePagination([
-    ...coupons.map((row) => ({ row, redeemed: false })),
-    ...redeemed.map((row) => ({ row, redeemed: true })),
+    ...held.map((voucher) => ({ voucher, redeemed: false })),
+    ...heldRedeemed.map((voucher) => ({ voucher, redeemed: true })),
   ])
 
   // Where the spent ones start ON THIS PAGE, so the heading is drawn once and
@@ -165,9 +171,9 @@ export function CouponsPage() {
       // The count is the LIVE count, matching the merchant card. Redeemed ones
       // sit below under their own heading rather than swelling this number: they
       // are receipts for value already burnt, not vouchers this wallet holds.
-      subtitle={coupons.length === 1 ? '1 voucher' : `${coupons.length} vouchers`}
+      subtitle={voucherNoun(held.length)}
       toolbar={
-        coupons.length > 1 ? (
+        held.length > 1 ? (
           <div className="mb-3 flex gap-2" role="group" aria-label="Sort vouchers">
             {SORT_OPTIONS.map((option) => {
               const active = sort === option.value
@@ -208,13 +214,13 @@ export function CouponsPage() {
         <EmptyRow>{expired.length > 0 ? 'No vouchers you can still use.' : 'No vouchers.'}</EmptyRow>
       ) : (
         visible.map((item, index) => (
-          <Fragment key={item.row.token_id}>
+          <Fragment key={item.voucher.key}>
             {index === firstRedeemed && (
               <p className="bg-mono-50 px-4 py-2 text-xs font-medium uppercase tracking-wide text-mono-500 dark:bg-mono-900">
                 Redeemed
               </p>
             )}
-            <CouponListItem row={item.row} />
+            <CouponListItem row={asOneVoucher(item.voucher)} />
           </Fragment>
         ))
       )}
@@ -232,11 +238,12 @@ export function CouponsPage() {
  * stateless.
  */
 function ExpiredGroup({ rows }: { rows: VoucherRow[] }) {
-  if (rows.length === 0) return null
+  const vouchers = groupByVoucher(rows)
+  if (vouchers.length === 0) return null
   return (
     <details className="group mt-4 overflow-hidden rounded-2xl border border-mono-200 dark:border-mono-800">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium text-mono-600 outline-none ring-inset ring-mono-400 press-row focus-visible:ring-2 dark:text-mono-300 [&::-webkit-details-marker]:hidden">
-        <span className="flex-1">Expired ({rows.length})</span>
+        <span className="flex-1">Expired ({vouchers.length})</span>
         <ChevronDown
           aria-hidden
           className="h-4 w-4 shrink-0 text-mono-400 transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none"
@@ -246,8 +253,8 @@ function ExpiredGroup({ rows }: { rows: VoucherRow[] }) {
         These ran out before they were used. They can no longer be spent and are not in your balance.
       </p>
       <div className="divide-y divide-mono-200 border-t border-mono-200 dark:divide-mono-800 dark:border-mono-800">
-        {rows.map((row) => (
-          <CouponListItem key={row.token_id} row={row} />
+        {vouchers.map((voucher) => (
+          <CouponListItem key={voucher.key} row={asOneVoucher(voucher)} />
         ))}
       </div>
     </details>

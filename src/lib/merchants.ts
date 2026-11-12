@@ -28,7 +28,7 @@ export interface Merchant {
   name: string
   /** One entry per (unit, ratio) combination held from this merchant. */
   groups: MerchantGroup[]
-  /** Total coupons held, across all groups. */
+  /** Total VOUCHERS held, across all groups: one voucher filed as several rows counts once. */
   voucherCount: number
 }
 
@@ -133,7 +133,6 @@ export function toMerchants(rows: VoucherRow[]): Merchant[] {
     const existing = byPubkey.get(group.merchantId)
     if (existing) {
       existing.groups.push(group)
-      existing.voucherCount += group.voucherCount
       // Keep the first non-placeholder name we see.
       if (existing.name === existing.pubkey && group.merchantName) {
         existing.name = group.merchantName
@@ -143,14 +142,26 @@ export function toMerchants(rows: VoucherRow[]): Merchant[] {
         pubkey: group.merchantId,
         name: group.merchantName || group.merchantId,
         groups: [group],
-        voucherCount: group.voucherCount,
+        voucherCount: 0,
       })
     }
+  }
+  for (const merchant of byPubkey.values()) {
+    merchant.voucherCount = countGroupedVouchers(merchant.groups.flatMap((g) => g.vouchers))
   }
 
   return [...byPubkey.values()].sort(
     (a, b) => totalFaceValue(b) - totalFaceValue(a),
   )
+}
+
+/**
+ * Vouchers among grouper Vouchers, not rows: the same rule as `countVouchers` (voucherCount.ts).
+ * `toVoucher` sets `voucher_id` to the row's voucher id, or its token id when it has none, so a
+ * row with no voucher id stays its own voucher.
+ */
+function countGroupedVouchers(vouchers: readonly Pick<Voucher, 'voucher_id' | 'issuer_id'>[]): number {
+  return new Set(vouchers.map((v) => `${String(v.issuer_id ?? '').toLowerCase()}:${v.voucher_id}`)).size
 }
 
 /**
@@ -504,6 +515,7 @@ export function holdingForUnit(merchant: Merchant, unit: string): UnitHolding | 
     }
   }
   if (found) {
+    found.voucherCount = countGroupedVouchers(found.vouchers)
     found.totalFaceValue = roundedOnceTotal(found.vouchers)
     found.spendable = spendableTotal(found.vouchers)
   }
