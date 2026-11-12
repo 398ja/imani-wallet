@@ -47,6 +47,8 @@ import { spendableTotal } from './couponTotals'
 export const MAX_CHECKOUT_PARTS = 20
 
 export type CheckoutExclusion = 'wrong_stall' | 'wrong_unit' | 'in_flight' | 'already_locked' | 'not_lockable' | 'expires_too_soon'
+  /** #405: the shop (Shopify) splits every part, and this coupon cannot be split. */
+  | 'not_splittable_for_shop'
 
 export interface CheckoutCandidate {
   row: VoucherRow
@@ -97,6 +99,8 @@ export interface CheckoutPlanRequest {
   /** The code's expiry, every part's locktime, epoch seconds. */
   x: number
   nowS: number
+  /** #405: every part must be splittable (a Shopify shop: the store refuses `NOT_SPLITTABLE`). */
+  requireSplittable?: boolean
 }
 
 function isSplittable(v: Voucher): boolean {
@@ -231,6 +235,7 @@ export function checkoutPlan(req: CheckoutPlanRequest): CheckoutPlan {
     }
     const found = candidateOf(row, req.x, req.nowS, req.payer)
     if (typeof found === 'string') excluded.push({ row, reason: found })
+    else if (req.requireSplittable && !found.splittable) excluded.push({ row, reason: 'not_splittable_for_shop' })
     else usable.push(found)
   }
 

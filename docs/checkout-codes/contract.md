@@ -130,6 +130,12 @@ integers in the unit's **minor units**. Times are epoch **seconds**.
 - 1 ≤ parts ≤ 20.
 - Verification is all-or-nothing (R8). One bad part refuses the deposit, with
   `refusal` naming the first problem and `part` its index.
+- `"provision": true` (optional, #405): the shop must create the code on its own platform before
+  it can be typed there (Shopify: a gift card). The code is stored with `shop_ready: false` and
+  appears on the shop's `/provisioning` feed (below). The wallet sends it when the stall's
+  `online_shop.platform` is `shopify`. The platform debits any amount from 1 to the balance, so
+  every part must be splittable: a part with `splittable: false` refuses the whole deposit with
+  `422 {"refusal": "NOT_SPLITTABLE", "part": i}` (the first such part).
 
 `201 {"code": "IMANI-…", "status": "reserved", "expires_at": …}`. The same
 `idempotency_key` from the same caller replays the same answer, including a deposit that
@@ -143,7 +149,8 @@ Refusals (`422 {"refusal": NAME, "part": i}`): `MALFORMED`, `TOO_MANY_PARTS`,
 `AMOUNT_MISMATCH`, `UNIT_MISMATCH`, `NOT_AUTHENTIC`, `WRONG_ISSUER`,
 `WRONG_LOCK_KEY`, `NOT_A_LOCK` (shape), `LOCKTIME_WITHOUT_REFUND`,
 `MIXED_EXPIRY`, `EXPIRY_OUT_OF_WINDOW`, `ALREADY_SPENT` (NUT-07),
-`DUPLICATE_PART`. `409 MINT_UNAVAILABLE` is retryable.
+`DUPLICATE_PART`, `NOT_SPLITTABLE` (#405, `provision: true` only).
+`409 MINT_UNAVAILABLE` is retryable.
 
 ### `GET /v1/checkout-codes/{code}`: look up (shop)
 
@@ -271,7 +278,9 @@ customer. They go to the outbox.
 ### `GET /v1/checkout-codes/mine` (customer)
 
 The caller's codes, newest first:
-`[{ "code", "status", "amount", "remaining", "unit", "expires_at", "shop_key", "stall_pubkey", "idempotency_key" }]`.
+`[{ "code", "status", "amount", "remaining", "unit", "expires_at", "shop_key", "stall_pubkey", "idempotency_key", "shop_ready" }]`.
+`shop_ready` (#405) is `false` while a provisioned code waits for its shop, `true` otherwise: the
+wallet shows "Preparing your code…" and keeps the code hidden until it is `true`.
 `amount` is what was deposited, `remaining` what is left on the code now (#472).
 `idempotency_key` is the deposit's own (from 0.2.1): a wallet that lost a deposit's answer finds
 its code by it. Without it, the wallet matches a code by its exact terms (`expires_at`, `amount`,
@@ -300,6 +309,20 @@ this is a privacy boundary, not a theft one, and it says only what a holder need
 - Never: parts, tokens, `S`, the maker, the order, `original_amount`.
 - Every miss is the R2 404, byte for byte. Its own limits (R3), tighter than the NIP-98 API: per
   address, per code, and a global ceiling on misses that answers 429 to everyone while it is closed.
+
+### `GET /v1/checkout-codes/provisioning?limit=50` (shop, #405)
+
+The caller's provisioned codes not yet `shop_ready`, oldest first (limit 1..200), in `reserved`:
+`[{ "code", "amount", "unit", "expires_at" }]`. Any other caller gets `[]`. A shop whose platform
+checks codes itself (Shopify gift cards) polls this and creates each code there.
+
+### `POST /v1/checkout-codes/{code}/ready` (shop, #405)
+
+Body `{"ref": "gid://shopify/GiftCard/…"}` (the platform's id, at most 256 characters, kept for
+audit). Sets `shop_ready` and leaves the feed. Idempotent: any later `/ready` answers the same
+`200 {"shop_ready": true}` and keeps the first `ref`. It does not look at the code's status: a code
+that was never provisioned, or is no longer `reserved`, also answers 200. `404` for another shop's
+code, as everywhere (R2).
 
 ### `GET /v1/checkout-codes/exposure?shop_key={S}` (stall)
 
@@ -506,3 +529,27 @@ A `redeemed` that ends a balance code carries `remaining: 0` and the amount of t
 
 The store publishes its nostr key at `GET /v1/checkout-codes/info` (`{"nostr_pubkey": "…"}`,
 public). The wallet drops any notice whose seal is not that key.
+
+## 7. Shopify (#405)
+
+Shopify's checkout cannot call the store, so each code is created there as a **gift card** by the
+Imani Shopify backend (`imani-checkout-shopify`), which holds the shop's `S` and the merchant's
+app credentials (client credentials grant, scopes `read_orders, read_gift_cards,
+write_gift_cards, read_gift_card_transactions, write_gift_card_transactions`, protected customer
+data access on).
+
+1. **Provision:** poll `/provisioning`, `giftCardCreate` with `code` = the compact code,
+   `initialValue` = `amount` in the shop currency (must equal `unit`), `expiresOn` = the shop-local
+   date of `x − margin`, then `/ready` with the gift card id. A `Code has already been taken`
+   error means an earlier run created it: find it by code and call `/ready`.
+2. **Redeem:** read new orders. For every `gift_card` `CAPTURE` whose receipt `gift_card_id` is one
+   of ours, `applied` = its amount, `order_ref` = `shopify:<order id>:<gift card id>`. Then the
+   §5 flow: `hold`, `redeem` (with `mode: balance` when §5 says so), settle, `/rebalance` or
+   `/change`. The gift card is **not** deactivated: Shopify debits only what an order needs, so its
+   balance is the code's `amount`. After each order, `balance == amount` is checked and a mismatch
+   is alerted.
+3. **Below dust:** when what is left is under `dust_below`, the rest goes to the maker (§5) and the
+   card is deactivated.
+4. **Refund:** Shopify credits a refund back onto the card. The backend debits that credit off the
+   card again (`giftCardDebit`) and records it (ADR 0004: the stall owes the customer).
+5. **Expiry:** at `x − margin` the card is deactivated. After `x` the parts refund to `R`.

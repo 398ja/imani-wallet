@@ -437,6 +437,8 @@ async function deposit(ports: CheckoutPorts, pubkey: string, record: CheckoutCod
     amount,
     expires_at: record.x,
     parts,
+    // #405: the shop creates the code on its own platform first (a Shopify gift card).
+    ...(record.platform === 'shopify' ? { provision: true } : {}),
   }
   let answer: GatewayAnswer
   try {
@@ -452,6 +454,8 @@ async function deposit(ports: CheckoutPorts, pubkey: string, record: CheckoutCod
     record.amount = amount
     record.remaining = amount
     record.redemptions = []
+    // #405: hidden until the shop says its gift card exists (`shop_ready` on `/mine`).
+    if (record.platform === 'shopify') record.shopReady = answer.body?.shop_ready === true
     save(pubkey, record)
     return { kind: 'issued', record }
   }
@@ -886,7 +890,7 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
     if ((await runCheckoutCode(ports, pubkey, r.id)).kind !== 'pending') changed += 1
   }
 
-  let mine: Array<{ code?: string; status?: string; remaining?: number }> = []
+  let mine: Array<{ code?: string; status?: string; remaining?: number; shop_ready?: boolean }> = []
   try {
     const answer = await ports.store.call('GET', `${CHECKOUT_CODES_PATH}/mine`)
     if (answer.status === 200 && Array.isArray(answer.body)) mine = answer.body as typeof mine
@@ -903,16 +907,23 @@ export async function reconcileCheckoutCodes(ports: CheckoutPorts, pubkey: strin
     changed += await withCheckoutCodeLock(pubkey, found.id, async () => {
       const record = find(pubkey, found.id)
       if (!record || record.done) return 0
+      // #405: the shop made its gift card. Saved even when nothing else moved.
+      let ready = 0
+      if (entry.shop_ready === true && record.shopReady === false) {
+        record.shopReady = true
+        save(pubkey, record)
+        ready = 1
+      }
       // #472: a lost `rebalanced` (or a balance code's last order): less is left than we know of.
       const lost =
         typeof entry.remaining === 'number' &&
         Number.isSafeInteger(entry.remaining) &&
         entry.remaining < remainingOf(record) &&
         (entry.status === 'reserved' || entry.status === 'held' || (entry.status === 'redeemed' && (record.redemptions?.length ?? 0) > 0))
-      if (lost) return (await syncBalance(ports, pubkey, record.id)) === 'handled' ? 1 : 0
-      if (record.status === entry.status) return 0
+      if (lost) return (await syncBalance(ports, pubkey, record.id)) === 'handled' ? 1 : ready
+      if (record.status === entry.status) return ready
       // `settling` is the store waiting on the shop's `/rebalance`: nothing to do here yet.
-      if (entry.status === 'settling') return 0
+      if (entry.status === 'settling') return ready
       record.status = entry.status as CheckoutCodeStatus
       if (record.status === 'redeemed') {
         for (const p of record.parts) if (p.state === 'locked') p.state = 'settled'

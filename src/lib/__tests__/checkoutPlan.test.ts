@@ -132,6 +132,17 @@ describe('checkoutPlan (#402)', () => {
     expect(out.plan?.map((p) => p.row)).toEqual([flexible])
     expect(out.plan?.[0].splittable).toBe(true)
   })
+
+  it('#405: a Shopify shop takes only splittable coupons, and names the rest', () => {
+    const stuck = row(999, { sats: [1], ratio: 999.5 })
+    const flexible = row(999)
+    const out = checkoutPlan({ rows: [stuck, flexible], payer: PAYER, stallId: STALL, unit: 'EUR', amount: 999, x: X, nowS: NOW, requireSplittable: true })
+    expect(out.usable.map((c) => c.row)).toEqual([flexible])
+    expect(out.excluded).toEqual([{ row: stuck, reason: 'not_splittable_for_shop' }])
+    expect(out.plan?.map((p) => p.row)).toEqual([flexible])
+    // Without the option, both are usable.
+    expect(plan([stuck, flexible], 999).usable).toHaveLength(2)
+  })
 })
 
 describe('maxExpiryFor', () => {

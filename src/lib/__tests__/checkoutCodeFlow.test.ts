@@ -350,3 +350,36 @@ describe('notices', () => {
     expect(flow.parseCheckoutNotice('not json')).toBeNull()
   })
 })
+
+describe('#405: a Shopify code waits for its shop', () => {
+  const deposited = () => store.calls.find((c) => c.path === '/v1/checkout-codes' && c.method === 'POST')!.body as { provision?: boolean }
+
+  it('other platforms: no provision, and the code is ready at once', async () => {
+    await start([part(coupon([64], 'a'))])
+    expect(deposited().provision).toBeUndefined()
+    expect(only().shopReady).toBeUndefined()
+  })
+
+  it('shopify: provision sent, hidden until /mine says shop_ready, then ready', async () => {
+    await start([part(coupon([64], 'a'))], { shop: { ...SHOP, platform: 'shopify' } })
+    expect(deposited().provision).toBe(true)
+    expect(only().shopReady).toBe(false)
+    expect(await flow.reconcileCheckoutCodes(ports, ME)).toBe(0)
+    expect(only().shopReady).toBe(false)
+    store.shopReady = true
+    expect(await flow.reconcileCheckoutCodes(ports, ME)).toBe(1)
+    expect(only().shopReady).toBe(true)
+    expect(only().status).toBe('reserved')
+  })
+})
+
+describe('#405: NOT_SPLITTABLE', () => {
+  it('a 422 NOT_SPLITTABLE deposit is a definite refusal: no code, parts back at x', async () => {
+    store.nextDeposit = { status: 422, body: { refusal: 'NOT_SPLITTABLE' } }
+    const out = await start([part(coupon([64], 'a'))], { shop: { ...SHOP, platform: 'shopify' } })
+    expect(out.kind).toBe('abandoned')
+    expect(only().status).toBe('abandoned')
+    expect(only().refusal).toBe('NOT_SPLITTABLE')
+    expect(only().code).toBeUndefined()
+  })
+})

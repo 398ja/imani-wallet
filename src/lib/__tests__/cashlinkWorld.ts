@@ -739,6 +739,8 @@ export class FakeCodeStore {
   nextDeposit?: GatewayAnswer
   /** `/mine` names each code's idempotency key (imani-checkout-codes from 0.2.1). */
   mineNamesKeys = false
+  /** #405: the shop has made its gift card for every provisioned code. */
+  shopReady = false
   /** Called inside each deposit before it is checked, so a test can interleave two. */
   onDeposit?: () => Promise<void>
   private n = 0
@@ -762,6 +764,7 @@ export class FakeCodeStore {
           shop_key: c.body.shop_key,
           stall_pubkey: c.body.stall_pubkey,
           ...(this.mineNamesKeys ? { idempotency_key: c.body.idempotency_key } : {}),
+          shop_ready: !(c.body as { provision?: boolean }).provision || this.shopReady,
         })) as unknown as Record<string, unknown>,
       }
     }
