@@ -879,6 +879,32 @@ services:
       # 2026-10-28/29 this stack's gifting site charged a staging stall 55 times and staging recorded
       # each as a debt it owed (CardPaidNotIssued).
       STRIPE_ENVIRONMENT: "${STRIPE_ENVIRONMENT:-dev}"
+      # The gifting site (#410), carried over from local/integration-407-410: without these on
+      # main, /api/v1/gifting/* answered 404 and the gifting site looked down. Off unless
+      # PURCHASE_GIFTING_ENABLED=true (imani-deploy/.env.local), as in every other deployment.
+      PURCHASE_GIFTING_ENABLED: "${PURCHASE_GIFTING_ENABLED:-false}"
+      PURCHASE_GIFTING_PUBLIC_ORIGIN: "${GIFTING_DEV_ORIGIN:-http://localhost:5181}"
+      PURCHASE_GIFTING_RETURN_URL: "${GIFTING_DEV_ORIGIN:-http://localhost:5181}/return"
+      PURCHASE_GIFTING_ISSUER_PUBKEY: "${PURCHASE_GIFTING_ISSUER_PUBKEY:-}"
+      # #410 G14: which deliveries are sold. `self` until the stack mints gifts locked.
+      PURCHASE_GIFTING_KINDS: "${PURCHASE_GIFTING_KINDS:-self}"
+      # Local only: the handle domain has no https front, so its NIP-05 is read from bottin directly.
+      PURCHASE_GIFTING_NIP05_OVERRIDES: "imani.local=http://imani.local:8085"
+      # #410 G15: a guest's return link is emailed at Pay, through imani-mailer (its own client,
+      # scoped to gift-return-link). Without these, guest gifts are refused rather than charged.
+      PURCHASE_GIFTING_MAILER_URL: "http://imani-mailer:8095"
+      PURCHASE_GIFTING_MAILER_TOKEN: "${PURCHASE_GIFTING_MAILER_TOKEN:-}"
+      PURCHASE_GIFTING_WALLET_ORIGIN: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      # purchase-issuer runs on the host (~/.local/state/imani-purchase-issuer/run.sh, :8791).
+      PURCHASE_ISSUER_BASE_URL: "${PURCHASE_ISSUER_BASE_URL:-http://host.docker.internal:8791}"
+      PURCHASE_API_TOKEN: "${PURCHASE_API_TOKEN:-}"
+      # Resolving a parked purchase (POST /api/v1/purchases/{event}/resolve). Unset, every resolve
+      # answers 503 "purchase operator API is not configured". Must differ from the issuer's token.
+      PURCHASE_OPERATOR_TOKEN: "${PURCHASE_OPERATOR_TOKEN:-}"
+      # Where a signed-in gift buyer's role is read (customers only, never a stall).
+      PURCHASE_GIFTING_GATEWAY_BASE_URL: "http://gateway-customer:8082"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # Fake SMTP for every local email (#410: imani-mailer's claim, receipt and return-link mails).
   # Accepts anything on mailpit:1025 with no auth or TLS, delivers nothing, and shows every message
