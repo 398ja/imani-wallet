@@ -206,6 +206,12 @@ services:
       CUSTOMER_WALLET_SERVICE_TOKEN: "dev-merchant-portal-token-local-only"
       # imani-security >= 0.2.0 refuses to boot without it (SEC-02); the wallet dev origin.
       GATEWAY_SECURITY_NIP98_PUBLIC_BASE_URL: "${WALLET_DEV_ORIGIN:-http://localhost:5173}"
+      # Open-for-business status (portal#96) reads the stall's kind-30078 record from the
+      # relay. Off (the default), every status call is 503 and the wallet refuses to pay with
+      # "We can't check whether <stall> is open right now". Pinned to the LOCAL relay: the
+      # default primary is wss://relay.398ja.xyz, a public one.
+      GATEWAY_PORTAL_RELAY_ENABLED: "true"
+      GATEWAY_PORTAL_RELAY_PRIMARY: "ws://nostr-relay:7777"
 
   # Two changes:
   #
