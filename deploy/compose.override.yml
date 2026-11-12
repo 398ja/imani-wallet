@@ -868,6 +868,11 @@ services:
       # delivers checkout.session.completed here, so a paid card sale is never recorded and its
       # voucher never issued: the buyer sees "Your payment went through" and nothing arrives.
       STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+      # payment-adapter 0.27.0 (#308): this stack's Checkout Sessions say imani_env=dev, so staging
+      # (STRIPE_ENVIRONMENT=staging) does not record them when both share a Stripe test key. On
+      # 2026-10-28/29 this stack's gifting site charged a staging stall 55 times and staging recorded
+      # each as a debt it owed (CardPaidNotIssued).
+      STRIPE_ENVIRONMENT: "${STRIPE_ENVIRONMENT:-dev}"
 
   # Fake SMTP for every local email (#410: imani-mailer's claim, receipt and return-link mails).
   # Accepts anything on mailpit:1025 with no auth or TLS, delivers nothing, and shows every message
