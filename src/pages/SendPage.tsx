@@ -37,8 +37,10 @@ import {
   splitObstacle,
   usedVouchers,
   withoutInFlight,
+  type SendProgress,
   type SendResult,
 } from '../lib/pay'
+import { SendingNotice } from '../components/SendingNotice'
 import { userMessage } from '../lib/userMessage'
 
 /**
@@ -105,6 +107,8 @@ export function SendPage({ pubkey }: { pubkey: string }) {
   const [memo, setMemo] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [status, setStatus] = useState<Status>({ step: 'idle' })
+  /** #552: which voucher is going, and whether the gateway is retrying it. */
+  const [progress, setProgress] = useState<SendProgress | null>(null)
   const [sent, setSent] = useState<SendResult | null>(null)
 
   useEffect(() => {
@@ -321,8 +325,10 @@ export function SendPage({ pubkey }: { pubkey: string }) {
             ) : (
               <Alert>
                 {usedVouchers(sent) > 1 ? `${usedVouchers(sent)} vouchers went before the rest stopped. ` : ''}
-                The rest was not sent and your remaining vouchers are untouched — send
-                the difference again if you still mean to.
+                {/* #552: the part that stopped may be on its way back by DM rather than still
+                    in the wallet, so "untouched" was not true of it. */}
+                The rest was not sent. Its vouchers stay in your wallet or come back to it —
+                send the difference again if you still mean to.
                 {sent.shortfall ? ` (${sent.shortfall})` : ''}
               </Alert>
             )}
@@ -452,6 +458,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
             disabled={status.step === 'sending' || status.step === 'unconfirmed' || stallBlocked}
             onClick={async () => {
               setStatus({ step: 'sending' })
+              setProgress(null)
               try {
                 // #434: a stall recipient is asked again right before money moves.
                 if (stallRecipient) {
@@ -474,6 +481,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                   unit: chosen.unit,
                   amount: minor,
                   memo: memo.trim() || undefined,
+                  onProgress: setProgress,
                 })
                 setSent(result)
                 setStatus({ step: 'idle' })
@@ -513,11 +521,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
           )}
         </div>
 
-        {status.step === 'sending' && (
-          <p className="mt-3 text-center text-xs text-mono-400" role="status" aria-live="polite">
-            This takes a few seconds. Do not close this screen.
-          </p>
-        )}
+        {status.step === 'sending' && <SendingNotice progress={progress} />}
       </Screen>
     )
   }

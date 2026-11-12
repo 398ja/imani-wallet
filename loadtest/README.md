@@ -932,6 +932,70 @@ orders hold one code (`BROKEN=double`: exit 99, `race_one_winner` 0%), and setup
 The fixture overwrites `.loadtest-codes.json`, so move a real one aside first.
 Against staging, one smoke pass of each half. **No ramp has been run against staging.**
 
+## The bundle under relay failure (#552)
+
+    node loadtest/signer.mjs &
+    node loadtest/pool.mjs --size 60
+    GATEWAY_URL=http://localhost:28081 PORTAL_URL=http://localhost:28084 RELAY_URL=ws://localhost:27778 \
+      EDGE_SECRET=dev-edge-secret-local-only-32-plus-chars node loadtest/stalls.mjs --count 4
+    docker run -d --name dm-fault-proxy --network imani-test_imani-internal -p 127.0.0.1:28099:8082 \
+      -v "$PWD/loadtest/stub/dm-fault-proxy.mjs:/proxy.mjs:ro" -e FAIL_SHARE=0.3 node:22-alpine node /proxy.mjs
+    # recreate gateway-core and account-app with
+    #   GATEWAY_ATOMIC_SEND_DELIVERY_NIP17_CUSTOMER_WALLET_BASE_URL=http://dm-fault-proxy:8082
+    GATEWAY_URL=http://localhost:5173 PORTAL_URL=http://localhost:28084 ACCOUNT_URL=http://localhost:28081 \
+      EDGE_SECRET=dev-edge-secret-local-only-32-plus-chars FAULT_STATS_URL=http://localhost:28099/__fault/stats \
+      VUS=20 DURATION=10m k6 run loadtest/bundle-retry.js
+
+`GATEWAY_URL` is the **wallet origin** (`:5173`), not `:28082`. On the local stack gateway-customer
+checks a NIP-98 `u` against the wallet origin. Signed for `:28082`, every coupon read answers
+`401 URL mismatch`, no quote-backed coupon ever looks backed, and the run reports setup misses
+instead of bundles. A first 20-VU run lost 138 of 165 iterations to this.
+
+**Local stack only.** The proxy drops real deliveries on purpose. Point it at staging and it
+breaks other people's payments.
+
+On 2026-11-07 one part of a 10-part payment failed its relay publish once. The gateway delivered it
+57 s later by its own retry, but the wallet had already called the part failed and stopped the
+bundle, so the stall got €21 of €31. The other scenarios never saw this because no relay ever
+failed under them. So this one **makes** it fail, at the boundary where it failed:
+
+- `loadtest/stub/dm-fault-proxy.mjs` sits between gateway-core and customer-wallet.
+- For `FAIL_SHARE` of atomic sends (chosen by hashing `send:<id>`, so the choice is stable per
+  send), it answers the first `FAIL_ATTEMPTS` DM publishes with `502 RELAY_PUBLISH_FAILED`
+  without forwarding them. This is what customer-wallet answers when no relay took the gift wrap.
+- Self-DMs that return a reclaim are never failed.
+- `GET /__fault/stats` reports how many faults were injected, so a run reports injected
+  faults rather than assuming them.
+
+### What an iteration is
+
+1. A stall issues `PARTS` coupons.
+2. A customer pays them back to that stall as one bundle, sending the bundle fields the wallet
+   sends (`buildSendParams`), one part after another as `deliverCounted` does.
+3. Each part is followed the way the **fixed** wallet follows it: a retry state (`DM_ERROR`,
+   `DM_RETRY_PENDING`, `SPLIT_ERROR`) is not the end, and the run waits up to
+   `PART_WAIT_SECONDS` (150 s, the wallet's `RETRY_WAIT_MS`).
+
+On `RECLAIM_SHARE` of the parts seen in `DM_ERROR`, it also races a sender reclaim against the
+gateway's retry. This is the race the gateway fix closes.
+
+The probe is decided **once per part**, not on each status read. A first version rolled the dice on
+every 2 s read, which turned a 25% share into nearly 100% over a two-minute retry. Every injected
+fault (34 of 34) then ended `RECLAIMED` by the probe, and the gateway's own retry was never
+observed, so the run measured the wrong thing.
+
+### Gates
+
+| Gate | Value | Why |
+|---|---|---|
+| `bundle_complete` | `rate>0.95` | Every part arrived: the thing #552 is about. Parts the probe reclaimed count as the customer's choice. |
+| `part_recovered` | `rate>0.95` | Of the parts that went through a retry and were not reclaimed, the share that ended `COMPLETED`. |
+| `reclaim_refused_while_retrying` | `rate==1.0` | A reclaim in `DM_ERROR` gets `409` (the retry won) or the token (the reclaim won). The pre-fix answer, `422`, fails this. |
+| `no_double_handout` | `rate==1.0` | A part whose token went back to the sender never also ends `COMPLETED`. |
+
+When the proxy injected nothing, the summary says `NO PART WENT THROUGH A RETRY` instead of
+reporting a clean 100%. A rate with no samples prints `n/a (no samples)`, never 0%.
+
 ## What can and cannot be run against staging
 
 Every tier answers on **`wallet.staging.398ja.xyz`**, routed by path.
