@@ -4,7 +4,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 import { vouchers } from '../../lib/bundleWording'
 import { formatFace, formatDate, displayDecimals } from '../../lib/format'
-import { worstValidation, type HistoryEntry } from '../../lib/historyGroups'
+import { entryVoucherCount, worstValidation, type HistoryEntry } from '../../lib/historyGroups'
 import { isRedeemed } from '../../lib/merchants'
 import { expiryState } from '../../lib/couponExpiry'
 import { ExpiryBadge } from './ExpiryBadge'
@@ -131,7 +131,7 @@ export function HistoryListItem({ entry }: { entry: HistoryEntry }) {
   const Arrow = outgoing ? ArrowUpRight : ArrowDownLeft
   const label = transactionLabel(entry.parts[0]!)
   const total = formatFace(entry.amount, { unit: entry.unit, decimals: entry.decimals })
-  const count = vouchers(entry.parts.length)
+  const count = vouchers(entryVoucherCount(entry))
   const date = formatDate(entry.at)
   // Folding must not hide a failed check: the worst part's status rides on
   // the line (see worstValidation). And one payment has one memo, which the
