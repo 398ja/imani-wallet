@@ -4,6 +4,7 @@ import type { VoucherRow } from '@imani/wallet-storage'
 
 import {
   buildSendParams,
+  isDeadReplay,
   sendVouchers,
   loadPendingSends,
   payRequest,
@@ -2358,5 +2359,88 @@ describe('a settled payment request is never paid, or settled, twice (#461)', ()
     expect(removed).toEqual([source.token_id])
     expect(rows).toEqual([])
     expect(await reconcilePendingSends(PAYER)).toBe(0)
+  })
+})
+
+describe('paying a request again after it FAILED starts a new send (local SPLIT_ERROR retry)', () => {
+  const PAYER = 'c'.repeat(64)
+  const ISSUER = 'f'.repeat(64)
+  const merchant = { pubkey: ISSUER, name: 'John Radcliffe', groups: [], voucherCount: 0 }
+  const source = {
+    token_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    token: `cashuB${'o'.repeat(30)}`,
+    voucher_id: 'v-1',
+    face_value: 500,
+    face_unit: 'EUR',
+    face_decimals: 2,
+    token_amount: 500,
+    amount: 500,
+    issuer_id: ISSUER,
+    status: 'active',
+  } as unknown as VoucherRow
+
+  beforeEach(() => {
+    stubs.merchants.clear()
+    stubs.unreachable.clear()
+    const ls = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => ls.get(k) ?? null,
+      setItem: (k: string, v: string) => void ls.set(k, v),
+      removeItem: (k: string) => void ls.delete(k),
+    })
+    const rows = [source]
+    stubs.rows = rows
+    Object.assign(stubs.wallet, {
+      getVoucher: async (id: string) => rows.find((r) => r.token_id === id) ?? null,
+      removeVoucher: async (id: string) => {
+        const at = rows.findIndex((r) => r.token_id === id)
+        if (at >= 0) rows.splice(at, 1)
+        return at >= 0
+      },
+      saveVoucher: async (next: VoucherRow) => void rows.push(next),
+      addTransaction: async () => {},
+    })
+  })
+
+  /** The gateway's idempotency table: a key seen before answers with ITS send, as it stood. */
+  function gatewayWithDeadSend(deadKey: string, dead: Record<string, unknown>) {
+    const keys: string[] = []
+    Object.assign(stubs.api, {
+      initiateAtomicSend: async (_p: Record<string, unknown>, key?: string | null) => {
+        keys.push(String(key))
+        if (key === deadKey) return { send_id: 'as_dead', ...dead }
+        return { send_id: 'as_new', status: 'INITIATED' }
+      },
+      getAtomicSendStatus: async (id: string) =>
+        id === 'as_new' ? { status: 'COMPLETED', is_full_send: true, token_fingerprint: source.token_id } : dead,
+      ackKeepToken: async () => {},
+      reclaimAtomicSend: async () => ({}),
+    })
+    return keys
+  }
+
+  it('walks past the dead send to a fresh key and completes', async () => {
+    const base = `pay_r-9_${source.token_id}`
+    const keys = gatewayWithDeadSend(base, { status: 'FAILED', error_code: 'SPLIT_ERROR' })
+    const result = await payRequest({ request: request(500, { paymentId: 'r-9', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER })
+    expect(result.delivered).toBe(500)
+    expect(keys).toEqual([base, `${base}~1`])
+  })
+
+  it('does not walk past a send that says the coupon itself is spent', async () => {
+    const base = `pay_r-10_${source.token_id}`
+    const keys = gatewayWithDeadSend(base, { status: 'FAILED', error_code: 'SOURCE_PROOFS_NOT_UNSPENT' })
+    await expect(
+      payRequest({ request: request(500, { paymentId: 'r-10', issuerId: ISSUER }), raw: 'v', merchant, payer: PAYER }),
+    ).rejects.toThrow(/did not complete \(FAILED\)/)
+    expect(keys).toEqual([base])
+  })
+
+  it('classifies replays', () => {
+    expect(isDeadReplay({ status: 'FAILED', error_code: 'SPLIT_ERROR' })).toBe(true)
+    expect(isDeadReplay({ status: 'SPLIT_ERROR' })).toBe(true)
+    expect(isDeadReplay({ status: 'INITIATED' })).toBe(false)
+    expect(isDeadReplay({ status: 'COMPLETED' })).toBe(false)
+    expect(isDeadReplay({ status: 'FAILED', error_code: 'PHANTOM_SPEND' })).toBe(false)
   })
 })
