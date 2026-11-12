@@ -16,8 +16,10 @@ import {
   usedVouchers,
   withoutInFlight,
   withoutTombstoned,
+  type SendProgress,
   type SendResult,
 } from '../lib/pay'
+import { SendingNotice } from '../components/SendingNotice'
 import type { NUT18VRequest } from '../lib/nap'
 import { passedOverNote } from '../lib/passedOverWording'
 import { VoucherFullyRedeemedError } from '../lib/fullyRedeemed'
@@ -62,6 +64,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // never renders: the screen shows "Checking your coupons…" until then.
   const [loadedAt, setLoadedAt] = useState(0)
   const [status, setStatus] = useState<Status>({ step: 'review' })
+  /** #552: which voucher is going, and whether the gateway is retrying it. */
+  const [progress, setProgress] = useState<SendProgress | null>(null)
 
   type Parsed = { ok: true; request: NUT18VRequest } | { ok: false; error: string }
 
@@ -203,7 +207,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         {partial && inFlight === 0 && (
           <Alert>
             {usedVouchers(status.result) > 1 ? `${usedVouchers(status.result)} vouchers went before the rest stopped. ` : ''}
-            The rest was not paid and your remaining vouchers are untouched — the
+            {/* #552: see SendPage. The part that stopped may be on its way back by DM. */}
+            The rest was not paid. Its vouchers stay in your wallet or come back to it — the
             merchant's request is still open for the difference.
             {status.result.shortfall ? ` (${status.result.shortfall})` : ''}
           </Alert>
@@ -289,6 +294,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
         }
         onClick={async () => {
           setStatus({ step: 'paying' })
+          setProgress(null)
           try {
             // #434: ask again right before money moves. A stall that closed since the last poll
             // must not be paid, and nothing has left the wallet yet.
@@ -300,7 +306,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
               })
               return
             }
-            const result = await payRequest({ request, raw, merchant: merchant!, payer: pubkey })
+            const result = await payRequest({ request, raw, merchant: merchant!, payer: pubkey, onProgress: setProgress })
             setStatus({ step: 'done', result })
           } catch (e) {
             if (e instanceof RequestAlreadyPaidError) {
@@ -324,6 +330,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
               ? 'Already paid'
               : 'Pay'}
       </Button>
+      {/* #552: a payment the gateway is retrying can take minutes; the screen said nothing. */}
+      {status.step === 'paying' && <SendingNotice progress={progress} />}
     </Screen>
   )
 }
