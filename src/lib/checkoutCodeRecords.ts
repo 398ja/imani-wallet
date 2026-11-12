@@ -93,6 +93,11 @@ export interface CheckoutCodeRecord {
   shopKey: string
   shopUrl: string
   platform: string
+  /**
+   * #405: false while the shop has not yet created the code on its platform (Shopify), so it is
+   * hidden. Absent means ready (every other platform, and records from before #405).
+   */
+  shopReady?: boolean
   unit: string
   decimals: number
   /** Minor units. */
