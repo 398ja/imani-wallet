@@ -16,6 +16,8 @@ import {
   SendOutcomeUnknownError,
   signedPartOf,
   unreclaimableNote,
+  debitFor,
+  recordedAmount,
 } from '../pay'
 import { VoucherFullyRedeemedError } from '../fullyRedeemed'
 import { RequestAlreadyPaidError } from '../settledSends'
@@ -1757,6 +1759,76 @@ describe('sendVouchers and payRequest', () => {
     expect(sent).toEqual([])
   })
 
+  describe('the NGN overcharge: a send records what left the coupon', () => {
+    // 10 000.00 NGN on 7429 sats, about 134.6 kobo a sat. 1500.00 takes 1115 sats, worth
+    // 1500.87, and leaves a change worth 8499.13 (the gateway-parity vector in sendFace.test.ts).
+    const ngnToken = () =>
+      buildVoucherToken(
+        { unit: 'NGN', faceValue: 1_000_000, faceDecimals: 2, issuanceRatio: 1_000_000 / 7429 },
+        [4096, 2048, 1024, 256, 4, 1],
+      ).token
+    const ngnRow = (token: string) =>
+      row({ token, face_value: 1_000_000, face_unit: 'NGN', face_decimals: 2, token_amount: 7429, amount: 7429 })
+
+    function completing(status: Record<string, unknown>) {
+      gateway()
+      stubs.api.getAtomicSendStatus = async () => status
+      stubs.api.initiateAtomicSend = async () => ({ send_id: 'as_1', status: 'PENDING' })
+    }
+
+    it('records 1500.87 when the gateway reports the change its sats can back', async () => {
+      // Arrange
+      const source = ngnRow(ngnToken())
+      stubs.rows = [source]
+      completing({ status: 'COMPLETED', keep_token: `cashuB${'k'.repeat(30)}`, keep_face_value: 849_913, is_full_send: false })
+      const { transactions } = wallet([source])
+
+      // Act
+      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'NGN', amount: 150_000 })
+
+      // Assert
+      expect(transactions[0]).toMatchObject({ type: 'sent', amount: 150_087, unit: 'NGN' })
+    })
+
+    it('records the request when the gateway still reports parent minus request (not yet upgraded)', async () => {
+      // Arrange: what every gateway answered before the fix.
+      const source = ngnRow(ngnToken())
+      stubs.rows = [source]
+      completing({ status: 'COMPLETED', keep_token: `cashuB${'k'.repeat(30)}`, keep_face_value: 850_000, is_full_send: false })
+      const { transactions } = wallet([source])
+
+      // Act
+      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'NGN', amount: 150_000 })
+
+      // Assert
+      expect(transactions[0]).toMatchObject({ type: 'sent', amount: 150_000 })
+    })
+
+    it('debitFor says 1500.87 before the tap, and the exact amount on a EUR coupon', () => {
+      // Arrange
+      const ngnCoupon = coupon({ token: ngnToken(), face_value: 1_000_000, token_amount: 7429, face_unit: 'NGN' })
+      const eurCoupon = coupon({ token: buildVoucherToken({ unit: 'EUR', faceValue: 1000, issuanceRatio: 1000 / 13304 }, [8192, 4096, 1016]).token, face_value: 1000, token_amount: 13304, face_unit: 'EUR' })
+
+      // Act + Assert
+      expect(debitFor([ngnCoupon], 150_000)).toBe(150_087)
+      expect(debitFor([eurCoupon], 250)).toBe(250)
+      expect(debitFor([ngnCoupon], 0)).toBe(0)
+    })
+
+    it('recordedAmount never records less than the request and never trusts an unconfirmed figure', () => {
+      // Arrange
+      const token = ngnToken()
+
+      // Act + Assert
+      expect(recordedAmount(token, 150_000, { keep_token: 'k', keep_face_value: 849_913 })).toBe(150_087)
+      expect(recordedAmount(token, 150_000, { keep_token: 'k', keep_face_value: 849_000 })).toBe(150_000)
+      expect(recordedAmount(token, 150_000, { keep_token: 'k' })).toBe(150_000)
+      expect(recordedAmount(token, 150_000, { is_full_send: true })).toBe(150_000)
+      expect(recordedAmount(token, 999_950, { is_full_send: true })).toBe(1_000_000)
+      expect(recordedAmount(undefined, 150_000, { keep_token: 'k', keep_face_value: 849_913 })).toBe(150_000)
+    })
+  })
+
   describe('the sender signature (#91)', () => {
     const SENT_ID = 'ab'.repeat(16)
     /** The signature waits on a `merchantStatus` lookup and is not awaited by the send. */
@@ -1946,21 +2018,22 @@ describe('sendVouchers and payRequest', () => {
         status: 'COMPLETED',
         sent_voucher_id: SENT_ID,
         keep_token: `cashuB${'k'.repeat(30)}`,
-        keep_face_value: 4500,
+        keep_face_value: 4475,
       })
       wallet([source])
 
       await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'XAF', amount: 510 })
       await flush()
 
-      // The gateway sends floor(510 / 25) = 20 sats, which the receiver
-      // credits as round(20 x 25) = 500, not the 510 asked for.
-      const sentSats = Math.floor(510 / RATIO)
+      // A PROPORTIONAL coupon's part is rounded UP by the gateway (#114): the fewest sats worth
+      // 510 are ceil(510 / 25) = 21, which the receiver credits as round(21 x 25) = 525. This
+      // read floor(510 / 25) = 20 sats, 500, and the signature fell a sat short of the credit.
+      const sentSats = Math.ceil(510 / RATIO)
       const received = parseVoucherToken(
         buildVoucherToken({ issuanceRatio: RATIO, faceValue: 5000, faceDecimals: 0, unit: 'XAF' }, [sentSats]).token,
       )
       const credited = creditableFaceValue(received).faceValue
-      expect(credited).toBe(500)
+      expect(credited).toBe(525)
       // Exactly the figures the receiver's `withCommitment` compares, so the
       // receipt carries its commitment instead of dropping to the bare form.
       expect(signatures.calls).toEqual([

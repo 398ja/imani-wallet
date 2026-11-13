@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An NGN send says, and records, what really leaves the balance.** A sat of an NGN coupon is
+  worth about 128 kobo, so 1500.00 cannot be sent exactly: the gateway sends the fewest sats worth
+  it, up to a sat more. The history recorded 1500.00 while the balance fell by up to NGN 1.35 more.
+  The Pay and Send confirmation screens now show "Taken from your balance" with the real figure
+  before the tap (`debitFor`, `sendFace.ts`, which mirrors gateway-core's split), and the history
+  records it once the gateway's `keep_face_value` confirms it (`recordedAmount`); a gateway that
+  has not been upgraded is recorded as before. The transfer signature now commits to the sats the
+  gateway really sends on a PROPORTIONAL coupon (it assumed FLOOR, the gateway rounds up), so it
+  no longer falls a sat short of what the receiver credits. EUR, USD and XAF sends are unchanged.
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops
   part-paid because one part's relay publish failed once (#552).** The wallet took `DM_ERROR`,
   `SPLIT_ERROR` and `RECLAIM_READY` as the end of a send, gave up after 20 s, asked the gateway to
