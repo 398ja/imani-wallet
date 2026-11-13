@@ -80,7 +80,7 @@ async function keep(coupon: KeptCoupon): Promise<void> {
   // History, and the owner saw no record of it). A failed row write never undoes the kept coupon.
   if (coupon.why === 'claimed' || coupon.takenBack) {
     try {
-      await wallet.addTransaction(coupon.why === 'claimed' ? claimedRow(row, coupon.token, Date.now(), coupon.bundleId) : takenBackRow(row, coupon.token, Date.now(), coupon.bundleId))
+      await wallet.addTransaction(coupon.why === 'claimed' ? claimedRow(row, coupon.token, Date.now(), coupon.bundleId) : takenBackRow(row, coupon.token, Date.now(), coupon.bundleId, coupon.returnOf))
     } catch (error) {
       console.warn('[cashlink] coupon kept but its History row was not written', error instanceof Error ? error.message : 'unknown')
     }
@@ -108,10 +108,10 @@ export function claimedRow(row: VoucherRow, token: string, at = Date.now(), bund
  * The History row for a Cashlink coupon back with its issuer. Its own id (`returned:`), so it never
  * merges over the claim row of the same coupon on a wallet that both sent and claimed it.
  */
-export function takenBackRow(row: VoucherRow, token: string, at = Date.now(), bundleId?: string) {
+export function takenBackRow(row: VoucherRow, token: string, at = Date.now(), bundleId?: string, returnOf?: string) {
   const received = claimedRow(row, token, at, bundleId) as unknown as Record<string, unknown>
   const id = `returned:${String((row as unknown as Record<string, unknown>).token_id)}`
-  return { ...received, id, txId: id, memo: CASHLINK_TAKEN_BACK_MEMO } as unknown as ReturnType<typeof claimedRow>
+  return { ...received, id, txId: id, memo: CASHLINK_TAKEN_BACK_MEMO, ...(returnOf ? { returnOf } : {}) } as unknown as ReturnType<typeof claimedRow>
 }
 
 export function appCashlinkPorts(): CashlinkPorts {

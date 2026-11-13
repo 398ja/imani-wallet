@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   found no take-back in History. That row, and the one written by Take it back on such a link, now
   reads "Taken back from Cashlink" in the link's bundle, as a locked link's take-back has since
   0.55.3. App only, no configuration.
+- **A Cashlink take-back links to the Cashlink it came from.** Every take-back row, locked link or
+  not, at expiry or by Take it back, now names the row that made the Cashlink (`returnOf`, a row
+  id, never the link key). Its record page has "See the Cashlink you sent", and the Cashlink's
+  record page lists what "Came back" from it. The link travels in the encrypted history backup
+  (`return_of`), so a restored device keeps it. Rows written before this have no link.
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops
   part-paid because one part's relay publish failed once (#552).** The wallet took `DM_ERROR`,
   `SPLIT_ERROR` and `RECLAIM_READY` as the end of a send, gave up after 20 s, asked the gateway to
