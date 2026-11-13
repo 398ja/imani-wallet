@@ -45,6 +45,22 @@ describe('sendFaceOf', () => {
     expect(face).toEqual({ sendFace: send, keepFace: keep, sendSats: sats, fullSend: false })
   })
 
+  it('takes the extra sat the gateway takes when the written ratio is a hair under face / sats (gateway parity)', () => {
+    // 10 000.00 NGN on 7600 sats signs 131.57894736842104, a hair under 1e6 / 7600. 19 sats are
+    // 2500 in doubles but 2499.99... in decimals, so gateway-core's creditsAtLeast sends 20. This
+    // read the doubles only, said 2500, and the overcharge slipped past the screen and the history.
+    const token = buildVoucherToken(
+      { unit: 'NGN', faceValue: 1_000_000, faceDecimals: 2, issuanceRatio: 1_000_000 / 7600 },
+      [4096, 2048, 1024, 256, 128, 32, 16],
+    ).token
+
+    // Act
+    const face = sendFaceOf(token, 2500)
+
+    // Assert
+    expect(face).toEqual({ sendFace: 2632, keepFace: 997_368, sendSats: 20, fullSend: false })
+  })
+
   it('NGN within a sat of the whole coupon sends the whole coupon, and says so', () => {
     // Act
     const face = sendFaceOf(ngn(), NGN_FACE - 50)
