@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Cashlink taken back at its expiry has a History row of its own, whichever way it was sent.**
+  A link that was never locked to its link (the legacy send, or an arm that did not take) comes
+  back through the ordinary receive, whose row read "Received via DM", in no bundle, with nothing
+  tying it to the link. The sender got "Your Cashlink expired, so its voucher came back to you" and
+  found no take-back in History. That row, and the one written by Take it back on such a link, now
+  reads "Taken back from Cashlink" in the link's bundle, as a locked link's take-back has since
+  0.55.3. App only, no configuration.
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops
   part-paid because one part's relay publish failed once (#552).** The wallet took `DM_ERROR`,
   `SPLIT_ERROR` and `RECLAIM_READY` as the end of a send, gave up after 20 s, asked the gateway to

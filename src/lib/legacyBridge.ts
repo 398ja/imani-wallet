@@ -160,6 +160,7 @@ type Correlation = {
   claim?: MerchantClaim
   terminalPubkey?: string
   spendSource?: SpendSource
+  memo?: string
 }
 
 /** Redeems in flight, by the id each was handed. */
@@ -228,6 +229,13 @@ export async function withCorrelation<T>(
      * read "Received via DM" with no order on it (2026-11-02).
      */
     spendSource?: SpendSource
+    /**
+     * What the row says it is, when the receive is not an ordinary arrival. The row that survives
+     * is rebuilt from empty metadata (see `installTokenIdFill`), so the builder can only ever write
+     * "Received via DM": a Cashlink the sender took back read as a DM from nobody, with nothing
+     * tying it to the link.
+     */
+    memo?: string
   },
   redeem: (correlationId: string) => Promise<T>,
 ): Promise<T> {
@@ -248,7 +256,8 @@ export async function withCorrelation<T>(
     ids.zeroCredit ||
     ids.claim ||
     ids.terminalPubkey ||
-    ids.spendSource
+    ids.spendSource ||
+    ids.memo
   inFlight.set(correlationId, hasIds ? ids : undefined)
   try {
     return await redeem(correlationId)
@@ -316,6 +325,8 @@ function stampCorrelation(rows: unknown[], ids: Correlation | undefined): unknow
       ...(ids.zeroCredit ? { amount: 0 } : {}),
       ...(ids.terminalPubkey && !t.terminalPubkey ? { terminalPubkey: ids.terminalPubkey } : {}),
       ...(ids.spendSource && !t.spendSource ? { spendSource: ids.spendSource } : {}),
+      // Overwrites: the builder's memo is a guess ("Received via DM"), this one is what happened.
+      ...(ids.memo ? { memo: ids.memo } : {}),
       // OVERWRITES, unlike everything above: the builder's voucher id is the
       // gateway's (in practice a random UUID) and its amount can be a derived
       // figure, so neither matches the issuance they must be summed against.
