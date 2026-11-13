@@ -161,6 +161,7 @@ type Correlation = {
   terminalPubkey?: string
   spendSource?: SpendSource
   memo?: string
+  returnOf?: string
 }
 
 /** Redeems in flight, by the id each was handed. */
@@ -236,6 +237,8 @@ export async function withCorrelation<T>(
      * tying it to the link.
      */
     memo?: string
+    /** A Cashlink take-back: the id of the `sent` row that made the link (`WalletTransaction.returnOf`). */
+    returnOf?: string
   },
   redeem: (correlationId: string) => Promise<T>,
 ): Promise<T> {
@@ -257,7 +260,8 @@ export async function withCorrelation<T>(
     ids.claim ||
     ids.terminalPubkey ||
     ids.spendSource ||
-    ids.memo
+    ids.memo ||
+    ids.returnOf
   inFlight.set(correlationId, hasIds ? ids : undefined)
   try {
     return await redeem(correlationId)
@@ -327,6 +331,7 @@ function stampCorrelation(rows: unknown[], ids: Correlation | undefined): unknow
       ...(ids.spendSource && !t.spendSource ? { spendSource: ids.spendSource } : {}),
       // Overwrites: the builder's memo is a guess ("Received via DM"), this one is what happened.
       ...(ids.memo ? { memo: ids.memo } : {}),
+      ...(ids.returnOf && !t.returnOf ? { returnOf: ids.returnOf } : {}),
       // OVERWRITES, unlike everything above: the builder's voucher id is the
       // gateway's (in practice a random UUID) and its amount can be a derived
       // figure, so neither matches the issuance they must be summed against.

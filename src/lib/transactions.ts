@@ -57,6 +57,11 @@ export interface WalletTransaction {
   /** A gift link this `sent` row went to (claim links phase 4). */
   link?: GiftLinkRecord
   /**
+   * On a Cashlink take-back row: the id of the `sent` row that made the Cashlink, so the return
+   * opens the send it undoes (and the send lists what came back). A row id, never the link key.
+   */
+  returnOf?: string
+  /**
    * What was actually checked about this coupon when it arrived.
    *
    * Absent on every row written before verification existed, and that absence
@@ -321,6 +326,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // screen. Either spelling, as for the evidence above.
     terminalPubkey: str(r.terminalPubkey) ?? str(r.terminal_pubkey),
     link: asGiftLinkRecord(r.link),
+    returnOf: str(r.returnOf) ?? str(r.return_of),
     ...(asCheckoutCodeSnapshot(r.checkoutCode) ? { checkoutCode: asCheckoutCodeSnapshot(r.checkoutCode) } : {}),
     ...(parseSpendSource(r.spendSource ?? r.spend_source) ? { spendSource: parseSpendSource(r.spendSource ?? r.spend_source) } : {}),
   }
@@ -809,6 +815,20 @@ export function buildCashbackTransaction(input: {
     ...(input.merchantId ? { merchantId: input.merchantId } : {}),
     ...(input.terminalPubkey ? { terminalPubkey: input.terminalPubkey } : {}),
   } as unknown as TransactionRow
+}
+
+/**
+ * The take-back rows of the Cashlink a `sent` row made: every row whose `returnOf` names any row of
+ * the same link (a several-coupon send is several rows, and the take-back names one of them).
+ * Matched on the link's rows, never by showing the link key. Newest first. Empty for a row that
+ * made no Cashlink.
+ */
+export function cashlinkReturnsOf(all: readonly WalletTransaction[], sent: WalletTransaction): WalletTransaction[] {
+  const k = sent.link?.k
+  if (!k) return []
+  const linkRowIds = new Set(all.filter((t) => t.link?.k === k).map((t) => t.id))
+  linkRowIds.add(sent.id)
+  return all.filter((t) => t.returnOf !== undefined && linkRowIds.has(t.returnOf)).sort((a, b) => b.at - a.at)
 }
 
 /**

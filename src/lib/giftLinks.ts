@@ -956,6 +956,8 @@ export async function redeemGiftTokens(
   source: 'gift_link' | 'gift_link_reclaim',
   /** The link's key, text form. Needed for a gift locked to its link (#295 phase 4). */
   key?: string,
+  /** A take-back: the id of the `sent` row that made the Cashlink, linked from the return's row. */
+  returnOf?: string,
 ): Promise<GiftRedeemOutcome> {
   await loadTrustedMints()
   for (const { token } of tokens) {
@@ -996,9 +998,9 @@ export async function redeemGiftTokens(
       if (outcome.kind !== 'ok') return outcome
       tellIssuerClaimed(locked, account)
       const rest = tokens.filter((t) => !locked.includes(t))
-      return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption, cashlinkBundleId(linkPubOf(linkSecret)))
+      return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption, cashlinkBundleId(linkPubOf(linkSecret)), returnOf)
     }
-    return await swapGiftTokens(tokens, source, redemption, linkSecret ? cashlinkBundleId(linkPubOf(linkSecret)) : undefined)
+    return await swapGiftTokens(tokens, source, redemption, linkSecret ? cashlinkBundleId(linkPubOf(linkSecret)) : undefined, returnOf)
   } finally {
     endReceive()
   }
@@ -1069,6 +1071,8 @@ async function swapGiftTokens(
   redemption: NonNullable<Window['TokenRedemption']>,
   /** One id for every coupon off this link, so History folds a several-coupon claim into one entry. */
   bundleId?: string,
+  /** A take-back's `sent` row id (see `redeemGiftTokens`). */
+  returnOf?: string,
 ): Promise<GiftRedeemOutcome> {
   let added = 0
   let spent = 0
@@ -1080,7 +1084,7 @@ async function swapGiftTokens(
       const validation = cashbackValidation(token)
       // A take-back is the sender's own coupon coming home: its row says so, in the link's bundle,
       // as the locked path's does (`takenBackRow`). Without the memo the row read "Received via DM".
-      const takenBack = source === 'gift_link_reclaim' ? { memo: CASHLINK_TAKEN_BACK_MEMO } : {}
+      const takenBack = source === 'gift_link_reclaim' ? { memo: CASHLINK_TAKEN_BACK_MEMO, ...(returnOf ? { returnOf } : {}) } : {}
       await withCorrelation({ ...(validation ? { validation: { ...validation } } : {}), ...(bundleId ? { bundleId } : {}), ...takenBack }, (correlationId) =>
         redemption.redeem(token, { source, metadata: { correlation_id: correlationId } }),
       )
@@ -1248,7 +1252,7 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
   }
   const unspent = tokens.filter((_, n) => states[n] !== 'SPENT')
   // The link key: its bundle id goes on the take-back's History row.
-  const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim', k)
+  const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim', k, rows[0] ? creationRowId(rows) : undefined)
   if (outcome.kind === 'ok') await setLinkStatus(rows, 'reclaimed', Date.now(), told)
   else if (outcome.kind === 'claimed') await setLinkStatus(rows, 'claimed', Date.now(), told)
   return outcome
@@ -1292,6 +1296,7 @@ async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken
       // finished on every later run too. Without this, the next run read the proofs still on the link
       // as "waiting for x", and a gift taken back part way stayed part way until its expiry.
       takeBackNow: takeBackNow || link.arm?.s === 'returning',
+      returnOf: creationRowId(rows),
       onReturning: async () => {
         // Before anything leaves the link: logout stays off until it is back as a voucher.
         await cashlinkSeam.markMoving(pubkey, rows[0].id)
@@ -1479,7 +1484,7 @@ export async function reconcileGiftLinks(
         // coupon has lapsed (second check of #367). A wallet clock running fast must never close a
         // link the mint would still let come back.
         // The link key: its bundle id goes on the take-back's History row.
-        const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim', k)
+        const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim', k, creationRowId(parts))
         if (outcome.kind === 'ok') {
           await setLinkStatus(parts, 'reclaimed', nowMs)
           reclaimed += 1
@@ -1556,6 +1561,16 @@ function openLinkOf(parts: LinkRow[]): GiftLinkRecord {
 
 /** A row the restore scan wrote (`adoptLink`), not the send itself. */
 const isAdoptedRow = (r: LinkRow): boolean => r.id.startsWith('sent:gift-')
+
+/**
+ * The row that made a Cashlink, which its take-back's row links to: the send's own row before one a
+ * restore scan adopted, and of a several-coupon send its first row in id order, so every run of a
+ * take-back names the same one. Exported for tests.
+ */
+export function creationRowId(rows: readonly LinkRow[]): string {
+  const ranked = [...rows].sort((a, b) => Number(isAdoptedRow(a)) - Number(isAdoptedRow(b)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return ranked[0].id
+}
 
 /**
  * #379: whether a link's spent bearer gift went into this wallet's own burn outputs (an arm), which

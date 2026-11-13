@@ -9,7 +9,8 @@ import { hexToBytes } from '@noble/hashes/utils'
  * is taken back, at its expiry or by hand, comes back through TokenRedemption. That receive's row is
  * rebuilt from empty metadata, so it read "Received via DM", in no bundle, with nothing tying it to
  * the link: the sender was told "its voucher came back to you" and History showed no take-back.
- * It now reads "Taken back from Cashlink", in the link's bundle, as the locked path's row does.
+ * It now reads "Taken back from Cashlink", in the link's bundle, as the locked path's row does, and
+ * names the `sent` row that made the Cashlink (`returnOf`), so the return opens the send.
  */
 
 const h = vi.hoisted(() => ({
@@ -115,7 +116,7 @@ describe('an unlocked Cashlink taken back has its own History row', () => {
     // Assert
     expect(out).toEqual({ claimed: 0, reclaimed: 1 })
     expect(h.written).toHaveLength(1)
-    expect(h.written[0]).toMatchObject({ type: 'received', direction: 'in', memo: CASHLINK_TAKEN_BACK_MEMO, bundleId })
+    expect(h.written[0]).toMatchObject({ type: 'received', direction: 'in', memo: CASHLINK_TAKEN_BACK_MEMO, bundleId, returnOf: 'sent:g' })
   })
 
   it('by hand: Take it back writes the same row', async () => {
@@ -133,6 +134,6 @@ describe('an unlocked Cashlink taken back has its own History row', () => {
     // Assert
     expect(out.kind).toBe('ok')
     expect(h.written).toHaveLength(1)
-    expect(h.written[0]).toMatchObject({ type: 'received', direction: 'in', memo: CASHLINK_TAKEN_BACK_MEMO, bundleId })
+    expect(h.written[0]).toMatchObject({ type: 'received', direction: 'in', memo: CASHLINK_TAKEN_BACK_MEMO, bundleId, returnOf: 'sent:h' })
   })
 })
