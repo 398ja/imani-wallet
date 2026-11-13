@@ -36,50 +36,89 @@ const MAX_PROVABLE_SATS = 2 ** 52
 
 type Rounding = 'floor' | 'halfUp' | 'ceil'
 
+/**
+ * A double as Java's `BigDecimal.valueOf(double)` reads it: the shortest decimal that round-trips,
+ * which is what both `Double.toString` (JDK 19+) and `String(number)` print. `m / 10^scale`.
+ */
+interface Written {
+  m: bigint
+  scale: bigint
+}
+
+function written(x: number): Written {
+  const [mantissa, exp = '0'] = String(x).toLowerCase().split('e')
+  const [whole, frac = ''] = mantissa.split('.')
+  const shift = BigInt(frac.length) - BigInt(exp)
+  const digits = BigInt(whole + frac)
+  return shift >= 0n ? { m: digits, scale: shift } : { m: digits * 10n ** -shift, scale: 0n }
+}
+
 /** A coupon's rate, as `CouponRate.of(signedFace, ratio)` reads it. */
 class Rate {
   private constructor(
     private readonly face: bigint,
     private readonly minted: bigint,
-    private readonly ratio: number,
+    readonly ratio: number,
+    private readonly w: Written,
   ) {}
 
   static of(signedFace: number, ratio: number): Rate | null {
     if (!(ratio > 0) || !Number.isFinite(ratio)) return null
-    const plain = new Rate(0n, 0n, ratio)
+    const w = written(ratio)
+    const plain = new Rate(0n, 0n, ratio, w)
     if (!(signedFace > 0) || !Number.isSafeInteger(signedFace)) return plain
     const quotient = signedFace / ratio
     if (!Number.isFinite(quotient) || quotient < 0.5 || quotient >= MAX_PROVABLE_SATS) return plain
     const sats = Math.round(quotient)
     const signs = (s: number) => s > 0 && signedFace / s === ratio
     const proven = signs(sats) && !signs(sats - 1) && !signs(sats + 1)
-    return proven ? new Rate(BigInt(signedFace), BigInt(sats), ratio) : plain
+    return proven ? new Rate(BigInt(signedFace), BigInt(sats), ratio, w) : plain
   }
 
   private exact(): boolean {
     return this.minted > 0n
   }
 
-  /** Value of `sats`, rounded as asked. */
+  /** Value of `sats`, rounded as asked: exact when proven, else on the ratio as written. */
   value(sats: number, rounding: Rounding): number {
-    if (this.exact()) return Number(divide(BigInt(sats) * this.face, this.minted, rounding))
-    const v = sats * this.ratio
-    return rounding === 'floor' ? Math.floor(v) : rounding === 'ceil' ? Math.ceil(v) : Math.floor(v + 0.5)
+    return this.exact()
+      ? Number(divide(BigInt(sats) * this.face, this.minted, rounding))
+      : this.writtenValue(sats, rounding)
+  }
+
+  /** `BigDecimal.valueOf(sats).multiply(BigDecimal.valueOf(ratio)).setScale(0, rounding)`. */
+  writtenValue(sats: number, rounding: Rounding): number {
+    return Number(divide(BigInt(sats) * this.w.m, 10n ** this.w.scale, rounding))
   }
 
   /** CouponRate.fewestSatsWorth: the fewest sats whose floor value is at least `face`. */
   fewestSatsWorth(face: number): number {
     let sats = this.exact()
       ? Number(divide(BigInt(face) * this.minted, this.face, 'ceil'))
-      : Math.ceil(face / this.ratio)
+      : Number(divide(BigInt(face) * 10n ** this.w.scale, this.w.m, 'ceil'))
     while (this.value(sats, 'floor') < face) sats += 1
     return sats
+  }
+
+  /**
+   * `VoucherSplitCalculator.creditsAtLeast`: floor(sats x ratio) reaches `face` both on the ratio
+   * as written in exact decimals and in IEEE doubles (what a JavaScript till computes). The two
+   * differ when the written ratio is a hair under face / minted sats: 19 sats at 131.57894736842104
+   * are 2500 in doubles and 2499.99... in decimals, and the gateway sends 20.
+   */
+  creditsAtLeast(sats: number, face: number): boolean {
+    return this.writtenValue(sats, 'floor') >= face && Math.floor(sats * this.ratio) >= face
   }
 
   /** CouponRate.satsFor, or null on a coupon whose minted sats are not proven. */
   satsFor(face: number, rounding: Rounding): number | null {
     if (!this.exact()) return null
     return Number(divide(BigInt(face) * this.minted, this.face, rounding))
+  }
+
+  /** `face / ratio` on the written ratio, rounded down: the calculator's `applyRounding(FLOOR)`. */
+  writtenSatsFloor(face: number): number {
+    return Math.floor(face / this.ratio)
   }
 }
 
@@ -120,11 +159,10 @@ export function splitOf(parsed: ParsedVoucherToken, amount: number): SendFace | 
   let sendSats: number
   if (proportional) {
     sendSats = rate.fewestSatsWorth(amount)
-    // The double till (`creditsAtLeast`): floor(sats * ratio) in IEEE doubles.
-    while (Math.floor(sendSats * v.issuanceRatio) < amount) sendSats += 1
+    while (!rate.creditsAtLeast(sendSats, amount)) sendSats += 1
     if (sendSats > available && amount <= parent) sendSats = available
   } else {
-    sendSats = rate.satsFor(amount, 'floor') ?? Math.floor(amount / v.issuanceRatio)
+    sendSats = rate.satsFor(amount, 'floor') ?? rate.writtenSatsFloor(amount)
   }
   if (sendSats > available) return undefined
 
