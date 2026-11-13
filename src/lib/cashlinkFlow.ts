@@ -409,6 +409,11 @@ export type UnarmedReason =
   | 'rate_limited'
   /** The mint refused the burn itself (nothing moved). The only one that can follow `onArming`. */
   | 'burn_refused'
+  /**
+   * The lock key is a stall's online shop and the stall's plan takes no new checkout codes
+   * (`422 FEATURE_NOT_IN_PLAN`, #402). Decided by the dry run, so nothing was burnt.
+   */
+  | 'not_in_plan'
 
 export type ArmOutcome =
   /** Locked, and the take-back is waiting at the relay: it comes back on its own. */
@@ -724,6 +729,7 @@ async function preflight(
     const dry = d.value
     if (dry.status === 429) return { kind: 'unarmed', why: 'rate_limited' }
     if (dry.status === 404 || dry.status === 405 || dry.status >= 500) return { kind: 'unarmed', why: 'lock_route_unavailable' }
+    if (dry.status === 422 && refusalOf(dry) === 'FEATURE_NOT_IN_PLAN') return { kind: 'unarmed', why: 'not_in_plan' }
     if (!(dry.status === 409 && dry.body?.refusal === 'PREDECESSOR_NOT_SPENT')) return { kind: 'unarmed', why: 'lock_refused' }
     return null
   }

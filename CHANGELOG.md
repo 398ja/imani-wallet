@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Settings › Online shop (#402).** Connecting a website now has its own screen instead of a
+  paste box under Add a terminal: what an online shop is, the platform (WooCommerce, WordPress,
+  Magento, Shopify) with its steps, the shop's code, and a confirmation naming the address. The
+  same screen shows the connected shop (outstanding codes, whether customers can see it, expiry
+  and Renew) and disconnects it. Terminals lists a connected shop as one line pointing there, and
+  a shop's code scanned in Add a terminal is handed to it.
+- **Online shops follow the plan (`ecommerce`, Pro).** The row is listed for every merchant and
+  locked below Pro, with the way to plans. A shop's first credential mint is marked
+  `X-Imani-Online-Shop: 1`, and gateway-customer refuses it (`422 FEATURE_NOT_IN_PLAN`) and any new
+  checkout-code lock for a stall without the feature. When a plan lapses, codes already made still
+  finish; only new ones are refused, and the customer is told the shop is not taking new codes
+  before anything is burnt. Needs the matching gateway-customer release; against an older gateway
+  nothing is refused and the screen works as before.
+
 ### Fixed
 
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops

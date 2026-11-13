@@ -200,6 +200,20 @@ describe('arming a Cashlink (burn with R, lock, mint, deposit)', () => {
     expect(w.mint.log.swaps).toHaveLength(0)
   })
 
+  // #402: the lock key is a stall's online shop and its plan takes no new checkout codes. The dry
+  // run is what learns it, so the customer's coupon is never burnt into sats for a lock refused after.
+  it('the dry run answers FEATURE_NOT_IN_PLAN (422): not_in_plan, nothing burnt', async () => {
+    // Arrange
+    w.gateway.override.set(LOCK_PATH, { status: 422, body: { refusal: 'FEATURE_NOT_IN_PLAN' } })
+
+    // Act
+    const out = await armGift(armCtx(giftOn(w)))
+
+    // Assert
+    expect(out).toEqual({ kind: 'unarmed', why: 'not_in_plan' })
+    expect(w.mint.log.swaps).toHaveLength(0)
+  })
+
   it('a gift already claimed before arming: reported claimed, nothing burnt', async () => {
     const gift = giftOn(w)
     await w.mint.swap(MINT_URL, tokenProofs(gift.token), [])

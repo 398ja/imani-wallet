@@ -28,10 +28,9 @@ import {
 import { ownerTransport, type MintTransport } from '../lib/terminalMint'
 import { collectEnrolled, ownerPublisher } from '../lib/terminalDeliveryNet'
 import { confirmEnrolled, deliverWaiting, stallConfirm, type ConfirmCall } from '../lib/terminalConfirm'
-import { setupCode, wrapMessage } from '../lib/terminalDelivery'
+import { setupCode } from '../lib/terminalDelivery'
 import { getSigner } from '../lib/nap'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
-import { legacyApi } from '../lib/legacyBridge'
 import { syncRosterNow } from '../lib/terminalRosterSyncNet'
 import {
   cancelLapsedRenewals,
@@ -40,19 +39,13 @@ import {
   lapsedRenewalMessage,
   renewalsQueued,
   resumeRenewal,
-  startRenewal,
 } from '../lib/terminalRenewOwner'
 import { expiryBand, type ExpiryBand } from '../lib/terminalRenewal'
 import { collectRenewRequests } from '../lib/terminalDeliveryNet'
 import { onlineShopUnconfirmed, syncOnlineShop, type ProfilePublisher } from '../lib/onlineShopProfile'
-import { exposureLine, fetchShopExposure, type ExposureFetch, type ShopExposure } from '../lib/shopExposure'
-import { publish as relayPublish } from '../lib/relay'
-import { mirrorToGateway } from '../lib/transferSignature'
-import { profilePublisherVia } from '../lib/onlineShopPublisher'
+import { shopHost } from '../lib/shopEnrol'
+import { ownerProfilePublisher, ownerRenew, ownerSend, ownerSpendApi } from '../lib/terminalOwnerPorts'
 
-// 8 s to connect, not the default 3: right after an enrolment this page has a burst of relay sockets
-// open and the profile publish lost the 3 s race every time on staging (2026-10-31).
-const ownerProfilePublisher: ProfilePublisher = profilePublisherVia((e) => relayPublish(e, undefined, { connectMs: 8000 }), mirrorToGateway)
 
 
 /** How often the list looks for a device's "I have it" while something is waiting. */
@@ -69,13 +62,6 @@ const ownerDeliver = (stallPubkey: string) =>
 /** A stable clock: a fresh arrow per render would re-run the effect that reads it, forever. */
 const systemNow = () => Date.now()
 
-/** Sends a renewal's credential DM to the device, sealed by the stall (#160 phase 6). */
-const ownerSend = (json: string, terminalPubkey: string) =>
-  ownerPublisher.publish(getSigner().withPrivkey((key) => wrapMessage(key, terminalPubkey, json)))
-
-/** Renew, with the owner's own key, transport and publisher (#160 phase 6). */
-const ownerRenew = (stallPubkey: string, terminalPubkey: string, api: CredentialMintApi) =>
-  startRenewal(stallPubkey, terminalPubkey, { api, send: ownerSend, stallSigner: getSigner() })
 
 /**
  * When the list opens: finish renewals that did not, cancel any the device never picked up in
@@ -88,10 +74,6 @@ async function ownerRenewals(stallPubkey: string, api: CredentialMintApi, transp
   return { changed: resumed.completed + resumed.cleared + lapsed.length + asked, lapsed }
 }
 
-/** The owner's spend client, the one `burn.ts` and decommissioning use. */
-async function ownerSpendApi(): Promise<CredentialMintApi> {
-  return (await legacyApi()) as unknown as CredentialMintApi
-}
 
 /**
  * The terminals this stall has out, and taking one back.
@@ -136,7 +118,6 @@ export function TerminalsPage({
   renewals = ownerRenewals,
   now = systemNow,
   profile = ownerProfilePublisher,
-  exposure = fetchShopExposure,
 }: {
   stallPubkey: string
   /** Injected by tests. Spends a credential with the stall's key. */
@@ -159,8 +140,6 @@ export function TerminalsPage({
   now?: () => number
   /** Injected by tests. Signs and publishes the stall's profile when its online shop changes (#402). */
   profile?: ProfilePublisher
-  /** Injected by tests. The code store's outstanding figure for a shop (#402 R5). */
-  exposure?: ExposureFetch
 }) {
   // Read lazily rather than in an effect. The roster is local storage, so it is
   // available on the first render — going through an effect would paint an
@@ -220,27 +199,6 @@ export function TerminalsPage({
     }
   }, [stallPubkey, terminals, profile])
 
-  // R5: what each live shop could redirect, from the code store. No figure when it cannot say.
-  const [exposures, setExposures] = useState<Record<string, ShopExposure>>({})
-  const shopKeys = terminals
-    .filter((t) => t.shop && t.revokedAt === undefined)
-    .map((t) => t.terminalPubkey)
-    .join(',')
-  useEffect(() => {
-    if (!shopKeys) return
-    let cancelled = false
-    void Promise.all(
-      shopKeys.split(',').map(async (key) => [key, await exposure(stallPubkey, key).catch(() => null)] as const),
-    ).then((pairs) => {
-      if (cancelled) return
-      const next: Record<string, ShopExposure> = {}
-      for (const [key, value] of pairs) if (value) next[key] = value
-      setExposures(next)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [stallPubkey, shopKeys, exposure])
 
   /** Which row is being revoked right now, and what went wrong last time. */
   const [revoking, setRevoking] = useState<string | null>(null)
@@ -380,7 +338,10 @@ export function TerminalsPage({
     return () => clearInterval(timer)
   }, [now])
   const queued = renewalsQueued(stallPubkey, nowMs)
-  const live = terminals.filter((t) => t.revokedAt === undefined)
+  // A live online shop is managed from Settings › Online shop, which connects, renews and
+  // disconnects it; here it is one line pointing there. Retired shops stay below, as history.
+  const liveShop = terminals.find((t) => t.shop && t.revokedAt === undefined)
+  const live = terminals.filter((t) => t.revokedAt === undefined && !t.shop)
   const retired = terminals.filter((t) => t.revokedAt !== undefined)
 
   return (
@@ -413,7 +374,6 @@ export function TerminalsPage({
             <TerminalRow
               key={terminal.terminalPubkey}
               terminal={terminal}
-              exposure={exposures[terminal.terminalPubkey]}
               // Undefined until the check answers, so the row shows no marker
               // rather than briefly accusing a healthy subscription.
               stopped={licence ? !mayServe(licence, terminals, terminal.terminalPubkey).serving : undefined}
@@ -440,6 +400,18 @@ export function TerminalsPage({
           ))}
         </ListSection>
       )}
+
+      {liveShop?.shop ? (
+        <Link to="/settings/online-shop" className="mb-6 block" data-testid="online-shop-pointer">
+          <Panel className="flex items-center gap-3 p-4 press-row">
+            <Store className="h-5 w-5 shrink-0 text-mono-400" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="font-medium text-mono-900 dark:text-mono-50">Online shop: {shopHost(liveShop.shop.url)}</p>
+              <p className="text-sm text-mono-500">Managed in Settings › Online shop</p>
+            </div>
+          </Panel>
+        </Link>
+      ) : null}
 
       {retired.length > 0 ? (
         // Kept, not hidden. Their movements are still in the stall's records,
@@ -482,11 +454,8 @@ function TerminalRow({
   renewing = false,
   renewError = null,
   onRenew,
-  exposure,
 }: {
   terminal: TerminalRecord
-  /** An online shop's outstanding codes (#402 R5), when the code store could say. */
-  exposure?: ShopExposure
   /** The clock the expiry badge reads (#160 phase 6). The list passes its own. */
   now: number
   renewing?: boolean
@@ -562,7 +531,7 @@ function TerminalRow({
           </p>
           {terminal.shop ? (
             <p className="text-sm text-mono-500" data-testid="shop-line">
-              {exposure && !revoked ? exposureLine(exposure, terminal.shop.url) : `Online shop at ${terminal.shop.url}`}
+              Online shop at {terminal.shop.url}
             </p>
           ) : null}
         </div>
