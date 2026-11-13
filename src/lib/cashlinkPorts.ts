@@ -15,7 +15,7 @@ import { SWAPPED_TO_SATS_STATUS } from './swapBack'
 import { getWallet, notifyWalletChanged } from './wallet'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { cashlinkMovingKey } from './inFlightMoney'
-import { buildReceivedTransaction } from './transactions'
+import { buildReceivedTransaction, CASHLINK_TAKEN_BACK_MEMO } from './transactions'
 import { cashbackValidation } from './cashbackValidation'
 
 /** Put the locked gift on its link, then read it back: delivered only once a copy is found there. */
@@ -111,7 +111,7 @@ export function claimedRow(row: VoucherRow, token: string, at = Date.now(), bund
 export function takenBackRow(row: VoucherRow, token: string, at = Date.now(), bundleId?: string) {
   const received = claimedRow(row, token, at, bundleId) as unknown as Record<string, unknown>
   const id = `returned:${String((row as unknown as Record<string, unknown>).token_id)}`
-  return { ...received, id, txId: id, memo: 'Taken back from Cashlink' } as unknown as ReturnType<typeof claimedRow>
+  return { ...received, id, txId: id, memo: CASHLINK_TAKEN_BACK_MEMO } as unknown as ReturnType<typeof claimedRow>
 }
 
 export function appCashlinkPorts(): CashlinkPorts {

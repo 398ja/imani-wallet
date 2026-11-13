@@ -33,7 +33,7 @@ import { sendVouchers, type SendResult } from './pay'
 import { publishTx } from './txRecords'
 import { cashbackValidation } from './cashbackValidation'
 import { checkTokenBacking, loadTrustedMints } from './trustedMint'
-import { asGiftLinkRecord, buildSentTransaction, type GiftLinkRecord, type GiftLinkStatus } from './transactions'
+import { asGiftLinkRecord, buildSentTransaction, CASHLINK_TAKEN_BACK_MEMO, type GiftLinkRecord, type GiftLinkStatus } from './transactions'
 import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } from './voucherToken'
 import { getWallet, notifyWalletChanged } from './wallet'
 import type { Merchant } from './merchants'
@@ -1078,7 +1078,10 @@ async function swapGiftTokens(
     const { token } = gift
     try {
       const validation = cashbackValidation(token)
-      await withCorrelation({ ...(validation ? { validation: { ...validation } } : {}), ...(bundleId ? { bundleId } : {}) }, (correlationId) =>
+      // A take-back is the sender's own coupon coming home: its row says so, in the link's bundle,
+      // as the locked path's does (`takenBackRow`). Without the memo the row read "Received via DM".
+      const takenBack = source === 'gift_link_reclaim' ? { memo: CASHLINK_TAKEN_BACK_MEMO } : {}
+      await withCorrelation({ ...(validation ? { validation: { ...validation } } : {}), ...(bundleId ? { bundleId } : {}), ...takenBack }, (correlationId) =>
         redemption.redeem(token, { source, metadata: { correlation_id: correlationId } }),
       )
       added += 1
@@ -1244,7 +1247,8 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
     return { kind: 'claimed' }
   }
   const unspent = tokens.filter((_, n) => states[n] !== 'SPENT')
-  const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim')
+  // The link key: its bundle id goes on the take-back's History row.
+  const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim', k)
   if (outcome.kind === 'ok') await setLinkStatus(rows, 'reclaimed', Date.now(), told)
   else if (outcome.kind === 'claimed') await setLinkStatus(rows, 'claimed', Date.now(), told)
   return outcome
@@ -1474,7 +1478,8 @@ export async function reconcileGiftLinks(
         // The take-back is always tried first: the mint's clock, not this device's, decides whether a
         // coupon has lapsed (second check of #367). A wallet clock running fast must never close a
         // link the mint would still let come back.
-        const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim')
+        // The link key: its bundle id goes on the take-back's History row.
+        const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim', k)
         if (outcome.kind === 'ok') {
           await setLinkStatus(parts, 'reclaimed', nowMs)
           reclaimed += 1

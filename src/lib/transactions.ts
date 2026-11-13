@@ -812,6 +812,13 @@ export function buildCashbackTransaction(input: {
 }
 
 /**
+ * What History calls a Cashlink's coupon back with its sender, by hand or at the link's expiry, on
+ * every path that brings it back: the locked one (`cashlinkPorts.takenBackRow`) and a link that was
+ * never locked, received back through TokenRedemption (`giftLinks.swapGiftTokens`).
+ */
+export const CASHLINK_TAKEN_BACK_MEMO = 'Taken back from Cashlink'
+
+/**
  * The row for a coupon claimed off a Cashlink by this wallet's own swap (#295 phase 4).
  *
  * The same shape as imani-apps' `_buildReceiveTransactionRow` writes for every other receive, and
