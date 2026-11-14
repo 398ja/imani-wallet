@@ -17,10 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   redeploy the subscription service so wallets adopt it). `FREE_TERMINALS` is 0, so `mayEnrol`
   refuses even a first terminal without a subscription, and a lapse or seller revocation now stops
   every enrolled terminal. The stall's own device is unaffected.
-- Settings › Terminals is disabled on the free tier: it explains that terminals start at
-  Essentials, links to Settings › Subscription, and turns off "Add a terminal". Terminals enrolled
-  before stay listed and revocable. Settings › Subscription shows "This device only", and the
+- Settings › Terminals is disabled for a stall that has never subscribed: it explains that
+  terminals start at Essentials, links to Settings › Subscription, turns off "Add a terminal", and
+  offers no Renew or setup code. Terminals enrolled before stay listed and revocable, marked as
+  needing a plan. A lapsed, revoked or offline subscriber keeps the ordinary page (renew, not buy). Settings › Subscription shows "This device only", and the
   subscription site's plan cards read "Your device only, no extra tills" for Starter.
+- Publish catalog 6 (redeploy the subscription service) before or with gateway-portal: a device that
+  cached catalog 5 keeps the free tier's 1 terminal until it fetches 6.
 - Consumers: a free stall's existing terminal stops serving once its device adopts catalog 6, and
   stops selling as soon as gateway-portal ships its matching change (`TerminalLicenceGate` no longer
   honours `terminal:free`).

@@ -127,7 +127,7 @@ export interface EnrolmentContext {
   licence: LicenceStatus
   /**
    * Terminals in service, excluding the owner's own device. Waiting rows are
-   * not counted: they do not use up the free terminal (decision 4 on #160).
+   * not counted: they do not use up the tier's allowance (decision 4 on #160).
    */
   enrolledCount: number
   /**

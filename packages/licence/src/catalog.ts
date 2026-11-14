@@ -69,8 +69,13 @@ const USD_DECIMALS = 2
  *
  * The free tier's terminal allowance is 0 ENROLLED terminals: the owner's own device keeps trading, and
  * additional terminals start at Essentials. `terminalAllowance` counts enrolled terminals only (the
- * owner's device is never converted). Until a device fetches catalog version 6 or later this bundled
- * value is what it enforces, so it must agree with services/subscription/catalog.json.
+ * owner's device is never converted). It must agree with services/subscription/catalog.json.
+ *
+ * Note that this bundled value only applies on a device with no cached signed catalog. A device that
+ * cached an older published one (version 2 to 5, which gave the free tier 1 terminal) keeps that one
+ * until it fetches version 6, because any signed catalog newer than this bundled version 1 wins. So
+ * publish catalog 6 (redeploy the subscription service) before or with the gateway-portal change, or
+ * such a device may still let a free stall enrol a till that the portal then refuses.
  */
 export const BUNDLED_CATALOG: TierCatalog = {
   version: 1,

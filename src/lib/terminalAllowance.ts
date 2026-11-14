@@ -1,4 +1,4 @@
-import { DENIAL_REASONS, GRACE_REASONS } from '@imani/licence'
+import { BUNDLED_CATALOG, DENIAL_REASONS, FREE_TIER, GRACE_REASONS } from '@imani/licence'
 
 import { LICENCE_FEATURES } from './licenceIssue'
 import { grants, type LicenceStatus } from './licenceStatus'
@@ -46,14 +46,14 @@ import { terminalLimit } from './entitlement'
  */
 
 /**
- * Enrolled terminals a stall may run without a subscription.
+ * Enrolled terminals a stall may run without a subscription, per the BUNDLED
+ * catalog: none. The owner's own device is not enrolled and is not counted here
+ * — see above.
  *
- * None: the owner's own device is not enrolled and is not counted here — see
- * above. The live number comes from the catalog's free tier (`terminalLimit`);
- * this constant names the published rule for copy and tests, and the bundled
- * catalog must agree with it.
+ * Derived, not restated, so it cannot drift from the catalog. The gate itself
+ * reads the CURRENT catalog through `terminalLimit`; this is for tests and copy.
  */
-export const FREE_TERMINALS = 0
+export const FREE_TERMINALS: number = BUNDLED_CATALOG.tiers[FREE_TIER]?.limits.terminals ?? 0
 
 export const ENROL_REFUSAL = {
   /** Already at the free allowance, with no subscription. */
