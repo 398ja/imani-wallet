@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import QRCode from 'qrcode'
 import { Check, Clock, Lock, Store, TriangleAlert } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, Button, Alert } from '../components/ui'
@@ -21,16 +22,18 @@ import { exposureLine, fetchShopExposure, type ExposureFetch, type ShopExposure 
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import type { StallSigner } from '../lib/ownerAttestation'
 import { getSigner } from '../lib/nap'
-import { confirmEnrolled, stallConfirm, type ConfirmCall } from '../lib/terminalConfirm'
-import { DEFAULT_IDLE_LOCK_MINUTES, type WrapPublisher } from '../lib/terminalDelivery'
+import { stallConfirm, type ConfirmCall } from '../lib/terminalConfirm'
+import { DEFAULT_IDLE_LOCK_MINUTES, setupCode, type WrapPublisher } from '../lib/terminalDelivery'
 import { collectEnrolled, ownerPublisher } from '../lib/terminalDeliveryNet'
 import { EnrolNotStartedError, enrolTerminal, ownerMessageFor, type Enrolled } from '../lib/terminalEnrolFlow'
 import { checkEnrolment, prepareEnrolment } from '../lib/terminalIssue'
-import { CredentialMintError, ownerTransport, type MintTransport } from '../lib/terminalMint'
-import { ownerProfilePublisher, ownerRenew, ownerSpendApi, stallSeal } from '../lib/terminalOwnerPorts'
-import { currentExpiry, isRenewable } from '../lib/terminalRenewOwner'
+import { CredentialMintError, checkCode, formatCheckCode, ownerTransport, type MintTransport } from '../lib/terminalMint'
+import { ownerDeliver, ownerProfilePublisher, ownerRenew, ownerRenewals, ownerSpendApi, stallSeal } from '../lib/terminalOwnerPorts'
+import { currentExpiry, isRenewable, lapsedRenewalMessage } from '../lib/terminalRenewOwner'
+import { syncRosterNow } from '../lib/terminalRosterSyncNet'
+import { useTerminalUpkeep } from '../hooks/useTerminalUpkeep'
 import { expiryBand } from '../lib/terminalRenewal'
-import { cancelExpiredWaiting, resumeMinting, revokeTerminalAtMint } from '../lib/terminalRevoke'
+import { revokeTerminalAtMint } from '../lib/terminalRevoke'
 import { REVOCATION_DELAY_NOTE, allTerminals, isRevocable, enrolledCount, holdsLiveCredential, waitingTerminals, type TerminalRecord } from '../lib/terminalRoster'
 import { TERMINAL_ROLES } from '../lib/terminalRole'
 import { useOnline } from '../lib/useOnline'
@@ -56,8 +59,6 @@ const PLATFORM_LABELS: Record<OnlineShopPlatform, { name: string; steps: string[
   },
 }
 
-/** How often the screen looks for the shop's "I have it" while its connection waits. */
-const ENROLLED_POLL_MS = 5_000
 /** The `online_shop` republish retries this often, this many times, while the screen is open. */
 const PROFILE_RETRY_MS = 5_000
 const PROFILE_RETRIES = 24
@@ -98,6 +99,9 @@ export function OnlineShopPage({
   profile = ownerProfilePublisher,
   exposure = fetchShopExposure,
   now = systemNow,
+  deliver = ownerDeliver,
+  sync = syncRosterNow,
+  renewals = ownerRenewals,
 }: {
   stallPubkey: string
   /** Injected by tests. The licence check otherwise. */
@@ -113,6 +117,12 @@ export function OnlineShopPage({
   profile?: ProfilePublisher
   exposure?: ExposureFetch
   now?: () => number
+  /** Injected by tests. Re-sends a credential DM that did not land (#160 round 2). */
+  deliver?: (stallPubkey: string) => Promise<number>
+  /** Injected by tests. Merges the roster the owner's other devices published (#160 phase 6). */
+  sync?: (stallPubkey: string) => Promise<boolean>
+  /** Injected by tests. Resumes, cancels and adopts renewals (#160 phase 6). */
+  renewals?: (stallPubkey: string, api: CredentialMintApi, transport: MintTransport) => Promise<{ changed: number; lapsed: string[] }>
 }) {
   const online = useOnline()
   const location = useLocation()
@@ -126,6 +136,16 @@ export function OnlineShopPage({
   const [rows, setRows] = useState<TerminalRecord[]>(() => allTerminals(stallPubkey))
   const refresh = useCallback(() => setRows(allTerminals(stallPubkey)), [stallPubkey])
   const [licence, setLicence] = useState<LicenceStatus | null>(null)
+  const [licenceFailed, setLicenceFailed] = useState(false)
+  // Why the last connect did not finish, carried past the switch to the connected view: a mint
+  // with no answer leaves the row `minting`, which replaces the form that held the message.
+  const [connectNotice, setConnectNotice] = useState<string | null>(null)
+  const [lapsedRenewals, setLapsedRenewals] = useState<string[]>([])
+
+  // The same pass Terminals runs (useTerminalUpkeep.ts): resume a lost mint, re-send a DM that did
+  // not land, collect the shop's pickup of its credential or renewal, notice a revoke made on
+  // another phone, cancel what waited 24 hours. A shop-only merchant may never open Terminals.
+  useTerminalUpkeep(stallPubkey, rows, { spendApi, transport, collect, confirm, deliver, sync, renewals }, refresh, setLapsedRenewals)
 
   useEffect(() => {
     let cancelled = false
@@ -136,7 +156,7 @@ export function OnlineShopPage({
         // The gateway gates on the licence it was told about, so tell it (#197), as Terminals does.
         if (s.decision.granted) void reportLicence({ pubkey: stallPubkey }).catch(() => undefined)
       },
-      () => undefined,
+      () => !cancelled && setLicenceFailed(true),
     )
     return () => {
       cancelled = true
@@ -150,18 +170,25 @@ export function OnlineShopPage({
     <Screen>
       <BackLink to="/settings" label="Settings" />
       <PageHeader title="Online shop" subtitle="Let customers pay with your coupons on your website" />
-      {access === null ? (
-        <p className="text-sm text-mono-500" data-testid="online-shop-loading">
-          Checking your plan…
-        </p>
-      ) : shop ? (
+      {lapsedRenewals.map((name) => (
+        <div key={name} className="mb-4">
+          <Alert>{lapsedRenewalMessage(name)}</Alert>
+        </div>
+      ))}
+      {shop ? (
+        // A connected shop needs no plan answer to be shown, renewed or disconnected.
         <ConnectedShop
           stallPubkey={stallPubkey}
           shop={shop}
           lapsed={access === 'lapsed'}
+          notice={connectNotice}
           refresh={refresh}
-          deps={{ transport, spendApi, collect, confirm, renew, profile, exposure, now }}
+          deps={{ spendApi, renew, profile, exposure, now }}
         />
+      ) : access === null ? (
+        <p className="text-sm text-mono-500" data-testid="online-shop-loading">
+          {licenceFailed ? 'Could not check your plan. Check your connection and open this screen again.' : 'Checking your plan…'}
+        </p>
       ) : access === 'locked' ? (
         <LockedShop />
       ) : (
@@ -170,7 +197,10 @@ export function OnlineShopPage({
           licence={licence!}
           online={online}
           initialCode={handedCode}
-          onConnected={refresh}
+          onConnected={(notice) => {
+            setConnectNotice(notice ?? null)
+            refresh()
+          }}
           deps={{ transport, spendApi, publisher, seal, stallSigner }}
         />
       )}
@@ -224,7 +254,8 @@ function ConnectShop({
   licence: LicenceStatus
   online: boolean
   initialCode?: string
-  onConnected: () => void
+  /** The roster changed; `notice` is why the connect did not finish, when it did not. */
+  onConnected: (notice?: string) => void
   deps: Parameters<typeof enrolTerminal>[3]
 }) {
   const [platform, setPlatform] = useState<OnlineShopPlatform | null>(null)
@@ -291,10 +322,16 @@ function ConnectShop({
       )
       onConnected()
     } catch (e) {
-      if (e instanceof EnrolNotStartedError) setFailure(userMessage(e.cause, 'Could not connect the shop.'))
-      else if (e instanceof CredentialMintError && e.code === 'FEATURE_NOT_IN_PLAN') setFailure(ONLINE_SHOP_NOT_IN_PLAN_MESSAGE)
-      else setFailure(ownerMessageFor(e).replace('Could not set up the terminal', 'Could not connect the shop'))
-      onConnected()
+      const message =
+        e instanceof EnrolNotStartedError
+          ? userMessage(e.cause, 'Could not connect the shop.')
+          : e instanceof CredentialMintError && e.code === 'FEATURE_NOT_IN_PLAN'
+            ? ONLINE_SHOP_NOT_IN_PLAN_MESSAGE
+            : ownerMessageFor(e).replace('Could not set up the terminal', 'Could not connect the shop')
+      setFailure(message)
+      // A definitive refusal forgot the row and this form stays; one with no answer kept it
+      // `minting`, and the connected view shows the message instead.
+      onConnected(message)
     } finally {
       setBusy(false)
     }
@@ -400,74 +437,51 @@ function ConnectedShop({
   stallPubkey,
   shop,
   lapsed,
+  notice: connectNotice,
   refresh,
   deps,
 }: {
   stallPubkey: string
   shop: TerminalRecord
   lapsed: boolean
+  /** Why the connect that made this row did not finish, if it did not. */
+  notice: string | null
   refresh: () => void
   deps: {
-    transport: MintTransport
     spendApi: () => Promise<CredentialMintApi>
-    collect: (stallPubkey: string) => Promise<number>
-    confirm: ConfirmCall
     renew: (stallPubkey: string, terminalPubkey: string, api: CredentialMintApi) => Promise<{ started: boolean; message?: string }>
     profile: ProfilePublisher
     exposure: ExposureFetch
     now: () => number
   }
 }) {
-  const { transport, spendApi, collect, confirm, renew, profile, exposure, now } = deps
+  const { spendApi, renew, profile, exposure, now } = deps
   const url = shop.shop!.url
   const host = shopHost(url)
   const minting = shop.status === 'minting'
   const waiting = shop.status === 'waiting' || minting || shop.gatewayState === 'unconfirmed'
   const inService = (shop.status === undefined || shop.status === 'in-service') && shop.gatewayState !== 'unconfirmed'
 
-  // A mint whose answer was lost is finished (or cleared), and a shop that never confirmed in 24
-  // hours is cancelled, as the Terminals list does when it opens (#160 review, decision 4).
-  // Best effort: offline or locked leaves the row as it is for the next visit.
-  const needsUpkeep = minting || shop.status === 'waiting'
+  // The shop's plugin finishes its side with the setup code, and shows the check code when it has
+  // its credential: the same two codes a till's enrol screen shows (terminalDelivery, #160 review).
+  const setup = shop.status === 'waiting' && shop.token && shop.voucherId ? setupCode(stallPubkey, shop.voucherId) : null
+  const check = shop.voucherId ? formatCheckCode(checkCode(shop.voucherId, stallPubkey, shop.terminalPubkey)) : null
+  const [setupQr, setSetupQr] = useState<string | null>(null)
   useEffect(() => {
-    if (!needsUpkeep) return
+    if (!setup) return
     let cancelled = false
-    void (async () => {
-      try {
-        const api = await spendApi()
-        await resumeMinting(stallPubkey, api, transport)
-        await cancelExpiredWaiting(stallPubkey, api)
-      } catch {
-        // Tried again on the next visit.
-      }
-      if (!cancelled) refresh()
-    })()
+    void QRCode.toDataURL(setup, { width: 512, margin: 1 }).then(
+      (u) => !cancelled && setSetupQr(u),
+      () => !cancelled && setSetupQr(null),
+    )
     return () => {
       cancelled = true
     }
-  }, [needsUpkeep, stallPubkey, spendApi, transport, refresh])
-
-  // While it waits for the shop's "I have it", look for it, and confirm it at the gateway, as the
-  // Terminals list does for a till (#160 phase 2, round 2).
-  useEffect(() => {
-    if (!waiting) return
-    let stopped = false
-    const tick = async () => {
-      await collect(stallPubkey).catch(() => 0)
-      await confirmEnrolled(stallPubkey, confirm).catch(() => undefined)
-      if (!stopped) refresh()
-    }
-    void tick()
-    const timer = setInterval(() => void tick(), ENROLLED_POLL_MS)
-    return () => {
-      stopped = true
-      clearInterval(timer)
-    }
-  }, [waiting, stallPubkey, collect, confirm, refresh])
+  }, [setup])
 
   // The profile's `online_shop` follows the roster (#402 §0): published once the shop is in
   // service, retried while this screen is open, and its state shown.
-  const [published, setPublished] = useState<boolean | null>(null)
+  const [published, setPublished] = useState<'publishing' | 'yes' | 'retrying' | 'gave-up'>('publishing')
   useEffect(() => {
     if (!inService) return
     let stopped = false
@@ -476,7 +490,7 @@ function ConnectedShop({
       const out = await syncOnlineShop(stallPubkey, allTerminals(stallPubkey), profile).catch(() => ({ changed: true, published: false }))
       const failed = !out.published && (out.changed || onlineShopUnconfirmed(stallPubkey))
       if (stopped) return
-      setPublished(!failed)
+      setPublished(!failed ? 'yes' : left > 0 ? 'retrying' : 'gave-up')
       if (failed && left > 0) timer = setTimeout(() => void attempt(left - 1), PROFILE_RETRY_MS)
     }
     void attempt(PROFILE_RETRIES)
@@ -571,14 +585,40 @@ function ConnectedShop({
                 with a connection.
               </p>
             ) : waiting ? (
-              <p className="mt-2 text-sm text-mono-500" data-testid="online-shop-waiting">
-                Waiting for {host} to confirm. Keep its Imani settings open; this finishes on its own, and is cancelled
-                after 24 hours if the shop never confirms.
-              </p>
+              <div className="mt-2 text-sm text-mono-500">
+                <p data-testid="online-shop-waiting">
+                  {shop.delivered === false
+                    ? `${host} has not received its connection yet. It is sent again each time you open this screen.`
+                    : `Waiting for ${host} to confirm. Keep its Imani settings open; this finishes on its own, and is cancelled after 24 hours if the shop never confirms.`}
+                </p>
+                {check ? (
+                  <p className="mt-2" data-testid="online-shop-check-code">
+                    Check code <span className="font-mono font-medium text-mono-900 dark:text-mono-50">{check}</span>. Your
+                    shop shows the same code once it is connected.
+                  </p>
+                ) : null}
+                {setup ? (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer">Show the setup code</summary>
+                    {setupQr ? (
+                      <img src={setupQr} alt="Shop setup code" className="mx-auto mt-2 w-full max-w-xs rounded-2xl bg-white p-4" />
+                    ) : null}
+                    <p className="mt-2 break-all font-mono text-xs" data-testid="online-shop-setup-code">
+                      {setup}
+                    </p>
+                  </details>
+                ) : null}
+              </div>
             ) : (
               <>
                 <p className="mt-2 text-sm text-mono-500" data-testid="online-shop-published">
-                  {published === null ? 'Publishing…' : published ? 'Customers can see it.' : 'Not published yet. Trying again.'}
+                  {published === 'publishing'
+                    ? 'Publishing…'
+                    : published === 'yes'
+                      ? 'Customers can see it.'
+                      : published === 'retrying'
+                        ? 'Not published yet. Trying again.'
+                        : 'Not published yet. It is tried again the next time you open this screen.'}
                 </p>
                 {outstanding ? (
                   <p className="mt-1 text-sm text-mono-500" data-testid="online-shop-exposure">
@@ -601,9 +641,9 @@ function ConnectedShop({
       {shop.renewal ? (
         <p className="mb-4 text-sm text-mono-500">Renewal sent. {host} picks it up the next time it checks in.</p>
       ) : null}
-      {notice ? (
+      {notice ?? (minting ? connectNotice : null) ? (
         <div className="mb-4">
-          <Alert>{notice}</Alert>
+          <Alert>{notice ?? connectNotice}</Alert>
         </div>
       ) : null}
 

@@ -404,6 +404,12 @@ change), nor a shop's credential renewal. So when a plan lapses, the codes alrea
 finish and only new ones are refused. The wallet shows the shop as connected with a "renew or
 disconnect" notice; the profile keeps `online_shop` until the owner disconnects.
 
+One narrow case is deliberately not exempted: a code whose first part was already burnt when the
+plan lapsed (a lapse landing between the dry run and the real lock, or a run resumed after a
+crash) has that lock refused, and the part comes back to the customer as sats (`kept_as_sats`),
+never lost. Exempting a lock whose predecessor is already spent would let any client skip the
+gate by burning first, which is the only server-side stop on new codes.
+
 ## 5. Settling: how value leaves `S` (redeem, change, cancel)
 
 A swap cannot change who a coupon is locked to: the gateway's voucher signature covers `data`.
