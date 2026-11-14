@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { reportLicence } from '../lib/licenceReport'
 import { mayServe } from '../lib/lapseService'
+import { terminalLimit } from '../lib/entitlement'
 import { formatDate } from '../lib/format'
 import { TERMINAL_ROLE_LABELS } from '../lib/terminalRole'
 import {
@@ -382,11 +383,31 @@ export function TerminalsPage({
   const queued = renewalsQueued(stallPubkey, nowMs)
   const live = terminals.filter((t) => t.revokedAt === undefined)
   const retired = terminals.filter((t) => t.revokedAt !== undefined)
+  // Terminals are an Essentials-and-above feature: the free tier allows no enrolled terminal. The
+  // section is disabled rather than hidden, and only once the licence check has answered, so a
+  // paying stall never sees it greyed out while the check loads. Existing rows stay listed and
+  // revocable: a paywall in front of revocation would turn a billing problem into a security one.
+  const disabled = licence !== null && terminalLimit(licence) === 0
 
   return (
     <Screen>
       <BackLink to="/settings" label="Settings" />
       <PageHeader title="Terminals" subtitle="The devices trading for your stall" />
+
+      {disabled ? (
+        <div className="mb-6" data-testid="terminals-disabled">
+        <Panel className="p-4">
+          <p className="font-medium">Terminals are not included in the free Starter plan</p>
+          <p className="mt-1 text-sm text-mono-500">
+            Your own device keeps trading as it does now. To let other devices take payments for your
+            stall, upgrade to Essentials or above.
+          </p>
+          <Link to="/settings/subscription" className="mt-3 block">
+            <Button className="w-full">See plans</Button>
+          </Link>
+        </Panel>
+        </div>
+      ) : null}
 
       {lapsed.map((name) => (
         <div key={name} className="mb-4" data-testid="renewal-lapsed">
@@ -400,14 +421,14 @@ export function TerminalsPage({
         </p>
       ) : null}
 
-      {live.length === 0 ? (
+      {live.length === 0 && !disabled ? (
         <Panel className="mb-6">
           <EmptyRow>
             No terminals yet. Add one from a device to let it take payments for
             your stall.
           </EmptyRow>
         </Panel>
-      ) : (
+      ) : live.length === 0 ? null : (
         <ListSection title="In service">
           {live.map((terminal) => (
             <TerminalRow
@@ -455,14 +476,22 @@ export function TerminalsPage({
       {/* The way in, present whether or not the list is empty: an owner adding
           a second till should not have to find a different route than the one
           they used for the first. */}
-      <Link to="/settings/terminals/add" className="mt-2 block">
-        <Button className="w-full">Add a terminal</Button>
-      </Link>
+      {disabled ? (
+        <Button className="mt-2 w-full" disabled>
+          Add a terminal
+        </Button>
+      ) : (
+        <Link to="/settings/terminals/add" className="mt-2 block">
+          <Button className="w-full">Add a terminal</Button>
+        </Link>
+      )}
 
       {/* Says what to do, rather than implying a resume exists somewhere. */}
-      <p className="mt-4 text-sm text-mono-500">
-        To bring a terminal back, add it again from the device.
-      </p>
+      {disabled ? null : (
+        <p className="mt-4 text-sm text-mono-500">
+          To bring a terminal back, add it again from the device.
+        </p>
+      )}
     </Screen>
   )
 }

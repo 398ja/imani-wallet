@@ -80,7 +80,7 @@ export function servingTerminals(
 
   if (grants(status, LICENCE_FEATURES.TERMINALS) && terminalLimit(status) === null) return live
 
-  // The oldest N keep serving, N being the tier's allowance (#407): one free, three on Basic.
+  // The oldest N keep serving, N being the tier's allowance (#407): none free, three on Basic.
   return live.slice(0, terminalLimit(status) ?? live.length)
 }
 

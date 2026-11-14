@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The free (Starter) tier no longer includes an extra terminal.** Additional terminals are now an
+  Essentials-and-above feature (Essentials 3, Pro unlimited). The free tier's `terminals` limit is 0
+  in both the bundled catalog and the published `services/subscription/catalog.json` (version 5 → 6;
+  redeploy the subscription service so wallets adopt it). `FREE_TERMINALS` is 0, so `mayEnrol`
+  refuses even a first terminal without a subscription, and a lapse or seller revocation now stops
+  every enrolled terminal. The stall's own device is unaffected.
+- Settings › Terminals is disabled on the free tier: it explains that terminals start at
+  Essentials, links to Settings › Subscription, and turns off "Add a terminal". Terminals enrolled
+  before stay listed and revocable. Settings › Subscription shows "This device only", and the
+  subscription site's plan cards read "Your device only, no extra tills" for Starter.
+- Consumers: a free stall's existing terminal stops serving once its device adopts catalog 6, and
+  stops selling as soon as gateway-portal ships its matching change (`TerminalLicenceGate` no longer
+  honours `terminal:free`).
+
 ### Fixed
 
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops

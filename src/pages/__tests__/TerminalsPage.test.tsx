@@ -354,17 +354,16 @@ describe('what a lapse shows the owner', () => {
 
   it('marks only the tills a lapse actually stopped', async () => {
     /**
-     * The free one keeps serving, so exactly one of these two is marked. A
-     * screen that marked both would tell an owner their stall had stopped
-     * trading over a billing problem, which is the thing the whole design
-     * refuses.
+     * The free tier includes no terminals (2026-11), so a lapse stops both and
+     * both are marked. The stall still trades on the owner's own device, which
+     * is not on this list.
      */
     subscribed = false
     two()
     renderPage()
 
     await waitFor(() =>
-      expect(screen.getAllByText(/subscription is inactive/)).toHaveLength(1),
+      expect(screen.getAllByText(/subscription is inactive/)).toHaveLength(2),
     )
   })
 
@@ -376,7 +375,7 @@ describe('what a lapse shows the owner', () => {
     two()
     renderPage()
 
-    await waitFor(() => expect(screen.getByText(/subscription is inactive/)).toBeTruthy())
+    await waitFor(() => expect(screen.getAllByText(/subscription is inactive/).length).toBeGreaterThan(0))
     expect(screen.getByText('In service')).toBeTruthy()
     expect(screen.queryByText('No longer in service')).toBeNull()
   })
@@ -389,7 +388,7 @@ describe('what a lapse shows the owner', () => {
     renderPage()
 
     await waitFor(() =>
-      expect(screen.getByText(/nothing needs setting up on the device/)).toBeTruthy(),
+      expect(screen.getAllByText(/nothing needs setting up on the device/).length).toBeGreaterThan(0),
     )
   })
 
@@ -400,7 +399,7 @@ describe('what a lapse shows the owner', () => {
     two()
     const { container } = renderPage()
 
-    await waitFor(() => expect(screen.getByText(/subscription is inactive/)).toBeTruthy())
+    await waitFor(() => expect(screen.getAllByText(/subscription is inactive/).length).toBeGreaterThan(0))
     expect(container.textContent).not.toMatch(/paused|suspended/i)
   })
 })
@@ -774,3 +773,38 @@ describe('the stall profile publisher (#402): only the relay confirms', () => {
   })
 })
 
+
+describe('the free tier has no terminals (2026-11)', () => {
+  it('disables the section for a stall with no subscription', async () => {
+    // Terminals start at Essentials. The screen says so and the way in is off,
+    // rather than leaving an owner to discover it at the enrolment refusal.
+    subscribed = false
+    renderPage()
+
+    await waitFor(() => expect(screen.getByTestId('terminals-disabled')).toBeTruthy())
+    expect(screen.getByText(/not included in the free Starter plan/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Add a terminal' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByText(/No terminals yet/)).toBeNull()
+  })
+
+  it('still lists, and lets the owner revoke, a till enrolled before', async () => {
+    // A paywall in front of revocation would turn a billing problem into a
+    // security one: a stolen device must stay revocable on every tier.
+    subscribed = false
+    enrol()
+    renderPage()
+
+    await waitFor(() => expect(screen.getByTestId('terminals-disabled')).toBeTruthy())
+    expect(screen.getByText('Door')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Revoke/ })).toBeTruthy()
+  })
+
+  it('is not disabled under a subscription', async () => {
+    subscribed = true
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/No terminals yet/)).toBeTruthy())
+    expect(screen.queryByTestId('terminals-disabled')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Add a terminal' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+})
