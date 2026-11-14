@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import QRCode from 'qrcode'
-import { Check, Clock, Lock, Store, TriangleAlert } from 'lucide-react'
+import { Check, ChevronRight, Globe, Lock } from 'lucide-react'
 
-import { Screen, BackLink, PageHeader, Panel, Button, Alert } from '../components/ui'
+import { Screen, BackLink, PageHeader, Button, Alert, DetailRow, Notice } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
-import { formatDate } from '../lib/format'
+import { formatDay } from '../lib/format'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { reportLicence } from '../lib/licenceReport'
 import { ONLINE_SHOP_PLATFORMS, type OnlineShopPlatform } from '../lib/onlineShop'
@@ -18,7 +18,7 @@ import {
 } from '../lib/onlineShopAccess'
 import { onlineShopUnconfirmed, syncOnlineShop, type ProfilePublisher } from '../lib/onlineShopProfile'
 import { SHOP_ENROL_MESSAGES, readShopEnrolCode, shopHost, type ShopEnrolment } from '../lib/shopEnrol'
-import { exposureLine, fetchShopExposure, type ExposureFetch, type ShopExposure } from '../lib/shopExposure'
+import { exposureLine, exposureSummary, fetchShopExposure, type ExposureFetch, type ShopExposure } from '../lib/shopExposure'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import type { StallSigner } from '../lib/ownerAttestation'
 import { getSigner } from '../lib/nap'
@@ -34,7 +34,7 @@ import { syncRosterNow } from '../lib/terminalRosterSyncNet'
 import { useTerminalUpkeep } from '../hooks/useTerminalUpkeep'
 import { expiryBand } from '../lib/terminalRenewal'
 import { revokeTerminalAtMint } from '../lib/terminalRevoke'
-import { REVOCATION_DELAY_NOTE, allTerminals, isRevocable, enrolledCount, holdsLiveCredential, waitingTerminals, type TerminalRecord } from '../lib/terminalRoster'
+import { REVOCATION_DELAY_HOURS, allTerminals, isRevocable, enrolledCount, holdsLiveCredential, waitingTerminals, type TerminalRecord } from '../lib/terminalRoster'
 import { TERMINAL_ROLES } from '../lib/terminalRole'
 import { useOnline } from '../lib/useOnline'
 import { userMessage } from '../lib/userMessage'
@@ -208,34 +208,88 @@ export function OnlineShopPage({
   )
 }
 
-/** What an online shop is, in two sentences. Shown above the connect flow and the lock alike. */
-function Explainer() {
+/**
+ * Presentation follows Apple's Human Interface Guidelines, within the wallet's own tokens: inset
+ * grouped lists with short headers and footnote footers (the same frame as `ListSection`), one
+ * primary action per step, a single-choice list with a checkmark for the platform, progressive
+ * disclosure (the code step appears once a platform is chosen), status as label/value rows, and
+ * the destructive action alone in its own group, confirmed in place.
+ */
+
+/** An inset grouped list: optional header above, optional footnote below. */
+function Group({ title, footer, children, testId }: { title?: string; footer?: React.ReactNode; children: React.ReactNode; testId?: string }) {
   return (
-    <Panel className="mb-6 p-4">
-      <div className="flex items-start gap-3">
-        <Store className="mt-0.5 h-5 w-5 shrink-0 text-mono-400" aria-hidden />
-        <div className="text-sm text-mono-500">
-          <p>Customers turn your coupons into a checkout code in their wallet and type it in at your shop's checkout.</p>
-          <p className="mt-2">Your shop can take your coupons. It can never issue them.</p>
-        </div>
+    <section className="mb-6" data-testid={testId}>
+      {title ? <h2 className="mb-2 px-4 text-xs font-medium uppercase tracking-wide text-mono-500">{title}</h2> : null}
+      <div className="divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800">
+        {children}
       </div>
-    </Panel>
+      {footer ? <div className="mt-2 px-4 text-xs leading-relaxed text-mono-500">{footer}</div> : null}
+    </section>
   )
 }
 
+/** A full-width row that acts, at least 44 pt tall. Destructive rows are red and stand alone. */
+function ActionRow({
+  children,
+  onClick,
+  tone = 'default',
+  disabled,
+}: {
+  children: React.ReactNode
+  onClick: () => void
+  tone?: 'default' | 'destructive'
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`press-row block min-h-11 w-full p-4 text-center font-medium disabled:opacity-50 ${
+        tone === 'destructive' ? 'text-red-600 dark:text-red-400' : 'text-mono-900 dark:text-mono-50'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** The page's lead: an icon tile, a title and one line of state. */
+function StatusHeader({ title, status, tone }: { title: string; status: string; tone: 'ok' | 'pending' | 'warning' | 'neutral' }) {
+  const dot = { ok: 'bg-green-500', pending: 'bg-amber-500', warning: 'bg-amber-500', neutral: 'bg-mono-400' }[tone]
+  return (
+    <div className="mb-6 flex items-center gap-4">
+      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-mono-100 dark:bg-mono-900">
+        <Globe className="h-7 w-7 text-mono-700 dark:text-mono-200" aria-hidden />
+      </div>
+      <div className="min-w-0">
+        <p className="truncate text-lg font-semibold text-mono-900 dark:text-mono-50">{title}</p>
+        <p className="flex items-center gap-1.5 text-sm text-mono-500">
+          <span className={`inline-block h-2 w-2 rounded-full ${dot}`} aria-hidden />
+          {status}
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/** What an online shop is, in two sentences. */
+const EXPLAINER =
+  "Customers turn your coupons into a checkout code in their wallet and type it in at your shop's checkout. Your shop can take your coupons. It can never issue them."
+
 function LockedShop() {
   return (
-    <div data-testid="online-shop-locked">
-      <Explainer />
-      <Panel className="mb-6 p-4">
-        <div className="flex items-start gap-3">
-          <Lock className="mt-0.5 h-5 w-5 shrink-0 text-mono-400" aria-hidden />
-          <p className="text-sm text-mono-500">
-            Online shops are part of the {ONLINE_SHOP_PLAN_NAME} plan. Upgrade to connect your website.
-          </p>
-        </div>
-      </Panel>
-      <Link to="/settings/subscription" className="block">
+    <div data-testid="online-shop-locked" className="flex flex-col items-center px-2 pt-6 text-center">
+      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-mono-100 dark:bg-mono-900">
+        <Lock className="h-8 w-8 text-mono-500" aria-hidden />
+      </div>
+      <p className="text-lg font-semibold text-mono-900 dark:text-mono-50">Sell online with your coupons</p>
+      <p className="mt-2 text-sm leading-relaxed text-mono-500">{EXPLAINER}</p>
+      <p className="mt-3 text-sm leading-relaxed text-mono-500">
+        Online shops are part of the {ONLINE_SHOP_PLAN_NAME} plan. Upgrade to connect your website.
+      </p>
+      <Link to="/settings/subscription" className="mt-6 block w-full">
         <Button className="w-full">See plans</Button>
       </Link>
     </div>
@@ -347,76 +401,84 @@ function ConnectShop({
     )
   }
 
+  if (code) {
+    // The confirmation: what will be connected, said plainly, and one primary action.
+    return (
+      <div data-testid="online-shop-confirm">
+        <p className="mb-1 text-lg font-semibold text-mono-900 dark:text-mono-50">Connect {shopHost(code.url)}?</p>
+        <p className="mb-6 text-sm text-mono-500">Check this is your shop. Customers' wallets will send their checkout codes there.</p>
+        <Group footer="It will be able to take your coupons at checkout. It can never issue them.">
+          <DetailRow label="Address" value={code.url} />
+          <DetailRow label="Platform" value={PLATFORM_LABELS[code.platform].name} />
+        </Group>
+        {!online ? (
+          <Notice tone="warning">Connecting a shop needs a connection.</Notice>
+        ) : null}
+        {failure ? (
+          <div className="mb-4">
+            <Alert>{failure}</Alert>
+          </div>
+        ) : null}
+        <Button className="w-full" onClick={() => void connect()} disabled={busy || !online}>
+          {busy ? 'Connecting…' : 'Connect'}
+        </Button>
+        <Button
+          variant="ghost"
+          className="mt-2 w-full"
+          onClick={() => {
+            setCode(null)
+            setFailure(null)
+          }}
+          disabled={busy}
+        >
+          Cancel
+        </Button>
+      </div>
+    )
+  }
+
   return (
     <div>
-      <Explainer />
-      {!online ? (
-        <p className="mb-6 rounded-xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
-          Connecting a shop needs a connection.
-        </p>
-      ) : null}
+      <p className="mb-6 text-sm leading-relaxed text-mono-500">{EXPLAINER}</p>
+      {!online ? <Notice tone="warning">Connecting a shop needs a connection.</Notice> : null}
 
-      {code ? (
-        <div data-testid="online-shop-confirm">
-        <Panel className="mb-6 p-4">
-          <p className="font-medium text-mono-900 dark:text-mono-50">Connect {shopHost(code.url)}?</p>
-          <p className="mt-1 text-sm text-mono-500">Platform: {PLATFORM_LABELS[code.platform].name}</p>
-          <p className="mt-2 text-sm text-mono-500">
-            It will be able to take your coupons at checkout. It can never issue them. Check this is your shop's
-            address: customers' wallets will send their checkout codes there.
-          </p>
-          {failure ? (
-            <div className="mt-3">
-              <Alert>{failure}</Alert>
-            </div>
-          ) : null}
-          <div className="mt-4 flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setCode(null)
-                setFailure(null)
-              }}
-              disabled={busy}
-            >
-              Cancel
-            </Button>
-            <Button onClick={() => void connect()} disabled={busy || !online}>
-              {busy ? 'Connecting…' : 'Connect'}
-            </Button>
-          </div>
-        </Panel>
-        </div>
-      ) : (
-        <>
-          <span className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300">1. Your shop's platform</span>
-          <div className="mb-6 grid grid-cols-2 gap-2">
-            {ONLINE_SHOP_PLATFORMS.map((p) => (
-              <button
-                key={p}
-                type="button"
-                aria-pressed={platform === p}
-                onClick={() => setPlatform(p)}
-                className={`pressable rounded-xl border p-3 text-left font-medium ${
-                  platform === p
-                    ? 'border-mono-900 bg-mono-100 text-mono-900 dark:border-mono-50 dark:bg-mono-900 dark:text-mono-50'
-                    : 'border-mono-200 text-mono-900 hover:bg-mono-100 dark:border-mono-800 dark:text-mono-50 dark:hover:bg-mono-900'
-                }`}
-              >
-                {PLATFORM_LABELS[p].name}
-              </button>
-            ))}
-          </div>
-          {platform ? (
-            <ol className="mb-6 list-decimal space-y-1 pl-5 text-sm text-mono-500" data-testid="platform-steps">
+      <Group
+        title="Platform"
+        footer={
+          platform ? (
+            <ol className="list-decimal space-y-1 pl-4" data-testid="platform-steps">
               {PLATFORM_LABELS[platform].steps.map((step) => (
                 <li key={step}>{step}</li>
               ))}
               <li>Copy the code it shows, or keep it on screen to scan.</li>
             </ol>
-          ) : null}
-          <span className="mb-2 block text-sm font-medium text-mono-700 dark:text-mono-300">2. Your shop's code</span>
-          <ScanRecipient onFound={() => {}} onText={onText} selfPubkey={stallPubkey} manualLabel="Or paste the code from your shop" />
+          ) : (
+            'Where your shop runs. Each platform has an Imani add-on that shows a code to connect with.'
+          )
+        }
+      >
+        <div role="radiogroup" aria-label="Platform" className="divide-y divide-mono-200 dark:divide-mono-800">
+          {ONLINE_SHOP_PLATFORMS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              role="radio"
+              aria-checked={platform === p}
+              onClick={() => setPlatform(p)}
+              className="press-row flex min-h-11 w-full items-center justify-between p-4 text-left text-mono-900 dark:text-mono-50"
+            >
+              {PLATFORM_LABELS[p].name}
+              {platform === p ? <Check className="h-5 w-5 text-mono-900 dark:text-mono-50" aria-hidden /> : null}
+            </button>
+          ))}
+        </div>
+      </Group>
+
+      {/* Progressive disclosure: the code is asked for once there is a platform to get it from. */}
+      {platform ? (
+        <section className="mb-6">
+          <h2 className="mb-2 px-4 text-xs font-medium uppercase tracking-wide text-mono-500">Your shop's code</h2>
+          <ScanRecipient onFound={() => {}} onText={onText} selfPubkey={stallPubkey} manualLabel="Or paste the code from your shop" placeholder="imani-shop-enrol:1:…" />
           {refusal ? (
             <div className="mt-3">
               <Alert>{refusal}</Alert>
@@ -427,8 +489,8 @@ function ConnectShop({
               <Alert>{failure}</Alert>
             </div>
           ) : null}
-        </>
-      )}
+        </section>
+      ) : null}
     </div>
   )
 }
@@ -553,136 +615,163 @@ function ConnectedShop({
   const band = inService ? expiryBand(expiresAt, now()) : 'ok'
   const renewable = isRenewable(shop) && !shop.renewal
 
+  const publishedText =
+    published === 'publishing' ? 'Publishing…' : published === 'yes' ? 'Yes' : published === 'retrying' ? 'Not yet, trying again' : 'Not yet'
+  const status = minting
+    ? 'Being set up'
+    : waiting
+      ? shop.delivered === false
+        ? 'Not received by the shop yet'
+        : 'Waiting for the shop'
+      : lapsed
+        ? 'Taking no new codes'
+        : 'Connected'
+  const tone = minting || waiting ? 'pending' : lapsed ? 'warning' : 'ok'
+  const shown = notice ?? (minting ? connectNotice : null)
+
   return (
     <div data-testid="online-shop-connected">
+      <StatusHeader title={host} status={status} tone={tone} />
+
       {lapsed ? (
-        <div className="mb-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" data-testid="online-shop-lapsed">
-          <p>
+        <div data-testid="online-shop-lapsed">
+          <Notice tone="warning">
             Your plan no longer includes online shops. {host} takes no new checkout codes; the ones customers already
-            made still work until they are used or expire.
-          </p>
-          <Link to="/settings/subscription" className="mt-2 inline-block font-medium underline">
-            Renew {ONLINE_SHOP_PLAN_NAME}
-          </Link>
+            made still work until they are used or expire.{' '}
+            <Link to="/settings/subscription" className="font-medium underline">
+              Renew {ONLINE_SHOP_PLAN_NAME}
+            </Link>
+          </Notice>
+        </div>
+      ) : null}
+      {shown ? (
+        <div className="mb-4">
+          <Alert>{shown}</Alert>
         </div>
       ) : null}
 
-      <Panel className="mb-6 p-4">
-        <div className="flex items-start gap-3">
-          {waiting ? (
-            <Clock className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden />
-          ) : (
-            <Check className="mt-0.5 h-5 w-5 shrink-0 text-green-600" aria-hidden />
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="font-medium text-mono-900 dark:text-mono-50">{waiting ? `Connecting ${host}` : `Connected: ${host}`}</p>
-            <p className="text-sm text-mono-500">
-              {PLATFORM_LABELS[shop.shop!.platform].name} · since {formatDate(shop.enrolledAt)}
-            </p>
-            {minting ? (
-              <p className="mt-2 text-sm text-mono-500" data-testid="online-shop-minting">
-                The gateway has not confirmed it yet. It is finished, or cleared, the next time you open this screen
-                with a connection.
+      {minting ? (
+        <Group
+          footer={
+            <span data-testid="online-shop-minting">
+              The gateway has not confirmed it yet. It is finished, or cleared, the next time you open this screen with a
+              connection.
+            </span>
+          }
+        >
+          <DetailRow label="Platform" value={PLATFORM_LABELS[shop.shop!.platform].name} />
+        </Group>
+      ) : waiting ? (
+        <Group
+          title="Finish on your shop"
+          footer={
+            <span data-testid="online-shop-waiting">
+              {shop.delivered === false
+                ? `${host} has not received its connection yet. It is sent again each time you open this screen.`
+                : `Waiting for ${host} to confirm. Keep its Imani settings open; this finishes on its own, and is cancelled after 24 hours if the shop never confirms.`}
+            </span>
+          }
+        >
+          {check ? (
+            <div data-testid="online-shop-check-code" className="flex items-baseline justify-between gap-4 p-4">
+              <span className="text-sm text-mono-500">Check code</span>
+              <span className="font-mono text-lg font-medium tracking-wider text-mono-900 dark:text-mono-50" aria-label={`Check code ${check}`}>
+                {check}
+              </span>
+            </div>
+          ) : null}
+          {setup ? (
+            <details className="group p-4 text-sm">
+              <summary className="flex min-h-6 cursor-pointer list-none items-center justify-between text-mono-900 dark:text-mono-50">
+                Setup code
+                <ChevronRight className="h-4 w-4 text-mono-400 transition-transform group-open:rotate-90" aria-hidden />
+              </summary>
+              {setupQr ? (
+                <img src={setupQr} alt="Shop setup code" className="mx-auto mt-3 w-full max-w-xs rounded-2xl bg-white p-4" />
+              ) : null}
+              <p className="mt-2 break-all font-mono text-xs text-mono-500" data-testid="online-shop-setup-code">
+                {setup}
               </p>
-            ) : waiting ? (
-              <div className="mt-2 text-sm text-mono-500">
-                <p data-testid="online-shop-waiting">
-                  {shop.delivered === false
-                    ? `${host} has not received its connection yet. It is sent again each time you open this screen.`
-                    : `Waiting for ${host} to confirm. Keep its Imani settings open; this finishes on its own, and is cancelled after 24 hours if the shop never confirms.`}
-                </p>
-                {check ? (
-                  <p className="mt-2" data-testid="online-shop-check-code">
-                    Check code <span className="font-mono font-medium text-mono-900 dark:text-mono-50">{check}</span>. Your
-                    shop shows the same code once it is connected.
-                  </p>
-                ) : null}
-                {setup ? (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer">Show the setup code</summary>
-                    {setupQr ? (
-                      <img src={setupQr} alt="Shop setup code" className="mx-auto mt-2 w-full max-w-xs rounded-2xl bg-white p-4" />
-                    ) : null}
-                    <p className="mt-2 break-all font-mono text-xs" data-testid="online-shop-setup-code">
-                      {setup}
-                    </p>
-                  </details>
-                ) : null}
-              </div>
-            ) : (
-              <>
-                <p className="mt-2 text-sm text-mono-500" data-testid="online-shop-published">
-                  {published === 'publishing'
-                    ? 'Publishing…'
-                    : published === 'yes'
-                      ? 'Customers can see it.'
-                      : published === 'retrying'
-                        ? 'Not published yet. Trying again.'
-                        : 'Not published yet. It is tried again the next time you open this screen.'}
-                </p>
-                {outstanding ? (
-                  <p className="mt-1 text-sm text-mono-500" data-testid="online-shop-exposure">
-                    {exposureLine(outstanding, url)}
-                  </p>
-                ) : null}
-              </>
-            )}
+            </details>
+          ) : null}
+          <DetailRow label="Platform" value={PLATFORM_LABELS[shop.shop!.platform].name} />
+        </Group>
+      ) : (
+        <Group footer={published === 'gave-up' ? 'Your shop is not on your public profile yet. It is tried again the next time you open this screen.' : undefined}>
+          <div className="flex items-baseline justify-between gap-4 p-4">
+            <span className="shrink-0 text-sm text-mono-500">Visible to customers</span>
+            <span className="text-right text-mono-900 dark:text-mono-50" data-testid="online-shop-published">
+              {publishedText}
+            </span>
           </div>
-        </div>
-      </Panel>
+          {outstanding ? (
+            <div className="flex items-baseline justify-between gap-4 p-4">
+              <span className="shrink-0 text-sm text-mono-500">Outstanding codes</span>
+              <span className="text-right text-mono-900 dark:text-mono-50" data-testid="online-shop-exposure">
+                {exposureSummary(outstanding)}
+              </span>
+            </div>
+          ) : null}
+          <DetailRow label="Platform" value={PLATFORM_LABELS[shop.shop!.platform].name} />
+          <DetailRow label="Connected since" value={formatDay(shop.enrolledAt)} />
+          {expiresAt !== undefined ? <DetailRow label="Renews by" value={formatDay(expiresAt * 1000)} /> : null}
+        </Group>
+      )}
 
       {band !== 'ok' && expiresAt !== undefined ? (
-        <p className={`mb-4 text-sm ${band === 'amber' ? 'text-amber-700 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`} data-testid="online-shop-expiry">
-          {band === 'expired'
-            ? `${host} stopped taking coupons on ${formatDate(expiresAt * 1000)}. Renew it.`
-            : `${host} stops taking coupons on ${formatDate(expiresAt * 1000)}. Renew it.`}
-        </p>
-      ) : null}
-      {shop.renewal ? (
-        <p className="mb-4 text-sm text-mono-500">Renewal sent. {host} picks it up the next time it checks in.</p>
-      ) : null}
-      {notice ?? (minting ? connectNotice : null) ? (
-        <div className="mb-4">
-          <Alert>{notice ?? connectNotice}</Alert>
-        </div>
+        <Group
+          footer={
+            <span
+              className={band === 'amber' ? 'text-amber-700 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}
+              data-testid="online-shop-expiry"
+            >
+              {band === 'expired'
+                ? `${host} stopped taking coupons on ${formatDay(expiresAt * 1000)}. Renew it.`
+                : `${host} stops taking coupons on ${formatDay(expiresAt * 1000)}. Renew it.`}
+            </span>
+          }
+        >
+          {renewable ? (
+            <ActionRow onClick={() => void renewNow()} disabled={busy !== null}>
+              {busy === 'renew' ? 'Renewing…' : 'Renew'}
+            </ActionRow>
+          ) : (
+            <p className="p-4 text-sm text-mono-500">Renewal sent. {host} picks it up the next time it checks in.</p>
+          )}
+        </Group>
+      ) : shop.renewal ? (
+        <p className="mb-6 px-4 text-xs text-mono-500">Renewal sent. {host} picks it up the next time it checks in.</p>
       ) : null}
 
-      {confirming ? (
-        <div className="expand-row mb-4 rounded-xl bg-amber-50 p-3 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300" data-testid="online-shop-disconnect-confirm">
-          <div className="flex gap-2">
-            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-            <div className="text-sm">
-              {outstanding && outstanding.codes > 0 ? (
-                <p className="mb-2">
-                  {exposureLine(outstanding, url)}. Customers get those back when the codes expire, not at checkout.
-                </p>
-              ) : null}
-              <p>{REVOCATION_DELAY_NOTE}</p>
-            </div>
-          </div>
-          <div className="mt-3 flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setConfirming(false)}>
-              Keep it
-            </Button>
-            <Button size="sm" onClick={() => void disconnect()} disabled={busy !== null} className="!bg-red-600 !text-white hover:!bg-red-700">
-              {busy === 'revoke' ? 'Disconnecting…' : `Disconnect ${host}`}
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex gap-2">
-          {renewable && band !== 'ok' ? (
-            <Button onClick={() => void renewNow()} disabled={busy !== null}>
-              {busy === 'renew' ? 'Renewing…' : 'Renew'}
-            </Button>
-          ) : null}
-          {isRevocable(shop) && shop.status !== 'minting' ? (
-            <Button variant="outline" onClick={() => setConfirming(true)} disabled={busy !== null} className="!text-red-600 dark:!text-red-400">
-              {waiting ? 'Cancel' : 'Disconnect'}
-            </Button>
-          ) : null}
-        </div>
-      )}
+      {isRevocable(shop) && !minting ? (
+        confirming ? (
+          // In place, as an action sheet would: what happens, the destructive choice, then Cancel.
+          <Group
+            testId="online-shop-disconnect-confirm"
+            footer={
+              <>
+                {outstanding && outstanding.codes > 0 ? (
+                  <p className="mb-1">
+                    {exposureLine(outstanding, url)}. Customers get those back when the codes expire, not at checkout.
+                  </p>
+                ) : null}
+                <p>{host} stops taking your coupons within {REVOCATION_DELAY_HOURS} hours, when its session next expires.</p>
+              </>
+            }
+          >
+            <ActionRow tone="destructive" onClick={() => void disconnect()} disabled={busy !== null}>
+              {busy === 'revoke' ? 'Disconnecting…' : `${waiting ? 'Cancel connecting' : 'Disconnect'} ${host}`}
+            </ActionRow>
+            <ActionRow onClick={() => setConfirming(false)}>Cancel</ActionRow>
+          </Group>
+        ) : (
+          <Group>
+            <ActionRow tone="destructive" onClick={() => setConfirming(true)} disabled={busy !== null}>
+              {waiting ? 'Cancel connecting' : 'Disconnect'}
+            </ActionRow>
+          </Group>
+        )
+      ) : null}
     </div>
   )
 }

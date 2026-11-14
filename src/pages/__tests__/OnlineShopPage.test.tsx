@@ -106,6 +106,11 @@ const { join } = await import('node:path')
 /** A real signed till credential, so a revoke has something to spend. */
 const TOKEN = readFileSync(join(__dirname, '../../lib/__tests__/fixtures/live-terminal-credential.token'), 'utf8').trim()
 
+/** The platform step: the code step appears once one is chosen (progressive disclosure). */
+async function choosePlatform(name = 'WooCommerce') {
+  fireEvent.click(await screen.findByRole('radio', { name }))
+}
+
 type Props = Partial<Parameters<typeof OnlineShopPage>[0]>
 function renderPage(props: Props = {}, state?: unknown) {
   return render(
@@ -173,7 +178,7 @@ describe('the plan check', () => {
           renewals={async () => ({ changed: 0, lapsed: [] })} spendApi={fakeSpend as never} />
       </MemoryRouter>,
     )
-    await screen.findByRole('button', { name: 'scan' })
+    await screen.findByRole('radio', { name: 'WooCommerce' })
     await new Promise((r) => setTimeout(r, 50))
 
     // Assert
@@ -204,12 +209,27 @@ describe('below the plan that includes online shops', () => {
 })
 
 describe('connecting a shop on Pro', () => {
+  it('asks for the code only once a platform is chosen, and marks the choice', async () => {
+    // Arrange
+    renderPage()
+    await screen.findByRole('radio', { name: 'Magento' })
+    expect(screen.queryByRole('button', { name: 'scan' })).toBeNull()
+
+    // Act
+    fireEvent.click(screen.getByRole('radio', { name: 'Magento' }))
+
+    // Assert
+    expect(screen.getByRole('radio', { name: 'Magento' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('radio', { name: 'Shopify' }).getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByRole('button', { name: 'scan' })).toBeTruthy()
+  })
+
   it('shows the chosen platform its steps', async () => {
     // Arrange
     renderPage()
 
     // Act
-    fireEvent.click(await screen.findByRole('button', { name: 'Shopify' }))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Shopify' }))
 
     // Assert
     expect(screen.getByTestId('platform-steps').textContent).toMatch(/Shopify admin/)
@@ -220,7 +240,8 @@ describe('connecting a shop on Pro', () => {
     renderPage()
 
     // Act: scan, read the confirmation, connect.
-    fireEvent.click(await screen.findByRole('button', { name: 'scan' }))
+    await choosePlatform()
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
     const confirm = await screen.findByTestId('online-shop-confirm')
     expect(confirm.textContent).toMatch(/Connect shop\.example\?/)
     expect(confirm.textContent).toMatch(/WooCommerce/)
@@ -244,7 +265,8 @@ describe('connecting a shop on Pro', () => {
     renderPage()
 
     // Act
-    fireEvent.click(await screen.findByRole('button', { name: 'scan' }))
+    await choosePlatform()
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Connect' }))
 
     // Assert
@@ -266,7 +288,8 @@ describe('connecting a shop on Pro', () => {
     renderPage()
 
     // Act / Assert: own key.
-    fireEvent.click(await screen.findByRole('button', { name: 'scan' }))
+    await choosePlatform()
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
     expect(await screen.findByText(/That is your own stall/)).toBeTruthy()
 
     // Act / Assert: two days old.
@@ -279,7 +302,8 @@ describe('connecting a shop on Pro', () => {
   it('cancelling the confirmation goes back to the code, with nothing sent', async () => {
     // Arrange
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'scan' }))
+    await choosePlatform()
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
     await screen.findByTestId('online-shop-confirm')
 
     // Act
@@ -307,8 +331,8 @@ describe('a connected shop', () => {
     })
 
     // Assert
-    await waitFor(() => expect(screen.getByTestId('online-shop-exposure').textContent).toMatch(/^3 codes, .*45.* outstanding at shop\.example$/))
-    await waitFor(() => expect(screen.getByTestId('online-shop-published').textContent).toBe('Customers can see it.'))
+    await waitFor(() => expect(screen.getByTestId('online-shop-exposure').textContent).toMatch(/^3 codes, .*45.*$/))
+    await waitFor(() => expect(screen.getByTestId('online-shop-published').textContent).toBe('Yes'))
     expect(mergeMerchantEvent(emptyMerchant(STALL), published[0].content, 1).onlineShop?.redeemKey).toBe(SHOP)
   })
 
@@ -335,7 +359,7 @@ describe('a connected shop', () => {
     expect(after.acceptsCards).toBe(true)
     expect(loadMerchant(STALL)?.onlineShop).toBeUndefined()
     // Back to connecting a new one.
-    expect(await screen.findByRole('button', { name: 'scan' })).toBeTruthy()
+    expect(await screen.findByRole('radio', { name: 'WooCommerce' })).toBeTruthy()
   })
 
   it('warns about outstanding codes before disconnecting', async () => {
@@ -388,7 +412,7 @@ describe('the shop lifecycle Terminals used to run (review of #402)', () => {
     renderPage()
 
     // Assert
-    expect((await screen.findByTestId('online-shop-check-code')).textContent).toMatch(/Check code \S+/)
+    expect((await screen.findByTestId('online-shop-check-code')).textContent).toMatch(/^Check code\s*\d{3}\s+\d{3}$/)
     expect(screen.getByTestId('online-shop-setup-code').textContent).toMatch(STALL)
   })
 
@@ -430,7 +454,8 @@ describe('the shop lifecycle Terminals used to run (review of #402)', () => {
     renderPage({ spendApi: (async () => { throw new Error('locked') }) as never })
 
     // Act
-    fireEvent.click(await screen.findByRole('button', { name: 'scan' }))
+    await choosePlatform()
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Connect' }))
 
     // Assert
@@ -465,13 +490,14 @@ describe('the shop lifecycle Terminals used to run (review of #402)', () => {
       saveMerchant(emptyMerchant(STALL))
       connectShop()
       renderPage({ profile: { sign: async (t) => ({ ...t, created_at: 1 }), publish: async () => ({ ok: 0 }) } })
-      await waitFor(() => expect(screen.getByTestId('online-shop-published').textContent).toMatch(/Trying again/))
+      await waitFor(() => expect(screen.getByTestId('online-shop-published').textContent).toMatch(/trying again/))
 
       // Act
       await vi.advanceTimersByTimeAsync(25 * 5_000)
 
       // Assert
-      await waitFor(() => expect(screen.getByTestId('online-shop-published').textContent).toMatch(/next time you open this screen/))
+      await waitFor(() => expect(screen.getByTestId('online-shop-published').textContent).toBe('Not yet'))
+      expect(screen.getByText(/tried again the next time you open this screen/)).toBeTruthy()
     } finally {
       vi.useRealTimers()
     }

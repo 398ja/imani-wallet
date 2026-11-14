@@ -53,9 +53,14 @@ export const fetchShopExposure: ExposureFetch = async (_stallPubkey, shopKey) =>
   }
 }
 
-/** "3 codes, €45.00 outstanding at shop.example". */
-export function exposureLine(exposure: ShopExposure, url: string): string {
+/** "3 codes, €45.00": the figure alone, for a value cell. */
+export function exposureSummary(exposure: ShopExposure): string {
   const n = exposure.codes === 1 ? '1 code' : `${exposure.codes} codes`
   const value = formatFace(exposure.amount, { unit: exposure.unit, decimals: currencyDecimals(exposure.unit) })
-  return `${n}, ${value} outstanding at ${shopHost(url)}`
+  return `${n}, ${value}`
+}
+
+/** "3 codes, €45.00 outstanding at shop.example". */
+export function exposureLine(exposure: ShopExposure, url: string): string {
+  return `${exposureSummary(exposure)} outstanding at ${shopHost(url)}`
 }
