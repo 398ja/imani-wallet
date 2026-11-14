@@ -12,6 +12,8 @@ import { StrictMode } from 'react'
  * tills a lapse stops — runs for real, because it is the thing being wired.
  */
 let subscribed = true
+/** Why an unsubscribed check refuses: `expired` is a lapse, `absent` a stall that never subscribed. */
+let denialReason: 'expired' | 'absent' = 'expired'
 vi.mock('../../lib/licenceStatus', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/licenceStatus')>()
   return {
@@ -20,7 +22,7 @@ vi.mock('../../lib/licenceStatus', async (importOriginal) => {
       checkedAt: Date.now(),
       decision: subscribed
         ? { granted: true as const, source: 'verified' as const, grant: { features: ['terminals'] } }
-        : { granted: false as const, reason: 'expired' as const },
+        : { granted: false as const, reason: denialReason },
     }),
   }
 })
@@ -110,6 +112,7 @@ function enrol(over: Parameters<typeof recordTerminal>[1] | Record<string, unkno
 
 beforeEach(() => {
   localStorage.clear()
+  denialReason = 'expired'
   spendFails = false
   spent.length = 0
   confirmations = []
@@ -775,10 +778,11 @@ describe('the stall profile publisher (#402): only the relay confirms', () => {
 
 
 describe('the free tier has no terminals (2026-11)', () => {
-  it('disables the section for a stall with no subscription', async () => {
+  it('disables the section for a stall that never subscribed', async () => {
     // Terminals start at Essentials. The screen says so and the way in is off,
     // rather than leaving an owner to discover it at the enrolment refusal.
     subscribed = false
+    denialReason = 'absent'
     renderPage()
 
     await waitFor(() => expect(screen.getByTestId('terminals-disabled')).toBeTruthy())
@@ -787,16 +791,50 @@ describe('the free tier has no terminals (2026-11)', () => {
     expect(screen.queryByText(/No terminals yet/)).toBeNull()
   })
 
-  it('still lists, and lets the owner revoke, a till enrolled before', async () => {
+  it('still lists, and lets the owner revoke, a till enrolled before, but offers no Renew', async () => {
     // A paywall in front of revocation would turn a billing problem into a
-    // security one: a stolen device must stay revocable on every tier.
+    // security one: a stolen device must stay revocable on every tier. Renewing
+    // would mint a credential for a till the portal refuses (402), so it is gone.
     subscribed = false
-    enrol()
+    denialReason = 'absent'
+    enrol({ status: 'in-service' })
     renderPage()
 
     await waitFor(() => expect(screen.getByTestId('terminals-disabled')).toBeTruthy())
     expect(screen.getByText('Door')).toBeTruthy()
     expect(screen.getByRole('button', { name: /Revoke/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Renew Door' })).toBeNull()
+  })
+
+  it('tells a never-subscribed stall its stopped till needs a plan, not a renewal', async () => {
+    subscribed = false
+    denialReason = 'absent'
+    enrol({ status: 'in-service' })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/Upgrading to Essentials starts it again/)).toBeTruthy())
+    expect(screen.queryByText(/subscription is inactive/)).toBeNull()
+  })
+
+  it('is not disabled for a lapsed subscriber, who is told to renew rather than buy', async () => {
+    // mayEnrol's own distinction: telling someone who already pays to buy a
+    // plan is the message the refusal reasons exist to avoid.
+    subscribed = false
+    denialReason = 'expired'
+    enrol({ status: 'in-service' })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/subscription is inactive/)).toBeTruthy())
+    expect(screen.queryByTestId('terminals-disabled')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Add a terminal' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('offers Renew on the same row under a subscription (the control for the test above)', async () => {
+    subscribed = true
+    enrol({ status: 'in-service' })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Renew Door' })).toBeTruthy())
   })
 
   it('is not disabled under a subscription', async () => {

@@ -59,9 +59,10 @@ export const STOPPED_BY_LAPSE_MESSAGE =
 /**
  * The terminals still entitled to serve, oldest enrolment first.
  *
- * Under a live subscription this is every live terminal: the licence is sold
- * per STALL and names no number, so there is no count to apply. Reintroducing
- * one here would be per-terminal pricing arriving by the back door.
+ * Under an unlimited tier (Pro, or a licence sold before tiers) this is every
+ * live terminal. Otherwise it is the oldest N, N being the tier's allowance:
+ * 3 on Essentials, and none on the free tier (2026-11), so a stall with no
+ * live subscription has no terminal serving.
  */
 export function servingTerminals(
   status: LicenceStatus,
