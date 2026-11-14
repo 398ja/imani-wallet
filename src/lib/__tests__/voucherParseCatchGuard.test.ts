@@ -156,12 +156,11 @@ const AUDITED = new Set<string>([
   // write as EnrolNotStartedError, the mint after settleMintFailure); the screens' catches only word
   // the failure. None reads a token as plain ecash.
   'src/lib/terminalEnrolFlow.ts#enrolTerminal#c0372312dea7',
-  'src/pages/OnlineShopPage.tsx#connect#c88b2fc428cd',
-  // Best-effort upkeep (resume a lost mint, cancel a stale wait): swallows only to retry next visit.
-  'src/pages/OnlineShopPage.tsx#ConnectedShop#db1c15073ca9',
+  // The Terminals open-time pass, moved unchanged into a hook both screens share (same hash).
+  'src/hooks/useTerminalUpkeep.ts#useTerminalUpkeep#a3a5f1cc76ec',
+  'src/pages/OnlineShopPage.tsx#connect#7da9854e1956',
   'src/pages/OnlineShopPage.tsx#disconnect#1a467249bb31',
   'src/pages/TerminalEnrolPage.tsx#enrol#c6d87daadd72',
-  'src/pages/TerminalsPage.tsx#TerminalsPage#a3a5f1cc76ec',
   'src/pages/TerminalsPage.tsx#TerminalsPage#a86fffe832b1',
 ])
 

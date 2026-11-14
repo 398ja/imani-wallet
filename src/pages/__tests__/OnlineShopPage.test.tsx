@@ -33,6 +33,10 @@ vi.mock('../../components/ScanRecipient', () => ({
   ScanRecipient: ({ onText }: { onText?: (t: string) => boolean }) => <button onClick={() => onText?.(scanned)}>scan</button>,
 }))
 
+/** Credential DMs re-sent by the open-time pass (#160 round 2). */
+let delivered = 0
+const deliver = async () => (delivered += 1, 0)
+
 /** The gateway at the network edge. */
 let mintRefusal: { status: number; code: string } | null = null
 const posts: Array<{ merchant_metadata: Record<string, unknown> }> = []
@@ -118,6 +122,9 @@ function renderPage(props: Props = {}, state?: unknown) {
         confirm={async () => 204}
         exposure={async () => null}
         profile={{ sign: async (t) => ({ ...t, created_at: 1 }), publish: async () => ({ ok: 1 }) }}
+        deliver={deliver}
+        sync={async () => false}
+        renewals={async () => ({ changed: 0, lapsed: [] })}
         {...props}
       />
     </MemoryRouter>,
@@ -147,6 +154,7 @@ beforeEach(() => {
   postHeaders.length = 0
   spends.length = 0
   licenceChecks = 0
+  delivered = 0
   vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
 })
 afterEach(() => {
@@ -161,7 +169,8 @@ describe('the plan check', () => {
     // Arrange / Act
     render(
       <MemoryRouter>
-        <OnlineShopPage stallPubkey={STALL} exposure={async () => null} />
+        <OnlineShopPage stallPubkey={STALL} exposure={async () => null} deliver={deliver} sync={async () => false}
+          renewals={async () => ({ changed: 0, lapsed: [] })} spendApi={fakeSpend as never} />
       </MemoryRouter>,
     )
     await screen.findByRole('button', { name: 'scan' })
@@ -355,6 +364,117 @@ describe('a shop whose connection did not finish', () => {
     // Assert: re-sent with the same key and the shop marker, and now waiting for the shop.
     await waitFor(() => expect(allTerminals(STALL)[0].status).toBe('waiting'))
     expect(postHeaders[0]).toMatchObject({ 'Idempotency-Key': 'key-1', 'X-Imani-Online-Shop': '1' })
+  })
+})
+
+describe('the shop lifecycle Terminals used to run (review of #402)', () => {
+  it('re-sends a credential DM that did not land, and says the shop has not received it', async () => {
+    // Arrange: minted, waiting, and the first NIP-17 send failed.
+    connectShop({ status: 'waiting', delivered: false, enrolledAt: Date.now(), waitingUntil: Date.now() + 86_400_000 })
+
+    // Act
+    renderPage()
+
+    // Assert
+    await waitFor(() => expect(delivered).toBe(1))
+    expect(screen.getByTestId('online-shop-waiting').textContent).toMatch(/has not received its connection yet/)
+  })
+
+  it('shows the check code and the setup code while the shop is waiting', async () => {
+    // Arrange
+    connectShop({ status: 'waiting', delivered: true, enrolledAt: Date.now(), waitingUntil: Date.now() + 86_400_000 })
+
+    // Act
+    renderPage()
+
+    // Assert
+    expect((await screen.findByTestId('online-shop-check-code')).textContent).toMatch(/Check code \S+/)
+    expect(screen.getByTestId('online-shop-setup-code').textContent).toMatch(STALL)
+  })
+
+  it('polls for the pickup of a renewal, which is what completes it', async () => {
+    // Arrange: in service, with a renewal sent and not yet collected.
+    const { attestEnrolment } = await import('../../lib/terminalMint')
+    const { prepareEnrolment } = await import('../../lib/terminalIssue')
+    const attestation = attestEnrolment(
+      prepareEnrolment({ name: 'shop.example', role: TERMINAL_ROLES.REDEEM_ONLY, terminalPubkey: SHOP }, { stallPubkey: STALL, licence: await PRO(), enrolledCount: 0, online: true } as never),
+      stallSigner(),
+      Date.now(),
+    )
+    connectShop({ renewal: { startedAt: Date.now(), mintKey: 'renew-1', attestation, voucherId: 'r1', token: TOKEN } })
+    let collected = 0
+
+    // Act
+    renderPage({ collect: async () => (collected += 1, 0) })
+
+    // Assert
+    await waitFor(() => expect(collected).toBeGreaterThan(0))
+  })
+
+  it('runs the renewal pass on opening, and shows a renewal that lapsed', async () => {
+    // Arrange
+    connectShop()
+    let asked = 0
+
+    // Act
+    renderPage({ renewals: async () => (asked += 1, { changed: 0, lapsed: ['shop.example'] }) })
+
+    // Assert
+    await waitFor(() => expect(asked).toBe(1))
+    expect(await screen.findByText(/shop\.example/, { selector: '[role="alert"], [role="alert"] *' })).toBeTruthy()
+  })
+
+  it('keeps the reason a connect did not finish when the gateway gave no answer', async () => {
+    // Arrange: a 5xx keeps the row minting, so the connected view replaces the form.
+    mintRefusal = { status: 503, code: 'UNAVAILABLE' }
+    renderPage({ spendApi: (async () => { throw new Error('locked') }) as never })
+
+    // Act
+    fireEvent.click(await screen.findByRole('button', { name: 'scan' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect' }))
+
+    // Assert
+    await waitFor(() => expect(screen.getByTestId('online-shop-minting')).toBeTruthy())
+    expect(screen.getByRole('alert').textContent).toMatch(/Could not connect the shop/)
+  })
+
+  it('shows a connected shop, with Disconnect, even when the plan check fails', async () => {
+    // Arrange
+    connectShop()
+
+    // Act
+    renderPage({ status: (async () => { throw new Error('down') }) as never })
+
+    // Assert
+    expect(await screen.findByRole('button', { name: 'Disconnect' })).toBeTruthy()
+  })
+
+  it('says the plan check failed, rather than "Checking…" for ever, with no shop', async () => {
+    // Arrange / Act
+    renderPage({ status: (async () => { throw new Error('down') }) as never })
+
+    // Assert
+    await waitFor(() => expect(screen.getByTestId('online-shop-loading').textContent).toMatch(/Could not check your plan/))
+  })
+
+  it('stops saying "Trying again" once the publish retries are spent', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      // Arrange: a relay that never takes the profile.
+      const { saveMerchant, emptyMerchant } = await import('../../lib/merchant')
+      saveMerchant(emptyMerchant(STALL))
+      connectShop()
+      renderPage({ profile: { sign: async (t) => ({ ...t, created_at: 1 }), publish: async () => ({ ok: 0 }) } })
+      await waitFor(() => expect(screen.getByTestId('online-shop-published').textContent).toMatch(/Trying again/))
+
+      // Act
+      await vi.advanceTimersByTimeAsync(25 * 5_000)
+
+      // Assert
+      await waitFor(() => expect(screen.getByTestId('online-shop-published').textContent).toMatch(/next time you open this screen/))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

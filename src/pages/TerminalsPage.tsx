@@ -11,7 +11,6 @@ import { TERMINAL_ROLE_LABELS } from '../lib/terminalRole'
 import {
   REVOCATION_DELAY_NOTE,
   allTerminals,
-  hasUnconfirmed,
   RENEW_TO_KEEP_SELLING,
   isRevocable,
   needsRenewalToSell,
@@ -19,60 +18,38 @@ import {
   type TerminalRecord,
 } from '../lib/terminalRoster'
 import {
-  cancelExpiredWaiting,
-  markSpentElsewhere,
   removeUnmintedWaiting,
-  resumeMinting,
   revokeTerminalAtMint,
 } from '../lib/terminalRevoke'
 import { ownerTransport, type MintTransport } from '../lib/terminalMint'
-import { collectEnrolled, ownerPublisher } from '../lib/terminalDeliveryNet'
-import { confirmEnrolled, deliverWaiting, stallConfirm, type ConfirmCall } from '../lib/terminalConfirm'
+import { collectEnrolled } from '../lib/terminalDeliveryNet'
+import { stallConfirm, type ConfirmCall } from '../lib/terminalConfirm'
 import { setupCode } from '../lib/terminalDelivery'
-import { getSigner } from '../lib/nap'
 import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { syncRosterNow } from '../lib/terminalRosterSyncNet'
 import {
-  cancelLapsedRenewals,
   currentExpiry,
   isRenewable,
   lapsedRenewalMessage,
   renewalsQueued,
-  resumeRenewal,
 } from '../lib/terminalRenewOwner'
 import { expiryBand, type ExpiryBand } from '../lib/terminalRenewal'
-import { collectRenewRequests } from '../lib/terminalDeliveryNet'
 import { onlineShopUnconfirmed, syncOnlineShop, type ProfilePublisher } from '../lib/onlineShopProfile'
 import { shopHost } from '../lib/shopEnrol'
-import { ownerProfilePublisher, ownerRenew, ownerSend, ownerSpendApi } from '../lib/terminalOwnerPorts'
+import { ownerDeliver, ownerProfilePublisher, ownerRenew, ownerRenewals, ownerSpendApi } from '../lib/terminalOwnerPorts'
+import { useTerminalUpkeep } from '../hooks/useTerminalUpkeep'
 
 
 
-/** How often the list looks for a device's "I have it" while something is waiting. */
-const ENROLLED_POLL_MS = 5_000
 
 /** The online_shop republish retries this often, this many times, while the list is open (#402). */
 const ONLINE_SHOP_RETRY_MS = 5_000
 const ONLINE_SHOP_RETRIES = 24
 
-/** Sends a credential DM to every waiting device that has not had one, sealed by the stall. */
-const ownerDeliver = (stallPubkey: string) =>
-  deliverWaiting(stallPubkey, (borrow) => getSigner().withPrivkey(borrow), ownerPublisher)
-
 /** A stable clock: a fresh arrow per render would re-run the effect that reads it, forever. */
 const systemNow = () => Date.now()
 
 
-/**
- * When the list opens: finish renewals that did not, cancel any the device never picked up in
- * 24 hours, and adopt renew requests from tills this list lost (Q3).
- */
-async function ownerRenewals(stallPubkey: string, api: CredentialMintApi, transport: MintTransport) {
-  const resumed = await resumeRenewal(stallPubkey, { transport, api, send: ownerSend }).catch(() => ({ completed: 0, cleared: 0, pending: 0 }))
-  const lapsed = await cancelLapsedRenewals(stallPubkey, api).catch(() => [] as string[])
-  const asked = await collectRenewRequests(stallPubkey, async () => api).catch(() => 0)
-  return { changed: resumed.completed + resumed.cleared + lapsed.length + asked, lapsed }
-}
 
 
 /**
@@ -253,83 +230,8 @@ export function TerminalsPage({
     [stallPubkey, spendApi, renew, refresh],
   )
 
-  // Phase 2: while a row waits, look for its device's enrolled DM, so the row
-  // turns In service without a reload (spec 2.1 step 4).
-  // Round 2: and while a row is in service by the device's word but not yet confirmed at the
-  // gateway, confirm it as the stall, with backoff, so a lost device confirm cannot leave a
-  // till the list calls in service and the gateway refuses.
-  const hasWaiting = terminals.some(
-    (t) => (t.status === 'waiting' || t.renewal !== undefined) && t.revokedAt === undefined,
-  )
-  const needsConfirm = hasUnconfirmed(stallPubkey) || terminals.some((t) => t.gatewayState === 'unconfirmed')
-  useEffect(() => {
-    if (!hasWaiting && !needsConfirm) return
-    let stopped = false
-    const tick = async () => {
-      try {
-        await collect(stallPubkey)
-      } catch {
-        // Offline or locked. Try again on the next tick.
-      }
-      // Show the promotion now, not after the confirm below answers.
-      if (!stopped) refresh()
-      try {
-        await confirmEnrolled(stallPubkey, confirm)
-      } catch {
-        // Retried on the next tick, after its backoff.
-      }
-      // Re-read the roster whatever the count said. Under StrictMode the first
-      // effect's poll can promote the row after it was torn down, and the
-      // second then reports nothing changed: trusting the count left the row
-      // showing Waiting for good.
-      if (!stopped) refresh()
-    }
-    void tick()
-    const timer = setInterval(() => void tick(), ENROLLED_POLL_MS)
-    return () => {
-      stopped = true
-      clearInterval(timer)
-    }
-  }, [hasWaiting, needsConfirm, stallPubkey, collect, confirm, refresh])
-
-  // Waiting rows past their 24 hours are cancelled when this screen opens
-  // (decision 4 on #160). Best effort: one that does not land stays waiting and
-  // is tried again next time, and nothing here blocks the list from showing.
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        // The list from the owner's other devices first (#160 phase 6), merged into this one,
-        // so a terminal added or revoked on another phone shows here.
-        if (await sync(stallPubkey).catch(() => false)) {
-          if (!cancelled) refresh()
-        }
-        const api = await spendApi()
-        // Settle any credential request that did not finish (#160 review)
-        // before expiring waiting rows, so a request that is resumed now and
-        // turns out to be past its 24 hours is cancelled in the same pass.
-        const resumed = await resumeMinting(stallPubkey, api, transport)
-        const n = await cancelExpiredWaiting(stallPubkey, api)
-        // Renewals (#160 phase 6): finish any that did not, cancel any the device never picked up
-        // in 24 hours, and adopt renew requests from tills this list lost (Q3).
-        const { changed, lapsed: gone } = await renewals(stallPubkey, api, transport).catch(() => ({ changed: 0, lapsed: [] as string[] }))
-        if (gone.length > 0 && !cancelled) setLapsed(gone)
-        if (changed > 0 && !cancelled) refresh()
-        // A credential spent somewhere else (the device took itself out of service, or another
-        // of the owner's phones revoked it) reads as revoked here too (#160 phase 4).
-        const elsewhere = await markSpentElsewhere(stallPubkey, api).catch(() => 0)
-        // A row resumeMinting finished, or whose DM did not land, gets its DM now, the same
-        // one the enrol screen sends (#160 round 2). Its setup code is on the row below.
-        const sent = await deliver(stallPubkey).catch(() => 0)
-        if ((n > 0 || elsewhere > 0 || sent > 0 || resumed.completed > 0 || resumed.cleared > 0) && !cancelled) refresh()
-      } catch {
-        // Offline, or the wallet is locked. The rows stay waiting.
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [stallPubkey, spendApi, transport, deliver, sync, renewals, refresh])
+  // The open-time pass and the enrolled/confirm poll, shared with Settings › Online shop.
+  useTerminalUpkeep(stallPubkey, terminals, { spendApi, transport, collect, confirm, deliver, sync, renewals }, refresh, setLapsed)
   // Read once per render, from state set in an effect: render stays pure (react-hooks/purity).
   const [nowMs, setNowMs] = useState(() => now())
   useEffect(() => {

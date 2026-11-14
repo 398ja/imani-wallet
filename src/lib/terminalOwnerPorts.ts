@@ -6,7 +6,10 @@ import type { ProfilePublisher } from './onlineShopProfile'
 import { publish as relayPublish } from './relay'
 import { ownerPublisher } from './terminalDeliveryNet'
 import { wrapMessage } from './terminalDelivery'
-import { startRenewal } from './terminalRenewOwner'
+import { cancelLapsedRenewals, resumeRenewal, startRenewal } from './terminalRenewOwner'
+import { deliverWaiting } from './terminalConfirm'
+import { collectRenewRequests } from './terminalDeliveryNet'
+import type { MintTransport } from './terminalMint'
 import { mirrorToGateway } from './transferSignature'
 
 /**
@@ -36,3 +39,18 @@ export const ownerProfilePublisher: ProfilePublisher = profilePublisherVia(
 
 /** The stall's key, lent for one wrap, as `signer.withPrivkey` lends it everywhere else. */
 export const stallSeal = <T,>(borrow: (key: Uint8Array) => T): T => getSigner().withPrivkey(borrow)
+
+/** Sends a credential DM to every waiting device that has not had one, sealed by the stall. */
+export const ownerDeliver = (stallPubkey: string) =>
+  deliverWaiting(stallPubkey, (borrow) => getSigner().withPrivkey(borrow), ownerPublisher)
+
+/**
+ * When a screen opens: finish renewals that did not, cancel any the device never picked up in
+ * 24 hours, and adopt renew requests from tills (and shops) this phone lost (Q3).
+ */
+export async function ownerRenewals(stallPubkey: string, api: CredentialMintApi, transport: MintTransport) {
+  const resumed = await resumeRenewal(stallPubkey, { transport, api, send: ownerSend }).catch(() => ({ completed: 0, cleared: 0, pending: 0 }))
+  const lapsed = await cancelLapsedRenewals(stallPubkey, api).catch(() => [] as string[])
+  const asked = await collectRenewRequests(stallPubkey, async () => api).catch(() => 0)
+  return { changed: resumed.completed + resumed.cleared + lapsed.length + asked, lapsed }
+}
