@@ -96,7 +96,7 @@ export function SettingsPage({
               to="/settings/terminals"
               icon={Tablet}
               label="Terminals"
-              hint="Devices trading for your stall, and revoking one"
+              hint="Devices trading for your stall, on Essentials and above"
             />
             {/* Listed rather than hidden. The screen behind it is gated by the
                 real licence check and shows its own refusal, so a merchant

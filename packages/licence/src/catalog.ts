@@ -58,8 +58,8 @@ const USD_DECIMALS = 2
 /**
  * The catalog compiled into the app, used until a signed one has been fetched.
  *
- * Mirrors the published plans (www.imani.casa/pricing): about 100 USD one-off and 1 till (Starter,
- * the `free` tier), no sales limit and 3 tills (Essentials, the `basic` tier), no limits plus API and
+ * Mirrors the published plans (www.imani.casa/pricing): about 100 USD one-off and no tills beyond the
+ * owner's own device (Starter, the `free` tier), no sales limit and 3 tills (Essentials, the `basic` tier), no limits plus API and
  * e-commerce (Pro), with a 10 % overshoot.
  *
  * The free threshold is hard-coded in every merchant currency (`FREE_TIER_AMOUNTS`, #506), the
@@ -67,8 +67,10 @@ const USD_DECIMALS = 2
  * that has never fetched a catalog already has the right limit in NGN or KES, not 0. The version
  * stays at 1, so any catalog we publish still replaces this one.
  *
- * The free tier's terminal allowance is 1 ENROLLED terminal on top of the owner's own device, which
- * is how `terminalAllowance` has always counted (the owner's device is counted, never converted).
+ * The free tier's terminal allowance is 0 ENROLLED terminals: the owner's own device keeps trading, and
+ * additional terminals start at Essentials. `terminalAllowance` counts enrolled terminals only (the
+ * owner's device is never converted). Until a device fetches catalog version 6 or later this bundled
+ * value is what it enforces, so it must agree with services/subscription/catalog.json.
  */
 export const BUNDLED_CATALOG: TierCatalog = {
   version: 1,
@@ -76,7 +78,7 @@ export const BUNDLED_CATALOG: TierCatalog = {
   tiers: {
     free: {
       features: [],
-      limits: { sales: { period: 'lifetime', amounts: { ...FREE_TIER_AMOUNTS } }, terminals: 1 },
+      limits: { sales: { period: 'lifetime', amounts: { ...FREE_TIER_AMOUNTS } }, terminals: 0 },
     },
     basic: {
       features: ['terminals'],

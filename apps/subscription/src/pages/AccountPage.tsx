@@ -59,7 +59,7 @@ export function AccountPage({ me, onRefresh }: { me: Me | null; onRefresh: () =>
         <Panel className="mb-6 p-5">
           <p className="font-medium">You are on the Starter plan.</p>
           <p className="mt-1 text-sm text-mono-500">
-            Issue up to £100 of vouchers in total and run one till besides your device. Upgrade whenever you need more.
+            Issue up to £100 of vouchers in total from your own device. Extra tills start with Essentials. Upgrade whenever you need more.
           </p>
           <Link to="/plans" className={`${buttonClasses('primary', 'md')} mt-4 w-full`}>
             See plans

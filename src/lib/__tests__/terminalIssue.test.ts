@@ -177,23 +177,15 @@ describe('what an owner must supply', () => {
 })
 
 describe('the subscription gate, at the point of enrolment', () => {
-  it('allows the first terminal free', async () => {
-    const check = checkEnrolment(request(), context({ licence: await unsubscribed() }))
-    expect(check.ready).toBe(true)
-  })
-
-  it('refuses the second without a licence, and says how to lift it', async () => {
+  it('refuses even the first terminal without a licence, and says how to lift it', async () => {
     // Subscriptions 07's first criterion, asserted where the ticket demands it:
-    // at enrolment, not by a hidden button.
-    const check = checkEnrolment(
-      request(),
-      context({ licence: await unsubscribed(), enrolledCount: 1 }),
-    )
+    // at enrolment, not by a hidden button. The free tier includes no terminals.
+    const check = checkEnrolment(request(), context({ licence: await unsubscribed() }))
 
     expect(check.ready).toBe(false)
     if (!check.ready) {
       expect(check.reason).toBe(ENROLMENT_REFUSAL.NOT_ALLOWED)
-      expect(check.message).toMatch(/free till/)
+      expect(check.message).toMatch(/free Starter plan/)
       expect(check.message).toMatch(/Settings › Subscription/)
     }
   })
