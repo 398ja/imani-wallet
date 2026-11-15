@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The stall publishes voucher ledger v2 REDEEMED by default** (imani-gateway-customer#310).
+  `VITE_VOUCHER_LEDGER_V2` used to default to off; it is now on unless set to exactly `false`
+  (rollback only). The platform publishes ISSUED in v2 and the gateway no longer publishes
+  REDEEMED, so a stall left on the old default would record no redemptions at all.
+  **Deploy:** set `VITE_VOUCHER_ISSUER_PUBKEYS` to the gateway's voucher-signing key(s); left
+  empty, every platform-published ISSUED reads as "no record" in the wallet.
+
 ### Fixed
 
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops

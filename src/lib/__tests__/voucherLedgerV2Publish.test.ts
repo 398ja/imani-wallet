@@ -86,14 +86,24 @@ describe('publishRedeemed', () => {
     for (const key of borrowed) expect(key.every((b) => b === 0)).toBe(true)
   })
 
-  it('is off by default (flag unset) and when the flag is anything but true', async () => {
-    vi.stubEnv('VITE_VOUCHER_LEDGER_V2', '')
-    expect(voucherLedgerV2Enabled()).toBe(false)
-    expect(await publishRedeemed({ token: ownToken(), signatureValid: true })).toBeNull()
-    vi.stubEnv('VITE_VOUCHER_LEDGER_V2', 'on')
-    expect(await publishRedeemed({ token: ownToken(), signatureValid: true })).toBeNull()
+  it('is on by default (flag unset, blank or any value) and off only for an explicit false', async () => {
+    for (const on of ['', '  ', 'true', 'on', '1']) {
+      vi.stubEnv('VITE_VOUCHER_LEDGER_V2', on)
+      expect(voucherLedgerV2Enabled()).toBe(true)
+    }
+    for (const off of ['false', 'FALSE', ' false ']) {
+      vi.stubEnv('VITE_VOUCHER_LEDGER_V2', off)
+      expect(voucherLedgerV2Enabled()).toBe(false)
+      expect(await publishRedeemed({ token: ownToken(), signatureValid: true })).toBeNull()
+    }
     expect(published).toHaveLength(0)
     expect(borrowed).toHaveLength(0)
+  })
+
+  it('publishes with the flag unset (the default)', async () => {
+    vi.stubEnv('VITE_VOUCHER_LEDGER_V2', '')
+    expect(await publishRedeemed({ token: ownToken(), signatureValid: true })).not.toBeNull()
+    expect(published).toHaveLength(1)
   })
 
   it('does not publish when the envelope says the signature did not verify', async () => {
