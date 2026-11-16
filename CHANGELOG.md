@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   REDEEMED, so a stall left on the old default would record no redemptions at all.
   **Deploy:** set `VITE_VOUCHER_ISSUER_PUBKEYS` to the gateway's voucher-signing key(s); left
   empty, every platform-published ISSUED reads as "no record" in the wallet.
+- **The merchant's voucher record shows what the public ledger says** (imani-gateway-customer#310).
+  A "Public ledger" row under "What stands behind this" reads "Recorded as issued", "Recorded as
+  redeemed", "No public record yet" or "Could not check right now". A gateway that did not answer
+  is never shown as "no record". Hidden when `VITE_VOUCHER_LEDGER_V2=false`.
 
 ### Fixed
 
