@@ -320,3 +320,21 @@ describe('delegation margin edges', () => {
     expect((verdict as { code?: string }).code).toBeUndefined()
   })
 })
+
+describe('the record\u2019s issuance currency (gc#317)', () => {
+  // Readiness asks the sales allowance in the unit the stall's own signed record names.
+  it('carries issuanceCurrency, upper-cased', async () => {
+    const read = await readStallValidity(
+      'http://gw',
+      STALL,
+      gatewayWith([record({ voucherValidityDays: 90, issuanceCurrency: 'gbp' })]),
+    )
+    expect(read).toEqual({ kind: 'days', days: 90, source: 'record', currency: 'GBP' })
+  })
+
+  // No currency, or nonsense: none is guessed.
+  it.each([{}, { issuanceCurrency: 'pounds' }, { issuanceCurrency: 7 }])('carries none for %o', async (extra) => {
+    const read = await readStallValidity('http://gw', STALL, gatewayWith([record({ voucherValidityDays: 90, ...extra })]))
+    expect(read).toEqual({ kind: 'days', days: 90, source: 'record' })
+  })
+})
