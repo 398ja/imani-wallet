@@ -10,6 +10,7 @@ const BASE = process.env.E2E_BASE ?? 'http://localhost:5173'
 const PW = 'correct horse battery'
 const log: string[] = []
 const text = async (p: Page) => (await p.locator('body').innerText()).replace(/\s+/g, ' ')
+const UPGRADE = /\/settings\/subscription\?reason=sales-limit$/
 const fail = (msg: string): never => {
   console.log(`FAIL  ${msg}`)
   process.exit(1)
@@ -52,6 +53,9 @@ async function register(browser: Browser, merchant: boolean): Promise<{ page: Pa
 
 async function sell(p: Page, customer: string, amount: string): Promise<'sent' | 'limit' | string> {
   await p.goto(`${BASE}/sell`, { waitUntil: 'load' })
+  await p.locator('input[placeholder="name"]').or(p.getByTestId('sales-limit-upgrade-banner')).first()
+    .waitFor({ timeout: 30_000 })
+  if (UPGRADE.test(p.url())) return 'limit'
   await p.locator('input[placeholder="name"]').fill(customer)
   await p.getByRole('button', { name: 'Continue' }).click()
   const field = p.locator('input[placeholder="0.00"], input[placeholder="0"]').first()
@@ -59,7 +63,7 @@ async function sell(p: Page, customer: string, amount: string): Promise<'sent' |
   await field.fill(amount)
   await p.getByRole('button', { name: 'Send voucher' }).click()
   const sent = p.getByText(new RegExp(`Sent to ${customer}`))
-  const limit = p.getByTestId('sales-limit-reached')
+  const limit = p.getByTestId('sales-limit-upgrade-banner')
   const which = await Promise.race([
     sent.waitFor({ timeout: 120_000 }).then(() => 'sent' as const),
     limit.waitFor({ timeout: 120_000 }).then(() => 'limit' as const),
@@ -79,21 +83,25 @@ async function main() {
 
     const r100 = await sell(p, c.handle, '100.00')
     if (r100 !== 'limit') fail(`100.00 should be refused, got ${r100}`)
-    const alert = await p.getByRole('alert').innerText()
-    const href = await p.getByTestId('sales-limit-upgrade').getAttribute('href')
-    if (href !== '/settings/subscription') fail(`upgrade link: ${href}`)
-    await p.screenshot({ path: process.env.SHOT ?? 'free-allowance-refused.png' })
-    console.log(`PASS  100.00 refused: "${alert.replace(/\s+/g, ' ')}" link=${href}`)
-    await p.getByTestId('sales-limit-upgrade').click()
-    await p.waitForURL(/settings\/subscription/, { timeout: 10_000 }).catch(() => fail('upgrade link did not open'))
-    console.log(`PASS  upgrade link opens ${new URL(p.url()).pathname}`)
+    if (!UPGRADE.test(p.url())) fail(`100.00 should land on the subscription screen, at ${p.url()}`)
+    const banner = await p.getByTestId('sales-limit-upgrade-banner').innerText()
+    console.log(`PASS  100.00 refused, sent to ${new URL(p.url()).pathname}${new URL(p.url()).search}: "${banner.replace(/\s+/g, ' ')}"`)
 
     if ((await sell(p, c.handle, '70.01')) !== 'limit') fail('70.01 should be refused')
     console.log('PASS  70.01 refused')
     if ((await sell(p, c.handle, '70.00')) !== 'sent') fail('70.00 (exactly at the cap) should be issued')
     console.log('PASS  70.00 issued (100 of 100 used)')
-    if ((await sell(p, c.handle, '3.00')) !== 'limit') fail('3.00 after the cap should be refused')
-    console.log('PASS  3.00 refused after the cap')
+    // At the cap: pressing Sell goes straight to the subscription screen, no customer scanned.
+    await p.goto(`${BASE}/`, { waitUntil: 'load' })
+    await p.getByRole('button', { name: /^Sell$/ }).first().click()
+    await p.waitForURL(UPGRADE, { timeout: 30_000 }).catch(() => fail(`Sell at the cap stayed at ${p.url()}`))
+    await p.getByTestId('sales-limit-upgrade-banner').waitFor({ timeout: 30_000 })
+    if (await p.locator('input[placeholder="name"]').count()) fail('the Sell form showed at the cap')
+    await p.screenshot({ path: process.env.SHOT ?? 'free-allowance-refused.png', fullPage: true })
+    console.log('PASS  pressing Sell at the cap opens the subscription screen with the upgrade message')
+    await p.goto(`${BASE}/sell/cashback`, { waitUntil: 'load' })
+    await p.waitForURL(UPGRADE, { timeout: 30_000 }).catch(() => fail('Cashlink at the cap was not redirected'))
+    console.log('PASS  Cashlink at the cap opens the subscription screen too')
     console.log(`MERCHANT_HANDLE=${m.handle}`)
     console.log('\n' + log.join('\n'))
   } finally {
