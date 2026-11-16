@@ -37,7 +37,7 @@
  */
 
 import { verifyEvent, type Event } from 'nostr-tools/pure'
-import { MERCHANT_D_TAG, MERCHANT_KIND, validityFromRecord } from '@imani/merchant-record'
+import { currencyFromRecord, MERCHANT_D_TAG, MERCHANT_KIND, validityFromRecord } from '@imani/merchant-record'
 
 /** The gateway's public event query. Mirrors `gatewayEvents` in `src/lib/gatewayNostr.ts`. */
 export const NOSTR_QUERY_PATH = '/api/v1/nostr/query'
@@ -50,7 +50,16 @@ export const VALIDITY_TIMEOUT_MS = 5_000
 
 export type StallValidity =
   /** Days, or `NEVER_EXPIRES` (0). Read from the stall's signed record, or its default. */
-  | { kind: 'days'; days: number; source: 'record' | 'default' }
+  | {
+      kind: 'days'
+      days: number
+      source: 'record' | 'default'
+      /**
+       * The currency the record says the stall issues in, when it names one. Read from the same
+       * signed record so readiness can ask for the stall's sales allowance in that unit.
+       */
+      currency?: string
+    }
   /** The gateway could not be asked or answered nonsense. Nothing learned. */
   | { kind: 'unreadable'; reason: string }
 
@@ -115,7 +124,13 @@ export function validityFromEvents(events: Event[], stallPubkey: string): StallV
     .filter((e) => isStallMerchantRecord(e, stallPubkey))
     .sort((a, b) => b.created_at - a.created_at)[0]
   if (!newest) return { kind: 'days', days: validityFromRecord('{}'), source: 'default' }
-  return { kind: 'days', days: validityFromRecord(newest.content), source: 'record' }
+  const currency = currencyFromRecord(newest.content)
+  return {
+    kind: 'days',
+    days: validityFromRecord(newest.content),
+    source: 'record',
+    ...(currency ? { currency } : {}),
+  }
 }
 
 /** Ask the gateway, once, with no cache. */
