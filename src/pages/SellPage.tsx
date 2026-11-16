@@ -24,6 +24,7 @@ import { useCashbackAvailable } from '../lib/cashback'
 import type { MerchantProfile } from '../lib/merchant'
 import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
 import { userMessage } from '../lib/userMessage'
+import { SalesLimitError } from '../lib/entitlement'
 
 /**
  * Sell: issue a coupon to a customer standing in front of you.
@@ -166,6 +167,8 @@ function IssueForm({
   const [memo, setMemo] = useState('')
   const [stage, setStage] = useState<IssueStage | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The plan's allowance refused the sale: shown with an invitation to upgrade, not as a fault.
+  const [limitReached, setLimitReached] = useState(false)
   const [sent, setSent] = useState<number | null>(null)
   // How many coupons the sale became. Almost always 1; more when the gateway
   // split it. Shown on the confirmation so the merchant and the customer are
@@ -198,6 +201,7 @@ function IssueForm({
   const submit = async () => {
     if (minor === null || validity === null) return
     setError(null)
+    setLimitReached(false)
     try {
       const { vouchers, deliveredValue } = await issueAndDeliver(
         {
@@ -234,6 +238,7 @@ function IssueForm({
       setSent(deliveredValue)
       setShortfall(deliveredValue !== minor ? minor - deliveredValue : 0)
     } catch (e) {
+      setLimitReached(e instanceof SalesLimitError)
       setError(userMessage(e))
     } finally {
       setStage(null)
@@ -364,7 +369,23 @@ function IssueForm({
           </p>
         )}
 
-        {error && <Alert>{error}</Alert>}
+        {error && (
+          <Alert>
+            <span data-testid={limitReached ? 'sales-limit-reached' : undefined}>{error}</span>
+            {/* Only the owner can buy a plan; a till is told to ask them (ADR 0007). */}
+            {limitReached && (actor?.kind ?? 'owner') === 'owner' && (
+              <>
+                {' '}
+                <Link to="/settings/subscription" className="font-medium underline" data-testid="sales-limit-upgrade">
+                  Upgrade my plan
+                </Link>
+              </>
+            )}
+            {limitReached && actor && actor.kind !== 'owner' && (
+              <> Ask the stall owner to upgrade the plan.</>
+            )}
+          </Alert>
+        )}
       </div>
     </>
   )
