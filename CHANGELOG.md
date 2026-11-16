@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A stall that has used its Free plan's issuance allowance can no longer sell, and Sell takes
+  the owner to upgrade (gateway-customer#317).** On pressing Sell (or Cashlink), the wallet asks the
+  gateway for the stall's standing (`GET /api/v1/wallet/vouchers/sales-allowance`). At the
+  allowance, the owner is sent to Settings > Subscription with a banner explaining that the Free
+  plan's voucher allowance is used up and inviting an upgrade; a till is stopped with "ask the stall
+  owner to upgrade". A sale refused at the mint (`SALES_LIMIT_REACHED`) also sends the owner there.
+  An unreadable answer lets the sale go ahead: the gateway still refuses at the mint. The card
+  purchase issuer parks a paid sale the Free plan refuses for a person to refund, instead of
+  retrying it.
+
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops
   part-paid because one part's relay publish failed once (#552).** The wallet took `DM_ERROR`,
   `SPLIT_ERROR` and `RECLAIM_READY` as the end of a send, gave up after 20 s, asked the gateway to
