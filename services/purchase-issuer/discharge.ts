@@ -416,6 +416,11 @@ export async function discharge(
     if (error instanceof IssuanceFailed && error.unrecorded) {
       return { kind: 'unrecorded', reason: error.message }
     }
+    if (error instanceof IssuanceFailed && error.salesLimit) {
+      // gc#317: a paid sale the stall's Free plan cannot cover. Retrying would leave a charged buyer
+      // waiting forever with nobody looking; a person refunds or issues by hand once the stall upgrades.
+      return { kind: 'attention', reason: `sales_limit_reached: ${error.message}; refund or issue by hand` }
+    }
     if (error instanceof IssuanceFailed) {
       // A burnt credential will never mint. Retrying it forever would bury the
       // one case that needs a human in a log of identical failures.
