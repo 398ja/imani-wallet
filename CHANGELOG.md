@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **New subscription prices.** Essentials is £10/month or £100/year (was £8 or £70) and Pro is
+  £35/month or £350/year (was £25 or £250), all in GBP, VAT inclusive. Stripe prices are immutable,
+  so `deploy/subscription-local/stripe-prices.sh` creates new ones under new lookup keys; point
+  `SUBSCRIPTION_PRICES` at the new price ids. Starter and the Town / BID Partner plan are unchanged.
+
 ### Fixed
 
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops

@@ -127,7 +127,7 @@ export function money(minor: number, currency: string, fraction = false): string
   }).format(minor / 100)
 }
 
-/** "£8/month", "£70/year": a plan's price for a term, or null when it has none. */
+/** "£10/month", "£100/year": a plan's price for a term, or null when it has none. */
 export function priceLine(plan: Plan, term: Term): string | null {
   const p = plan.prices?.[term]
   if (!p) return null

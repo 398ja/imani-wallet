@@ -53,7 +53,7 @@ async function fillStripe(page: Page, email: string) {
   await page.locator('#email').waitFor({ timeout: 30_000 })
   // What Stripe itself will charge: the published Essentials monthly price, in pounds.
   const summary = (await page.locator('body').innerText()).replace(/\s+/g, ' ')
-  check('Stripe Checkout charges £8.00 a month for Essentials', /£8\.00/.test(summary) && /month/i.test(summary), summary.slice(0, 300))
+  check('Stripe Checkout charges £10.00 a month for Essentials', /£10\.00/.test(summary) && /month/i.test(summary), summary.slice(0, 300))
   check('Stripe Checkout names the plan "Imani Essentials", never Basic', /Imani Essentials/.test(summary) && !/Basic/.test(summary), summary.slice(0, 300))
   await page.locator('#email').fill(email)
   await page.locator('#cardNumber').fill('4242424242424242')
@@ -95,18 +95,18 @@ async function main() {
     check('the site opened in its own tab, signed in, with no login page', new URL(site.url()).origin === SITE)
 
     // The plans as www.imani.casa/pricing publishes them, with the amounts read from REAL Stripe.
-    await site.getByText('£70/year').waitFor({ timeout: 15_000 })
+    await site.getByText('£100/year').waitFor({ timeout: 15_000 })
     const yearly = await text(site)
     check(
       'plans are Starter, Essentials and Pro, with no Town / BID partnership',
       /Starter/.test(yearly) && /Essentials/.test(yearly) && /Pro/.test(yearly) && !/Town|BID|Partner/.test(yearly),
       yearly.slice(0, 400),
     )
-    check('yearly by default, in pounds: Essentials £70/year, Pro £250/year', /£70\/year/.test(yearly) && /£250\/year/.test(yearly), yearly.slice(0, 500))
+    check('yearly by default, in pounds: Essentials £100/year, Pro £350/year', /£100\/year/.test(yearly) && /£350\/year/.test(yearly), yearly.slice(0, 500))
     check('Essentials issues without limit on 3 tills', /Unlimited voucher issuance/.test(yearly) && /plus 3 tills/.test(yearly), yearly.slice(0, 500))
     await site.getByRole('radio', { name: /Monthly/ }).click()
     const monthly = await text(site)
-    check('monthly, in pounds: Essentials £8/month, Pro £25/month', /£8\/month/.test(monthly) && /£25\/month/.test(monthly), monthly.slice(0, 500))
+    check('monthly, in pounds: Essentials £10/month, Pro £35/month', /£10\/month/.test(monthly) && /£35\/month/.test(monthly), monthly.slice(0, 500))
     check('the plans page never says Basic', !/Basic/.test(yearly) && !/Basic/.test(monthly))
 
     await site.getByRole('button', { name: 'Choose Essentials' }).click()
