@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Check } from 'lucide-react'
 
@@ -25,6 +25,7 @@ import type { MerchantProfile } from '../lib/merchant'
 import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
 import { userMessage } from '../lib/userMessage'
 import { SalesLimitError } from '../lib/entitlement'
+import { UPGRADE_PATH, salesAllowance } from '../lib/salesAllowance'
 
 /**
  * Sell: issue a coupon to a customer standing in front of you.
@@ -74,6 +75,23 @@ export function SellPage({
 }) {
   const navigate = useNavigate()
   const [customer, setCustomer] = useState<string | null>(null)
+  const isOwner = (actor?.kind ?? 'owner') === 'owner'
+  // Review of gc#317: a stall whose Free plan is used up does not start a sale. The owner is taken
+  // to the upgrade screen; a till is told to ask the owner (only the owner can buy a plan, ADR 0007).
+  // `null` while asking; an unreadable answer lets the sale go ahead, since the mint still refuses.
+  const [allowanceReached, setAllowanceReached] = useState<boolean | null>(null)
+  useEffect(() => {
+    let live = true
+    void salesAllowance(merchant.issuanceCurrency).then((a) => {
+      if (!live) return
+      const reached = a.kind === 'limited' && a.reached
+      setAllowanceReached(reached)
+      if (reached && isOwner) navigate(UPGRADE_PATH, { replace: true })
+    })
+    return () => {
+      live = false
+    }
+  }, [merchant.issuanceCurrency, isOwner, navigate])
 
   /*
     A terminal cannot sign a warrant the customer's wallet accepts, so a sale
@@ -88,6 +106,26 @@ export function SellPage({
         <BackLink to="/" label="Back" />
         <PageHeader title="Sell" />
         <Alert>{TERMINAL_SALE_UNSUPPORTED}</Alert>
+        <div className="mt-4">
+          <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
+            Back
+          </Button>
+        </div>
+      </Screen>
+    )
+  }
+
+  if (allowanceReached && !isOwner) {
+    return (
+      <Screen>
+        <BackLink to="/" label="Back" />
+        <PageHeader title="Sell" />
+        <Alert>
+          <span data-testid="sales-limit-reached-till">
+            This stall has used its Free plan’s issuance allowance, so this till cannot sell vouchers.
+            Ask the stall owner to upgrade the plan. Redeeming coupons still works.
+          </span>
+        </Alert>
         <div className="mt-4">
           <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
             Back
@@ -163,6 +201,7 @@ function IssueForm({
   onRescan: () => void
   onDone: () => void
 }) {
+  const navigate = useNavigate()
   const [amount, setAmount] = useState('')
   const [memo, setMemo] = useState('')
   const [stage, setStage] = useState<IssueStage | null>(null)
@@ -238,6 +277,12 @@ function IssueForm({
       setSent(deliveredValue)
       setShortfall(deliveredValue !== minor ? minor - deliveredValue : 0)
     } catch (e) {
+      // Refused at the mint (another device sold the last of the allowance, or the pre-check was
+      // unreadable): the owner goes straight to the upgrade screen, a till keeps the message.
+      if (e instanceof SalesLimitError && (actor?.kind ?? 'owner') === 'owner') {
+        navigate(UPGRADE_PATH)
+        return
+      }
       setLimitReached(e instanceof SalesLimitError)
       setError(userMessage(e))
     } finally {
