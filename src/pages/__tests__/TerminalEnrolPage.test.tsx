@@ -3,7 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 
 /**
  * The enrolment form, driven as a screen.
@@ -791,41 +791,65 @@ describe('inv-terminal-not-merchant: only a key created as a terminal can be add
   })
 })
 
-describe('#402: enrolling an online shop', () => {
-  it('reads the shop code, fixes the role to redeem-only, and records the shop on the row', async () => {
+describe('#402: an online shop is connected from Settings › Online shop, not here', () => {
+  it("sends a shop's code to the Online shop screen with the code, and mints nothing", async () => {
+    // Arrange: the camera reads a shop's enrolment code.
     const { signShopEnrolCode } = await import('../../lib/shopEnrol')
-    // The fake gateway locks to DEVICE, so the shop's S is DEVICE here.
     scanned = signShopEnrolCode(DEVICE_KEY, DEVICE, 'https://shop.example', 'woocommerce', Math.floor(Date.now() / 1000))
-    renderPage()
+    function Probe() {
+      return <p data-testid="arrived">{JSON.stringify(useLocation().state)}</p>
+    }
+    render(
+      <MemoryRouter initialEntries={['/settings/terminals/add']}>
+        <Routes>
+          <Route
+            path="/settings/terminals/add"
+            element={
+              <TerminalEnrolPage
+                stallPubkey={STALL}
+                transport={fakeTransport}
+                spendApi={fakeSpend}
+                publisher={{ publish: async (w) => (sentDms.push(w), true) }}
+                seal={(borrow) => borrow(STALL_KEY)}
+                stallSigner={stallSigner}
+                merchantCheck={notAMerchant}
+              />
+            }
+          />
+          <Route path="/settings/online-shop" element={<Probe />} />
+        </Routes>
+      </MemoryRouter>,
+    )
     await waitFor(() => expect(addButton()).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
-    await waitFor(() => expect(screen.getByTestId('shop-role').textContent).toMatch(/shop\.example.*never sell/))
-    expect(screen.queryByRole('button', { name: /Sell and redeem/ })).toBeNull()
-    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('shop.example')
 
+    // Act
+    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
+
+    // Assert: the owner lands on the shop screen holding the code; no row, no mint.
+    expect(JSON.parse((await screen.findByTestId('arrived')).textContent!)).toEqual({ shopCode: scanned })
+    expect(posts).toEqual([])
+    expect(allTerminals(STALL)).toEqual([])
+  })
+
+  it('never marks a till as an online shop on the mint', async () => {
+    // Arrange
+    await fillEverything()
     await waitFor(() => expect(addButton().disabled).toBe(false))
+
+    // Act
     fireEvent.click(addButton())
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Waiting for the device' })).toBeTruthy())
 
-    const meta = (posts[0] as { merchant_metadata: Record<string, unknown> }).merchant_metadata
-    expect(meta.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
-    expect(postHeaders[0]?.['X-Imani-Terminal-Enrolment']).toMatch(/^1:\d+:[0-9a-f]{128}$/)
-    const row = allTerminals(STALL).find((t) => t.terminalPubkey === DEVICE)!
-    expect(row.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
-    expect(row.shop).toEqual({ url: 'https://shop.example', platform: 'woocommerce' })
-    expect(row.token).toBeTruthy()
+    // Assert: the gateway gates only marked mints on the plan; a till must not be one.
+    expect(postHeaders[0]?.['X-Imani-Online-Shop']).toBeUndefined()
+    expect(allTerminals(STALL).find((t) => t.terminalPubkey === DEVICE)?.shop).toBeUndefined()
   })
 
-  it('refuses a second online shop while one is connected', async () => {
-    const { signShopEnrolCode } = await import('../../lib/shopEnrol')
-    recordTerminal(STALL, {
-      terminalPubkey: 'e'.repeat(64), name: 'old', role: TERMINAL_ROLES.REDEEM_ONLY, enrolledAt: 1,
-      status: 'in-service', shop: { url: 'https://old.example', platform: 'magento' },
-    })
-    scanned = signShopEnrolCode(DEVICE_KEY, DEVICE, 'https://shop.example', 'woocommerce', Math.floor(Date.now() / 1000))
+  it('points the owner at Online shop instead of offering the shop code here', async () => {
+    // Arrange / Act
     renderPage()
-    await waitFor(() => expect(addButton()).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'scan' }))
-    await waitFor(() => expect(screen.getByText(/already connected to old\.example/)).toBeTruthy())
+
+    // Assert
+    expect(await screen.findByRole('link', { name: 'Use Online shop' })).toBeTruthy()
   })
 })

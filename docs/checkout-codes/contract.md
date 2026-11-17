@@ -382,6 +382,34 @@ then receives its credential by NIP-17 like a till (`terminalDelivery`'s setup c
 `enrolled` notice). The url and platform are not signed by `S`; the owner confirms them on
 screen and the stall signs them into §4.
 
+The wallet connects a shop from **Settings › Online shop** (`OnlineShopPage`), not from Add a
+terminal: a shop's code scanned there is handed to that screen.
+
+### The plan: `ecommerce` (#402, #407)
+
+Online shops are a plan feature, `ecommerce` (Pro in the bundled catalog). gateway-customer is
+the authority and refuses at two points, both with `FEATURE_NOT_IN_PLAN`:
+
+- **A new shop.** The stall's wallet sends `X-Imani-Online-Shop: 1` on a shop's FIRST credential
+  mint (never on a renewal, `X-Imani-Terminal-Renews`). Without `ecommerce`: `422`, error code
+  `FEATURE_NOT_IN_PLAN`, and nothing is minted.
+- **A new code.** `POST /cashlink/lock` with a lock key the coupon's issuer stall enrolled as a
+  terminal, for a stall without `ecommerce`: `422 {"refusal": "FEATURE_NOT_IN_PLAN"}`. This does
+  not depend on the header above. It is checked before the burnt-predecessor check, so the
+  customer wallet's pre-burn dry run (§2) sees it and nothing is burnt: the deposit is refused
+  `not_in_plan` and the customer keeps the coupon.
+
+Nothing that moves value out of an existing part is gated (settle, unlock, rebalance, return,
+change), nor a shop's credential renewal. So when a plan lapses, the codes already outstanding
+finish and only new ones are refused. The wallet shows the shop as connected with a "renew or
+disconnect" notice; the profile keeps `online_shop` until the owner disconnects.
+
+One narrow case is deliberately not exempted: a code whose first part was already burnt when the
+plan lapsed (a lapse landing between the dry run and the real lock, or a run resumed after a
+crash) has that lock refused, and the part comes back to the customer as sats (`kept_as_sats`),
+never lost. Exempting a lock whose predecessor is already spent would let any client skip the
+gate by burning first, which is the only server-side stop on new codes.
+
 ## 5. Settling: how value leaves `S` (redeem, change, cancel)
 
 A swap cannot change who a coupon is locked to: the gateway's voucher signature covers `data`.
