@@ -79,7 +79,7 @@ import {
 import { linkKeySigner, linkPubOf, secretFromText, type GiftToken, type ProofState } from './giftLink'
 import { nip98Header, type RequestSigner } from './nip98'
 import { encodePlainTokenV4 } from './plainToken'
-import { parseVoucherToken, referencedDocuments, tokenProofs, voucherOfProof, type TokenProof } from './voucherToken'
+import { isVoucherByReference, parseVoucherToken, referencedDocuments, tokenProofs, voucherOfProof, type TokenProof } from './voucherToken'
 import { splitTokenByVoucher } from './tokenSplit'
 import { splitIntoDenominations, unblindOutputs, type BlindSignatureResponse, type BlindedOutput, type UnblindedProof } from './walletSwap'
 import { cashlinkClaimsKey } from './inFlightMoney'
@@ -191,6 +191,14 @@ const proofBody = (p: TokenProof) => ({
 })
 
 const burnOutputsBody = (outputs: ReadonlyArray<{ amount: number; B_: string }>) => outputs.map((o) => ({ amount: o.amount, B_: o.B_ }))
+
+/**
+ * cashu-voucher#64: an unlocked predecessor stored by reference names its voucher only by hash, so
+ * the gateway needs the document beside it (`predecessor_document`, hex) to read the voucher. Sent
+ * only when the proof is by reference; an inline or locked predecessor's body is unchanged.
+ */
+const predecessorDocument = (p: TokenProof): { predecessor_document?: string } =>
+  p.document && isVoucherByReference(p.secret) ? { predecessor_document: p.document } : {}
 
 /**
  * Our outputs the mint has signed, as proofs, matched by `B_` (a restore answers a subset). The
@@ -795,6 +803,7 @@ function lockBody(ctx: ArmContext, proof: TokenProof, linkPub: string, refundPub
     authorization: cashlinkAuthorization(self ?? ctx.refundSecret, CASHLINK_LOCK_TAG, proof.secret, proposed),
     predecessor_proof: proofBody(proof),
     burn_outputs: burnOutputsBody(burnOutputs),
+    ...predecessorDocument(proof),
   }
 }
 
@@ -1761,7 +1770,7 @@ export function lockedOnLink(tokens: GiftToken[], linkPub: string): GiftToken[] 
  * #402: the shared steps, for the checkout-code flow (`checkoutCodeFlow.ts`), which reuses them
  * rather than growing a second copy of the money path.
  */
-export const cashlinkSteps = { mintOf, proofBody, burnOutputsBody, restoreMine, swapOrRestore, signRoute, notYet, refusalOf, tokenOf, keepAsSats, mintCarrier }
+export const cashlinkSteps = { mintOf, proofBody, burnOutputsBody, predecessorDocument, restoreMine, swapOrRestore, signRoute, notYet, refusalOf, tokenOf, keepAsSats, mintCarrier }
 
 // --- The default ports ------------------------------------------------------
 
