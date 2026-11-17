@@ -148,7 +148,7 @@ export function PlansPage({ me, onSessionEnded }: { me: Me | null; onSessionEnde
   )
 }
 
-/** "£70/year, about £5.83/month" or "£8/month, or £70/year", from the Stripe prices. */
+/** "£100/year, about £8.33/month" or "£10/month, or £100/year", from the Stripe prices. */
 function PriceTag({ plan, term }: { plan: Plan; term: Term }) {
   if (plan.tier === 'free') return <p className="mt-2 text-2xl font-semibold">Free</p>
   const line = priceLine(plan, term)
