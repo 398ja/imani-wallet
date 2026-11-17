@@ -365,6 +365,14 @@ describe('config: email gifts fail closed', () => {
     expect(c.gifts).toMatchObject({ walletOrigin: 'https://imani.casa', mailerUrl: 'http://mailer', testWindowSeconds: null })
   })
   const full = { ...base, PURCHASE_GIFT_SEAL_KEY: ISSUER_HEX, PURCHASE_WALLET_ORIGIN: 'https://imani.casa/', PURCHASE_MAILER_URL: 'http://mailer', PURCHASE_MAILER_TOKEN: 'm', PURCHASE_GIFT_ANCHORS_PATH: '/tmp/a.json', PURCHASE_GIFT_TRACKER_PATH: '/tmp/t.json' }
+  it('#410 §6c: reminder offsets default to 7 d and 1 d, are configurable in hours, "none" turns them off', () => {
+    expect(readConfig(full).gifts?.reminderOffsetsMs).toEqual([168 * 3_600_000, 24 * 3_600_000])
+    expect(readConfig({ ...full, PURCHASE_GIFT_REMINDER_OFFSETS_HOURS: '48' }).gifts?.reminderOffsetsMs).toEqual([48 * 3_600_000])
+    expect(readConfig({ ...full, PURCHASE_GIFT_REMINDER_OFFSETS_HOURS: 'none' }).gifts?.reminderOffsetsMs).toEqual([])
+    expect(() => readConfig({ ...full, PURCHASE_GIFT_REMINDER_OFFSETS_HOURS: '7d' })).toThrow(/PURCHASE_GIFT_REMINDER_OFFSETS_HOURS/)
+    expect(readConfig(full).gifts?.mailFrom).toBe('gifts@imani.casa')
+    expect(() => readConfig({ ...full, PURCHASE_GIFT_MAIL_FROM: 'nope' })).toThrow(/PURCHASE_GIFT_MAIL_FROM/)
+  })
   it('a test claim window is test mode only: refused in live mode, bounded', () => {
     expect(readConfig({ ...full, PURCHASE_TEST_CLAIM_WINDOW_SECONDS: '120' }).gifts?.testWindowSeconds).toBe(120)
     for (const env of [
@@ -398,6 +406,8 @@ describe('G15 §4.3: a delivered gift is tracked for the buyer\'s notices', () =
       // G17: the voucher's own expiry (90-day stall), which a taken-back gift keeps.
       spendBy: NOW + 90 * DAY_MS,
     })
+    // §6d: no recipient email to remind for a handle gift.
+    expect(t.tracked[0].input.recipient).toBeUndefined()
   })
 
   it('a NIP-05 handle is shown as typed; never a key', async () => {
@@ -425,6 +435,36 @@ describe('G15 §4.3: a delivered gift is tracked for the buyer\'s notices', () =
     const other = getPublicKey(generateSecretKey())
     await discharge('http://gw', obligation('handle', delivery({ buyerEmail: 'a@b.co', buyerPubkey: other })), portsWith(fakeGifts({ track: t.track }).ports))
     expect(t.tracked[0].input).toMatchObject({ guest: true, returnMailDate: null })
+  })
+
+  it('#410 §6d: an email gift hands the tracker the recipient, the claim subject and the event id; a handle gift no recipient', async () => {
+    const t = tracking()
+    fakeGateway(honestMint)
+    const d = { ...emailDelivery(), buyerEmail: 'guest@example.com', from: 'Ann' }
+    const out = await discharge('http://gw', obligation('email', d), portsWith(fakeGifts({ track: t.track, mailFrom: 'gifts@imani.test' }).ports))
+    expect(out).toMatchObject({ kind: 'discharged' })
+    expect(t.tracked[0].input).toMatchObject({
+      eventId: expect.any(String),
+      recipient: { email: 'bob@example.com', from: 'Ann', claimSubject: 'Ann sent you a voucher for Alice Bakery', sender: 'gifts@imani.test' },
+    })
+    // A handle gift: no recipient (the 'signed-in handle gift' test's input has none either).
+    expect(t.tracked[0].input.kind).toBe('email')
+  })
+
+  it('#570: a gift nobody tracks (no buyer email, or the tracker fails) is scrubbed all at once', async () => {
+    fakeGateway(honestMint)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const all: string[] = []
+    const scrubAll = async (id: string) => {
+      all.push(id)
+      return 'ok' as const
+    }
+    await discharge('http://gw', obligation('handle', delivery()), portsWith(fakeGifts({ track: async () => {}, scrubAll }).ports))
+    await discharge('http://gw', obligation('handle', delivery({ buyerEmail: 'a@b.co' })), portsWith(fakeGifts({ track: async () => { throw new Error('x') }, scrubAll }).ports))
+    expect(all).toHaveLength(2)
+    // Tracked: the tracker scrubs later, not discharge.
+    await discharge('http://gw', obligation('handle', delivery({ buyerEmail: 'a@b.co' })), portsWith(fakeGifts({ track: async () => {}, scrubAll }).ports))
+    expect(all).toHaveLength(2)
   })
 
   it('no buyer email: not tracked, still discharged, and the log names no address or draft', async () => {
