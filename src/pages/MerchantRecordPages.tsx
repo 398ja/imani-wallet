@@ -30,6 +30,8 @@ import { present } from '../lib/detailRows'
 import { useVoucherLedgerStatus, type VoucherLedgerState } from '../hooks/useVoucherLedgerStatus'
 import { CardReferenceMark, CopyReferenceButton, PaymentReferenceBlock } from '../components/PaymentReference'
 import { cardReferenceOf } from '../lib/paymentReference'
+import { CardPaymentBadge, CardPaymentNotice } from '../components/CardPaymentBadge'
+import { useStallCardPaymentState } from '../hooks/useCardPaymentState'
 import { onWalletChanged } from '../lib/wallet'
 import { handlerFor } from '../lib/terminalAttribution'
 import { onRosterView } from '../lib/terminalRoster'
@@ -415,6 +417,11 @@ export function VoucherRecordDetail({ voucher, stallPubkey }: { voucher: Voucher
     ? describeUnderstatedSale(voucher.shortfall, money)
     : describeWarrant(voucher.warrantVerdict)
   const attestation = describeAttestation(voucher.attestationVerdict)
+  // imani-wallet#277: a card sale the stall refunded or that is disputed, from payment-adapter.
+  const cardPayment = useStallCardPaymentState(stallPubkey, {
+    ref: voucher.rail.kind === 'card' ? voucher.rail.reference : undefined,
+    voucherId: row.voucherId,
+  })
 
   return (
     <Screen>
@@ -455,6 +462,8 @@ export function VoucherRecordDetail({ voucher, stallPubkey }: { voucher: Voucher
           money={money}
         />
       </Panel>
+
+      <CardPaymentNotice state={cardPayment} money={money} audience="stall" />
 
       {/*
         The movements themselves, so the total above can be checked rather than
@@ -858,6 +867,8 @@ function IssuedCouponRow({ tx, now, stallPubkey }: { tx: WalletTransaction; now:
   // button sits OUTSIDE the row's link: a button nested in an anchor is
   // invalid HTML and a tap on it would also navigate.
   const cardRef = tx.type === 'cashback' ? undefined : cardReferenceOf(tx.issuanceWarrant)
+  const cardPayment = useStallCardPaymentState(stallPubkey, { ref: cardRef, voucherId: tx.voucherId })
+  const money = (minor: number) => formatFace(minor, { unit: tx.unit, decimals: tx.decimals })
 
   const link = (
     <Link
@@ -912,6 +923,7 @@ function IssuedCouponRow({ tx, now, stallPubkey }: { tx: WalletTransaction; now:
         <span>Card</span>
         <CardReferenceMark reference={cardRef} />
         <CopyReferenceButton reference={cardRef} compact />
+        <CardPaymentBadge state={cardPayment} money={money} className="ml-1" />
       </div>
     </div>
   )
