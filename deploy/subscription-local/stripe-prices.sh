@@ -26,9 +26,9 @@ price() { # product tier term amount interval -> id
     -d "recurring[interval]=$5" -d lookup_key="$key" -d tax_behavior=inclusive | sed -n 's/.*"id": "\(price_[^"]*\)".*/\1/p' | head -1)
   echo "$id"
 }
-# As published on www.imani.casa/pricing, VAT inclusive: Essentials £8/month or £70/year, Pro
-# £25/month or £250/year. Essentials is the `basic` tier (the id licences carry; only the name
+# As published on www.imani.casa/pricing, VAT inclusive: Essentials £10/month or £100/year, Pro
+# £35/month or £350/year. Essentials is the `basic` tier (the id licences carry; only the name
 # changed). Starter is free and has no price. Town / BID Partner is arranged with us ("Contact
 # us") and is never sold by card, so it has no price here either.
 basic=$(product "Imani Essentials" basic); pro=$(product "Imani Pro" pro)
-echo "SUBSCRIPTION_PRICES=basic:monthly=$(price "$basic" basic monthly 800 month),basic:annual=$(price "$basic" basic annual 7000 year),pro:monthly=$(price "$pro" pro monthly 2500 month),pro:annual=$(price "$pro" pro annual 25000 year)"
+echo "SUBSCRIPTION_PRICES=basic:monthly=$(price "$basic" basic monthly 1000 month),basic:annual=$(price "$basic" basic annual 10000 year),pro:monthly=$(price "$pro" pro monthly 3500 month),pro:annual=$(price "$pro" pro annual 35000 year)"

@@ -1,0 +1,24 @@
+# Layered by ./deploy/up.sh after imani-deploy's docker-compose.support-snapshot.yml,
+# only when deploy/support-snapshot.env exists (see up.sh).
+#
+# imani-deploy's overlay gives gateway-core the SUPPORT_* settings it publishes in
+# /api/v1/config. Locally account-app serves /api/v1/config too, so it needs the same
+# three, or the wallet sees no support settings half the time and hides the row.
+#
+# Both run a gateway build that knows the SUPPORT_* settings. The acl-local image
+# up.sh otherwise requires predates them, and publishes nothing whatever it is given.
+#   cd ../imani-gateway-core
+#   mvn -pl gateway-core-rest package jib:dockerBuild -DskipTests \
+#       -Djib.to.image=imani-gateway-core:snapshot-local
+services:
+  gateway-core:
+    image: ${SUPPORT_GATEWAY_CORE_IMAGE:-imani-gateway-core:snapshot-local}
+
+  account-app:
+    image: ${SUPPORT_GATEWAY_CORE_IMAGE:-imani-gateway-core:snapshot-local}
+    environment:
+      SUPPORT_BLOSSOM_URL: ${SUPPORT_BLOSSOM_URL:-}
+      SUPPORT_NPUB: ${SUPPORT_NPUB:-}
+      SUPPORT_BLOSSOM_TTL: ${SUPPORT_BLOSSOM_TTL:-7d}
+      SUPPORT_FLEET_ENABLED: ${SUPPORT_FLEET_ENABLED:-false}
+      FLEET_HEARTBEAT_SECONDS: ${FLEET_HEARTBEAT_SECONDS:-900}
