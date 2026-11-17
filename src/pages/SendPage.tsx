@@ -24,6 +24,7 @@ import { closedMessage, mayTradeWith } from '../lib/merchantStatus'
 import { toMerchants, unitHoldings, type Merchant, type UnitHolding } from '../lib/merchants'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import { roundingShortfallNote } from '../lib/couponTotals'
+import { debitNote } from '../lib/sendFace'
 import {
   humanName,
   identityLabel,
@@ -32,6 +33,7 @@ import {
   useMerchantLabel,
 } from '../lib/identity'
 import {
+  debitFor,
   SendOutcomeUnknownError,
   sendVouchers,
   splitObstacle,
@@ -406,6 +408,11 @@ export function SendPage({ pubkey }: { pubkey: string }) {
       ? null
       : roundingShortfallNote(minor, chosen.spendable, chosen.totalFaceValue, (v) => formatFace(v, chosen))
 
+  // What really leaves: up to a sat more than `minor` where a sat is worth more than a minor
+  // unit (NGN). Same coupon choice as `sendVouchers`.
+  const debit = minor === null || minor <= 0 ? null : debitFor(chosen.vouchers, minor)
+  const overNote = minor === null || debit === null ? null : debitNote(minor, debit, (v) => formatFace(v, chosen))
+
   // ── Step 4: confirm ──────────────────────────────────────────────────────
   if (confirming && minor !== null) {
     return (
@@ -433,8 +440,10 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               label="From your vouchers with"
               value={<MerchantText merchant={chosen.merchant} />}
             />
+            {overNote && debit !== null && <Row label="Taken from your balance" value={formatFace(debit, chosen)} />}
             <Row label="Your balance" value={formatFace(chosen.totalFaceValue, chosen)} />
           </dl>
+          {overNote && <p className="mt-3 text-xs text-mono-500">{overNote}</p>}
         </Panel>
 
         {/* Said before the tap, not after it. On this stack a send that fails at
