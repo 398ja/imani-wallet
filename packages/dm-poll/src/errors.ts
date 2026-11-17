@@ -89,6 +89,12 @@ export type RefusalReason =
    * so the token is still the sender's. Terminal: a retry is refused the same way.
    */
   | 'fully-redeemed'
+  /**
+   * The GATEWAY refused it: the card payment behind this voucher was refunded or is disputed, or
+   * more of it was offered than the payment still backs (imani-wallet#277, 422
+   * `VOUCHER_PAYMENT_REFUNDED`). Nothing was swapped. Terminal until the payment changes.
+   */
+  | 'payment-refunded'
 
 /**
  * The recipient refused a redemption on policy grounds, before any swap.
