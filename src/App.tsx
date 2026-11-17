@@ -109,6 +109,7 @@ import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
 import { TerminalsPage } from './pages/TerminalsPage'
 import { TerminalEnrolPage } from './pages/TerminalEnrolPage'
+import { OnlineShopPage } from './pages/OnlineShopPage'
 import { useTerminalIdentity } from './lib/useTerminalIdentity'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
@@ -774,7 +775,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             also what hides the Merchant section from customers entirely — they
             have no stall record, and selling is chosen at registration. Only the
             trading SCREENS are gated on `active` (see `canTrade`). */}
-        <Route path="/settings" element={<SettingsPage merchant={merchant !== null} />} />
+        <Route path="/settings" element={<SettingsPage merchant={merchant !== null} stallPubkey={pubkey} />} />
         {/* Every role: what is running, the legal pages, support (no predicate). */}
         <Route path="/settings/about" element={<AboutPage />} />
         {/* #589: only reachable with a support snapshot code; the page hides itself when unconfigured. */}
@@ -873,6 +874,18 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // subscriptions ticket 07's first criterion.
             merchant !== null ? (
               <TerminalEnrolPage stallPubkey={pubkey} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
+        />
+        <Route
+          path="/settings/online-shop"
+          element={
+            // Merchant-only, and NOT plan-gated here: the screen shows its own lock below Pro, and a
+            // merchant whose plan lapsed must still reach their connected shop to disconnect it.
+            merchant !== null ? (
+              <OnlineShopPage stallPubkey={pubkey} />
             ) : (
               <Navigate to="/settings" replace />
             )

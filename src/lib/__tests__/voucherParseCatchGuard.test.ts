@@ -157,8 +157,15 @@ const AUDITED = new Set<string>([
   'src/lib/voucherSplit.ts#finishOne#ee4a1919ef0b',
   'src/lib/witness.ts#secretsFromToken#9d08a4ee6905',
   'src/pages/DeleteAccountPage.tsx#go#877cb02e068b',
-  'src/pages/TerminalEnrolPage.tsx#enrol#2f906b0921a6',
-  'src/pages/TerminalsPage.tsx#TerminalsPage#a3a5f1cc76ec',
+  // #402 online shop: the enrol pipeline moved to terminalEnrolFlow.ts. Its catches rethrow (the row
+  // write as EnrolNotStartedError, the mint after settleMintFailure); the screens' catches only word
+  // the failure. None reads a token as plain ecash.
+  'src/lib/terminalEnrolFlow.ts#enrolTerminal#c0372312dea7',
+  // The Terminals open-time pass, moved unchanged into a hook both screens share (same hash).
+  'src/hooks/useTerminalUpkeep.ts#useTerminalUpkeep#a3a5f1cc76ec',
+  'src/pages/OnlineShopPage.tsx#connect#7da9854e1956',
+  'src/pages/OnlineShopPage.tsx#disconnect#1a467249bb31',
+  'src/pages/TerminalEnrolPage.tsx#enrol#c6d87daadd72',
   'src/pages/TerminalsPage.tsx#TerminalsPage#a86fffe832b1',
 ])
 

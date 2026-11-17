@@ -23,6 +23,7 @@ export function ScanRecipient({
   selfPubkey,
   manualLabel = 'Or enter their handle',
   onText,
+  placeholder = 'name',
 }: {
   /**
    * The second argument is the NIP-05 the person was reached THROUGH, when they
@@ -40,6 +41,8 @@ export function ScanRecipient({
    * caller's to show.
    */
   onText?: (text: string) => boolean
+  /** The paste field's placeholder. */
+  placeholder?: string
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string | null>(null)
@@ -161,7 +164,7 @@ export function ScanRecipient({
       <div className="mt-4 space-y-2">
         <Input
           label={manualLabel}
-          placeholder="name"
+          placeholder={placeholder}
           value={manual}
           onChange={(e) => {
             setManual(e.target.value)
