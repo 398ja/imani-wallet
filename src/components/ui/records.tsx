@@ -8,6 +8,9 @@ import { entryVoucherCount, worstValidation, type HistoryEntry } from '../../lib
 import { isRedeemed } from '../../lib/merchants'
 import { expiryState } from '../../lib/couponExpiry'
 import { ExpiryBadge } from './ExpiryBadge'
+import { CardPaymentBadge } from '../CardPaymentBadge'
+import { useHolderCardPaymentState } from '../../hooks/useCardPaymentState'
+import { cardReferenceOfRow } from '../../lib/cardVoucherRef'
 import { giftStatusLabel, transactionLabel, type WalletTransaction } from '../../lib/transactions'
 import { hasValidationClaim } from '../../lib/validationStatus'
 import { ValidationBadge } from './ValidationBadge'
@@ -78,6 +81,8 @@ export function CouponListItem({ row, now }: { row: VoucherRow; now?: number }) 
   const redeemed = isRedeemed(row)
   const expiry = expiryState(row, now)
   const expired = !redeemed && expiry.kind === 'expired'
+  // imani-wallet#277: the same badge as the detail screen, for a refunded or disputed card voucher.
+  const cardPayment = useHolderCardPaymentState(redeemed ? undefined : cardReferenceOfRow(row))
   const dimmed = redeemed || expired
   return (
     <Link
@@ -104,6 +109,12 @@ export function CouponListItem({ row, now }: { row: VoucherRow; now?: number }) 
             })}
           </span>
           {!redeemed && <ExpiryBadge state={expiry} />}
+          <CardPaymentBadge
+            state={cardPayment}
+            money={(minor) =>
+              formatFace(minor, { unit: row.face_unit ?? '', decimals: displayDecimals(row.face_unit, row.face_decimals) })
+            }
+          />
         </p>
         <p className="text-sm text-mono-500">
           {redeemed ? 'Redeemed · ' : ''}

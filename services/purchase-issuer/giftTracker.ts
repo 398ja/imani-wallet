@@ -14,8 +14,20 @@
  * - any SPENT at or after claimBy: no email, row dropped;
  * - anything else (PENDING, UNKNOWN, mixed, mint down): next pass.
  *
+ * #410 §6d expiry reminders: an unclaimed email (or code) gift also holds the RECIPIENT's email,
+ * sealed like the buyer's (AAD = draftId + ':recipient'). Before claimBy, each pass that finds every
+ * proof still UNSPENT sends the latest due reminder (default 7 d and 1 d before claimBy), at most
+ * once per offset (`<draftId>:expiring:<offset>`), never within 1 h of claimBy, never for an offset
+ * longer than the gift's window, never once unsubscribed (RFC 8058, a signed per-gift token) or
+ * bounced. A hard bounce (the mailer's suppression list) sends the buyer `gift-bounced` once.
+ *
+ * #570 retention: a row is only dropped after payment-adapter has scrubbed every personal field of
+ * its purchase (`scrub?all=true`). A scrub that fails keeps the row (finished) and is retried on
+ * every sweep.
+ *
  * Logs and metrics carry no address, draft id or amount.
  */
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -27,6 +39,12 @@ import { countGiftNotice, countGiftSweepError } from './metrics'
 
 export const SWEEP_EVERY_MS = 10 * 60_000
 export const KEEP_AFTER_CLAIM_BY_MS = 7 * 86_400_000
+/** §6c default reminder offsets before claimBy. */
+export const DEFAULT_REMINDER_OFFSETS_MS = [7 * 86_400_000, 86_400_000]
+/** §Edge cases, clock skew: no reminder within this long of claimBy. */
+export const REMINDER_MARGIN_MS = 3_600_000
+
+type Sealed = { iv: string; sealed: string }
 
 export type ProofState = 'SPENT' | 'UNSPENT' | 'PENDING' | 'UNKNOWN'
 
@@ -54,14 +72,28 @@ export interface TrackedGift {
    * #410 code gifts: the code (sealed like the email, AAD = draftId + ':code'), how the amounts are
    * shown, and the last remaining value the public code-check reported (minor units).
    */
-  codeGift?: { code: { iv: string; sealed: string }; decimals: number; unit: string; lastRemaining: number }
+  codeGift?: { code: { iv: string; sealed: string }; decimals: number; unit: string; lastRemaining: number; amountMinor?: number }
   /**
    * Business metrics: the latest outcome seen for this gift, until payment-adapter has it
    * (`sent`). payment-adapter owns every gift state; this tracker only reports what it alone sees.
    */
   report?: { outcome: GiftOutcome; remainingMinor?: number; sent?: boolean }
-  /** The sweep is done with this row and keeps it only until its report is delivered. */
+  /** The sweep is done with this row and keeps it only until its report is delivered and its purchase scrubbed. */
   finished?: boolean
+  /** #570: the purchase's event id, for `scrub?all=true`. Absent on rows from before #570. */
+  eventId?: string
+  /** #570: payment-adapter has dropped the purchase's personal fields. */
+  scrubbed?: boolean
+  /** When it was tracked (unix ms): the claim email's date, and the start of its window. */
+  trackedAt?: number
+  /** §6d: the recipient's email (AAD = draftId + ':recipient'), and what the reminder names. */
+  recipient?: { email: Sealed; from: string | null; claimSubject: string; sender: string }
+  /** §6c: reminder offsets (ms before claimBy) already sent or passed over, with when. */
+  reminders?: Record<string, number>
+  /** RFC 8058 one-click unsubscribe: no more reminders for this gift. */
+  unsubscribed?: number
+  /** Hard bounce seen, and the buyer told (`gift-bounced`). No reminders after it. */
+  bounced?: number
 }
 
 /**
@@ -99,6 +131,14 @@ export interface TrackInput {
   spendBy?: number | null
   /** #410: a code gift, tracked through the public code-check instead of the mint. */
   code?: { code: string; amountMinor: number; decimals: number; unit: string }
+  /** #570: the purchase's event id, scrubbed (`all=true`) when the row is done. */
+  eventId?: string
+  /**
+   * §6d: an email or code gift's recipient, for expiry reminders and bounce checks: their address
+   * (sealed before it touches disk), the sender's "from" name, and the claim email's subject and
+   * From address (G13: the reminder names the email, never the link).
+   */
+  recipient?: { email: string; from: string | null; claimSubject: string; sender: string }
 }
 
 export interface TrackerStore {
@@ -116,6 +156,17 @@ export interface TrackerPorts {
   checkCode?(code: string): Promise<{ status: 'active' | 'in_use' | 'used' | 'expired'; remaining: number }>
   /** Business metrics: tell payment-adapter a gift's outcome. Absent, nothing is reported. */
   reportOutcome?(draftId: string, outcome: GiftOutcome, remainingMinor?: number): Promise<ReportResult>
+  /** #570: payment-adapter's `scrub?all=true`. Absent, rows are dropped without it (tests, old wiring). */
+  scrubAll?(eventId: string): Promise<ReportResult>
+  /** §6c reminder offsets, ms before claimBy. Default `DEFAULT_REMINDER_OFFSETS_MS`; [] turns reminders off. */
+  reminderOffsetsMs?: number[]
+  /**
+   * The RFC 8058 one-click URL for a gift's reminders, from `unsubscribeToken`. Absent (no public
+   * origin), no reminder is sent: every reminder must carry one (§6d).
+   */
+  unsubscribeUrl?(draftId: string, token: string): string
+  /** Hard-bounce check against imani-mailer's suppressions. Absent, bounces are not looked for. */
+  isBounced?(email: string): Promise<boolean>
 }
 
 /** Minor units as a currency, as discharge formats the gift amount. */
@@ -165,6 +216,7 @@ export function spendByLine(row: Pick<TrackedGift, 'spendBy'>): string | null {
 
 export class GiftTracker {
   private readonly key: Buffer
+  private readonly unsubKey: Buffer
   private chain: Promise<unknown> = Promise.resolve()
 
   private readonly store: TrackerStore
@@ -176,6 +228,36 @@ export class GiftTracker {
     const key = Buffer.from(keyHex, 'hex')
     if (key.length !== 32) throw new Error('gift tracker key must be 32 bytes of hex')
     this.key = key
+    this.unsubKey = createHmac('sha256', key).update('imani-gift-unsubscribe-v1').digest()
+  }
+
+  /** The signed per-gift unsubscribe token (HMAC of the draft id under a key derived from the vault key). */
+  unsubscribeToken(draftId: string): string {
+    return createHmac('sha256', this.unsubKey).update(draftId).digest('base64url')
+  }
+
+  /** True when `token` is this gift's unsubscribe token. Constant time. */
+  verifyUnsubscribe(draftId: string, token: string): boolean {
+    const want = Buffer.from(this.unsubscribeToken(draftId))
+    const got = Buffer.from(token)
+    return got.length === want.length && timingSafeEqual(got, want)
+  }
+
+  /**
+   * RFC 8058 one-click: stop this gift's reminders. 'bad' for a token that is not this gift's;
+   * 'ok' otherwise, also for a gift no longer tracked (nothing left to stop). Never cancels the gift.
+   */
+  unsubscribe(draftId: string, token: string): Promise<'ok' | 'bad'> {
+    if (!this.verifyUnsubscribe(draftId, token)) return Promise.resolve('bad')
+    return this.serial(async () => {
+      const rows = await this.store.read()
+      const row = rows[draftId]
+      if (row && row.unsubscribed === undefined) {
+        row.unsubscribed = this.ports.now()
+        await this.store.write(rows)
+      }
+      return 'ok' as const
+    })
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
@@ -212,7 +294,8 @@ export class GiftTracker {
       ys,
       claimBy: input.claimBy,
       buyerEmail: this.seal(input.draftId, input.buyerEmail),
-      recipientDisplay: input.recipientDisplay,
+      // The recipient's address is never kept in clear: shown from the sealed copy instead.
+      recipientDisplay: input.recipient && input.recipientDisplay.trim().toLowerCase() === input.recipient.email.trim().toLowerCase() ? '' : input.recipientDisplay,
       stall: input.stall,
       amount: input.amount,
       guest: input.guest,
@@ -225,67 +308,78 @@ export class GiftTracker {
               decimals: input.code.decimals,
               unit: input.code.unit,
               lastRemaining: input.code.amountMinor,
+              amountMinor: input.code.amountMinor,
             },
           }
         : {}),
       notified: {},
+      trackedAt: this.ports.now(),
+      ...(input.eventId ? { eventId: input.eventId } : {}),
+      ...(input.recipient
+        ? {
+            recipient: {
+              email: this.seal(input.draftId, input.recipient.email, `imani-gift-tracker:${input.draftId}:recipient`),
+              from: input.recipient.from,
+              claimSubject: input.recipient.claimSubject,
+              sender: input.recipient.sender,
+            },
+          }
+        : {}),
     }
     return this.serial(async () => {
       const rows = await this.store.read()
       // A re-drive of the same draft keeps what was already notified.
       const prior = rows[input.draftId]
       rows[input.draftId] = prior
-        ? { ...row, notified: prior.notified, ...(prior.codeGift && row.codeGift ? { codeGift: { ...row.codeGift, lastRemaining: prior.codeGift.lastRemaining } } : {}) }
+        ? {
+            ...row,
+            notified: prior.notified,
+            ...(prior.codeGift && row.codeGift ? { codeGift: { ...row.codeGift, lastRemaining: prior.codeGift.lastRemaining } } : {}),
+            ...(prior.trackedAt !== undefined ? { trackedAt: prior.trackedAt } : {}),
+            ...(prior.reminders ? { reminders: prior.reminders } : {}),
+            ...(prior.unsubscribed !== undefined ? { unsubscribed: prior.unsubscribed } : {}),
+            ...(prior.bounced !== undefined ? { bounced: prior.bounced } : {}),
+          }
         : row
       await this.store.write(rows)
     })
   }
 
   /** One sweep. Never throws for a single gift; a store that cannot be read throws. */
-  sweep(): Promise<{ claimed: number; expired: number; dropped: number }> {
+  sweep(): Promise<{ claimed: number; expired: number; dropped: number; reminded: number; bounced: number }> {
     return this.serial(async () => {
       const rows = await this.store.read()
-      const out = { claimed: 0, expired: 0, dropped: 0 }
+      const out = { claimed: 0, expired: 0, dropped: 0, reminded: 0, bounced: 0 }
       const now = this.ports.now()
       let changed = false
-      // A finished row is kept only until payment-adapter has its outcome.
-      const finish = (id: string) => {
-        const row = rows[id]
-        if (row?.report && !row.report.sent && this.ports.reportOutcome) row.finished = true
-        else delete rows[id]
+      // Done with a row: it is kept (finished) until its report is delivered and its purchase scrubbed.
+      const finish = async (id: string) => {
+        rows[id].finished = true
         out.dropped += 1
+        changed = true
+        await this.deliverReport(rows[id])
+        await this.release(rows, id, now)
       }
       for (const [id, row] of Object.entries(rows)) {
         if (row.report && !row.report.sent && this.ports.reportOutcome) {
           if (await this.deliverReport(row)) changed = true
-          if (row.finished && row.report.sent) {
-            delete rows[id]
-            changed = true
-            continue
-          }
         }
         if (row.finished) {
-          // Undeliverable for the whole keep window: give up, payment-adapter keeps its last state.
-          if (now >= row.claimBy + KEEP_AFTER_CLAIM_BY_MS) {
-            delete rows[id]
-            changed = true
-          }
+          if (await this.release(rows, id, now)) changed = true
           continue
         }
         if (now >= row.claimBy + KEEP_AFTER_CLAIM_BY_MS) {
-          delete rows[id]
-          out.dropped += 1
-          changed = true
+          await finish(id)
           continue
         }
         if (row.checkedAt !== undefined && now - row.checkedAt < (this.ports.sweepEveryMs ?? SWEEP_EVERY_MS)) continue
         row.checkedAt = now
         changed = true
+        if (await this.checkBounce(row, now)) out.bounced += 1
         if (row.kind === 'code') {
           const done = await this.sweepCode(row, now, out)
-          if (done) finish(id)
-          if (await this.deliverReport(rows[id])) changed = true
-          if (rows[id]?.finished && rows[id].report?.sent) delete rows[id]
+          if (done) await finish(id)
+          else await this.deliverReport(row)
           continue
         }
         let states: Map<string, ProofState>
@@ -300,22 +394,23 @@ export class GiftTracker {
         const anySpent = each.some((s) => s === 'SPENT')
         const allUnspent = each.every((s) => s === 'UNSPENT')
         if (now < row.claimBy) {
+          if (allUnspent) {
+            // A fresh "still unspent" from the mint, just now: the only time a reminder may go.
+            if (await this.remind(row, now)) out.reminded += 1
+            continue
+          }
           if (!allSpent) continue
           this.observe(row, 'CLAIMED')
           const sent = await this.notify(row, 'claimed')
           if (sent !== 'retry') {
             if (sent === 'sent') out.claimed += 1
-            finish(id)
-          }
-          if (await this.deliverReport(rows[id])) changed = true
-          if (rows[id]?.finished && rows[id].report?.sent) delete rows[id]
+            await finish(id)
+          } else await this.deliverReport(row)
           continue
         }
         if (anySpent) {
           this.observe(row, 'RETURNED')
-          finish(id)
-          if (await this.deliverReport(rows[id])) changed = true
-          if (rows[id]?.finished && rows[id].report?.sent) delete rows[id]
+          await finish(id)
           continue
         }
         if (allUnspent) {
@@ -330,13 +425,130 @@ export class GiftTracker {
           } else if (sent === 'refused') {
             // Permanent refusal: no point tracking a notice that can never be sent. The expiry
             // is still reported (above), so the gift is not left outstanding in the metrics.
-            finish(id)
+            await finish(id)
           }
         }
       }
       if (changed) await this.store.write(rows)
       return out
     })
+  }
+
+  /**
+   * #570: drop a finished row once its purchase is scrubbed (`all=true`) and its report delivered.
+   * A failed scrub keeps the row for the next sweep, however long that takes: payment-adapter's own
+   * backstop is the only other way those fields go. True when the row changed or went.
+   */
+  private async release(rows: Record<string, TrackedGift>, id: string, now: number): Promise<boolean> {
+    const row = rows[id]
+    let changed = false
+    if (!row.scrubbed && row.eventId && this.ports.scrubAll) {
+      let result: ReportResult
+      try {
+        result = await this.ports.scrubAll(row.eventId)
+      } catch {
+        result = 'retry'
+      }
+      if (result === 'retry') {
+        countGiftSweepError()
+        return false
+      }
+      row.scrubbed = true
+      changed = true
+    }
+    // Undeliverable for the whole keep window: give up, payment-adapter keeps its last state.
+    const reportOpen = !!row.report && !row.report.sent && !!this.ports.reportOutcome && now < row.claimBy + KEEP_AFTER_CLAIM_BY_MS
+    if (reportOpen) return changed
+    delete rows[id]
+    return true
+  }
+
+  /**
+   * Hard bounce (§Recipient: email): the recipient's address is on the mailer's suppression list.
+   * The buyer is told once (`gift-bounced`, `<draftId>:bounced`) and reminders stop. True when the
+   * buyer was told on this pass.
+   */
+  private async checkBounce(row: TrackedGift, now: number): Promise<boolean> {
+    if (!row.recipient || row.bounced !== undefined || !this.ports.isBounced || now >= row.claimBy) return false
+    let to: string
+    try {
+      to = this.open(row, row.recipient.email, `imani-gift-tracker:${row.draftId}:recipient`)
+    } catch {
+      countGiftSweepError()
+      return false
+    }
+    let bounced: boolean
+    try {
+      bounced = await this.ports.isBounced(to)
+    } catch {
+      countGiftSweepError()
+      return false
+    }
+    if (!bounced) return false
+    const sent = await this.send(row, 'gift-bounced', `${row.draftId}:bounced`, { recipient: to })
+    if (sent === 'retry') return false
+    // Refused (the buyer's own address suppressed, say): still no reminders to a dead address.
+    row.bounced = now
+    if (sent === 'sent') countGiftNotice('bounced')
+    return sent === 'sent'
+  }
+
+  /**
+   * §6c: the latest due reminder, if any. Only the offset closest to claimBy that is already due is
+   * sent; any longer offset still unsent is passed over (never two at once, never a stale one).
+   * True when a reminder went.
+   */
+  private async remind(row: TrackedGift, now: number, code?: { remaining: string }): Promise<boolean> {
+    if (!row.recipient || row.unsubscribed !== undefined || row.bounced !== undefined || !this.ports.unsubscribeUrl) return false
+    if (now >= row.claimBy - REMINDER_MARGIN_MS) return false
+    const windowMs = row.claimBy - (row.trackedAt ?? 0)
+    const offsets = (this.ports.reminderOffsetsMs ?? DEFAULT_REMINDER_OFFSETS_MS).filter((o) => o > 0 && o < windowMs)
+    const due = offsets.filter((o) => now >= row.claimBy - o).sort((a, b) => a - b)
+    if (due.length === 0) return false
+    const latest = due[0]
+    const done = row.reminders ?? {}
+    // Already sent this one, or a later one (a shorter offset): nothing due.
+    if (Object.keys(done).some((k) => Number(k) <= latest)) return false
+    let to: string
+    try {
+      to = this.open(row, row.recipient.email, `imani-gift-tracker:${row.draftId}:recipient`)
+    } catch {
+      countGiftSweepError()
+      return false
+    }
+    const url = this.ports.unsubscribeUrl(row.draftId, this.unsubscribeToken(row.draftId))
+    const template = code ? 'gift-code-expiring' : 'gift-expiring'
+    const fields: Record<string, string> = {
+      ...(row.recipient.from ? { from: row.recipient.from } : {}),
+      stall: row.stall,
+      amount: row.amount,
+      claimBy: displayDate(row.claimBy),
+      sentOn: displayDate(row.trackedAt ?? now),
+      sender: row.recipient.sender,
+      claimSubject: row.recipient.claimSubject,
+      ...(code ? { remaining: code.remaining } : {}),
+    }
+    let res: SendOutcome
+    try {
+      res = await this.ports.sendMail({ template, to, fields, idempotencyKey: `${row.draftId}:expiring:${latest}`, unsubscribeUrl: url })
+    } catch {
+      countGiftSweepError()
+      return false
+    }
+    if (!res.ok && res.retryable) {
+      countGiftSweepError()
+      return false
+    }
+    // Sent, or refused for good (suppressed, say): either way this offset and every longer one are done.
+    const marked = { ...done }
+    for (const o of due) marked[String(o)] = now
+    row.reminders = marked
+    if (!res.ok) {
+      countGiftSweepError()
+      return false
+    }
+    countGiftNotice('expiring')
+    return true
   }
 
   /**
@@ -369,7 +581,7 @@ export class GiftTracker {
       const sent = await this.send(row, 'gift-code-expired', `${row.draftId}:code-expired`, {
         stall: row.stall,
         amount: row.amount,
-        recipient: row.recipientDisplay,
+        recipient: this.recipientName(row),
         expiresOn: displayDate(row.claimBy),
         remaining: money(cg.lastRemaining),
         returnMailDate: row.returnMailDate ?? displayDate(row.claimBy),
@@ -381,13 +593,19 @@ export class GiftTracker {
       }
       return true
     }
+    // §6d for a code (flagged choice): remind only while nothing of it has been spent and it is not
+    // mid-checkout, so a recipient who is already using it is not nagged.
+    if (check.status === 'active' && check.remaining >= (cg.amountMinor ?? cg.lastRemaining) && now < row.claimBy) {
+      await this.remind(row, now, { remaining: money(check.remaining) })
+      return false
+    }
     if (check.status === 'in_use' || check.remaining >= cg.lastRemaining) return false
     const spent = cg.lastRemaining - check.remaining
     const sent = await this.send(row, 'gift-code-used', `${row.draftId}:code-used:${check.remaining}`, {
       stall: row.stall,
       amount: row.amount,
       spent: money(spent),
-      recipient: row.recipientDisplay,
+      recipient: this.recipientName(row),
       expiresOn: displayDate(row.claimBy),
       ...(check.remaining > 0 ? { remaining: money(check.remaining) } : {}),
     })
@@ -425,6 +643,16 @@ export class GiftTracker {
     return true
   }
 
+  /** What the buyer's notices call the recipient: the display, or the sealed address opened. */
+  private recipientName(row: TrackedGift): string {
+    if (row.recipientDisplay !== '' || !row.recipient) return row.recipientDisplay || 'the recipient'
+    try {
+      return this.open(row, row.recipient.email, `imani-gift-tracker:${row.draftId}:recipient`)
+    } catch {
+      return 'the recipient'
+    }
+  }
+
   private async send(row: TrackedGift, template: string, idempotencyKey: string, fields: Record<string, string>): Promise<'sent' | 'retry' | 'refused'> {
     let to: string
     try {
@@ -459,7 +687,7 @@ export class GiftTracker {
         : {
             stall: row.stall,
             amount: row.amount,
-            recipient: row.recipientDisplay,
+            recipient: this.recipientName(row),
             claimBy: displayDate(row.claimBy),
             howBack: howBack(row),
             ...(spendByLine(row) ? { spendBy: spendByLine(row)! } : {}),

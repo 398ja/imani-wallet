@@ -222,6 +222,20 @@ The link a guest buyer is given to take an unclaimed gift back. It carries the
 gift's refund key, which only the buyer holds; it is never the claim link.
 _Avoid_: Refund link, claim link
 
+**Gift record**:
+What the Purchase Issuer keeps about one delivered gift until it is claimed,
+returned or expired and the buyer has been told: the proofs' public points,
+the claim date, and the buyer's and recipient's addresses sealed. Then it is
+deleted, and the purchase's own copy of the addresses with it.
+_Avoid_: Gift row, tracking record, order
+
+**Expiry reminder**:
+The email the recipient of an unclaimed gift gets before its claim date (7
+days and 1 day before by default). It names the first email by date and
+subject and never carries the claim link. Its one-click unsubscribe stops the
+reminders for that gift only.
+_Avoid_: Nudge, follow-up, reminder link
+
 ### Diagnostics
 
 **Support snapshot**:

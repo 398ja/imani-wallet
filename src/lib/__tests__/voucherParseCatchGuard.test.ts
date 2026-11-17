@@ -125,6 +125,9 @@ const AUDITED = new Set<string>([
   'src/lib/notMoneyNotice.ts#announceTerminalDm#fd266fd0a09b',
   'src/lib/notMoney.ts#terminalCredentialFromToken#7fa34d6c8a4e',
   'src/lib/pay.ts#signedPartOf#e6d14ec06b1e',
+  // imani-wallet#277: an unreadable token has no card reference, so it gets no refund badge and no
+  // send-side check. Display and UX only: gateway-customer's receive guard still refuses it.
+  'src/lib/cardVoucherRef.ts#cardReferenceOfRow#e6d14ec06b1e',
   'src/lib/receiveSwap.ts#receiveByOwnSwap#95ffa067ed7a',
   'src/lib/redemptionRows.ts#refile#4e947b60885a',
   'src/lib/selfLockedCoupons.ts#faceShare#e6d14ec06b1e',

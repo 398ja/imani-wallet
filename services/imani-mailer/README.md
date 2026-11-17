@@ -8,6 +8,7 @@ server. Callers never build bodies, choose headers or hold mail credentials.
 POST   /v1/send           {template, to, fields, idempotencyKey}   client token, template scope
 POST   /v1/suppressions   {to, reason: hard-bounce|complaint|manual}  client token with bounce
 DELETE /v1/suppressions   {to}                                      client token with bounce
+POST   /v1/suppressions/check {to} -> {suppressed, reason?}         client token with bounce or check
 GET    /v1/templates      what this client may send, with field types
 GET    /health            liveness (no auth)
 GET    /ready             SMTP answers EHLO / STARTTLS / AUTH (no auth)
@@ -39,7 +40,11 @@ else if (!out.ok) /* park it for a person */
 
 - **Callers**: each client has its own random token; configuration holds only its **sha256**
   (`MAILER_CLIENTS`), compared in constant time. Each client lists the templates it may send;
-  only clients with `bounce` may manage suppressions. Internal network only, never behind the edge.
+  only clients with `bounce` may manage suppressions. A client with `check` (purchase-issuer's gift
+  tracker) may only ask whether an address is suppressed, which is how a hard bounce reported by the
+  provider webhook reaches the buyer (`gift-bounced`). A send may carry `unsubscribeUrl` (checked
+  against `MAILER_LINK_HOSTS`): the mailer then adds RFC 8058 `List-Unsubscribe` and
+  `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (the gift reminders use it). Internal network only, never behind the edge.
 - **Content**: templates are data, validated at boot. Fields are typed: `line` (one line, CR/LF and
   control characters removed, so no header injection), `text`, `url` (https, allowed hosts only, no
   userinfo), `email`. URLs and emails can never appear in a subject. Unknown fields are refused.

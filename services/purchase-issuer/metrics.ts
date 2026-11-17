@@ -82,7 +82,7 @@ export function attemptCount(outcome: Outcome): number {
 }
 
 /** G15 §4.3: buyer notices sent by kind, and sweep errors. Closed labels only. */
-export const GIFT_NOTICES = ['claimed', 'expired'] as const
+export const GIFT_NOTICES = ['claimed', 'expired', 'expiring', 'bounced'] as const
 export type GiftNotice = (typeof GIFT_NOTICES)[number]
 const giftNotices = new Map<GiftNotice, number>(GIFT_NOTICES.map((k) => [k, 0]))
 let giftSweepErrors = 0
