@@ -142,6 +142,33 @@ export function selectVouchers(vouchers: Voucher[], amount: number): Voucher[] {
     })
 }
 
+/**
+ * How a send or payment draws `amount`: the one rule every door uses (owner report 2026-11-17).
+ *
+ * Soonest-expiring first, always. One coupon is still preferred (fewer splits, one DM), but only
+ * when no usable coupon expires sooner than it. Otherwise the bundle plan, which starts at the
+ * soonest coupon: €2 expiring tomorrow and €10 expiring next year, paying €5, spends the €2 and
+ * €3 of the €10, rather than €5 of the €10 while the €2 lapses.
+ *
+ * `single` keeps every candidate, in `selectVouchers` order, so the payer can walk to the next
+ * when the gateway refuses one.
+ * `bundle` may have `remaining > 0`: nothing covers the amount. Callers pass only comparable
+ * coupons (one issuer, one unit), as they already did for `selectVouchers` and `planParts`.
+ */
+export type SpendChoice = { kind: 'single'; candidates: Voucher[] } | { kind: 'bundle'; plan: SendPlan }
+
+export function chooseSpend(vouchers: Voucher[], amount: number): SpendChoice {
+  const single = selectVouchers(vouchers, amount)
+  if (single.length === 0) return { kind: 'bundle', plan: planParts(vouchers, amount) }
+  const plan = planParts(vouchers, amount)
+  // The bundle wins only when it covers the amount AND draws on a coupon that expires sooner than
+  // the best single one. A sooner coupon that cannot take part (it cannot be divided to the
+  // residue) leaves one coupon as the answer.
+  const sooner = plan.parts.some((p) => expiryMs(p.voucher) < expiryMs(single[0]))
+  if (plan.remaining > 0 || !sooner || plan.parts.length < 2) return { kind: 'single', candidates: single }
+  return { kind: 'bundle', plan }
+}
+
 /** One draw against one coupon. Several of them make a bundle. */
 export type SendPart = { voucher: Voucher; amount: number }
 
@@ -298,13 +325,12 @@ export function passedOver(
     (v) => sameIssuer(v.issuer_id, payee.issuer) && sameUnit(v.face_unit, payee.unit),
   )
 
-  const single = selectVouchers(eligible, amount)
+  const choice = chooseSpend(eligible, amount)
   let spent: Voucher[]
-  if (single.length > 0) spent = [single[0]]
+  if (choice.kind === 'single') spent = [choice.candidates[0]]
   else {
-    const plan = planParts(eligible, amount)
-    if (plan.remaining > 0) return []
-    spent = plan.parts.map((p) => p.voucher)
+    if (choice.plan.remaining > 0) return []
+    spent = choice.plan.parts.map((p) => p.voucher)
   }
   const latestSpent = Math.max(...spent.map(expiryMs))
   const used = new Set(spent)
