@@ -115,7 +115,7 @@ export async function heartbeat(http: FleetHttp, body: { app_version: string; pl
   const b = await bodyOf(res)
   const lu = b.last_upload as Record<string, unknown> | null | undefined
   const lastUpload = lu && typeof lu === 'object' && typeof lu.round === 'string' && ROUND_RE.test(lu.round) && (lu.state === 'received' || lu.state === 'deleted')
-    ? { round: lu.round, state: lu.state }
+    ? { round: lu.round, state: lu.state as LastUpload['state'] }
     : null
   return { kind: 'ok', ...clampTiming(b), request: clampRequest(b.snapshot_request, (http.now ?? Date.now)()), lastUpload }
 }
