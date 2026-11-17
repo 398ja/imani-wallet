@@ -23,8 +23,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now reads as a terminal `payment-refunded` refusal). A lookup that fails shows nothing, never
   "Refunded". New Vite proxy rule `/api/v1/purchase-state` to payment-adapter. Needs payment-adapter
   with `/purchase-state` and `PURCHASE_STATE_PUBLIC_ORIGINS` naming the wallet origin.
+- **Gift expiry reminders (#410 §6d).** purchase-issuer's gift tracker emails the recipient of an
+  unclaimed email gift `gift-expiring` 7 days and 1 day before its claim date
+  (`PURCHASE_GIFT_REMINDER_OFFSETS_HOURS`, default `168,24`, `none` turns them off). Only the latest
+  due reminder is sent, once per offset (idempotency `<draftId>:expiring:<offset>`), never within
+  1 h of the claim date, never for a claimed, bounced or unsubscribed gift. An untouched shop code
+  gets `gift-code-expiring` (new template). The reminder names the claim email by date, subject and
+  From (`PURCHASE_GIFT_MAIL_FROM`, default `gifts@imani.casa`). The recipient's address is sealed
+  in the tracker like the buyer's.
+- **One-click unsubscribe (RFC 8058).** Each reminder carries `List-Unsubscribe` and
+  `List-Unsubscribe-Post` to `PURCHASE_PUBLIC_ORIGIN/api/v1/gifts/unsubscribe/<draft>?t=<token>`,
+  a per-gift HMAC token. POST stops that gift's reminders. GET shows a button only, so a link
+  scanner unsubscribes nobody. With no `PURCHASE_PUBLIC_ORIGIN`, no reminders are sent.
+  imani-mailer takes `unsubscribeUrl` on `/v1/send` (checked against `MAILER_LINK_HOSTS`).
+- **Hard bounce reaches the buyer.** The tracker asks imani-mailer `POST /v1/suppressions/check`
+  (new `check` client scope) about the recipient. On a hard bounce the buyer gets `gift-bounced`
+  once and reminders stop. **Operators:** give purchase-issuer's mailer client `"check": true` and
+  the templates `gift-expiring`, `gift-code-expiring` and `gift-bounced`, and add the issuer's public
+  host to `MAILER_LINK_HOSTS`.
 
 ### Changed
+
+- **Gift data is deleted when the gift is done (#570).** A finished tracker row is dropped only
+  after payment-adapter's `POST /purchases/{id}/scrub?all=true` succeeds, retried on every sweep.
+  Self gifts, and gifts with no tracker row, are scrubbed straight after delivery. Needs
+  payment-adapter with #570 (it also clears the Purchase Draft).
+- The gifting site's thank-you page no longer mentions a signed-in wallet.
 
 - **The free (Starter) tier no longer includes an extra terminal.** Additional terminals are now an
   Essentials-and-above feature (Essentials 3, Pro unlimited). The free tier's `terminals` limit is 0

@@ -100,6 +100,38 @@ describe('HTTP', () => {
     expect((await post(`${url}/v1/send`, ISSUER_TOKEN, claim)).status).toBe(202)
   })
 
+  it('#410: suppressions/check answers a bounce client, refuses one without check, logs only the tag', async () => {
+    const { url, lines } = await start()
+    const body = { to: 'bob@example.com' }
+    expect((await post(`${url}/v1/suppressions/check`, ISSUER_TOKEN, body)).status).toBe(403)
+    expect(await (await post(`${url}/v1/suppressions/check`, OPS_TOKEN, body)).json()).toEqual({ suppressed: false })
+    await post(`${url}/v1/suppressions`, OPS_TOKEN, { to: 'bob@example.com', reason: 'hard-bounce' })
+    expect(await (await post(`${url}/v1/suppressions/check`, OPS_TOKEN, body)).json()).toEqual({ suppressed: true, reason: 'hard-bounce' })
+    expect((await post(`${url}/v1/suppressions/check`, OPS_TOKEN, { to: 'x', extra: 1 })).status).toBe(400)
+    expect(JSON.stringify(lines)).not.toContain('bob@example.com')
+  })
+
+  it('#410: a check-only client may check but not suppress', async () => {
+    const token = 'check-token-0123456789abcdefghijklmnopqrs'
+    const { createHash } = await import('node:crypto')
+    const clients = [...CLIENTS, { id: 'checker', tokenSha256: createHash('sha256').update(token).digest('hex'), templates: ['gift-claim'], check: true }]
+    const { url } = await start({ MAILER_CLIENTS: JSON.stringify(clients) })
+    expect((await post(`${url}/v1/suppressions/check`, token, { to: 'bob@example.com' })).status).toBe(200)
+    expect((await post(`${url}/v1/suppressions`, token, { to: 'bob@example.com', reason: 'manual' })).status).toBe(403)
+  })
+
+  it('#410: unsubscribeUrl becomes RFC 8058 List-Unsubscribe headers, only to an allowed host', async () => {
+    const { url, transport, lines } = await start()
+    const u = 'https://imani.test/api/v1/gifts/unsubscribe/d1?t=tok'
+    expect((await post(`${url}/v1/send`, ISSUER_TOKEN, { ...claim, idempotencyKey: 'evt_2:claim', unsubscribeUrl: u })).status).toBe(202)
+    expect(transport.sent[0].headers['List-Unsubscribe']).toBe(`<${u}>`)
+    expect(transport.sent[0].headers['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click')
+    expect(JSON.stringify(lines)).not.toContain('tok')
+    expect((await post(`${url}/v1/send`, ISSUER_TOKEN, { ...claim, idempotencyKey: 'evt_3:claim', unsubscribeUrl: 'https://evil.example/u' })).status).toBe(400)
+    expect((await post(`${url}/v1/send`, ISSUER_TOKEN, { ...claim, idempotencyKey: 'evt_4:claim' })).status).toBe(202)
+    expect(transport.sent[1].headers['List-Unsubscribe']).toBeUndefined()
+  })
+
   it('templates lists only what the client may send', async () => {
     const { url } = await start()
     const res = await fetch(`${url}/v1/templates`, { headers: { Authorization: `Bearer ${RECEIPTS_TOKEN}` } })

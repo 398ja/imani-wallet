@@ -1,7 +1,7 @@
 /**
  * imani-mailer operator commands.
  *
- *   npx tsx services/imani-mailer/cli.ts token <client-id> [template,...|*] [--bounce]
+ *   npx tsx services/imani-mailer/cli.ts token <client-id> [template,...|*] [--bounce] [--check]
  *       A new random bearer token for a client, and the MAILER_CLIENTS entry that names its HASH.
  *       Give the token to the caller (its own secret store); put only the entry in configuration.
  *
@@ -21,7 +21,7 @@ const [command, ...args] = process.argv.slice(2)
 if (command === 'token') {
   const id = args[0]
   if (!id || !/^[a-z][a-z0-9-]{1,63}$/.test(id)) {
-    console.error('usage: token <client-id> [template,...|*] [--bounce]')
+    console.error('usage: token <client-id> [template,...|*] [--bounce] [--check]')
     process.exit(2)
   }
   const templates = (args[1] && !args[1].startsWith('--') ? args[1] : '').split(',').filter(Boolean)
@@ -31,6 +31,7 @@ if (command === 'token') {
     tokenSha256: createHash('sha256').update(token).digest('hex'),
     templates,
     bounce: args.includes('--bounce'),
+    check: args.includes('--check'),
   }
   console.log(`token (give to the caller, shown once):\n  ${token}\n\nMAILER_CLIENTS entry:\n  ${JSON.stringify(entry)}`)
 } else if (command === 'check') {
