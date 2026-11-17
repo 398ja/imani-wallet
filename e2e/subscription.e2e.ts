@@ -77,7 +77,7 @@ const fake = createServer(async (req, res) => {
   // GET /v1/prices/:id: the published plan, in GBP (www.imani.casa/pricing).
   const priceMatch = /^\/v1\/prices\/([A-Za-z0-9_]+)$/.exec(req.url ?? '')
   if (req.method === 'GET' && priceMatch) {
-    const amounts: Record<string, [number, string]> = { price_basicM: [800, 'month'], price_basicA: [7000, 'year'], price_proM: [1100, 'month'] }
+    const amounts: Record<string, [number, string]> = { price_basicM: [1000, 'month'], price_basicA: [10000, 'year'], price_proM: [3500, 'month'] }
     const p = amounts[priceMatch[1]]
     if (!p) return send(404, { error: { message: 'No such price' } })
     return send(200, { id: priceMatch[1], unit_amount: p[0], currency: 'gbp', recurring: { interval: p[1] } })
@@ -325,11 +325,11 @@ async function main() {
       check('the site is on its own origin, not the wallet’s', new URL(site.url()).origin === SITE_ORIGIN, site.url())
       const plans = await site.locator('main').innerText()
       check('plans list Starter, Essentials and Pro, and no Town / BID partnership', /Starter/.test(plans) && /Essentials/.test(plans) && /Pro/.test(plans) && !/Town|BID|Partner/.test(plans), plans.slice(0, 300))
-      check('yearly by default: Essentials £70/year, from the Stripe price', /£70\/year/.test(plans), plans.slice(0, 400))
+      check('yearly by default: Essentials £100/year, from the Stripe price', /£100\/year/.test(plans), plans.slice(0, 400))
       check('Essentials: unlimited voucher issuance and 3 tills', /Unlimited voucher issuance/.test(plans) && /plus 3 tills/.test(plans), plans.slice(0, 400))
       await site.getByRole('radio', { name: /Monthly/ }).click()
       const monthly = await site.locator('main').innerText()
-      check('monthly: Essentials £8/month and Pro £25/month, in pounds', /£8\/month/.test(monthly) && /£25\/month/.test(monthly), monthly.slice(0, 400))
+      check('monthly: Essentials £10/month and Pro £35/month, in pounds', /£10\/month/.test(monthly) && /£35\/month/.test(monthly), monthly.slice(0, 400))
 
       const cookies = await context.cookies(SITE_ORIGIN)
       const session = cookies.find((c) => c.name === 'imani_subscription_session')

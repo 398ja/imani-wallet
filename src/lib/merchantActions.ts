@@ -24,6 +24,12 @@ export const CARD_SALES_CHECKING = 'Checking card sales…'
  * chooses a validity.
  */
 export const CARD_SALES_NEEDS_EXPIRY = 'This shop sells by card only with an expiry date.'
+/**
+ * The stall is on the Free plan and has used its lifetime sales allowance (gc#317). The gateway
+ * would refuse to mint the voucher, so a card payment now would be taken for nothing. Buy waits
+ * until the stall upgrades. Worded for the shopper: the plan is the stall's to change, not theirs.
+ */
+export const CARD_SALES_LIMIT_REACHED = "This merchant can't sell more vouchers on their current plan right now."
 
 /**
  * Whether the purchase issuer can issue for this stall now (#298). `checking` and `not-ready`
@@ -40,11 +46,12 @@ export const LOG_IN_FOR_CODE = 'Log in to use your vouchers online'
 
 export type StallOpen = 'open' | 'closed' | 'customer' | 'unknown' | 'loading'
 
-export type CardSalesReadiness = 'checking' | 'ready' | 'not-ready' | 'no-expiry'
+export type CardSalesReadiness = 'checking' | 'ready' | 'not-ready' | 'no-expiry' | 'sales-limit'
 
 /** The line under a disabled Buy for a readiness that is not `ready`. */
 export function cardSalesReason(readiness: Exclude<CardSalesReadiness, 'ready'>): string {
   if (readiness === 'checking') return CARD_SALES_CHECKING
+  if (readiness === 'sales-limit') return CARD_SALES_LIMIT_REACHED
   return readiness === 'no-expiry' ? CARD_SALES_NEEDS_EXPIRY : CARD_SALES_NOT_READY
 }
 
