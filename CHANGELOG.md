@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Refunded card vouchers are labelled and not offered for sending** (#277). A card voucher whose
+  payment the stall refunded, partly refunded or that is disputed shows an amber badge with text and
+  an icon ("Refunded", "Partly refunded £3.00 of £10.00", "Disputed", plus the date):
+  - on the stall's voucher record (`/merchant/coupon/:id`, with what can still be redeemed) and its
+    sales list, from payment-adapter `GET /api/v1/purchase-state/stall/{pubkey}` (NIP-98 as the stall);
+  - on the holder's voucher card and detail ("Can’t be spent: the card payment for this voucher was
+    refunded."), from `GET /api/v1/purchase-state/holder/{pi_}` (the `pi_` in the signed warrant).
+  Send and pay skip such a voucher, and a partly refunded one is only offered up to what is still
+  backed (UX only: gateway-customer's receive refuses it 422 `VOUCHER_PAYMENT_REFUNDED`, which dm-poll
+  now reads as a terminal `payment-refunded` refusal). A lookup that fails shows nothing, never
+  "Refunded". New Vite proxy rule `/api/v1/purchase-state` to payment-adapter. Needs payment-adapter
+  with `/purchase-state` and `PURCHASE_STATE_PUBLIC_ORIGINS` naming the wallet origin.
 - **Gift expiry reminders (#410 §6d).** purchase-issuer's gift tracker emails the recipient of an
   unclaimed email gift `gift-expiring` 7 days and 1 day before its claim date
   (`PURCHASE_GIFT_REMINDER_OFFSETS_HOURS`, default `168,24`, `none` turns them off). Only the latest

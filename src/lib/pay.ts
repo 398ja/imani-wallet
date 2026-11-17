@@ -15,6 +15,8 @@ import { publishTx } from './txRecords'
 import { sendFaceOf, splitOf } from './sendFace'
 import { OWN_STALL_COPY, giftExclusion } from './giftLink'
 import { FULLY_REDEEMED_STATUS, VoucherFullyRedeemedError, isVoucherFullyRedeemed } from './fullyRedeemed'
+import { VoucherPaymentRefundedError, holderCardPaymentState, isUnspendable } from './cardPaymentState'
+import { cardReferenceOfRow } from './cardVoucherRef'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { carryExpiryReminders } from './expiryReminders'
@@ -1926,6 +1928,32 @@ function deliver(ctx: SendContext, vouchers: Voucher[], amount: number, unitLabe
   return withSpend(() => deliverCounted(ctx, vouchers, amount, unitLabel))
 }
 
+/**
+ * The vouchers a send may draw on, without card vouchers whose payment no longer backs them
+ * (imani-wallet#277). A lookup that cannot be answered keeps the voucher: the gateway refuses it
+ * if it must, and a send blocked by a network blip is worse than one refused with a reason.
+ *
+ * @throws VoucherPaymentRefundedError every voucher that could pay was refused this way
+ */
+export async function withoutRefundedCardVouchers(vouchers: Voucher[], amount: number): Promise<Voucher[]> {
+  let refused: VoucherPaymentRefundedError | undefined
+  const kept: Voucher[] = []
+  for (const voucher of vouchers) {
+    const state = await holderCardPaymentState(cardReferenceOfRow({ token: voucher.token }))
+    if (isUnspendable(state)) {
+      refused = new VoucherPaymentRefundedError(state!.status as 'refunded' | 'disputed')
+      continue
+    }
+    if (state?.status === 'partly_refunded' && Math.min(amount, voucher.face_value ?? 0) > state.backedMinor) {
+      refused = new VoucherPaymentRefundedError('partly_refunded')
+      continue
+    }
+    kept.push(voucher)
+  }
+  if (kept.length === 0 && refused) throw refused
+  return kept
+}
+
 async function deliverCounted(
   ctx: SendContext,
   vouchers: Voucher[],
@@ -1939,6 +1967,9 @@ async function deliverCounted(
   // the wallet stopped waiting would otherwise block this person until the next login.
   await reconcilePendingSends(ctx.payer)
   refuseIfUnconfirmedTo(ctx)
+  // imani-wallet#277: a card voucher whose payment was refunded or is disputed is not offered, and a
+  // partly refunded one only for what its payment still backs. UX only: the gateway is the guard.
+  vouchers = await withoutRefundedCardVouchers(vouchers, amount)
 
   // One coupon first: fewer mint splits, one DM, and the path that has been
   // carrying every payment on this stack since the beginning.
