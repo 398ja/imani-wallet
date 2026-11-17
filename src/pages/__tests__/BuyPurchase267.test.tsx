@@ -43,7 +43,7 @@ vi.mock('../../lib/identity', async (orig) => ({
 }))
 
 import { BuyPage } from '../BuyPage'
-import { CARD_SALES_NEEDS_EXPIRY, CARD_SALES_NOT_READY } from '../../lib/merchantActions'
+import { CARD_SALES_LIMIT_REACHED, CARD_SALES_NEEDS_EXPIRY, CARD_SALES_NOT_READY } from '../../lib/merchantActions'
 import { BuyCancelledPage, BuyDonePage } from '../BuyReturnPages'
 import { PENDING_PURCHASE_KEY } from '../../lib/pendingPurchase'
 
@@ -184,6 +184,21 @@ describe('Buy page for a stall whose vouchers never expire (#312)', () => {
     buy(BUYER)
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25.00' } })
     const reason = await screen.findByText(CARD_SALES_NEEDS_EXPIRY)
+    const pay = screen.getByRole('button', { name: /pay by card/i }) as HTMLButtonElement
+    expect(pay.disabled).toBe(true)
+    expect(pay.getAttribute('aria-describedby')).toContain(reason.id)
+    expect(startPurchase).not.toHaveBeenCalled()
+  })
+})
+
+describe('Buy page for a Free stall at its sales allowance (gc#317)', () => {
+  // The gateway would refuse the voucher after the card was charged, so Buy is off before anyone
+  // pays, with words for the shopper (the plan is the stall's to change), and nothing is started.
+  it('disables Pay by card and says the merchant cannot sell more on their plan', async () => {
+    readinessOverride = 'sales-limit'
+    buy(BUYER)
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25.00' } })
+    const reason = await screen.findByText(CARD_SALES_LIMIT_REACHED)
     const pay = screen.getByRole('button', { name: /pay by card/i }) as HTMLButtonElement
     expect(pay.disabled).toBe(true)
     expect(pay.getAttribute('aria-describedby')).toContain(reason.id)

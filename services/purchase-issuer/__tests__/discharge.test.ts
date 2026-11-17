@@ -175,6 +175,34 @@ describe('discharging a purchase', () => {
     expect(outcome.kind).toBe('owed')
   })
 
+  it('parks a paid sale the stall’s Free plan cannot cover, never retrying it (gc#317)', async () => {
+    // The buyer has paid; the gateway refused before minting. Owed would retry it forever with a
+    // charged buyer waiting; blocked would hide why. Attention puts it in front of a person.
+    const fetchMock = vi.fn().mockResolvedValue(
+      reply(422, {
+        error: {
+          code: 'SALES_LIMIT_REACHED',
+          message: 'This sale would take your stall past the Free plan’s issuance allowance.',
+        },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const outcome = await discharge('http://gw', OBLIGATION, ports())
+
+    expect(outcome.kind).toBe('attention')
+    if (outcome.kind === 'attention') expect(outcome.reason).toMatch(/^sales_limit_reached: /)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('still treats an unrelated 422 as a plain refusal', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(422, { error: { code: 'FACE_VALUE_INVALID' } })))
+
+    const outcome = await discharge('http://gw', OBLIGATION, ports())
+
+    expect(outcome.kind).not.toBe('attention')
+  })
+
   it('blocks rather than retries when the credential was burnt', async () => {
     // A stall revoking its issuer is a deliberate act. Retrying forever would
     // bury the one case needing a person under identical failures.

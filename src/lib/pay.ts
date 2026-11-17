@@ -12,6 +12,7 @@ import { buildPaymentTransaction, buildSentTransaction, type GiftLinkRecord } fr
 import { sendTransferSignature } from './transferSignature'
 import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import { publishTx } from './txRecords'
+import { sendFaceOf, splitOf } from './sendFace'
 import { OWN_STALL_COPY, giftExclusion } from './giftLink'
 import { FULLY_REDEEMED_STATUS, VoucherFullyRedeemedError, isVoucherFullyRedeemed } from './fullyRedeemed'
 import type { NUT18VRequest } from './nap'
@@ -539,8 +540,9 @@ function forgetPendingSend(pubkey: string, sendId: string): void {
  * The receiver's figure is `creditableFaceValue` of the token it gets, which
  * is round(sent sats x ratio), clamped to the face. The sent sats are the
  * gateway's split rule: the whole source token on a full send (no change
- * came back), else floor(amount / ratio), gateway-core's default
- * (`VoucherSplitProperties.roundingMode = FLOOR`). On a fractional ratio that
+ * came back), else what gateway-core's split takes for `amount` (`splitOf`:
+ * the fewest sats worth it on a PROPORTIONAL coupon, the configured FLOOR
+ * otherwise, falling back to floor(amount / ratio)). On a fractional ratio that
  * can differ from `amount`, and signing `amount` then drops every such receipt
  * to the bare form. Undefined when the source token does not parse (plain
  * ecash), and the caller signs what it asked for, as before.
@@ -555,9 +557,13 @@ export function signedPartOf(
     const parsed = parseVoucherToken(sourceToken)
     const { issuanceRatio, unit, faceDecimals } = parsed.voucher
     if (!(issuanceRatio > 0)) return undefined
+    // The gateway's own split of `amount` (sendFace.ts), which rounds a PROPORTIONAL coupon's part
+    // UP to the fewest sats worth it (#114). This read FLOOR, so on NGN (about 128 kobo per sat)
+    // the signed figure fell up to a sat short of what the receiver credits.
+    const split = fullSend ? undefined : splitOf(parsed, amount)
     const sats = fullSend
       ? parsed.tokenAmount
-      : Math.min(parsed.tokenAmount, Math.floor(amount / issuanceRatio + 1e-9))
+      : Math.min(parsed.tokenAmount, split?.sendSats ?? Math.floor(amount / issuanceRatio + 1e-9))
     const { faceValue } = creditableFaceValue({ ...parsed, tokenAmount: sats })
     return { amount: faceValue, unit, decimals: faceDecimals }
   } catch {
@@ -622,8 +628,9 @@ async function settleSend(
     return false
   }
   // Read before the settle below removes or replaces the source row.
+  const sourceToken = (source as { token?: string }).token
   const part = signedPartOf(
-    (source as { token?: string }).token,
+    sourceToken,
     pending.amount,
     !status.keep_token,
   )
@@ -660,7 +667,10 @@ async function settleSend(
   try {
     const common = {
       tokenId: spentTokenId,
-      amount: pending.amount,
+      // What left the coupon, which is up to a sat more than asked where a sat is worth more
+      // than a minor unit (NGN): recording the request there made the balance fall by more than
+      // the history said. See `recordedAmount`.
+      amount: recordedAmount(sourceToken, pending.amount, status),
       unit: pending.unit,
       decimals: pending.decimals,
       merchantId: pending.merchantPubkey,
@@ -1866,6 +1876,47 @@ export async function refuseIfWrongMerchant(recipient: string, issuer: string): 
  * `vouchers` to one unit — this cannot check that, and adding coupons of two
  * currencies is how a request settles for a fraction of what was asked.
  */
+/**
+ * What sending `amount` from these coupons takes from the balance, minor units, chosen the way
+ * `deliverCounted` will choose (the first single coupon that will do, else the bundle plan).
+ *
+ * The request, unless a coupon's sat is worth more than a minor unit (NGN, KES): its part is then
+ * the fewest sats worth the request, up to a sat more, and that is what leaves (see `sendFace.ts`).
+ * For the confirmation screen, so the figure is said before the tap. The first candidate is the
+ * estimate: a coupon the gateway refuses moves the send to the next, which is rare and which the
+ * history then records exactly (`recordedAmount`). Never throws.
+ */
+export function debitFor(vouchers: Voucher[], amount: number): number {
+  try {
+    if (!Number.isSafeInteger(amount) || amount <= 0) return amount
+    const take = (voucher: Voucher, part: number) => Math.max(part, sendFaceOf(voucher.token, part)?.sendFace ?? part)
+    const single = selectVouchers(vouchers, amount)
+    if (single.length > 0) return take(single[0], amount)
+    const plan = planParts(vouchers, amount)
+    if (plan.remaining > 0) return amount
+    return plan.parts.reduce((sum, part) => sum + take(part.voucher, part.amount), 0)
+  } catch {
+    return amount
+  }
+}
+
+/**
+ * What the history records for one settled part: what left the coupon (the NGN overcharge).
+ *
+ * The request, unless the split took up to a sat more (`sendFace.ts`) and the gateway's answer
+ * confirms it: on a partial send its `keep_face_value` is the change this wallet predicts, on a
+ * full send the whole coupon went. A gateway that still reports `parent - request` disagrees with
+ * the prediction, so the request is recorded as before. Never below the request, never throws.
+ */
+export function recordedAmount(sourceToken: string | undefined, amount: number, status: Pick<SendStatus, 'keep_token' | 'keep_face_value' | 'is_full_send'>): number {
+  const predicted = sendFaceOf(sourceToken, amount)
+  if (!predicted || predicted.sendFace <= amount) return amount
+  const confirmed = status.keep_token
+    ? !predicted.fullSend && typeof status.keep_face_value === 'number' && status.keep_face_value === predicted.keepFace
+    : predicted.fullSend && status.is_full_send !== false
+  return confirmed ? predicted.sendFace : amount
+}
+
 /**
  * Every send goes through here, counted by the spend gate (#335): once logout
  * has closed it (in this tab, or another tab's logout has paused this one) a

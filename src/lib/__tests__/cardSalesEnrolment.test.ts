@@ -216,4 +216,13 @@ describe('readiness for a shopper (fail safe)', () => {
     expect(await cardSalesReadiness(STALL, answer(200, { ready: true }))).toBe('ready')
     expect(await cardSalesReady(STALL, answer(200, { ready: false, reason: 'validity_never_expires' }))).toBe(false)
   })
+
+  // gc#317: a Free stall at (or, for one amount, past) its allowance reads `sales-limit`, never ready.
+  it('reads the sales-limit codes as sales-limit', async () => {
+    const answer = (status: number, body: unknown) => (async () => respond(status, body)) as unknown as typeof fetch
+    for (const reason of ['sales_limit_reached', 'sales_limit_exceeded']) {
+      expect(await cardSalesReadiness(STALL, answer(200, { ready: false, reason }))).toBe('sales-limit')
+      expect(await cardSalesReady(STALL, answer(200, { ready: false, reason }))).toBe(false)
+    }
+  })
 })

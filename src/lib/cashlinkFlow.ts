@@ -155,6 +155,8 @@ export interface KeptCoupon {
    * sats of a burn), which have their own records.
    */
   takenBack?: true
+  /** With `takenBack`: the id of the `sent` row that made the Cashlink, for the return row's link. */
+  returnOf?: string
 }
 
 /**
@@ -384,9 +386,25 @@ const tokenOf = (mintUrl: string, proofs: UnblindedProof[]): string => encodePla
  * proofs of one gift kept under the same token would leave only the last proof's sats
  * (rev-wallet377 H1).
  */
-async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenProof, proofs: UnblindedProof[], why: KeptCoupon['why'], faceValue?: number, bundleId?: string, takenBack?: boolean): Promise<void> {
+async function keepAsSats(
+  ports: CashlinkPorts,
+  mintUrl: string,
+  source: TokenProof,
+  proofs: UnblindedProof[],
+  why: KeptCoupon['why'],
+  faceValue?: number,
+  { bundleId, takenBack, returnOf }: Pick<KeptCoupon, 'bundleId' | 'takenBack' | 'returnOf'> = {},
+): Promise<void> {
   const couponToken = tokenOf(mintUrl, [{ amount: source.amount, id: source.id, secret: source.secret, C: source.C }])
-  await ports.keep({ token: couponToken, satsToken: tokenOf(mintUrl, proofs), sats: proofs.reduce((n, p) => n + p.amount, 0), why, ...faceOf(faceValue), ...(bundleId ? { bundleId } : {}), ...(takenBack && bundleId ? { takenBack: true as const } : {}) })
+  await ports.keep({
+    token: couponToken,
+    satsToken: tokenOf(mintUrl, proofs),
+    sats: proofs.reduce((n, p) => n + p.amount, 0),
+    why,
+    ...faceOf(faceValue),
+    ...(bundleId ? { bundleId } : {}),
+    ...(takenBack && bundleId ? { takenBack: true as const, ...(returnOf ? { returnOf } : {}) } : {}),
+  })
 }
 
 // --- Sending: arming --------------------------------------------------------
@@ -1201,6 +1219,8 @@ export interface ReturnContext {
   depositKeyset?: string
   /** "Take it back" before the link expires: it goes the link key's way. */
   takeBackNow?: boolean
+  /** The `sent` row that made the Cashlink: a take-back's History row links to it. */
+  returnOf?: string
   /** Called before anything leaves the link, so a page that dies finishes the return on the next run. */
   onReturning(): Promise<void>
 }
@@ -1383,7 +1403,7 @@ async function reform(
   }
   if (notYet(answer.status)) return 'pending'
   // A definite refusal after the sats came back (422, or 404: the routes are gone): keep them.
-  await keepAsSats(ports, mintUrl, locked, plain, 'returned', share, takenBackOf(ctx, locked).bundleId, true)
+  await keepAsSats(ports, mintUrl, locked, plain, 'returned', share, takenBackOf(ctx, locked))
   return 'returned'
 }
 
@@ -1392,9 +1412,9 @@ async function reform(
  * incoming row, in the link's bundle (#530) so the coupons of one link fold into one entry. Other
  * returns through `settle` (code and guest gifts, no link key) keep their own records.
  */
-function takenBackOf(ctx: ReturnContext, locked: TokenProof): { bundleId?: string; takenBack?: true } {
+function takenBackOf(ctx: ReturnContext, locked: TokenProof): Pick<KeptCoupon, 'bundleId' | 'takenBack' | 'returnOf'> {
   const linkPub = ctx.linkSecret ? readLinkLock(locked.secret)?.linkPub : undefined
-  return linkPub ? { bundleId: cashlinkBundleId(linkPub), takenBack: true } : {}
+  return linkPub ? { bundleId: cashlinkBundleId(linkPub), takenBack: true, ...(ctx.returnOf ? { returnOf: ctx.returnOf } : {}) } : {}
 }
 
 /** Mint a signed successor from plain proofs, or find it if an earlier run already did. */
@@ -1609,7 +1629,7 @@ async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uin
   }
   if (notYet(answer.status)) return PARTLY
   // A definite refusal after the burn: the value is kept as sats, in this wallet. Never lost.
-  await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue, bundleId)
+  await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue, { bundleId })
   forget()
   return 'ok'
 }

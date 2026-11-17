@@ -7,8 +7,10 @@ import { listVouchers } from '../lib/wallet'
 import { holdingForUnit, issuerKey, toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { roundingShortfallNote } from '../lib/couponTotals'
+import { debitNote } from '../lib/sendFace'
 import { identityLabel, useIdentity } from '../lib/identity'
 import {
+  debitFor,
   passedOver,
   payRequest,
   SendOutcomeUnknownError,
@@ -155,6 +157,10 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // what is payable — a coupon divisible on one and not the other would let the
   // user tap Pay only to be refused.
   const obstacle = group ? splitObstacle(group.vouchers, request.amount) : null
+  // What really leaves: up to a sat more than asked where a sat is worth more than a minor unit
+  // (NGN). Same coupon choice as `payRequest`.
+  const debit = group ? debitFor(group.vouchers, request.amount) : request.amount
+  const overNote = debitNote(request.amount, debit, (minor) => formatFace(minor, denom))
   // #157: name a sooner-expiring voucher this payment leaves, and why, so the
   // soonest-first rule does not look ignored. Whole holding, not just `group`.
   const allVouchers = merchants.flatMap((m) => m.groups.flatMap((g) => g.vouchers))
@@ -255,9 +261,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           <p className="mt-2 text-sm text-mono-500">{request.description}</p>
         )}
         <dl className="mt-4 space-y-1 text-sm">
+          {overNote && <Row label="Taken from your balance" value={formatFace(debit, denom)} />}
           <Row label="Your balance" value={formatFace(available, denom)} />
           <Row label="Vouchers held" value={String(group?.voucherCount ?? 0)} />
         </dl>
+        {overNote && <p className="mt-3 text-xs text-mono-500">{overNote}</p>}
       </Panel>
 
       {expired && <Alert>This payment request has expired.</Alert>}
