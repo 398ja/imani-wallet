@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cashlink lock and bearer split send `predecessor_document` for a by-reference coupon**
+  (cashu-voucher#64 phase B). A v2 predecessor names its voucher only by hash, so the gateway
+  (imani-gateway-customer#321) needs the document beside it. Inline and locked predecessors send
+  the same body as before. This is the last wallet prerequisite for turning on
+  `gateway.voucher.by-reference.enabled`.
+
 - **Refunded card vouchers are labelled and not offered for sending** (#277). A card voucher whose
   payment the stall refunded, partly refunded or that is disputed shows an amber badge with text and
   an icon ("Refunded", "Partly refunded £3.00 of £10.00", "Disputed", plus the date):
