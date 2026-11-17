@@ -72,3 +72,6 @@ e2e/.probe-cashback-spend/
 .npm
 # real-day.mts writes its k6 crowd summary here per run; the dated real-day report is what is kept.
 loadtest/results/.real-day-k6-*.json
+
+# Local support-snapshot secrets for ./deploy/up.sh (copy from support-snapshot.env.example).
+deploy/support-snapshot.env
