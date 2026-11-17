@@ -384,16 +384,19 @@ export function describeBundle(view: BundleView, opts: { queued?: number } = {})
     }
   }
 
-  if (view.state === 'in_flight') {
+  // #552: a bundle is one payment, counted only once every declared part is in. Until then it
+  // reads as on its way: the gateway publishes parts only after it has decided to deliver all of
+  // them, so a missing part is late, never stopped.
+  if (view.state === 'in_flight' || (view.state === 'incomplete' && missing > 0 && !over)) {
     const queued = opts.queued ?? 0
     const progress =
       queued > 0
         ? `${view.receivedCount} of ${view.declaredCount} in — ${queued} still receiving`
         : `${view.receivedCount} of ${view.declaredCount} vouchers so far`
     return {
-      amount: `${received} of ${declared}`,
+      amount: `${declared} on its way`,
       progress,
-      body: `${received} of ${declared} received (${view.receivedCount} of ${view.declaredCount} vouchers).${caveat}`,
+      body: `${declared} on its way (${view.receivedCount} of ${view.declaredCount} vouchers in).${caveat}`,
       settled: false,
     }
   }

@@ -274,6 +274,8 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     // screen reports the delivered figure rather than the one that was typed —
     // showing the full amount here would send the customer away believing money
     // arrived that never did.
+    // #552: an atomic bundle is Sent, Not sent (an error) or Still sending (an error), never
+    // partial. Only the per-part fallback for a gateway without the bundle endpoint lands here.
     const partial = sent.delivered < sent.requested
     // A part the gateway accepted but could not confirm may already have arrived: the screen
     // says so, and never suggests sending it again (#125).
@@ -283,7 +285,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     return (
       <Screen>
         <PageHeader
-          title={inFlight > 0 ? 'Still going through' : partial ? 'Partly sent' : asMerchant ? 'Paid' : 'Sent'}
+          title={inFlight > 0 ? 'Still sending' : partial ? 'Not all sent' : asMerchant ? 'Paid' : 'Sent'}
         />
         <Panel>
           <div className="flex flex-col items-center py-4 text-center">
