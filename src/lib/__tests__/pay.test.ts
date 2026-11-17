@@ -1046,6 +1046,30 @@ describe('sendVouchers and payRequest', () => {
     expect(sent[0].bundlePartId).toBeUndefined()
   })
 
+  /**
+   * Owner report 2026-11-17, at the send door with stored rows (`expires_at` epoch seconds, a
+   * number, as perf/snapshots/coupons-20.json holds it). Before: the 10.00 coupon covered 5.00 on its
+   * own and was spent whole while the 2.00 coupon expiring in three days was left to lapse.
+   */
+  it('spends a smaller coupon expiring sooner first, the rest from the next', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const rows = () => [
+      row({ token_id: '7'.repeat(32), voucher_id: 'v-late', face_value: 1000, token_amount: 1000, expires_at: now + 300 * 86_400 } as Partial<VoucherRow>),
+      row({ token_id: '8'.repeat(32), voucher_id: 'v-soon', face_value: 200, token_amount: 200, expires_at: now + 3 * 86_400 } as Partial<VoucherRow>),
+    ]
+    stubs.rows = rows()
+    const sent = gateway()
+    wallet(rows())
+
+    const result = await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 })
+
+    expect(result).toMatchObject({ requested: 500, delivered: 500, parts: 2 })
+    expect(sent.map((s) => [s.voucherId, s.amount])).toEqual([
+      ['v-soon', 200],
+      ['v-late', 300],
+    ])
+  })
+
   it('draws across several coupons and tags every part of the bundle', async () => {
     stubs.rows = trio()
     const sent = gateway()
