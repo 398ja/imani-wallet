@@ -748,6 +748,7 @@
   "[dmPoll] could not attest a received coupon",
   "[dmPoll] could not flush unacknowledged escrows",
   "[dmPoll] could not persist the received-token set",
+  "[dmPoll] coupon refused by the gateway: card payment refunded",
   "[dmPoll] coupon refused by the mint: redeemed in full",
   "[dmPoll] identity changed, restarting the poller",
   "[dmPoll] ledger v2 publish failed",
