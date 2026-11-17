@@ -27,6 +27,7 @@ import {
   Switch,
 } from '../components/ui'
 import { present } from '../lib/detailRows'
+import { useVoucherLedgerStatus, type VoucherLedgerState } from '../hooks/useVoucherLedgerStatus'
 import { CardReferenceMark, CopyReferenceButton, PaymentReferenceBlock } from '../components/PaymentReference'
 import { cardReferenceOf } from '../lib/paymentReference'
 import { onWalletChanged } from '../lib/wallet'
@@ -397,12 +398,14 @@ export function IssuedCouponPage({ pubkey }: { pubkey: string }) {
   // records have not been restored yet.
   if (voucher === undefined) return <Centered>No record of this voucher.</Centered>
 
-  return <VoucherRecordDetail voucher={voucher} />
+  return <VoucherRecordDetail voucher={voucher} stallPubkey={pubkey} />
 }
 
 /** Exported for its page test; routed through `IssuedCouponPage`. */
-export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
+export function VoucherRecordDetail({ voucher, stallPubkey }: { voucher: VoucherRecord; stallPubkey?: string }) {
   const { row, expired, claimedMinor, outstandingMinor, claims } = voucher
+  // What the public ledger says (#310). The stall is the voucher's issuerId.
+  const ledger = describeLedger(useVoucherLedgerStatus(stallPubkey, row.voucherId))
   const money = (minor: number) => formatFace(minor, { unit: row.unit, decimals: row.decimals })
 
   const rail = describeRail(voucher.rail)
@@ -577,6 +580,9 @@ export function VoucherRecordDetail({ voucher }: { voucher: VoucherRecord }) {
             <EvidenceRow label="Customer receipt" line={attestation} />
           </>
         )}
+        {/* Both kinds: a cashback is a voucher the platform issues too, so it
+            has a ledger entry like a sale's. Nothing when the ledger is off. */}
+        {ledger ? <EvidenceRow label="Public ledger" line={ledger} /> : null}
       </ListSection>
 
       {/*
@@ -789,6 +795,26 @@ const EVIDENCE_TONE: Record<EvidenceTone, { Icon: LucideIcon; className: string 
  * glyphs would make three icons into a column the eye reads as a list of
  * statuses rather than as three separate answers.
  */
+/** The public ledger's answer in the screen's voice; null when there is nothing to say. */
+function describeLedger(state: VoucherLedgerState): EvidenceLine | null {
+  switch (state.kind) {
+    case 'off':
+      return null
+    case 'checking':
+      return { label: 'Checking…', tone: 'neutral' }
+    case 'issued':
+      return { label: 'Recorded as issued', tone: 'confirmed' }
+    case 'redeemed':
+      return { label: 'Recorded as redeemed', tone: 'confirmed' }
+    case 'revoked':
+      return { label: 'Recorded as withdrawn', tone: 'alarming' }
+    case 'none':
+      return { label: 'No public record yet', tone: 'neutral' }
+    case 'unavailable':
+      return { label: 'Could not check right now', tone: 'neutral' }
+  }
+}
+
 function EvidenceRow({ label, line }: { label: string; line: EvidenceLine }) {
   const { Icon, className: tone } = EVIDENCE_TONE[line.tone]
 

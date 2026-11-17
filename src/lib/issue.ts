@@ -20,7 +20,7 @@ import {
 import { parseIssuanceWarrant } from './issuanceWarrant'
 import type { AttestedSale } from './cashAttestation'
 import { NEVER_EXPIRES } from './merchant'
-import { assertWithinSalesLimit, SALES_LIMIT_MESSAGE } from './entitlement'
+import { assertWithinSalesLimit, SALES_LIMIT_MESSAGE, SalesLimitError } from './entitlement'
 import { recordTillSale } from './tillSales'
 
 /**
@@ -305,16 +305,34 @@ async function detail(response: Response, fallback: string): Promise<string> {
   const text = await response.text().catch(() => '')
   if (!text) return `${fallback} (${response.status}).`
   try {
-    const body = JSON.parse(text) as { error?: string | { message?: string }; message?: string; code?: string }
-    // The gateway's sales-limit refusal (#407), worded the same as the device's own.
-    if (body.code === 'SALES_LIMIT_REACHED' || body.error === 'SALES_LIMIT_REACHED') return SALES_LIMIT_MESSAGE
+    const body = JSON.parse(text) as {
+      error?: string | { message?: string; code?: string }
+      message?: string
+      code?: string
+      error_code?: string
+    }
+    // The gateway's sales-limit refusal (#407): thrown as SalesLimitError, not a plain message,
+    // so the Sell screen can tell it apart and invite an upgrade. Nothing was issued.
+    if (isSalesLimitBody(body)) throw new SalesLimitError(SALES_LIMIT_MESSAGE)
     const message =
       typeof body.error === 'string' ? body.error : (body.error?.message ?? body.message)
     if (message) return message
-  } catch {
+  } catch (e) {
+    if (e instanceof SalesLimitError) throw e
     // Not JSON — fall through to the raw text, truncated.
   }
   return `${fallback} (${response.status}): ${text.slice(0, 200)}`
+}
+
+/**
+ * The plan-allowance refusal, in any of the shapes the tiers write it: the portal's flat
+ * `{ error_code | code }`, or gateway-customer's `{ error: { code } }`.
+ */
+export function isSalesLimitBody(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false
+  const b = body as { code?: unknown; error_code?: unknown; error?: unknown }
+  const nested = b.error && typeof b.error === 'object' ? (b.error as { code?: unknown }).code : undefined
+  return [b.code, b.error_code, b.error, nested].includes('SALES_LIMIT_REACHED')
 }
 
 /**

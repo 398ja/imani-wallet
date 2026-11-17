@@ -24,9 +24,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finish; only new ones are refused, and the customer is told the shop is not taking new codes
   before anything is burnt. Needs the matching gateway-customer release; against an older gateway
   nothing is refused and the screen works as before.
+### Changed
+
+- **The stall publishes voucher ledger v2 REDEEMED by default** (imani-gateway-customer#310).
+  `VITE_VOUCHER_LEDGER_V2` used to default to off; it is now on unless set to exactly `false`
+  (rollback only). The platform publishes ISSUED in v2 and the gateway no longer publishes
+  REDEEMED, so a stall left on the old default would record no redemptions at all.
+  **Deploy:** set `VITE_VOUCHER_ISSUER_PUBKEYS` to the gateway's voucher-signing key(s); left
+  empty, every platform-published ISSUED reads as "no record" in the wallet.
+- **The merchant's voucher record shows what the public ledger says** (imani-gateway-customer#310).
+  A "Public ledger" row under "What stands behind this" reads "Recorded as issued", "Recorded as
+  redeemed", "No public record yet" or "Could not check right now". A gateway that did not answer
+  is never shown as "no record". Hidden when `VITE_VOUCHER_LEDGER_V2=false`.
+- **New subscription prices.** Essentials is £10/month or £100/year (was £8 or £70) and Pro is
+  £35/month or £350/year (was £25 or £250), all in GBP, VAT inclusive. Stripe prices are immutable,
+  so `deploy/subscription-local/stripe-prices.sh` creates new ones under new lookup keys; point
+  `SUBSCRIPTION_PRICES` at the new price ids. Starter and the Town / BID Partner plan are unchanged.
 
 ### Fixed
 
+- **A stall that has used its Free plan's issuance allowance can no longer sell, and Sell takes
+  the owner to upgrade (gateway-customer#317).** On pressing Sell (or Cashlink), the wallet asks the
+  gateway for the stall's standing (`GET /api/v1/wallet/vouchers/sales-allowance`). At the
+  allowance, the owner is sent to Settings > Subscription with a banner explaining that the Free
+  plan's voucher allowance is used up and inviting an upgrade; a till is stopped with "ask the stall
+  owner to upgrade". A sale refused at the mint (`SALES_LIMIT_REACHED`) also sends the owner there.
+  An unreadable answer lets the sale go ahead: the gateway still refuses at the mint. The card
+  purchase issuer parks a paid sale the Free plan refuses for a person to refund, instead of
+  retrying it.
+
+- **An NGN send says, and records, what really leaves the balance.** A sat of an NGN coupon is
+  worth about 128 kobo, so 1500.00 cannot be sent exactly: the gateway sends the fewest sats worth
+  it, up to a sat more. The history recorded 1500.00 while the balance fell by up to NGN 1.35 more.
+  The Pay and Send confirmation screens now show "Taken from your balance" with the real figure
+  before the tap (`debitFor`, `sendFace.ts`, which mirrors gateway-core's split), and the history
+  records it once the gateway's `keep_face_value` confirms it (`recordedAmount`); a gateway that
+  has not been upgraded is recorded as before. The transfer signature now commits to the sats the
+  gateway really sends on a PROPORTIONAL coupon (it assumed FLOOR, the gateway rounds up), so it
+  no longer falls a sat short of what the receiver credits. EUR, USD and XAF sends are unchanged.
+- **A Cashlink taken back at its expiry has a History row of its own, whichever way it was sent.**
+  A link that was never locked to its link (the legacy send, or an arm that did not take) comes
+  back through the ordinary receive, whose row read "Received via DM", in no bundle, with nothing
+  tying it to the link. The sender got "Your Cashlink expired, so its voucher came back to you" and
+  found no take-back in History. That row, and the one written by Take it back on such a link, now
+  reads "Taken back from Cashlink" in the link's bundle, as a locked link's take-back has since
+  0.55.3. App only, no configuration.
+- **A Cashlink take-back links to the Cashlink it came from.** Every take-back row, locked link or
+  not, at expiry or by Take it back, now names the row that made the Cashlink (`returnOf`, a row
+  id, never the link key). Its record page has "See the Cashlink you sent", and the Cashlink's
+  record page lists what "Came back" from it. The link travels in the encrypted history backup
+  (`return_of`), so a restored device keeps it. Rows written before this have no link.
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops
   part-paid because one part's relay publish failed once (#552).** The wallet took `DM_ERROR`,
   `SPLIT_ERROR` and `RECLAIM_READY` as the end of a send, gave up after 20 s, asked the gateway to

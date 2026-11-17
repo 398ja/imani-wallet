@@ -161,13 +161,21 @@ export class IssuanceFailed extends Error {
    * is parked `gateway_unrecorded` for a person (imani-wallet#274).
    */
   readonly unrecorded: boolean
+  /**
+   * gc answered 422 SALES_LIMIT_REACHED (gc#317): the stall is on the Free plan and this sale would
+   * take it past the plan's issuance allowance. Nothing was minted, and retrying cannot help until
+   * the stall upgrades, while the buyer has already paid: parked for a person (refund or issue by
+   * hand), never retried.
+   */
+  readonly salesLimit: boolean
 
-  constructor(message: string, retryable: boolean, ambiguous = retryable, unrecorded = false) {
+  constructor(message: string, retryable: boolean, ambiguous = retryable, unrecorded = false, salesLimit = false) {
     super(message)
     this.name = 'IssuanceFailed'
     this.retryable = retryable
     this.ambiguous = ambiguous
     this.unrecorded = unrecorded
+    this.salesLimit = salesLimit
   }
 }
 
@@ -284,6 +292,16 @@ export async function issueAsStall(
 
   if (isUnrecorded(response.status, raw)) {
     throw new IssuanceFailed(explain(response.status, raw), false, true, true)
+  }
+
+  if (response.status === 422 && /SALES_LIMIT_REACHED/.test(raw)) {
+    throw new IssuanceFailed(
+      'the stall is on the Free plan and this sale would pass its issuance allowance; nothing was minted',
+      false,
+      false,
+      false,
+      true,
+    )
   }
 
   if (response.status !== 200 && response.status !== 201) {

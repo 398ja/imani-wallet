@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_VALIDITY_DAYS, NEVER_EXPIRES, validityFromRecord } from '../index'
+import { currencyFromRecord, DEFAULT_VALIDITY_DAYS, NEVER_EXPIRES, validityFromRecord } from '../index'
 
 /**
  * imani-wallet#312: the record decoding the wallet's Sell screen and the purchase issuer share.
@@ -21,4 +21,18 @@ describe('validityFromRecord', () => {
       expect(validityFromRecord(content)).toBe(DEFAULT_VALIDITY_DAYS)
     },
   )
+})
+
+describe('currencyFromRecord', () => {
+  it.each([
+    [JSON.stringify({ issuanceCurrency: 'GBP' }), 'GBP'],
+    [JSON.stringify({ issuanceCurrency: ' eur ' }), 'EUR'],
+    [JSON.stringify({ issuanceCurrency: 'pounds' }), null],
+    [JSON.stringify({ issuanceCurrency: 826 }), null],
+    ['{}', null],
+    ['not json', null],
+    ['null', null],
+  ])('reads %s as %o', (content, unit) => {
+    expect(currencyFromRecord(content)).toBe(unit)
+  })
 })
