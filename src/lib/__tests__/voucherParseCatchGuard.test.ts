@@ -36,6 +36,11 @@ const NAMED_WRAPPERS = ['licenceFromToken', 'terminalCredentialFromToken', 'read
 
 const AUDITED = new Set<string>([
   // Each fails safe: no claim, zero credit, not lockable, unreadable, pending or retried.
+  // The NGN overcharge: sendFaceOf answers undefined and debitFor the request on any failure, so an
+  // unverifiable voucher gets no prediction; the screen and the history keep the request, and the
+  // gateway refuses the send itself. Neither credits anything.
+  'src/lib/pay.ts#debitFor#02159eb3f93f',
+  'src/lib/sendFace.ts#sendFaceOf#e6d14ec06b1e',
   'src/components/SwapBackOffer.tsx#SwapBackOffer#61b402ebda63',
   'src/lib/cashback.ts#commitToken#6eb60a5b13a2',
   'src/lib/cashback.ts#resolveClaimUrl#c0a6b1d9439b',
