@@ -15,7 +15,7 @@ import { publishTx } from './txRecords'
 import { sendFaceOf, splitOf } from './sendFace'
 import { OWN_STALL_COPY, giftExclusion } from './giftLink'
 import { FULLY_REDEEMED_STATUS, VoucherFullyRedeemedError, isVoucherFullyRedeemed } from './fullyRedeemed'
-import { VoucherPaymentRefundedError, holderCardPaymentState, isUnspendable } from './cardPaymentState'
+import { VoucherPaymentRefundedError, holderCardPaymentState, isUnspendable, refusalOf } from './cardPaymentState'
 import { cardReferenceOfRow } from './cardVoucherRef'
 import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
@@ -53,6 +53,15 @@ export {
   type SendPlan,
 } from '@imani/wallet-core'
 import { passedOver, planParts, selectVouchers, splitObstacle, type SendPart } from '@imani/wallet-core'
+
+/** Why a bundle was refused for a card voucher, in the badge's terms (gateway-core#221). */
+function refundedReason(status: 'refunded' | 'partly_refunded' | 'disputed'): string {
+  if (status === 'disputed') return 'A voucher in it can’t be spent while its card payment is disputed.'
+  if (status === 'partly_refunded') {
+    return 'Part of a voucher’s card payment was refunded, so it can’t be spent for that much.'
+  }
+  return 'A voucher in it can’t be spent: its card payment was refunded.'
+}
 
 /**
  * Paying a merchant's voucher payment request.
@@ -2400,10 +2409,24 @@ async function sendBundle(ctx: SendContext, plan: SendPart[], amount: number): P
       return null
     }
     const code = (error as { code?: unknown } | null)?.code
+    // gateway-core#221: a card voucher's payment could not be checked. A definite 503 answered
+    // before anything was saved or split, so nothing left the wallet (unlike a bare 503).
+    if ((error as { status?: unknown } | null)?.status === 503 && code === 'PAYMENT_STATE_UNAVAILABLE') {
+      forgetPendingBundle(ctx.payer, bundleId)
+      throw new Error(
+        'Not sent: nothing left your wallet. We couldn’t check a voucher’s card payment right now. ' +
+          'Try again in a moment.',
+      )
+    }
     if (gatewayAnswered(error)) {
       // Refused before anything was saved or split (contract): nothing left the wallet.
       forgetPendingBundle(ctx.payer, bundleId)
       if (code === 'request_already_paid') throw new RequestAlreadyPaidError(ctx.paymentRequestId)
+      // gateway-core#221: a part's card voucher was refunded or disputed, refused up front.
+      const refused = refusalOf(error)
+      if (refused) {
+        throw new Error(`Not sent: nothing left your wallet. ${refundedReason(refused.status)}`)
+      }
       if (code === 'TOO_MANY_PARTS') {
         const max = (error as { data?: { max_parts?: unknown } }).data?.max_parts
         throw new Error(tooManyPartsMessage(plan.length, typeof max === 'number' ? max : plan.length - 1))

@@ -256,6 +256,43 @@ describe('atomic bundle send (#552)', () => {
     expect(loadPendingBundles(PAYER)).toEqual([])
   })
 
+  // gateway-core#221: a refunded or disputed card voucher refuses the whole bundle up front.
+  it.each([
+    ['refunded:0', /Not sent: nothing left your wallet\. A voucher in it can’t be spent: its card payment was refunded\./],
+    ['disputed:0', /Not sent: nothing left your wallet\. .*card payment is disputed/],
+    ['partly_refunded:700', /Not sent: nothing left your wallet\. Part of a voucher’s card payment was refunded/],
+  ])('says VOUCHER_PAYMENT_REFUNDED (%s) as not sent, nothing spent', async (details, wording) => {
+    stubs.rows = trio()
+    const { balance } = store(trio())
+    const calls = gateway(() => ({}))
+    stubs.api.initiateAtomicSendBundle = async () => {
+      // shared/api.js copies the code onto the error and leaves details in the body.
+      throw Object.assign(new Error('refused'), {
+        status: 422,
+        code: 'VOUCHER_PAYMENT_REFUNDED',
+        data: { error: { code: 'VOUCHER_PAYMENT_REFUNDED', details } },
+      })
+    }
+    await expect(send()).rejects.toThrow(wording)
+    expect(balance()).toBe(1200)
+    expect(loadPendingBundles(PAYER)).toEqual([])
+    expect(calls.perPart).toBe(0)
+  })
+
+  it('says PAYMENT_STATE_UNAVAILABLE as not sent, nothing spent, not as still sending', async () => {
+    stubs.rows = trio()
+    const { balance } = store(trio())
+    gateway(() => ({}))
+    stubs.api.initiateAtomicSendBundle = async () => {
+      throw Object.assign(new Error('down'), { status: 503, code: 'PAYMENT_STATE_UNAVAILABLE' })
+    }
+    const error = await send().catch((e: unknown) => e)
+    expect(error).not.toBeInstanceOf(SendOutcomeUnknownError)
+    expect(String((error as Error).message)).toMatch(/Not sent: nothing left your wallet\. .*card payment/)
+    expect(balance()).toBe(1200)
+    expect(loadPendingBundles(PAYER)).toEqual([])
+  })
+
   it('falls back to the per-part loop on a gateway without the bundle endpoint', async () => {
     stubs.rows = trio()
     store(trio())
