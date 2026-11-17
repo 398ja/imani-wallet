@@ -44,6 +44,8 @@
  * The lock key, obviously. Also the NIP-98 header and the request body: neither is secret, but a
  * log line that prints request material is the line someone later extends to print a key.
  */
+import { createHash, timingSafeEqual } from 'node:crypto'
+
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils'
@@ -56,6 +58,7 @@ import type { StallCredential } from './issuer'
 import type { StallValidity } from './stallValidity'
 import { countEnrolment } from './metrics'
 import { ReplayGuard, verifyNip98 } from './nip98Auth'
+import { allowanceVerdict, normaliseUnit, type AllowanceReader } from './salesAllowance'
 import type { CredentialVault } from './vault'
 
 /** Where the stall calls. Under `/api/v1` so the edge can route this prefix and nothing else. */
@@ -122,7 +125,14 @@ export interface EnrolmentStatus {
   reasonCode?: ReadinessCode
 }
 
-export type ReadinessCode = 'validity_never_expires' | 'validity_outlives_delegation' | 'validity_unknown'
+export type ReadinessCode =
+  | 'validity_never_expires'
+  | 'validity_outlives_delegation'
+  | 'validity_unknown'
+  /** The stall is on the Free plan and has used its lifetime sales allowance (gc#317). */
+  | 'sales_limit_reached'
+  /** This amount would take a Free stall past its allowance. Only told to a trusted caller. */
+  | 'sales_limit_exceeded'
 
 interface Pending {
   lockKeyHex: string
@@ -140,6 +150,18 @@ export interface EnrolmentDeps {
    * stall whose term no delegated card coupon can honour is not ready, BEFORE anyone pays.
    */
   validityFor: (stallPubkey: string) => Promise<StallValidity>
+  /**
+   * The stall's Free plan sales allowance (`salesAllowance.ts`). Absent: readiness ignores the
+   * allowance, as before. Its answer is advice: an unknown keeps a stall ready, because the mint
+   * re-checks, and a gateway blip must not take every stall off sale.
+   */
+  allowanceFor?: AllowanceReader
+  /**
+   * The internal token payment-adapter presents (`PURCHASE_API_TOKEN`). Only a caller holding it
+   * may ask about one amount: told to anyone, `amount=` would let a stranger binary-search a stall's
+   * remaining allowance and so its lifetime sales. Absent or empty: no caller is trusted.
+   */
+  internalToken?: string
 }
 
 export class EnrolmentService {
@@ -158,7 +180,7 @@ export class EnrolmentService {
     try {
       const path = request.path.split('?')[0]
       if (request.method === 'GET' && path.startsWith(READY_PREFIX)) {
-        return await this.ready(path.slice(READY_PREFIX.length))
+        return await this.ready(path.slice(READY_PREFIX.length), request)
       }
       if (request.method === 'POST' && path === BEGIN_PATH) return await this.authed(request, (s) => this.begin(s))
       if (request.method === 'POST' && path === ENROL_PATH) {
@@ -365,16 +387,63 @@ export class EnrolmentService {
     return checkDelegation(credential, couponExpiresAtMs(now, validity.days))
   }
 
-  /** Public readiness, for the Buy button. Says nothing a stall's `acceptsCards` does not. */
-  private async ready(stallRaw: string): Promise<EnrolmentResponse> {
+  /**
+   * Public readiness, for the Buy button. Says nothing a stall's `acceptsCards` does not, except
+   * that a Free stall at its allowance cannot sell (gc#317), which a disabled Buy shows anyway.
+   *
+   * `?unit=` (the currency the sale will be in, payment-adapter sends the stall's Stripe currency)
+   * and `?amount=` (minor units) are honoured only for the internal caller, see `internalToken`.
+   * Anyone else is answered in the stall's signed record's `issuanceCurrency`, amount aside.
+   */
+  private async ready(stallRaw: string, request: EnrolmentRequest): Promise<EnrolmentResponse> {
     const stall = decodeURIComponent(stallRaw).toLowerCase()
     if (!HEX64.test(stall)) return { status: 400, body: { error: 'that is not a stall address' } }
     const status = await this.status(stall)
-    // The code only, never the free-text reason: this answer is public (#312).
-    return {
-      status: 200,
-      body: { ready: status.ready, ...(status.reasonCode ? { reason: status.reasonCode } : {}) },
+    if (!status.ready) {
+      // The code only, never the free-text reason: this answer is public (#312).
+      return { status: 200, body: { ready: false, ...(status.reasonCode ? { reason: status.reasonCode } : {}) } }
     }
+    const limit = await this.salesLimit(stall, request)
+    return { status: 200, body: limit === null ? { ready: true } : { ready: false, reason: limit } }
+  }
+
+  /** A sales-limit refusal for this stall, or null when the allowance does not stop the sale. */
+  private async salesLimit(stall: string, request: EnrolmentRequest): Promise<ReadinessCode | null> {
+    const reader = this.deps.allowanceFor
+    if (!reader) return null
+    const query = new URLSearchParams(request.path.split('?')[1] ?? '')
+    // `unit=` and `amount=` are the internal caller's only. From anyone else a unit of their choosing
+    // would be one more gateway read per code they invent, and a unit the free tier does not price
+    // reads as "reached", so the public answer always uses the stall's own record.
+    const trusted = this.trusted(request.authorization)
+    let unit = trusted ? normaliseUnit(query.get('unit')) : null
+    if (unit === null) {
+      const validity = await this.deps.validityFor(stall)
+      unit = validity.kind === 'days' ? (validity.currency ?? null) : null
+    }
+    // No unit to ask in: nothing to advise. The checkout asks again with the account's currency.
+    if (unit === null) return null
+    const credential = await this.deps.vault.get(stall)
+    if (credential === null) return null
+    const amount = trusted ? minorAmount(query.get('amount')) : null
+    const position = await reader(credential, unit)
+    if (position.kind === 'unknown') {
+      // Kept ready (see `allowanceFor`). Logged, so a gateway that never answers is seen.
+      console.warn(JSON.stringify({ event: 'card_sales_allowance_unknown', stall: stall.slice(0, 16), reason: position.reason }))
+      return null
+    }
+    const verdict = allowanceVerdict(position, amount)
+    if (verdict === 'reached') return 'sales_limit_reached'
+    if (verdict === 'exceeded') return 'sales_limit_exceeded'
+    return null
+  }
+
+  /** Does this request carry the internal token? Constant-time, and never for an empty token. */
+  private trusted(header: string | undefined): boolean {
+    const token = this.deps.internalToken ?? ''
+    if (token === '' || !header || !header.startsWith('Bearer ')) return false
+    const presented = createHash('sha256').update(header.slice('Bearer '.length)).digest()
+    return timingSafeEqual(presented, createHash('sha256').update(token).digest())
   }
 
   private sweep(): void {
@@ -383,6 +452,13 @@ export class EnrolmentService {
       if (entry.at <= cutoff) this.pending.delete(stall)
     }
   }
+}
+
+/** A positive whole number of minor units, or null. */
+function minorAmount(raw: string | null): number | null {
+  if (raw === null || !/^\d{1,15}$/.test(raw)) return null
+  const n = Number(raw)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
 }
 
 function expirationOf(delegation: string | undefined): number | null {

@@ -52,6 +52,7 @@ import { PurchasesApi, ReportLostError } from './purchasesApi'
 import { sendSaleRecord } from './saleRecord'
 import { ENROLMENT_PREFIX, EnrolmentService, MAX_BODY_BYTES } from './enrolment'
 import { cachedValidityReader, readStallValidity, type ValidityReader } from './stallValidity'
+import { cachedAllowanceReader, readSalesAllowance } from './salesAllowance'
 import { CredentialVault } from './vault'
 import { fileTrackerStore, GiftTracker, httpCheckStates } from './giftTracker'
 import { runPass, type WorkerDeps } from './worker'
@@ -370,7 +371,18 @@ function main(): void {
   const confirmer = new CredentialConfirmer(config.gatewayUrl)
   const validityFor = validityReaderFor(config)
   const deps = depsFor(config, vault, confirmer, validityFor)
-  mountEnrolment(new EnrolmentService({ vault, confirmer, publicOrigin: config.publicOrigin, validityFor }))
+  mountEnrolment(
+    new EnrolmentService({
+      vault,
+      confirmer,
+      publicOrigin: config.publicOrigin,
+      validityFor,
+      // gc#317: a Free stall at its allowance is not ready, so the buyer is refused before paying.
+      allowanceFor: cachedAllowanceReader((credential, unit) => readSalesAllowance(config.gatewayUrl, credential, unit)),
+      // payment-adapter asks about one amount with the token it already shares with this service.
+      internalToken: config.purchasesToken,
+    }),
+  )
   // #290: a record sealed by somebody else (the operator script) is picked up on the next read,
   // and confirmed at once (#296) rather than at its first sale. One the gateway could not confirm
   // then is retried like a boot-time one (second review of #299). A new reload REPLACES the reload

@@ -22,6 +22,7 @@ import { present } from '../lib/detailRows'
 import {
   getVoucherRow,
   getTransactionRow,
+  listTransactions,
   listVouchers,
   onWalletChanged,
   recheckCashbackRowOnOpen,
@@ -43,7 +44,7 @@ import {
   validationStatus,
   type ValidationStatus,
 } from '../lib/validationStatus'
-import { otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
+import { cashlinkReturnsOf, otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
 import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
 import { fetchCashbackLink, useCashbackStatus } from '../lib/cashback'
 import { formatCashbackLink } from '../lib/claimLink'
@@ -462,6 +463,65 @@ const EXPLAINER: Record<ValidationStatus, string> = {
  * could not be fetched must not read as unredeemed — a merchant deciding
  * whether to honour a code twice is exactly who a confident guess would hurt.
  */
+/**
+ * A Cashlink's send and its take-back, each one tap from the other. A take-back row names the row
+ * that made the link (`returnOf`); that row lists what came back from it. Nothing here shows the
+ * link key: both ends are row ids.
+ */
+function CashlinkReturnSection({ tx }: { tx: WalletTransaction }) {
+  const [returns, setReturns] = useState<WalletTransaction[]>([])
+  const sentLink = tx.link?.k
+
+  useEffect(() => {
+    if (!sentLink) {
+      setReturns([])
+      return
+    }
+    const load = async () => setReturns(cashlinkReturnsOf((await listTransactions()).map(toTransaction), tx))
+    void load()
+    return onWalletChanged(load)
+    // Only the link and the row decide what is listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sentLink, tx.id])
+
+  if (tx.returnOf) {
+    return (
+      <ListSection title="Cashlink">
+        <Link
+          to={`/transaction/${encodeURIComponent(tx.returnOf)}`}
+          className="press-row -mx-1 flex items-center gap-3 rounded-xl p-3"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block font-medium text-mono-900 dark:text-mono-50">See the Cashlink you sent</span>
+            <span className="block text-sm text-mono-500">This voucher came back from it</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" aria-hidden />
+        </Link>
+      </ListSection>
+    )
+  }
+  if (returns.length === 0) return null
+  return (
+    <ListSection title="Came back">
+      {returns.map((r) => (
+        <Link
+          key={r.id}
+          to={`/transaction/${encodeURIComponent(r.id)}`}
+          className="press-row -mx-1 flex items-center gap-3 rounded-xl p-3"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block font-medium text-mono-900 dark:text-mono-50">
+              +{formatFace(r.amount, { unit: r.unit, decimals: r.decimals })}
+            </span>
+            <span className="block text-sm text-mono-500">{formatDate(r.at)}</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" aria-hidden />
+        </Link>
+      ))}
+    </ListSection>
+  )
+}
+
 function CashbackSection({ tx }: { tx: WalletTransaction }) {
   const { reading, checking } = useCashbackStatus({
     rowId: tx.id,
@@ -763,6 +823,8 @@ export function TransactionPage({
       ) : null}
 
       <GiftLinkSection link={tx.link} />
+
+      <CashlinkReturnSection tx={tx} />
 
       <ValidationSection tx={tx} />
 
