@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "overshoot_pct": 10,
   "tiers": {
     "free": {
@@ -164,7 +164,7 @@
             "ZWG": 260000
           }
         },
-        "terminals": 1
+        "terminals": 0
       }
     },
     "basic": {

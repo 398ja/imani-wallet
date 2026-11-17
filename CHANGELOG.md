@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The free (Starter) tier no longer includes an extra terminal.** Additional terminals are now an
+  Essentials-and-above feature (Essentials 3, Pro unlimited). The free tier's `terminals` limit is 0
+  in both the bundled catalog and the published `services/subscription/catalog.json` (version 5 → 6;
+  redeploy the subscription service so wallets adopt it). `FREE_TERMINALS` is 0, so `mayEnrol`
+  refuses even a first terminal without a subscription, and a lapse or seller revocation now stops
+  every enrolled terminal. The stall's own device is unaffected.
+- Settings › Terminals is disabled for a stall that has never subscribed: it explains that
+  terminals start at Essentials, links to Settings › Subscription, turns off "Add a terminal", and
+  offers no Renew or setup code. Terminals enrolled before stay listed and revocable, marked as
+  needing a plan. A lapsed, revoked or offline subscriber keeps the ordinary page (renew, not buy). Settings › Subscription shows "This device only", and the
+  subscription site's plan cards read "Your device only, no extra tills" for Starter.
+- Publish catalog 6 (redeploy the subscription service) before or with gateway-portal: a device that
+  cached catalog 5 keeps the free tier's 1 terminal until it fetches 6.
+- Consumers: a free stall's existing terminal stops serving once its device adopts catalog 6, and
+  stops selling as soon as gateway-portal ships its matching change (`TerminalLicenceGate` no longer
+  honours `terminal:free`).
 ### Added
 
 - **Settings › Online shop (#402).** Connecting a website now has its own screen instead of a
@@ -24,7 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finish; only new ones are refused, and the customer is told the shop is not taking new codes
   before anything is burnt. Needs the matching gateway-customer release; against an older gateway
   nothing is refused and the screen works as before.
-### Changed
 
 - **The stall publishes voucher ledger v2 REDEEMED by default** (imani-gateway-customer#310).
   `VITE_VOUCHER_LEDGER_V2` used to default to off; it is now on unless set to exactly `false`

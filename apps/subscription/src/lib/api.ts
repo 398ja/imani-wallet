@@ -166,6 +166,7 @@ export function tillsLine(limits: LicenceLimits): string {
   const t = limits.terminals
   if (t === null) return 'Unlimited tills'
   if (t === undefined) return ''
+  if (t === 0) return 'Your device only, no extra tills'
   return t === 1 ? 'Your device plus 1 till' : `Your device plus ${t} tills`
 }
 

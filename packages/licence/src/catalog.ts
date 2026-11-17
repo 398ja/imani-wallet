@@ -58,8 +58,8 @@ const USD_DECIMALS = 2
 /**
  * The catalog compiled into the app, used until a signed one has been fetched.
  *
- * Mirrors the published plans (www.imani.casa/pricing): about 100 USD one-off and 1 till (Starter,
- * the `free` tier), no sales limit and 3 tills (Essentials, the `basic` tier), no limits plus API and
+ * Mirrors the published plans (www.imani.casa/pricing): about 100 USD one-off and no tills beyond the
+ * owner's own device (Starter, the `free` tier), no sales limit and 3 tills (Essentials, the `basic` tier), no limits plus API and
  * e-commerce (Pro), with a 10 % overshoot.
  *
  * The free threshold is hard-coded in every merchant currency (`FREE_TIER_AMOUNTS`, #506), the
@@ -67,8 +67,15 @@ const USD_DECIMALS = 2
  * that has never fetched a catalog already has the right limit in NGN or KES, not 0. The version
  * stays at 1, so any catalog we publish still replaces this one.
  *
- * The free tier's terminal allowance is 1 ENROLLED terminal on top of the owner's own device, which
- * is how `terminalAllowance` has always counted (the owner's device is counted, never converted).
+ * The free tier's terminal allowance is 0 ENROLLED terminals: the owner's own device keeps trading, and
+ * additional terminals start at Essentials. `terminalAllowance` counts enrolled terminals only (the
+ * owner's device is never converted). It must agree with services/subscription/catalog.json.
+ *
+ * Note that this bundled value only applies on a device with no cached signed catalog. A device that
+ * cached an older published one (version 2 to 5, which gave the free tier 1 terminal) keeps that one
+ * until it fetches version 6, because any signed catalog newer than this bundled version 1 wins. So
+ * publish catalog 6 (redeploy the subscription service) before or with the gateway-portal change, or
+ * such a device may still let a free stall enrol a till that the portal then refuses.
  */
 export const BUNDLED_CATALOG: TierCatalog = {
   version: 1,
@@ -76,7 +83,7 @@ export const BUNDLED_CATALOG: TierCatalog = {
   tiers: {
     free: {
       features: [],
-      limits: { sales: { period: 'lifetime', amounts: { ...FREE_TIER_AMOUNTS } }, terminals: 1 },
+      limits: { sales: { period: 'lifetime', amounts: { ...FREE_TIER_AMOUNTS } }, terminals: 0 },
     },
     basic: {
       features: ['terminals'],

@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { reportLicence } from '../lib/licenceReport'
 import { mayServe } from '../lib/lapseService'
+import { ENROL_REFUSAL, mayEnrol } from '../lib/terminalAllowance'
 import { formatDate } from '../lib/format'
 import { TERMINAL_ROLE_LABELS } from '../lib/terminalRole'
 import {
@@ -245,11 +246,39 @@ export function TerminalsPage({
   const liveShop = terminals.find((t) => t.shop && t.revokedAt === undefined)
   const live = terminals.filter((t) => t.revokedAt === undefined && !t.shop)
   const retired = terminals.filter((t) => t.revokedAt !== undefined)
+  // Terminals are an Essentials-and-above feature: the free tier allows no enrolled terminal. The
+  // section is disabled only for a stall that has NEVER subscribed, the same reading `mayEnrol` uses
+  // for "buy" rather than "renew": a lapsed, revoked or offline-past-grace subscriber keeps the
+  // ordinary page and meets its own refusal at enrolment, rather than being told to buy a plan it
+  // already owns. Disabled only once the licence check has answered, so a paying stall never sees it
+  // greyed out while the check loads. Existing rows stay listed and revocable: a paywall in front of
+  // revocation would turn a billing problem into a security one.
+  const disabled =
+    licence !== null &&
+    (() => {
+      const decision = mayEnrol(licence, 0)
+      return !decision.allowed && decision.reason === ENROL_REFUSAL.AT_FREE_LIMIT
+    })()
 
   return (
     <Screen>
       <BackLink to="/settings" label="Settings" />
       <PageHeader title="Terminals" subtitle="The devices trading for your stall" />
+
+      {disabled ? (
+        <div className="mb-6" data-testid="terminals-disabled">
+        <Panel className="p-4">
+          <p className="font-medium">Terminals are not included in the free Starter plan</p>
+          <p className="mt-1 text-sm text-mono-500">
+            Your own device keeps trading as it does now. To let other devices take payments for your
+            stall, upgrade to Essentials or above.
+          </p>
+          <Link to="/settings/subscription" className="mt-3 block">
+            <Button className="w-full">See plans</Button>
+          </Link>
+        </Panel>
+        </div>
+      ) : null}
 
       {lapsed.map((name) => (
         <div key={name} className="mb-4" data-testid="renewal-lapsed">
@@ -263,14 +292,14 @@ export function TerminalsPage({
         </p>
       ) : null}
 
-      {live.length === 0 ? (
+      {live.length === 0 && !disabled ? (
         <Panel className="mb-6">
           <EmptyRow>
             No terminals yet. Add one from a device to let it take payments for
             your stall.
           </EmptyRow>
         </Panel>
-      ) : (
+      ) : live.length === 0 ? null : (
         <ListSection title="In service">
           {live.map((terminal) => (
             <TerminalRow
@@ -279,6 +308,7 @@ export function TerminalsPage({
               // Undefined until the check answers, so the row shows no marker
               // rather than briefly accusing a healthy subscription.
               stopped={licence ? !mayServe(licence, terminals, terminal.terminalPubkey).serving : undefined}
+              freeTier={disabled}
               confirming={confirming === terminal.terminalPubkey}
               busy={revoking === terminal.terminalPubkey}
               error={revokeError?.terminal === terminal.terminalPubkey ? revokeError.message : null}
@@ -292,9 +322,12 @@ export function TerminalsPage({
               now={nowMs}
               renewing={renewing === terminal.terminalPubkey}
               renewError={renewNotice?.terminal === terminal.terminalPubkey ? renewNotice.message : null}
-              onRenew={() => void renewOne(terminal.terminalPubkey)}
+              // A free-tier stall's till can never sell (the portal answers 402), so minting it a
+              // fresh credential, or handing out a setup code for one, would only make a till that
+              // cannot trade. Revoke stays.
+              onRenew={disabled ? undefined : () => void renewOne(terminal.terminalPubkey)}
               setup={
-                terminal.status === 'waiting' && terminal.voucherId && terminal.token
+                !disabled && terminal.status === 'waiting' && terminal.voucherId && terminal.token
                   ? setupCode(stallPubkey, terminal.voucherId)
                   : undefined
               }
@@ -329,14 +362,22 @@ export function TerminalsPage({
       {/* The way in, present whether or not the list is empty: an owner adding
           a second till should not have to find a different route than the one
           they used for the first. */}
-      <Link to="/settings/terminals/add" className="mt-2 block">
-        <Button className="w-full">Add a terminal</Button>
-      </Link>
+      {disabled ? (
+        <Button className="mt-2 w-full" disabled>
+          Add a terminal
+        </Button>
+      ) : (
+        <Link to="/settings/terminals/add" className="mt-2 block">
+          <Button className="w-full">Add a terminal</Button>
+        </Link>
+      )}
 
       {/* Says what to do, rather than implying a resume exists somewhere. */}
-      <p className="mt-4 text-sm text-mono-500">
-        To bring a terminal back, add it again from the device.
-      </p>
+      {disabled ? null : (
+        <p className="mt-4 text-sm text-mono-500">
+          To bring a terminal back, add it again from the device.
+        </p>
+      )}
     </Screen>
   )
 }
@@ -344,6 +385,7 @@ export function TerminalsPage({
 function TerminalRow({
   terminal,
   stopped,
+  freeTier = false,
   confirming = false,
   busy = false,
   error = null,
@@ -367,6 +409,8 @@ function TerminalRow({
   setup?: string
   /** Enrolled and unrevoked, but a lapse has stopped it. Undefined = unknown. */
   stopped?: boolean
+  /** The stall has never subscribed: a stopped till needs a plan, not a renewal. */
+  freeTier?: boolean
   confirming?: boolean
   /** The spend is in flight. */
   busy?: boolean
@@ -561,8 +605,9 @@ function TerminalRow({
           system, and this needs no action on the terminal to undo. */}
       {!revoked && stopped ? (
         <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-          Not trading while your subscription is inactive. Renewing starts it again
-          straight away — nothing needs setting up on the device.
+          {freeTier
+            ? 'Not trading: terminals are not included in the free Starter plan. Upgrading to Essentials starts it again — nothing needs setting up on the device.'
+            : 'Not trading while your subscription is inactive. Renewing starts it again straight away — nothing needs setting up on the device.'}
         </p>
       ) : null}
 

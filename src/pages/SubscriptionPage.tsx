@@ -292,7 +292,13 @@ function PlanPanel({ position }: { position: SalesPosition }) {
       ) : null}
       <DetailRow
         label="Tills"
-        value={entitlement.terminals === null ? 'No limit' : `${entitlement.terminals} besides this device`}
+        value={
+          entitlement.terminals === null
+            ? 'No limit'
+            : entitlement.terminals === 0
+              ? 'This device only'
+              : `${entitlement.terminals} besides this device`
+        }
       />
       {entitlement.features.length ? (
         <DetailRow label="Includes" value={entitlement.features.map(featureName).join(', ')} />

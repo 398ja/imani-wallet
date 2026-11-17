@@ -179,11 +179,11 @@ describe('the tills after a revocation', () => {
     return status([row])
   }
 
-  it('only the free till keeps serving; the paid ones stop', async () => {
+  it('every till stops: the free allowance is none', async () => {
     expect(servingTerminals(await revokedStatus(), roster())).toHaveLength(FREE_TERMINALS)
   })
 
-  it('no till is enrolled past the free one, and the owner is told the seller ended it', async () => {
+  it('no till is enrolled, and the owner is told the seller ended it', async () => {
     const decision = mayEnrol(await revokedStatus(), FREE_TERMINALS)
 
     expect(decision.allowed).toBe(false)
@@ -194,7 +194,9 @@ describe('the tills after a revocation', () => {
     }
   })
 
-  it('the free till itself may still be enrolled: a revocation never takes the free allowance', async () => {
-    expect(mayEnrol(await revokedStatus(), 0)).toEqual({ allowed: true })
+  it('leaves no till to enrol: the free allowance it falls back to is none', async () => {
+    const decision = mayEnrol(await revokedStatus(), 0)
+    expect(decision.allowed).toBe(false)
+    if (!decision.allowed) expect(decision.reason).toBe(ENROL_REFUSAL.REVOKED)
   })
 })

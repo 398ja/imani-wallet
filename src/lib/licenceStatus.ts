@@ -408,7 +408,7 @@ export function explain(status: LicenceStatus): string {
     case 'revoked-by-seller':
       return (
         'This subscription was revoked by the seller, usually after a refund, so it grants nothing. ' +
-        'Your free till keeps trading. A new subscription restores the others.'
+        'This device keeps trading. A new subscription restores your terminals.'
       )
     case GRACE_REASONS.NEVER_VERIFIED:
       return (
