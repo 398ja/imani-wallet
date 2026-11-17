@@ -24,6 +24,7 @@ import { CredentialVault } from '../vault'
 import { runPass, type WorkerDeps } from '../worker'
 import { delegationJson, ninetyDayTerm, STALL, STALL_SK } from './stallFixture'
 import type { StallValidity } from '../stallValidity'
+import type { SalesPosition } from '../salesAllowance'
 
 const ORIGIN = 'https://wallet.test'
 const GATEWAY = 'http://gateway:8082'
@@ -381,5 +382,119 @@ describe('#312: readiness follows the stall\u2019s voucher validity', () => {
     const soon = Math.floor(Date.now() / 1000) + 400 * 86_400
     const refused = await enrolAs(callLong, 'cred-0002', (lock) => delegationJson({ delegate: lock, expiresAt: soon }))
     expect(refused.enrolled.status).toBe(422)
+  })
+})
+
+describe('gc#317: readiness follows the stall\u2019s Free plan sales allowance', () => {
+  const TOKEN = 'pa-shared-token'
+  const gbp = async (): Promise<StallValidity> => ({ kind: 'days', days: 90, source: 'record', currency: 'GBP' })
+
+  /** An enrolled stall, with readiness asked through `allowanceFor`. */
+  async function enrolledWithAllowance(position: SalesPosition, validityFor: () => Promise<StallValidity> = gbp) {
+    const { call, vault, confirmer } = await setup()
+    expect((await enrolAs(call)).enrolled.status).toBe(200)
+    const asked: Array<{ stall: string; unit: string }> = []
+    const service = new EnrolmentService({
+      vault,
+      confirmer,
+      publicOrigin: ORIGIN,
+      validityFor,
+      internalToken: TOKEN,
+      allowanceFor: async (credential, unit) => {
+        asked.push({ stall: credential.stallPubkey, unit })
+        return position
+      },
+    })
+    const ready = async (query = '', authorization?: string) =>
+      (await service.handle({ method: 'GET', path: `${READY_PREFIX}${STALL}${query}`, body: '', authorization })).body
+    return { ready, asked }
+  }
+
+  // jan's case: a Free stall at its allowance is NOT ready, so Buy is off and nobody pays.
+  it('answers not ready, sales_limit_reached, for a stall at its allowance', async () => {
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 0 })
+    expect(await ready()).toEqual({ ready: false, reason: 'sales_limit_reached' })
+    // Asked in the currency the stall's own signed record names.
+    expect(asked).toEqual([{ stall: STALL, unit: 'GBP' }])
+  })
+
+  // A paid plan, or allowance left: ready, as before.
+  it.each<SalesPosition>([{ kind: 'unlimited' }, { kind: 'limited', unit: 'GBP', remainingMinor: 1 }])(
+    'answers ready for %o',
+    async (position) => {
+      const { ready } = await enrolledWithAllowance(position)
+      expect(await ready()).toEqual({ ready: true })
+    },
+  )
+
+  // Advice only: a gateway that cannot answer must not take every stall off sale. The mint re-checks.
+  it('stays ready when the allowance cannot be read', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'unknown', reason: 'down' })
+    expect(await ready()).toEqual({ ready: true })
+  })
+
+  // `unit=` (payment-adapter sends the Stripe currency) wins over the record's, for the internal caller.
+  it('asks in the unit the internal caller names', async () => {
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'unlimited' })
+    await ready('?unit=eur', `Bearer ${TOKEN}`)
+    expect(asked[0].unit).toBe('EUR')
+  })
+
+  // From anyone else it is ignored: an invented unit must not cost a gateway read, or read as reached.
+  it('ignores a unit from a public caller', async () => {
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'unlimited' })
+    await ready('?unit=xyz')
+    expect(asked[0].unit).toBe('GBP')
+  })
+
+  // No unit anywhere (no record currency, none asked): nothing to advise, nothing asked.
+  it('does not ask without a unit', async () => {
+    const none = async (): Promise<StallValidity> => ({ kind: 'days', days: 90, source: 'default' })
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 0 }, none)
+    expect(await ready()).toEqual({ ready: true })
+    expect(asked).toEqual([])
+  })
+
+  // With the shared token, the amount counts: more than is left is refused for this sale only.
+  it('refuses an amount over what is left, for the internal caller', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 7000 })
+    const auth = `Bearer ${TOKEN}`
+    expect(await ready('?unit=GBP&amount=7001', auth)).toEqual({ ready: false, reason: 'sales_limit_exceeded' })
+    expect(await ready('?unit=GBP&amount=7000', auth)).toEqual({ ready: true })
+  })
+
+  // Without it the amount is ignored: told to anyone, it would let a stranger bisect a stall's sales.
+  it.each([undefined, 'Bearer wrong', `Nostr ${TOKEN}`, 'Bearer '])('ignores the amount for %s', async (auth) => {
+    const { ready } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 7000 })
+    expect(await ready('?unit=GBP&amount=999999', auth)).toEqual({ ready: true })
+  })
+
+  // An empty configured token trusts nobody, even a caller presenting an empty bearer.
+  it('trusts nobody when no token is configured', async () => {
+    const { call, vault, confirmer } = await setup()
+    await enrolAs(call)
+    const service = new EnrolmentService({
+      vault,
+      confirmer,
+      publicOrigin: ORIGIN,
+      validityFor: gbp,
+      internalToken: '',
+      allowanceFor: async () => ({ kind: 'limited', unit: 'GBP', remainingMinor: 10 }),
+    })
+    const answer = await service.handle({
+      method: 'GET',
+      path: `${READY_PREFIX}${STALL}?amount=500`,
+      body: '',
+      authorization: 'Bearer ',
+    })
+    expect(answer.body).toEqual({ ready: true })
+  })
+
+  // A not-ready stall keeps its own reason, and the gateway is not asked for nothing.
+  it('keeps an earlier reason and does not ask', async () => {
+    const never = async (): Promise<StallValidity> => ({ kind: 'days', days: 0, source: 'record', currency: 'GBP' })
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 0 }, never)
+    expect(await ready()).toEqual({ ready: false, reason: 'validity_never_expires' })
+    expect(asked).toEqual([])
   })
 })
