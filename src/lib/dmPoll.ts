@@ -68,6 +68,8 @@ import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './tru
 import { couponReference, fullyRedeemedMessage, isVoucherFullyRedeemed } from './fullyRedeemed'
 import { refusalOf } from './cardPaymentState'
 import type { SpendSource } from './spendSource'
+import { createHeldPartPuller, type HeldPartPuller, type IncomingPart } from './heldPartPull'
+import { openBundles } from './bundleArrival'
 
 /**
  * A receive the mint refused as redeemed in full (cashu-mint#540), as dm-poll's terminal refusal.
@@ -1990,6 +1992,8 @@ export function startDmPoll(pubkey: string): DmPollService {
       // configuration was fixed while the app was closed.
       void starting.start().then(() => {
         if (service === starting) void reofferHeld()
+        // #220 B: and the parts the gateway holds for this wallet, after the relay catch-up.
+        if (service === starting) void heldPartPuller?.poke('login')
       })
     }
   })
@@ -1999,6 +2003,8 @@ export function startDmPoll(pubkey: string): DmPollService {
   // The first `onopen` fires after `start()` has already caught up, so it costs
   // one duplicate query per session — worth not special-casing.
   onSseOpen = catchUp
+  heldPartPuller?.stop()
+  heldPartPuller = startHeldPartPuller(pubkey, service)
   // The socket is not the only thing a freeze breaks. Coming back to the
   // foreground catches the case where the stream looks alive to the client but
   // the gateway already reaped it (`sse_cleanup reason=keepalive failed`).
@@ -2008,7 +2014,41 @@ export function startDmPoll(pubkey: string): DmPollService {
 }
 
 function onVisible(): void {
-  if (document.visibilityState === 'visible') catchUp()
+  if (document.visibilityState === 'visible') {
+    catchUp()
+    void heldPartPuller?.poke('resume')
+  }
+}
+
+/** The recipient pull of held bundle parts (imani-gateway-core#220 B), see heldPartPull.ts. */
+let heldPartPuller: HeldPartPuller | undefined
+
+function startHeldPartPuller(pubkey: string, polling: DmPollService): HeldPartPuller | undefined {
+  // A partial service double in older suites has no pull entry: no pull, nothing else changes.
+  if (typeof (polling as { processPulledToken?: unknown }).processPulledToken !== 'function') return undefined
+  type PullApi = {
+    getIncomingAtomicSends?: (o: { since: number; limit: number }) => Promise<{ items?: IncomingPart[]; next_since?: number | null }>
+    ackIncomingAtomicSend?: (id: string) => Promise<unknown>
+  }
+  const api = async (): Promise<PullApi> => (await legacyApi()) as unknown as PullApi
+  const puller = createHeldPartPuller({
+    recipientPubkey: pubkey,
+    async getIncoming(opts) {
+      const a = await api()
+      // A build of the API client without the method behaves like a gateway without the route.
+      if (typeof a.getIncomingAtomicSends !== 'function') throw Object.assign(new Error('no pull'), { status: 404 })
+      return a.getIncomingAtomicSends(opts)
+    },
+    async ack(sendId) {
+      const a = await api()
+      if (typeof a.ackIncomingAtomicSend !== 'function') throw Object.assign(new Error('no ack'), { status: 404 })
+      return a.ackIncomingAtomicSend(sendId)
+    },
+    receive: (input) => polling.processPulledToken(input),
+    hasOpenBundle: () => openBundles(pubkey).length > 0,
+  })
+  puller.start()
+  return puller
 }
 
 /**
@@ -2026,6 +2066,8 @@ export function stopDmPoll(): void {
   // so `drainDmPoll` waiting for the ones already started is enough.
   pollerGeneration++
   onSseOpen = undefined
+  heldPartPuller?.stop()
+  heldPartPuller = undefined
   if (deferredRetryTimer !== undefined) clearTimeout(deferredRetryTimer)
   deferredRetryTimer = undefined
   deferredRetries.clear()

@@ -46,6 +46,7 @@ const ROUTE_FOR_TYPE: Record<NotificationTypeOrGeneric, string> = {
   voucher_claimed: '/merchant/transactions',
   voucher_expiring: '/',
   cashback_claimed: '/merchant/transactions',
+  send_retrying: '/',
   generic: '/',
 }
 
@@ -55,8 +56,15 @@ const FALLBACK_TEXT: Record<NotificationTypeOrGeneric, { title: string; body: st
   voucher_claimed: { title: 'Coupon claimed', body: 'A coupon you sent was claimed.' },
   voucher_expiring: { title: 'Coupon expiring', body: 'A coupon in your wallet expires soon.' },
   cashback_claimed: { title: 'Cashback claimed', body: 'A cashback code you issued was claimed.' },
+  send_retrying: {
+    title: 'Payment on its way',
+    body: "We are retrying a payment you sent. You don't need to do anything.",
+  },
   generic: { title: 'Imani', body: 'You have a new notification.' },
 }
+
+/** A hex key (or a long prefix of one) or a bech32 npub/nsec. */
+const KEY_SHAPED = /\b[0-9a-f]{12,}\b|\bn(pub|sec)1[02-9ac-hj-np-z]{6,}/i
 
 function readString(source: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = source?.[key]
@@ -127,8 +135,14 @@ export function toRenderable(payload: PushPayload | null | undefined): Renderabl
   const type: NotificationTypeOrGeneric = isNotificationType(candidate) ? candidate : 'generic'
 
   const fallback = FALLBACK_TEXT[type]
-  const title = readString({ t: raw.title }, 't') ?? fallback.title
-  const body = readString({ b: raw.body }, 'b') ?? fallback.body
+  let title = readString({ t: raw.title }, 't') ?? fallback.title
+  let body = readString({ b: raw.body }, 'b') ?? fallback.body
+  // gateway-core#220: the retry notice must never show a key. If the server's words carry
+  // something key-shaped (hex pubkey, npub), the wallet's own plain words are used instead.
+  if (type === 'send_retrying' && KEY_SHAPED.test(`${title} ${body}`)) {
+    title = fallback.title
+    body = fallback.body
+  }
 
   return {
     title,
