@@ -19,7 +19,7 @@ import type { NUT18VRequest } from './nap'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { carryExpiryReminders } from './expiryReminders'
 import { withSpend } from './receiveGate'
-import { PENDING_SEND_LIFETIME_MS as SEND_LIFETIME, pendingSendsKey } from './inFlightMoney'
+import { PENDING_SEND_LIFETIME_MS as SEND_LIFETIME, pendingBundlesKey, pendingSendsKey } from './inFlightMoney'
 import { checkoutHeldTokenIds } from './checkoutCodeRecords'
 import { cashlinkHeldTokenIds } from './cashlinkIntents'
 import { forgetSendIntent, gatewayAnswered, keyForSend, pendingIntentVoucher } from './sendIntent'
@@ -50,7 +50,7 @@ export {
   type SendPart,
   type SendPlan,
 } from '@imani/wallet-core'
-import { passedOver, planParts, selectVouchers, splitObstacle } from '@imani/wallet-core'
+import { passedOver, planParts, selectVouchers, splitObstacle, type SendPart } from '@imani/wallet-core'
 
 /**
  * Paying a merchant's voucher payment request.
@@ -270,10 +270,27 @@ export async function replaceVoucherToken(
   if (row) {
     await wallet.removeVoucher(tokenId)
   } else {
+    console.error('[pay] no row for the coupon being replaced; key:', tokenId)
+  }
+  await writeTokenRow(wallet, row, tokenId, token, faceValue)
+}
+
+/**
+ * Write `token` as a coupon row modelled on `row` (the source coupon it came from). Used by
+ * `replaceVoucherToken`, and by an aborted bundle (#552) whose part comes back as two tokens:
+ * the change and the reclaimed send half, both from the one source row.
+ */
+async function writeTokenRow(
+  wallet: Pick<ReturnType<typeof getWallet>, 'saveVoucher'>,
+  row: Awaited<ReturnType<ReturnType<typeof getWallet>['getVoucher']>> | null | undefined,
+  tokenId: string,
+  token: string,
+  faceValue?: number,
+): Promise<void> {
+  if (!row) {
     // Should not happen now the key is the primary key, and it must never be
     // silent: the replacement below still runs, because dropping the change
     // token would lose real money.
-    console.error('[pay] no row for the coupon being replaced; key:', tokenId)
   }
 
   // The sats must move with the face value. A coupon that keeps its old
@@ -794,8 +811,11 @@ export function reconcilePendingSends(pubkey: string): Promise<number> {
 const reconcilesInFlight = new Map<string, Promise<number>>()
 
 async function reconcileOnce(pubkey: string): Promise<number> {
+  // #552: atomic bundles first. Each is one record for all its parts, never dropped while its
+  // state is unknown.
+  const bundlesSettled = await reconcilePendingBundles(pubkey)
   const pending = loadPendingSends(pubkey)
-  if (pending.length === 0) return 0
+  if (pending.length === 0) return bundlesSettled
 
   let api: {
     getAtomicSendStatus(sendId: string): Promise<SendStatus>
@@ -856,7 +876,7 @@ async function reconcileOnce(pubkey: string): Promise<number> {
 
   savePendingSends(pubkey, unresolved)
   if (settled > 0) notifyWalletChanged()
-  return settled
+  return settled + bundlesSettled
 }
 
 /**
@@ -1057,6 +1077,8 @@ export async function withoutTombstoned<T extends { token_id?: string }>(
  */
 export function withoutInFlight(rows: VoucherRow[], payer: string): VoucherRow[] {
   const held = new Set(inFlightSends(payer).map((send) => send.tokenId))
+  // #552: and every source coupon of an atomic bundle whose outcome is not known yet.
+  for (const bundle of loadPendingBundles(payer)) for (const part of bundle.parts) held.add(part.tokenId)
   // #402: and every coupon behind a checkout code still outstanding.
   for (const id of checkoutHeldTokenIds(payer)) held.add(id)
   // #543: and every coupon a Cashlink being made on the direct path still draws on.
@@ -1079,6 +1101,19 @@ function refuseIfUnconfirmedTo(ctx: SendContext): void {
       ? send.paymentRequestId === ctx.paymentRequestId
       : send.recipientPubkey?.toLowerCase() === ctx.recipient.pubkey.toLowerCase(),
   )
+  const bundle = loadPendingBundles(ctx.payer).find((b) =>
+    ctx.paymentRequestId
+      ? b.paymentRequestId === ctx.paymentRequestId
+      : b.recipientPubkey?.toLowerCase() === ctx.recipient.pubkey.toLowerCase(),
+  )
+  if (bundle) {
+    throw new SendOutcomeUnknownError(
+      `Your last ${ctx.paymentRequestId ? 'payment of this request' : 'send to them'} is still sending ` +
+        `(bundle ${bundle.bundleId}). Nothing has been sent this time. Check your history in a moment ` +
+        'before trying again.',
+      bundle.bundleId,
+    )
+  }
   if (!unconfirmed) return
   throw new SendOutcomeUnknownError(
     `Your last ${ctx.paymentRequestId ? 'payment of this request' : 'send to them'} is still going ` +
@@ -1949,7 +1984,7 @@ async function deliverCounted(
     return { id: sendId, requested: amount, delivered: amount, parts: 1, vouchers: 1 }
   }
 
-  const plan = planParts(vouchers, amount)
+  let plan = planParts(vouchers, amount)
   if (plan.remaining > 0) {
     throw new Error(
       splitObstacle(vouchers, amount) ??
@@ -1957,6 +1992,20 @@ async function deliverCounted(
           'for that amount.',
     )
   }
+
+  // #552: one payment is at most the gateway's part cap. Over it, plan again with the largest
+  // coupons first (fewer, larger parts), and refuse before anything is spent if that is still over.
+  const maxParts = await bundleMaxParts(ctx.api as unknown as BundleApi)
+  if (plan.parts.length > maxParts) {
+    const fewer = planParts(vouchers, amount, { largestFirst: true })
+    if (fewer.remaining === 0 && fewer.parts.length < plan.parts.length) plan = fewer
+    if (plan.parts.length > maxParts) throw new Error(tooManyPartsMessage(plan.parts.length, maxParts))
+  }
+
+  // #552: one atomic bundle request. `null` means an older gateway without the endpoint, which
+  // keeps the per-part loop below.
+  const atomic = await sendBundle(ctx, plan.parts, amount)
+  if (atomic) return atomic
 
   const bundleId = newBundleId()
   // Vouchers, not parts, for the screen: see `SendResult.vouchers`.
@@ -1992,4 +2041,383 @@ async function deliverCounted(
   }
 
   return { id: bundleId, requested: amount, delivered, parts: plan.parts.length, vouchers: vouchersIn(plan.parts.length) }
+}
+
+/* ------------------------------------------------------------------------ */
+/* #552: atomic bundles                                                      */
+/* ------------------------------------------------------------------------ */
+
+/** What the gateway's bundle endpoints answer (`552-contract.md`). snake_case, as on the wire. */
+export type BundleStatus = {
+  bundle_id?: string
+  state?: string
+  part_count?: number
+  total?: number
+  error_code?: string | null
+  error_message?: string | null
+  parts?: Array<
+    SendStatus & {
+      part_index?: number
+      send_id?: string
+      reclaimed_token?: string | null
+    }
+  >
+}
+
+/** One part of a pending bundle: the source coupon it draws on, and what it draws. */
+export interface PendingBundlePart {
+  index: number
+  /** Primary key of the source row. */
+  tokenId: string
+  voucherId?: string
+  /** Minor units this part sends. */
+  amount: number
+  /** Source coupon's face, for the change when the gateway omits keep_face_value. */
+  sourceFaceValue: number
+  /** Known once the gateway has answered. */
+  sendId?: string
+}
+
+/**
+ * An atomic bundle whose outcome this wallet has not applied yet. Written BEFORE the request goes
+ * out and dropped only on DELIVERED (every change applied) or ABORTED (every token back). A record
+ * whose state is unknown is never dropped: `reconcilePendingSends` asks again at every login.
+ */
+export interface PendingBundle {
+  bundleId: string
+  at: number
+  total: number
+  unit: string
+  decimals: number
+  merchantPubkey: string
+  merchantName?: string
+  recipientPubkey?: string
+  recipientName?: string
+  paymentRequestId?: string
+  memo?: string
+  link?: GiftLinkRecord
+  parts: PendingBundlePart[]
+}
+
+/** The cap when the gateway does not advertise one (`gateway.atomic-send.bundle.max-parts`). */
+export const DEFAULT_BUNDLE_MAX_PARTS = 10
+/** How long the live wait follows a bundle: the 60 s prepare deadline plus the DM retry sweep. */
+export const BUNDLE_WAIT_MS = 180_000
+export const BUNDLE_POLL_INTERVAL_MS = 1_000
+/** A bundle the gateway still does not know this long after the request is taken as never created. */
+const BUNDLE_NEVER_CREATED_MS = 10 * 60 * 1000
+
+const BUNDLE_FINAL = ['DELIVERED', 'ABORTED']
+
+export function loadPendingBundles(pubkey: string): PendingBundle[] {
+  try {
+    const raw = localStorage.getItem(pendingBundlesKey(pubkey))
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as PendingBundle[]
+    return Array.isArray(parsed)
+      ? parsed.filter((b) => typeof b?.bundleId === 'string' && Array.isArray(b.parts))
+      : []
+  } catch {
+    return []
+  }
+}
+
+function savePendingBundles(pubkey: string, bundles: PendingBundle[]): void {
+  if (bundles.length === 0) localStorage.removeItem(pendingBundlesKey(pubkey))
+  else localStorage.setItem(pendingBundlesKey(pubkey), JSON.stringify(bundles))
+}
+
+function rememberPendingBundle(pubkey: string, bundle: PendingBundle): void {
+  savePendingBundles(pubkey, [bundle, ...loadPendingBundles(pubkey).filter((b) => b.bundleId !== bundle.bundleId)])
+}
+
+function forgetPendingBundle(pubkey: string, bundleId: string): void {
+  savePendingBundles(pubkey, loadPendingBundles(pubkey).filter((b) => b.bundleId !== bundleId))
+}
+
+type BundleApi = {
+  initiateAtomicSendBundle?(body: Record<string, unknown>, idempotencyKey?: string | null): Promise<BundleStatus>
+  getAtomicSendBundle?(bundleId: string): Promise<BundleStatus>
+  getConfig?(): Promise<Record<string, unknown> | null>
+  ackKeepToken(sendId: string): Promise<void>
+}
+
+/** The gateway's part cap. The default when the gateway does not say, or cannot be asked. */
+export async function bundleMaxParts(api: Pick<BundleApi, 'getConfig'>): Promise<number> {
+  try {
+    const value = (await api.getConfig?.())?.atomic_send_bundle_max_parts
+    return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : DEFAULT_BUNDLE_MAX_PARTS
+  } catch {
+    return DEFAULT_BUNDLE_MAX_PARTS
+  }
+}
+
+/** The copy for a plan over the cap. Said before anything is spent. */
+export function tooManyPartsMessage(parts: number, max: number): string {
+  return (
+    `This amount needs ${parts} vouchers, and one payment can use at most ${max}. ` +
+    'Nothing was sent. Send a smaller amount, or send the rest as a second payment.'
+  )
+}
+
+/** Whether the gateway has no bundle endpoint (an older gateway): 404 or 405 on the POST. */
+function bundleEndpointMissing(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status
+  const code = (error as { code?: unknown } | null)?.code
+  // A 404 that names a known error code is the endpoint answering, not the route being absent.
+  return status === 405 || (status === 404 && (code === undefined || code === 'UNKNOWN_ERROR'))
+}
+
+function asPendingSend(bundle: PendingBundle, part: PendingBundlePart): PendingSend {
+  return {
+    sendId: part.sendId ?? `${bundle.bundleId}:${part.index}`,
+    tokenId: part.tokenId,
+    amount: part.amount,
+    unit: bundle.unit,
+    decimals: bundle.decimals,
+    merchantPubkey: bundle.merchantPubkey,
+    merchantName: bundle.merchantName,
+    ...(bundle.paymentRequestId
+      ? { paymentRequestId: bundle.paymentRequestId }
+      : { recipientPubkey: bundle.recipientPubkey, recipientName: bundle.recipientName }),
+    ...(bundle.link ? { link: bundle.link } : {}),
+    voucherId: part.voucherId,
+    memo: bundle.memo,
+    bundleId: bundle.bundleId,
+    sourceFaceValue: part.sourceFaceValue,
+    at: bundle.at,
+  }
+}
+
+function partStatusOf(status: BundleStatus, part: PendingBundlePart) {
+  return status.parts?.find((p) => p.part_index === part.index) ?? status.parts?.[part.index]
+}
+
+/**
+ * Apply a final bundle answer to the wallet. Returns false when the answer is not final, or a
+ * part's tokens are missing from it, in which case the record must be kept.
+ */
+async function applyBundle(
+  api: BundleApi,
+  wallet: ReturnType<typeof getWallet>,
+  payer: string,
+  bundle: PendingBundle,
+  status: BundleStatus,
+): Promise<boolean> {
+  if (status.state === 'DELIVERED') {
+    for (const part of bundle.parts) {
+      const answer = partStatusOf(status, part)
+      if (answer?.send_id) part.sendId = answer.send_id
+      // Every change is applied, or the record stays: a DELIVERED part always carries its change
+      // until acked, so a missing one is an answer to ask for again, never a guess.
+      if (!answer || (!answer.keep_token && answer.is_full_send !== true)) {
+        if (await wallet.getVoucher(part.tokenId)) return false
+        continue
+      }
+      await settleSend(api, wallet, payer, asPendingSend(bundle, part), { ...answer, status: 'COMPLETED' })
+    }
+    notifyWalletChanged()
+    return true
+  }
+
+  if (status.state === 'ABORTED') {
+    // First check that every split part brought its reclaimed half, so nothing is half-applied.
+    for (const part of bundle.parts) {
+      const answer = partStatusOf(status, part)
+      const split = !!answer?.keep_token || answer?.is_full_send === true
+      if (split && !answer?.reclaimed_token && (await wallet.getVoucher(part.tokenId))) return false
+    }
+    for (const part of bundle.parts) {
+      const answer = partStatusOf(status, part)
+      if (answer?.send_id) part.sendId = answer.send_id
+      const reclaimed = answer?.reclaimed_token ?? undefined
+      if (!answer || !reclaimed) continue // Cancelled before its split: the source is untouched.
+      const source = await wallet.getVoucher(part.tokenId)
+      if (!source) continue // Already applied (another tab, or an earlier pass).
+      if (answer.keep_token) {
+        const keepFace = answer.keep_face_value ?? part.sourceFaceValue - part.amount
+        await wallet.removeVoucher(part.tokenId)
+        await writeTokenRow(wallet, source, part.tokenId, answer.keep_token, keepFace)
+        await writeTokenRow(wallet, source, part.tokenId, reclaimed, part.sourceFaceValue - keepFace)
+      } else {
+        await replaceVoucherToken(wallet, part.tokenId, reclaimed, part.sourceFaceValue)
+      }
+      if (part.sendId) await api.ackKeepToken(part.sendId).catch(() => {})
+    }
+    notifyWalletChanged()
+    return true
+  }
+  return false
+}
+
+/** Finish atomic bundles this wallet stopped waiting for. Never throws. */
+async function reconcilePendingBundles(pubkey: string): Promise<number> {
+  const bundles = loadPendingBundles(pubkey)
+  if (bundles.length === 0) return 0
+  let api: BundleApi
+  try {
+    api = (await legacyApi()) as never
+  } catch {
+    return 0
+  }
+  if (!api?.getAtomicSendBundle) return 0
+  const wallet = getWallet()
+  let settled = 0
+  for (const bundle of bundles) {
+    try {
+      const status = await api.getAtomicSendBundle(bundle.bundleId)
+      if (await applyBundle(api, wallet, pubkey, bundle, status)) {
+        forgetPendingBundle(pubkey, bundle.bundleId)
+        if (status.state === 'DELIVERED') settled += 1
+        console.warn(`[pay] pending bundle ${bundle.bundleId} ended as ${status.state}`)
+      }
+    } catch (error) {
+      // The gateway never created it: the request did not arrive. Only once it is old enough that
+      // no request of ours can still be on its way.
+      const notFound = (error as { status?: unknown } | null)?.status === 404
+      if (notFound && Date.now() - bundle.at > BUNDLE_NEVER_CREATED_MS) {
+        console.warn('[pay] bundle never reached the gateway, nothing was spent:', bundle.bundleId)
+        forgetPendingBundle(pubkey, bundle.bundleId)
+      } else {
+        console.error('[pay] could not check pending bundle', bundle.bundleId, error)
+      }
+    }
+  }
+  return settled
+}
+
+/** The body for `POST /api/v1/atomic-send/bundles`, from the per-part params. */
+function bundleBody(ctx: SendContext, bundleId: string, total: number, parts: SendPart[]): Record<string, unknown> {
+  return {
+    bundle_id: bundleId,
+    recipient_pubkey: ctx.recipient.pubkey,
+    total,
+    ...(ctx.paymentRequestId ? { payment_request_id: ctx.paymentRequestId } : {}),
+    ...(ctx.memo ? { memo: ctx.memo } : {}),
+    parts: parts.map((part) => {
+      const p = buildSendParams(part.voucher, { amount: part.amount, recipientPubkey: ctx.recipient.pubkey })
+      return {
+        token: p.token,
+        amount: p.amount,
+        face_value: p.faceValue,
+        ...(p.faceUnit ? { face_unit: p.faceUnit } : {}),
+        ...(p.faceDecimals != null ? { face_decimals: p.faceDecimals } : {}),
+        ...(p.voucherId ? { voucher_id: p.voucherId } : {}),
+        ...(p.issuerId ? { issuer_id: p.issuerId } : {}),
+      }
+    }),
+  }
+}
+
+/**
+ * Send a plan of several parts as ONE atomic bundle (#552). Either every part reaches the
+ * recipient (Sent) or none does and every coupon is back (Not sent). An answer still open when
+ * the wait ends is Still sending: the record stays and the next login finishes it.
+ *
+ * Returns null when the gateway has no bundle endpoint, so the caller can fall back to the
+ * per-part loop. Nothing has been spent then.
+ */
+async function sendBundle(ctx: SendContext, plan: SendPart[], amount: number): Promise<SendResult | null> {
+  const api = ctx.api as unknown as BundleApi
+  if (!api.initiateAtomicSendBundle || !api.getAtomicSendBundle) return null
+
+  const bundleId = newBundleId()
+  const first = plan[0].voucher
+  const pending: PendingBundle = {
+    bundleId,
+    at: Date.now(),
+    total: amount,
+    unit: first.face_unit ?? ctx.unit ?? '',
+    decimals: first.face_decimals ?? 2,
+    merchantPubkey: ctx.merchant.pubkey,
+    merchantName: ctx.merchant.name === ctx.merchant.pubkey ? undefined : ctx.merchant.name,
+    ...(ctx.paymentRequestId
+      ? { paymentRequestId: ctx.paymentRequestId }
+      : { recipientPubkey: ctx.recipient.pubkey, recipientName: ctx.recipient.name }),
+    ...(ctx.memo ? { memo: ctx.memo } : {}),
+    ...(ctx.link ? { link: ctx.link } : {}),
+    parts: plan.map((part, index) => {
+      const row = ctx.rowOf.get(part.voucher)
+      if (!row) throw new Error('Lost track of the voucher being spent.')
+      return {
+        index,
+        tokenId: row.token_id,
+        voucherId: part.voucher.voucher_id,
+        amount: part.amount,
+        sourceFaceValue: part.voucher.face_value ?? 0,
+      }
+    }),
+  }
+  // BEFORE the request: from here on the gateway may hold these coupons.
+  rememberPendingBundle(ctx.payer, pending)
+
+  const vouchersUsed = new Set(plan.map((p) => p.voucher.voucher_id)).size
+  const stillSending = (detail: string) =>
+    new SendOutcomeUnknownError(
+      `This ${ctx.paymentRequestId ? 'payment' : 'send'} is still sending (bundle ${bundleId}${detail}). ` +
+        'It has NOT failed: it reaches the recipient in full or comes back in full. Check your ' +
+        'history in a moment before trying again.',
+      bundleId,
+    )
+
+  let status: BundleStatus
+  try {
+    status = await api.initiateAtomicSendBundle(bundleBody(ctx, bundleId, amount, plan), bundleId)
+  } catch (error) {
+    if (bundleEndpointMissing(error)) {
+      forgetPendingBundle(ctx.payer, bundleId)
+      return null
+    }
+    const code = (error as { code?: unknown } | null)?.code
+    if (gatewayAnswered(error)) {
+      // Refused before anything was saved or split (contract): nothing left the wallet.
+      forgetPendingBundle(ctx.payer, bundleId)
+      if (code === 'request_already_paid') throw new RequestAlreadyPaidError(ctx.paymentRequestId)
+      if (code === 'TOO_MANY_PARTS') {
+        const max = (error as { data?: { max_parts?: unknown } }).data?.max_parts
+        throw new Error(tooManyPartsMessage(plan.length, typeof max === 'number' ? max : plan.length - 1))
+      }
+      throw error
+    }
+    // No answer: the bundle may exist. Read it below; the record stays either way.
+    status = {}
+  }
+
+  const startedAt = Date.now()
+  let lastReported = -1
+  while (!BUNDLE_FINAL.includes(String(status.state))) {
+    const done = (status.parts ?? []).filter((p) => p.status === 'COMPLETED').length
+    const retrying = (status.parts ?? []).some((p) => GATEWAY_RETRYING.includes(String(p.status)) || p.status === 'MANUAL_ATTENTION')
+    if (done !== lastReported) {
+      lastReported = done
+      report(ctx.onProgress, { part: Math.min(done + 1, plan.length), parts: plan.length, retrying })
+    }
+    if (Date.now() + BUNDLE_POLL_INTERVAL_MS > startedAt + BUNDLE_WAIT_MS) {
+      throw stillSending(status.state ? `, ${status.state}` : '')
+    }
+    await new Promise((resolve) => setTimeout(resolve, BUNDLE_POLL_INTERVAL_MS))
+    try {
+      status = (await api.getAtomicSendBundle(bundleId)) ?? status
+    } catch (error) {
+      // An unreadable answer says nothing about the bundle. Keep waiting, keep the record.
+      if (isPermanentHttpError(error) && (error as { status?: unknown }).status !== 404) {
+        throw stillSending('')
+      }
+    }
+  }
+
+  const wallet = getWallet()
+  if (!(await applyBundle(api, wallet, ctx.payer, pending, status))) {
+    throw stillSending(`, ${status.state}`)
+  }
+  forgetPendingBundle(ctx.payer, bundleId)
+
+  if (status.state === 'ABORTED') {
+    const why = status.error_message ?? status.error_code
+    throw new Error(
+      `Not sent: nothing left your wallet. Every voucher in this ${ctx.paymentRequestId ? 'payment' : 'send'} ` +
+        `is back with you.${why ? ` (${why})` : ''}`,
+    )
+  }
+  return { id: bundleId, requested: amount, delivered: amount, parts: plan.length, vouchers: vouchersUsed }
 }

@@ -192,7 +192,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           <CheckCircle2 className="h-12 w-12 text-green-600" />
         )}
         <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
-          {inFlight > 0 ? 'Still going through' : partial ? 'Partly paid' : 'Paid'}
+          {inFlight > 0 ? 'Still sending' : partial ? 'Not all paid' : 'Paid'}
         </h1>
         <p className="text-sm text-mono-500">
           {formatFace(status.result.delivered, denom)}

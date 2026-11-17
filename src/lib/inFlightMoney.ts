@@ -22,6 +22,8 @@
  */
 
 export const pendingSendsKey = (pubkey: string) => `imani-wallet:pending-sends:${pubkey}`
+/** #552: atomic bundles whose outcome is not known yet (pay.ts). Never expire: the next run finishes each. */
+export const pendingBundlesKey = (pubkey: string) => `imani-wallet:pending-bundles:${pubkey}`
 export const swapIntentsKey = (pubkey: string) => `imani-wallet:swap-intents:${pubkey}`
 /**
  * #179: the Idempotency-Key of a send whose request went out and got no answer (sendIntent.ts).
@@ -145,7 +147,8 @@ export function moneyInFlight(pubkey: string): { sends: number; swaps: number; c
   return {
     sends:
       liveEntries(pendingSendsKey(pubkey), PENDING_SEND_LIFETIME_MS) +
-      liveEntries(sendIntentsKey(pubkey), SEND_INTENT_LIFETIME_MS),
+      liveEntries(sendIntentsKey(pubkey), SEND_INTENT_LIFETIME_MS) +
+      allEntries(pendingBundlesKey(pubkey)),
     swaps: liveEntries(swapIntentsKey(pubkey), SWAP_INTENT_LIFETIME_MS),
     cashlinks: allEntries(cashlinkClaimsKey(pubkey)) + allEntries(cashlinkMovingKey(pubkey)) + allEntries(voucherSplitsKey(pubkey)) + movingIntents(cashlinkIntentsKey(pubkey)),
     // #557: outstanding checkout codes, on their own. Logout lets one through once its relay backup
