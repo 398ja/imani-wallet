@@ -705,7 +705,7 @@ describe('the plans offered (www.imani.casa/pricing)', () => {
   it('are Starter (free), Basic and Pro, with Basic issuing without limit on 3 tills', async () => {
     const plans = await listPlans()
     expect(plans.map((p) => p.tier)).toEqual(['free', 'basic', 'pro'])
-    expect(plans[0]).toMatchObject({ terms: [], prices: {}, limits: { terminals: 1, sales: { period: 'lifetime', amounts: { GBP: 10000 } } } })
+    expect(plans[0]).toMatchObject({ terms: [], prices: {}, limits: { terminals: 0, sales: { period: 'lifetime', amounts: { GBP: 10000 } } } })
     expect(plans[1].limits).toEqual({ sales: null, terminals: 3 })
     expect(plans[2].limits).toEqual({ sales: null, terminals: null })
   })

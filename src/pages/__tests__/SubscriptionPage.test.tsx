@@ -431,6 +431,6 @@ describe('the plan (#407)', () => {
     expect(await screen.findByText('Starter')).toBeTruthy()
     expect(screen.getByText(/82\.00 of .*100\.00/)).toBeTruthy()
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('82')
-    expect(screen.getByText('1 besides this device')).toBeTruthy()
+    expect(screen.getByText('This device only')).toBeTruthy()
   })
 })

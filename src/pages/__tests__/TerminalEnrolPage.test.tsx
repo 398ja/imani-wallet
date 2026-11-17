@@ -105,6 +105,8 @@ vi.mock('../../components/ScanRecipient', () => ({
  * untested at exactly the point this screen depends on it.
  */
 let granted = true
+/** The granted licence's tier. Unset is a licence sold before tiers: unlimited tills. */
+let grantTier: string | undefined
 vi.mock('../../lib/licenceStatus', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/licenceStatus')>()
   return {
@@ -112,7 +114,11 @@ vi.mock('../../lib/licenceStatus', async (importOriginal) => {
     licenceStatus: async () => ({
       checkedAt: Date.now(),
       decision: granted
-        ? { granted: true as const, source: 'verified' as const, grant: { features: ['terminals'] } }
+        ? {
+            granted: true as const,
+            source: 'verified' as const,
+            grant: { features: ['terminals'], ...(grantTier ? { tier: grantTier } : {}) },
+          }
         : { granted: false as const, reason: 'no-licence' as const },
     }),
   }
@@ -172,6 +178,7 @@ const addButton = () => screen.getByRole('button', { name: 'Add terminal' }) as 
 beforeEach(() => {
   localStorage.clear()
   granted = true
+  grantTier = undefined
   offCurve = false
   scanned = null
   merchants.clear()
@@ -263,14 +270,8 @@ describe('the subscription gate is on the screen, not behind it', () => {
   it('refuses in words rather than hiding the form', async () => {
     // Subscriptions ticket 07: refused AT enrolment, not by a missing button.
     // A hidden button leaves an owner with no idea what to fix.
+    // No subscription: the free tier includes no terminals at all.
     granted = false
-    // One terminal already out, so the free allowance is used up.
-    recordTerminal(STALL, {
-      terminalPubkey: 'd'.repeat(64),
-      name: 'Existing',
-      role: TERMINAL_ROLES.REDEEM_ONLY,
-      enrolledAt: 1,
-    })
 
     await fillEverything()
 
@@ -280,13 +281,14 @@ describe('the subscription gate is on the screen, not behind it', () => {
     expect(screen.getByRole('alert').textContent).toBeTruthy()
   })
 
-  it('allows the first terminal without a subscription', async () => {
-    // The free allowance. A stall trying the product must reach a working
-    // terminal, or nobody ever sees what they would be paying for.
+  it('refuses even the first terminal without a subscription', async () => {
+    // Terminals start at Essentials (2026-11): the free tier runs on the
+    // owner's own device only.
     granted = false
     await fillEverything()
 
-    expect(addButton().disabled).toBe(false)
+    expect(addButton().disabled).toBe(true)
+    expect(screen.getByRole('alert').textContent).toBeTruthy()
   })
 })
 
@@ -481,8 +483,17 @@ describe('enrolling', () => {
 
   // Decision 4: a waiting row does not use the free terminal, so an owner with
   // no subscription and one botched setup can still add the device again.
-  it('does not count a waiting row against the free terminal', async () => {
-    granted = false
+  it('does not count a waiting row against the tier allowance', async () => {
+    // Essentials allows 3. Two in service plus one that never finished is 2.
+    grantTier = 'basic'
+    for (const key of ['3', '4']) {
+      recordTerminal(STALL, {
+        terminalPubkey: key.repeat(64),
+        name: `Till ${key}`,
+        role: TERMINAL_ROLES.REDEEM_ONLY,
+        enrolledAt: 1,
+      })
+    }
     recordTerminal(STALL, {
       terminalPubkey: '2'.repeat(64),
       name: 'Botched',

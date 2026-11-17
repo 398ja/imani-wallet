@@ -1,4 +1,4 @@
-import { DENIAL_REASONS, GRACE_REASONS } from '@imani/licence'
+import { BUNDLED_CATALOG, DENIAL_REASONS, FREE_TIER, GRACE_REASONS } from '@imani/licence'
 
 import { LICENCE_FEATURES } from './licenceIssue'
 import { grants, type LicenceStatus } from './licenceStatus'
@@ -13,12 +13,14 @@ import { terminalLimit } from './entitlement'
  * here so it lands with the licence work that defines it rather than being
  * reinvented inside a screen that is really about scanning a QR code.
  *
- * ## One free terminal, and it is the owner's own device
+ * ## No enrolled terminals on the free tier
  *
- * "A stall gets one terminal free — their own device, which is what they have
- * today — and the subscription buys the second onwards."
+ * The free (Starter) tier runs on the owner's own device only. Additional
+ * terminals are an Essentials-and-above feature: the subscription buys the
+ * first enrolled terminal onwards. (Until 2026-11 the free tier included one
+ * enrolled terminal; that allowance was withdrawn.)
  *
- * The owner's device is COUNTED, not converted. It keeps authenticating as the
+ * The owner's device is not an enrolled terminal and is never converted. It keeps authenticating as the
  * stall exactly as it does now: it holds the stall's key, it is not enrolled,
  * and it is never asked to be. Making it a real enrolled terminal would be a
  * migration of every existing merchant's device for no benefit they could
@@ -44,13 +46,14 @@ import { terminalLimit } from './entitlement'
  */
 
 /**
- * Terminals a stall may run without a subscription.
+ * Enrolled terminals a stall may run without a subscription, per the BUNDLED
+ * catalog: none. The owner's own device is not enrolled and is not counted here
+ * — see above.
  *
- * One, and it is not enrolled — see above. A number rather than a boolean
- * because the refusal has to say "you have 1 and 1 is your limit", and a
- * caller that only knew `false` could not.
+ * Derived, not restated, so it cannot drift from the catalog. The gate itself
+ * reads the CURRENT catalog through `terminalLimit`; this is for tests and copy.
  */
-export const FREE_TERMINALS = 1
+export const FREE_TERMINALS: number = BUNDLED_CATALOG.tiers[FREE_TIER]?.limits.terminals ?? 0
 
 export const ENROL_REFUSAL = {
   /** Already at the free allowance, with no subscription. */
@@ -73,17 +76,17 @@ export type EnrolDecision =
  * May this stall enrol another terminal?
  *
  * `enrolledCount` is the number of ENROLLED terminals, excluding the owner's
- * own device. A stall that has never enrolled anything passes 0 and is allowed
- * one; that first enrolment is the free one.
+ * own device. Without a subscription even 0 is refused: the free tier includes
+ * no enrolled terminals.
  *
- * The distinction between the two refusals is not cosmetic. "You have reached
- * your free terminal" and "your subscription ended" send a merchant to
+ * The distinction between the refusals is not cosmetic. "Terminals need a
+ * plan" and "your subscription ended" send a merchant to
  * completely different actions — buy, versus renew — and a gate that could only
  * say "no" would send them nowhere.
  */
 export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDecision {
   // The stall's terminal allowance from its tier (#407): unlimited on Pro and on licences sold
-  // before tiers, 3 on Basic, the free one otherwise. All from the catalog.
+  // before tiers, 3 on Basic, none on the free tier. All from the catalog.
   const limit = terminalLimit(status)
   if (limit === null || enrolledCount < limit) {
     return { allowed: true }
@@ -138,7 +141,7 @@ export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDec
       reason: ENROL_REFUSAL.REVOKED,
       message:
         'Your seller ended this subscription, so you cannot add another till. ' +
-        'A new subscription restores your tills. Your stall keeps trading on its free till.',
+        'A new subscription restores your tills. Your stall keeps trading on this device.',
     }
   }
 
@@ -147,8 +150,8 @@ export function mayEnrol(status: LicenceStatus, enrolledCount: number): EnrolDec
         allowed: false,
         reason: ENROL_REFUSAL.AT_FREE_LIMIT,
         message:
-          `You are using your free till. Running more than ${FREE_TERMINALS} at once ` +
-          'needs a subscription. Upgrade from Settings › Subscription and it arrives on this device on its own. ' +
+          'Terminals are not included in the free Starter plan. Adding one needs Essentials or above. ' +
+          'Upgrade from Settings › Subscription and it arrives on this device on its own. ' +
           'This device is not affected and keeps working as it does now.',
       }
     : {

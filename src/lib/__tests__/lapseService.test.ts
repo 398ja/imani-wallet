@@ -115,39 +115,30 @@ describe('while the subscription is live', () => {
 })
 
 describe('when it lapses', () => {
-  it('leaves the free till serving', async () => {
+  it('drops to the free allowance, which is no enrolled till at all', async () => {
     /**
-     * The criterion the spec singles out. A lapsed stall keeps exactly what an
-     * unsubscribed one starts with, rather than being left worse off for having
-     * once paid — and a billing problem must never close a stall.
+     * A lapsed stall keeps exactly what an unsubscribed one starts with. Since
+     * 2026-11 the free tier includes no terminals, so every enrolled till stops.
+     * The stall itself keeps trading on the owner's own device, which is never
+     * enrolled: a billing problem still never closes a stall.
      */
     const status = await lapsed()
-    const serving = servingTerminals(status, roster())
 
-    expect(serving).toHaveLength(FREE_TERMINALS)
-    expect(mayServe(status, roster(), OLDEST).serving).toBe(true)
+    expect(servingTerminals(status, roster())).toHaveLength(FREE_TERMINALS)
+    expect(FREE_TERMINALS).toBe(0)
   })
 
-  it('stops the extra tills', async () => {
+  it('stops every till, the oldest included', async () => {
     const status = await lapsed()
 
+    expect(mayServe(status, roster(), OLDEST).serving).toBe(false)
     expect(mayServe(status, roster(), MIDDLE).serving).toBe(false)
     expect(mayServe(status, roster(), NEWEST).serving).toBe(false)
   })
 
-  it('keeps the same till serving every time it is asked', async () => {
-    // A rule that shuffled would stop a different device each time anyone
-    // looked, which from behind a counter is indistinguishable from a broken
-    // app. Oldest-first, checked against a deliberately unsorted roster.
-    const status = await lapsed()
-    for (let i = 0; i < 5; i += 1) {
-      expect(servingTerminals(status, roster())[0].terminalPubkey).toBe(OLDEST)
-    }
-  })
-
   it('says how many tills would stop, for a warning before it happens', async () => {
     const status = await lapsed()
-    expect(terminalsStoppedByLapse(status, roster())).toBe(2)
+    expect(terminalsStoppedByLapse(status, roster())).toBe(3)
     expect(terminalsStoppedByLapse(await live(), roster())).toBe(0)
   })
 })
@@ -184,7 +175,7 @@ describe('a lapse revokes nothing', () => {
   it('restores every terminal on renewal, with no re-enrolment', async () => {
     // The same roster objects, untouched throughout: lapse, then renew.
     const mine = roster()
-    expect(servingTerminals(await lapsed(), mine)).toHaveLength(1)
+    expect(servingTerminals(await lapsed(), mine)).toHaveLength(0)
 
     forgetVerification(CUSTOMER)
     forgetLicenceParses()
@@ -250,17 +241,5 @@ describe('an unknown terminal', () => {
     // authority, so both must stop.
     const status = await live()
     expect(mayServe(status, roster(), 'f'.repeat(64)).serving).toBe(false)
-  })
-
-  it('does not take the free slot from a real one', async () => {
-    const status = await lapsed()
-    const withRevoked: TerminalRecord[] = [
-      { ...roster()[1], revokedAt: 5000 },
-      ...roster().filter((t) => t.terminalPubkey !== OLDEST),
-    ]
-
-    // OLDEST was revoked, so the allowance falls to the next oldest rather
-    // than being spent on a terminal that is no longer in service.
-    expect(servingTerminals(status, withRevoked)[0].terminalPubkey).toBe(MIDDLE)
   })
 })
