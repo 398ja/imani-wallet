@@ -5,6 +5,9 @@
  *   node scripts/operator.mjs lookup --voucher-id <id> | --payment-request-id <id> [--limit N] [--cursor C]
  *   node scripts/operator.mjs refund-redemption <sendId> --note "<why>"
  *   node scripts/operator.mjs manual-attention list [--limit N]
+ *   node scripts/operator.mjs stuck-sends list [--limit N] [--cursor C]
+ *   node scripts/operator.mjs stuck-sends show <sendId>
+ *   node scripts/operator.mjs stuck-sends resume <sendId> --note "<why>"
  *   node scripts/operator.mjs merchant suspend <pubkey-hex>
  *   node scripts/operator.mjs merchant unsuspend <pubkey-hex> [--role merchant|customer]
  *
@@ -52,6 +55,9 @@ const USAGE = `gateway-core operator commands (rev-540p2 6a). Runbook: imani-dep
   operator.mjs lookup --voucher-id <id> | --payment-request-id <id> [--limit N] [--cursor C]
   operator.mjs refund-redemption <sendId> --note "<why>"
   operator.mjs manual-attention list [--limit N]
+  operator.mjs stuck-sends list [--limit N] [--cursor C]   bundle parts that cannot be delivered (gateway-core#220)
+  operator.mjs stuck-sends show <sendId>
+  operator.mjs stuck-sends resume <sendId> --note "<why>"   re-queue delivery, never a refund
   operator.mjs merchant suspend <pubkey-hex>
   operator.mjs merchant unsuspend <pubkey-hex> [--role merchant|customer]
   any command: [--env-file <deploy env file>]
@@ -168,6 +174,19 @@ export function parseArgs(argv) {
       // retry-payout and open-refund went with the atomic purchase (gateway-core#156): the list is read-only.
       throw new Error('manual-attention list (read-only: the atomic purchase is removed)')
     }
+    case 'stuck-sends': {
+      // gateway-core#220: a forward-only bundle part whose delivery stopped. The only action pushes
+      // it forward to the recipient: there is no reclaim or refund of a part past the decision.
+      const action = rest[0]
+      if (action === 'list') return { command, action, limit, cursor: flags.cursor, envFile: flags['env-file'] }
+      if (action === 'show') return { command, action, sendId: one('<sendId>', rest[1]), envFile: flags['env-file'] }
+      if (action === 'resume') {
+        requireNote()
+        if (note.trim().length > 500) throw new Error('--note is at most 500 characters')
+        return { command, action, sendId: one('<sendId>', rest[1]), note, envFile: flags['env-file'] }
+      }
+      throw new Error('stuck-sends list | show <sendId> | resume <sendId> --note "<why>"')
+    }
     case 'merchant': {
       const action = rest[0]
       if (action !== 'suspend' && action !== 'unsuspend') throw new Error('merchant suspend|unsuspend <pubkey-hex>')
@@ -178,7 +197,7 @@ export function parseArgs(argv) {
       return { command, action, pubkey, role: action === 'unsuspend' ? role : undefined, envFile: flags['env-file'] }
     }
     default:
-      throw new Error(`unknown command '${command ?? ''}': lookup | refund-redemption | manual-attention | merchant`)
+      throw new Error(`unknown command '${command ?? ''}': lookup | refund-redemption | manual-attention | stuck-sends | merchant`)
   }
 }
 
@@ -219,6 +238,14 @@ function route(cmd) {
         body: JSON.stringify({ note: cmd.note }) }
     case 'manual-attention':
       return { method: 'GET', path: '/internal/v1/atomic-purchases/manual-attention' + query([['limit', cmd.limit]]) }
+    case 'stuck-sends':
+      if (cmd.action === 'list') {
+        return { method: 'GET', path: '/internal/v1/atomic-sends/manual-attention'
+          + query([['limit', cmd.limit], ['cursor', cmd.cursor]]) }
+      }
+      if (cmd.action === 'show') return { method: 'GET', path: `/internal/v1/atomic-sends/${seg(cmd.sendId)}/delivery` }
+      return { method: 'POST', path: `/internal/v1/atomic-sends/${seg(cmd.sendId)}/resume-delivery`,
+        body: JSON.stringify({ note: cmd.note }) }
     case 'merchant':
       return { method: 'POST', path: `/internal/v1/merchants/${seg(cmd.pubkey)}/${cmd.action}`
         + query([['role', cmd.role]]), body: '' }

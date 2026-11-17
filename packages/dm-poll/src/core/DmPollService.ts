@@ -311,6 +311,60 @@ export class DmPollService extends TypedEventEmitter<DmPollEvents> {
   }
 
   /**
+   * A token the recipient fetched from the gateway instead of a gift wrap
+   * (imani-gateway-core#220, the recipient pull).
+   *
+   * Runs the same steps as {@link processGiftWrap} after the unwrap: the same
+   * `extractToken` and `parseTokenTransferMessage`, the same received-fingerprint
+   * check and in-flight guard, and the same `redeemToken`. So a part that comes
+   * by DM and by pull is credited once, whichever arrives first.
+   *
+   * Returns what happened, so the caller knows when it may acknowledge the part:
+   * - `redeemed`: swapped into this wallet now
+   * - `duplicate`: already received earlier (by DM or a previous pull)
+   * - `in_flight`: the same token is being redeemed right now, try later
+   * - `not_redeemed`: refused, held or unsaved, so not in this wallet
+   * - `failed`: a transient failure, try later
+   * - `no_token`: the content carried no token
+   */
+  async processPulledToken(input: {
+    eventId: string;
+    senderPubkey: string;
+    content: string;
+    createdAt: number;
+  }): Promise<'redeemed' | 'duplicate' | 'in_flight' | 'not_redeemed' | 'failed' | 'no_token'> {
+    const token = this.config.cryptoAdapter.extractToken(input.content);
+    if (!token) return 'no_token';
+    const fingerprint = await this.config.cryptoAdapter.getTokenFingerprint(token);
+    if (this.config.storageAdapter && (await this.config.storageAdapter.hasTokenBeenReceived(fingerprint))) {
+      return 'duplicate';
+    }
+    if (this.inFlightFingerprints.has(fingerprint)) return 'in_flight';
+    this.inFlightFingerprints.add(fingerprint);
+    try {
+      const metadata = this.config.cryptoAdapter.parseTokenTransferMessage(input.content) ?? {};
+      const tokenDm: TokenDm = {
+        eventId: input.eventId,
+        senderPubkey: input.senderPubkey,
+        token,
+        metadata,
+        createdAt: input.createdAt,
+      };
+      this.emit('token:received', { eventId: input.eventId, token, tokenDm });
+      if (!this.config.redemptionAdapter) return 'failed';
+      const voucher = await this.redeemToken(tokenDm);
+      return voucher ? 'redeemed' : 'not_redeemed';
+    } catch (error) {
+      if (!(error instanceof BackingHeldError)) {
+        console.warn('[DmPollService] Pulled token not redeemed yet:', input.eventId.substring(0, 16));
+      }
+      return 'failed';
+    } finally {
+      this.inFlightFingerprints.delete(fingerprint);
+    }
+  }
+
+  /**
    * Redeem a token
    */
   private async redeemToken(tokenDm: TokenDm): Promise<Voucher | null> {

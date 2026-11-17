@@ -2419,6 +2419,25 @@ class GatewayAPI {
     return this.requestWithHeaders('POST', '/api/v1/atomic-send/bundles', { ...body, parts }, headers);
   }
 
+  /**
+   * gateway-core#220 (B): bundle parts held for THIS wallet (the NIP-98 signer is the recipient).
+   * The relay DM stays the primary path. This is the second one, for when a relay never delivers.
+   * @param {{since?: number, limit?: number}} [opts] - since in epoch seconds, inclusive
+   * @returns {Promise<{items: Object[], next_since: number|null}>}
+   */
+  async getIncomingAtomicSends({ since = 0, limit = 50 } = {}) {
+    return this.requestWithHeaders('GET', `/api/v1/atomic-send/incoming?since=${Number(since) || 0}&limit=${Number(limit) || 50}`);
+  }
+
+  /**
+   * gateway-core#220 (B): tell the gateway a pulled part was swapped into this wallet, so it stops
+   * retrying the DM and the sender sees Sent. Idempotent. Bookkeeping only: the money is already here.
+   * @param {string} sendId
+   */
+  async ackIncomingAtomicSend(sendId) {
+    return this.requestWithHeaders('POST', `/api/v1/atomic-send/incoming/${encodeURIComponent(sendId)}/ack`);
+  }
+
   /** #552: the state of a bundle and every part (GET /api/v1/atomic-send/bundles/{id}). */
   async getAtomicSendBundle(bundleId) {
     return this.requestWithHeaders('GET', `/api/v1/atomic-send/bundles/${bundleId}`);
