@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-11-17
+
 ### Fixed
 
 - **Sends and payments spend the soonest-expiring vouchers first** (owner report 2026-11-17). Any
