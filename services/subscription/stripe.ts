@@ -27,7 +27,7 @@ export interface StripeClient {
 }
 
 export interface StripePrice {
-  /** Minor units, e.g. 800 for £8. */
+  /** Minor units, e.g. 1000 for £10. */
   unitAmount: number
   /** ISO 4217, upper case. */
   currency: string

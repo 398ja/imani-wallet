@@ -194,20 +194,22 @@ export async function cardSalesReady(
 }
 
 /**
- * The same question, keeping the one reason a shopper can be told (#312): the stall's vouchers
- * never expire, and card sales need an expiry. Everything else that is not `ready` is plain
- * `not-ready`, failing safe exactly as `cardSalesReady` does.
+ * The same question, keeping the reasons a shopper can be told: the stall's vouchers never expire,
+ * and card sales need an expiry (#312), or the stall's Free plan has no sales left (gc#317).
+ * Everything else that is not `ready` is plain `not-ready`, failing safe exactly as
+ * `cardSalesReady` does.
  */
 export async function cardSalesReadiness(
   stallPubkey: string,
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 5000,
-): Promise<'ready' | 'not-ready' | 'no-expiry'> {
+): Promise<'ready' | 'not-ready' | 'no-expiry' | 'sales-limit'> {
   try {
     const response = await fetchImpl(readyPath(stallPubkey), { signal: AbortSignal.timeout(timeoutMs) })
     if (!response.ok) return 'not-ready'
     const body = (await response.json()) as { ready?: unknown; reason?: unknown }
     if (body.ready === true) return 'ready'
+    if (body.reason === 'sales_limit_reached' || body.reason === 'sales_limit_exceeded') return 'sales-limit'
     return body.reason === 'validity_never_expires' ? 'no-expiry' : 'not-ready'
   } catch {
     return 'not-ready'

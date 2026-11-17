@@ -106,6 +106,8 @@ export type HistoryContent = Nip60HistoryContent & {
    * every till sale as "Your device", the same defect class as the issuance evidence above.
    */
   terminal_pubkey?: string
+  /** A Cashlink take-back's `sent` row id (`WalletTransaction.returnOf`). */
+  return_of?: string
   /**
    * A gift link on a `sent` row (claim links phase 4): its secret, index, expiry and status, so a
    * restored or second device can show it again, watch it and take it back. Inside the sender's
@@ -244,6 +246,7 @@ export function toContent(tx: WalletTransaction): HistoryContent {
     transfer_id: tx.transferId,
     transfer_signature: tx.transferSignature,
     terminal_pubkey: tx.terminalPubkey,
+    ...(tx.returnOf ? { return_of: tx.returnOf } : {}),
     ...(tx.link ? { gift_link: tx.link } : {}),
     ...(tx.lockedGift ? { locked_gift: tx.lockedGift } : {}),
     ...(tx.checkoutCode ? { checkout_code: tx.checkoutCode } : {}),
@@ -297,6 +300,7 @@ export function toRow(id: string, content: HistoryContent): TransactionRow {
     transferId: content.transfer_id,
     transferSignature: content.transfer_signature,
     ...(content.terminal_pubkey ? { terminalPubkey: content.terminal_pubkey } : {}),
+    ...(typeof content.return_of === 'string' && content.return_of ? { returnOf: content.return_of } : {}),
     ...(asGiftLinkRecord(content.gift_link) ? { link: asGiftLinkRecord(content.gift_link) } : {}),
     ...(asLockedGiftRecord(content.locked_gift) ? { lockedGift: asLockedGiftRecord(content.locked_gift) } : {}),
     ...(content.checkout_code ? { checkoutCode: content.checkout_code } : {}),
