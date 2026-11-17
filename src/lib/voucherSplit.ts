@@ -38,7 +38,7 @@ import { planSplit } from './voucherSplitPlan'
 import { creditableFaceValue, parseVoucherToken, voucherOfProof, type TokenProof } from './voucherToken'
 import type { BlindedOutput, UnblindedProof } from './walletSwap'
 
-const { mintOf, proofBody, burnOutputsBody, restoreMine, swapOrRestore, signRoute, notYet, refusalOf, tokenOf, keepAsSats } = cashlinkSteps
+const { mintOf, proofBody, burnOutputsBody, predecessorDocument, restoreMine, swapOrRestore, signRoute, notYet, refusalOf, tokenOf, keepAsSats } = cashlinkSteps
 
 export const BEARER_SPLIT_PATH = '/api/v1/wallet/vouchers/bearer-split'
 export const BEARER_SPLIT_CHECK_PATH = '/api/v1/wallet/vouchers/bearer-split/check'
@@ -138,6 +138,7 @@ function bodyOf(K: Uint8Array, intent: SplitIntent, outputs: BlindedOutput[]) {
     parts,
     burn_outputs: burnOutputsBody(outputs),
     authorization: bearerSplitAuthorization(K, intent.proof.secret, parts, outputs),
+    ...predecessorDocument(intent.proof),
   }
 }
 
