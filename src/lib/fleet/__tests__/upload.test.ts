@@ -191,7 +191,7 @@ describe('the fleet pipeline (C1, C5, C6)', () => {
     const plain = await decryptSnapshot(h.blobs[0], base64.decode(dm.key), base64.decode(dm.iv))
     const v = verifyArchive(plain)
     expect(v.ok).toBe(true)
-    const m = (v as { manifest: Record<string, unknown> }).manifest
+    const m = (v as unknown as { manifest: Record<string, unknown> }).manifest
     expect(m).toMatchObject({ reason: 'fleet', round: ROUND, ticket_id: ROUND, wallet_pubkey: signer.pubkey })
     const files = unzipSync(plain)
     expect(Object.keys(files)).not.toContain('envelope/operator_only/memos.json')
