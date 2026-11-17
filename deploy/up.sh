@@ -109,13 +109,38 @@ fi
 # being overridden by it.
 DEPLOY_LOCAL_ENV="$DEPLOY/.env.local"
 
+# Support snapshots (#589) and fleet snapshots (#591). Settings > Help only shows
+# "Share a support snapshot" when /api/v1/config names a support Blossom and npub,
+# and only gateway-core publishes those when given imani-deploy's support overlay.
+# Without it the row is simply absent, which reads as the feature not being merged.
+#
+# Opt-in, because the support agent needs secrets (an nsec, a ledger key) that must
+# not be committed: copy deploy/support-snapshot.env.example to
+# deploy/support-snapshot.env (gitignored), fill it in, and every ./deploy/up.sh
+# layers the overlay and starts the support services with everything else.
+SUPPORT_ENV="$HERE/support-snapshot.env"
+SUPPORT_OVERLAY="$DEPLOY/docker-compose.support-snapshot.yml"
+SUPPORT_ON=
+if [ -f "$SUPPORT_ENV" ]; then
+  if [ -f "$SUPPORT_OVERLAY" ]; then
+    SUPPORT_ON=1
+    SERVICES+=(support-blossom support-blossom-edge support-blossom-prune support-snapshot)
+  else
+    echo "warning: $SUPPORT_ENV exists but $SUPPORT_OVERLAY does not (imani-deploy too old?); support snapshots stay off" >&2
+  fi
+fi
+
 compose() {
   local env_files=(--env-file "$DEPLOY/.env.test")
   [ -f "$DEPLOY_LOCAL_ENV" ] && env_files+=(--env-file "$DEPLOY_LOCAL_ENV")
+  local files=(-f "$DEPLOY/docker-compose.test.yml" -f "$HERE/compose.override.yml")
+  if [ -n "$SUPPORT_ON" ]; then
+    env_files+=(--env-file "$SUPPORT_ENV")
+    files+=(-f "$SUPPORT_OVERLAY" -f "$HERE/compose.support-snapshot.yml")
+  fi
 
   docker compose \
-    -f "$DEPLOY/docker-compose.test.yml" \
-    -f "$HERE/compose.override.yml" \
+    "${files[@]}" \
     "${env_files[@]}" \
     -p imani-test "$@"
 }
