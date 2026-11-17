@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.1] - 2026-11-17
+
+### Fixed
+
+- **The production build compiles again.** Two type errors from the fleet client (#591) failed `tsc -b`, so v0.62.0 could not be built into an image.
+
 ## [0.62.0] - 2026-11-17
 
 ### Fixed
