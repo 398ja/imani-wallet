@@ -174,11 +174,20 @@ export type SendPlan = { parts: SendPart[]; remaining: number }
  * draw, and only it needs `checkSplittable`. A coupon that cannot supply the
  * residue is skipped and the next one tried.
  */
-export function planParts(vouchers: Voucher[], amount: number): SendPlan {
+export function planParts(
+  vouchers: Voucher[],
+  amount: number,
+  /**
+   * #552: `largestFirst` drops the expiry ordering and draws the largest coupons first, which
+   * gives the fewest parts. Used when the expiry-first plan has more parts than the gateway
+   * accepts in one atomic bundle.
+   */
+  options: { largestFirst?: boolean } = {},
+): SendPlan {
   const usable = vouchers
     .filter((v) => v.token && isUnspent(v) && (v.face_value ?? 0) > 0)
     .sort((a, b) => {
-      const byExpiry = expiryMs(a) - expiryMs(b)
+      const byExpiry = options.largestFirst ? 0 : expiryMs(a) - expiryMs(b)
       if (byExpiry !== 0) return byExpiry
       const byFace = (b.face_value ?? 0) - (a.face_value ?? 0)
       if (byFace !== 0) return byFace

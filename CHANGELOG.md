@@ -44,6 +44,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A payment drawn from several vouchers is now one atomic send (#552).** The wallet sends the whole
+  plan in one `POST /api/v1/atomic-send/bundles` and follows `GET /api/v1/atomic-send/bundles/{id}`,
+  instead of one send per voucher. It ends Sent (every part reached the recipient), Not sent
+  (nothing left the wallet and every voucher is back), or Still sending. "Partly sent" and "Partly
+  paid" no longer happen against a gateway that has the endpoint. A pending-bundle record is written
+  before the request and dropped only once DELIVERED or ABORTED is applied. While it is open, its
+  vouchers are held and logout is refused, and the next login finishes it.
+- One payment uses at most the gateway's `atomic_send_bundle_max_parts` vouchers (10 by default). Over
+  it, the wallet plans fewer, larger parts, and refuses before anything is spent if that is still too
+  many.
+- A gateway without the bundle endpoint (404 or 405) keeps the old per-voucher sends, so an older
+  gateway still works. Single-voucher sends are unchanged.
+- Recipient: a multi-voucher payment counts as received only once every part is in. Until then it
+  reads "on its way", never "has not arrived".
 - **Gift data is deleted when the gift is done (#570).** A finished tracker row is dropped only
   after payment-adapter's `POST /purchases/{id}/scrub?all=true` succeeds, retried on every sweep.
   Self gifts, and gifts with no tracker row, are scrubbed straight after delivery. Needs

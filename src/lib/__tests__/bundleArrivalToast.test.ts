@@ -101,7 +101,7 @@ describe('a two-part payment on the recipient', () => {
   it('shows X of Y while a part is outstanding', async () => {
     await announceBundleArrival(coupon('v1'), declared(0), ME, 'wrap-0')
 
-    expect(props(toasts()[0]!).amount).toMatch(/3\.00.*of.*6\.00/)
+    expect(props(toasts()[0]!).amount).toMatch(/6\.00 on its way/)
     expect(props(toasts()[0]!).progress).toBe('1 of 2 vouchers so far')
     expect(listNotifications(ME)[0]!.body).toMatch(/1 of 2 vouchers/)
   })
@@ -113,7 +113,8 @@ describe('a two-part payment on the recipient', () => {
     expect(toasts()).toHaveLength(0)
   })
 
-  it('states the shortfall against the declaration once the window closes', async () => {
+  // #552: a part still missing when the window closes is late, never stopped: no warning.
+  it('says a bundle still missing parts is on its way once the window closes', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     await announceBundleArrival(coupon('v1'), declared(0), ME, 'wrap-0')
     calls.length = 0
@@ -121,14 +122,11 @@ describe('a two-part payment on the recipient', () => {
     await vi.advanceTimersByTimeAsync(BUNDLE_WAIT_WINDOW_MS + 1_000)
 
     const closing = toasts().at(-1)!
-    // A warning (decided on #94): part of what was promised is missing, and
-    // it stays up until the recipient dismisses it.
-    expect(closing.kind).toBe('warning')
-    expect(closing.options?.duration).toBe(Infinity)
+    expect(closing.kind).not.toBe('warning')
     const row = listNotifications(ME)[0]!
-    expect(row.title).toBe('Payment partly received')
-    expect(row.body).toMatch(/3\.00 of an expected €6\.00 received\. 1 voucher has not arrived\./)
-    expect(row.readAt).toBeNull()
+    expect(row.title).toBe('Payment on its way')
+    expect(row.body).toMatch(/€6\.00 on its way \(1 of 2 vouchers in\)/)
+    expect(row.body).not.toMatch(/not arrived/)
   })
 
   it('closes a bundle left open by a previous session', async () => {
@@ -140,7 +138,7 @@ describe('a two-part payment on the recipient', () => {
     resumeBundleArrivals(ME)
     await vi.runAllTimersAsync()
 
-    expect(listNotifications(ME)[0]!.title).toBe('Payment partly received')
+    expect(listNotifications(ME)[0]!.title).toBe('Payment on its way')
   })
 })
 

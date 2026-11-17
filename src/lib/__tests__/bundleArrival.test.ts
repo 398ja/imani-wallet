@@ -174,7 +174,7 @@ describe('wording: declared is expected, received is money', () => {
 
   it('shows progress while parts are outstanding', () => {
     const words = describeBundle(view({}))
-    expect(words.amount).toMatch(/3\.00.*of.*6\.00/)
+    expect(words.amount).toMatch(/6\.00 on its way/)
     expect(words.progress).toBe('1 of 2 vouchers so far')
     expect(words.settled).toBe(false)
   })
@@ -191,9 +191,26 @@ describe('wording: declared is expected, received is money', () => {
     expect(words.settled).toBe(true)
   })
 
-  it('states the shortfall against the declaration when the window closes', () => {
+  // #552: the gateway publishes parts only after deciding to deliver every one, so a bundle with
+  // parts still missing is on its way, never stopped, and is not counted as received yet.
+  it('reads an incomplete bundle as on its way, not stopped, and does not count it', () => {
     const words = describeBundle(view({ state: 'incomplete' }))
-    expect(words.body).toMatch(/3\.00 of an expected €6\.00 received\. 1 voucher has not arrived\./)
+    expect(words.amount).toBe('€6.00 on its way')
+    expect(words.body).toMatch(/€6\.00 on its way \(1 of 2 vouchers in\)/)
+    expect(words.body).not.toMatch(/not arrived|stopped/)
+    expect(words.settled).toBe(false)
+  })
+
+  it('counts a bundle as received only once every declared part is in', () => {
+    expect(describeBundle(view({})).amount).toBe('€6.00 on its way')
+    const done = describeBundle(view({ receivedTotal: 600, receivedCount: 2, state: 'complete' }))
+    expect(done.amount).toMatch(/^€6\.00$/)
+    expect(done.settled).toBe(true)
+  })
+
+  it('still states a shortfall when every part arrived and they add up to less', () => {
+    const words = describeBundle(view({ receivedTotal: 500, receivedCount: 2, state: 'incomplete' }))
+    expect(words.body).toMatch(/All 2 vouchers arrived, but add up to less/)
   })
 
   it('never caps money that arrived beyond the declaration', () => {
