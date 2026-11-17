@@ -84,6 +84,16 @@ export const REFUSAL_MESSAGES: Record<RefusalReason, { title: string; detail: st
    * most likely through a copy. Worded so staff can explain it and quote the reference, which
    * the refusal record carries.
    */
+  /**
+   * imani-wallet#277: the stall refunded this card voucher's payment (or the buyer disputed it), so
+   * the gateway will not take it for more than is still backed.
+   */
+  'payment-refunded': {
+    title: 'That voucher’s card payment was refunded',
+    detail:
+      'The card payment behind it was refunded or is disputed, so it can’t be redeemed for that ' +
+      'much. Nothing was taken.',
+  },
   'fully-redeemed': {
     title: 'That coupon has already been redeemed in full',
     detail:

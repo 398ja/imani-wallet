@@ -50,6 +50,9 @@ import { fetchCashbackLink, useCashbackStatus } from '../lib/cashback'
 import { formatCashbackLink } from '../lib/claimLink'
 import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
 import { GiftLinkSection } from '../components/GiftLinkSection'
+import { CardPaymentNotice } from '../components/CardPaymentBadge'
+import { useHolderCardPaymentState } from '../hooks/useCardPaymentState'
+import { cardReferenceOfRow } from '../lib/cardVoucherRef'
 
 /**
  * One record, in full.
@@ -95,6 +98,8 @@ export function CouponPage() {
   const { branding, loading: loadingIssuer } = useBranding(row?.issuer_id)
   // The countdown, the callout and the expired state are functions of the clock (#265).
   useExpiryClock()
+  // imani-wallet#277: a card voucher whose payment was refunded or is disputed.
+  const cardPayment = useHolderCardPaymentState(row ? cardReferenceOfRow(row) : undefined)
 
   useEffect(() => {
     const load = async () => {
@@ -160,6 +165,14 @@ export function CouponPage() {
           issuerTo={row.issuer_id ? `/profile/${row.issuer_id}` : undefined}
         />
       </div>
+
+      <CardPaymentNotice
+        state={cardPayment}
+        money={(minor) =>
+          formatFace(minor, { unit: row.face_unit ?? '', decimals: row.face_decimals ?? 0 })
+        }
+        audience="holder"
+      />
 
       {expired && expiry.kind === 'expired' && (
         <p

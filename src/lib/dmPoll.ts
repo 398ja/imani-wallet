@@ -23,7 +23,7 @@ import {
 } from './arrivalToast'
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
 import { gatesSealed, receivesOpen } from './receiveGate'
-import { announceRefusal } from './refusalToast'
+import { REFUSAL_MESSAGES, announceRefusal } from './refusalToast'
 import {
   announceUnsaved,
   dropAcknowledgedReceipts,
@@ -66,6 +66,7 @@ import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './trustedMint'
 import { couponReference, fullyRedeemedMessage, isVoucherFullyRedeemed } from './fullyRedeemed'
+import { refusalOf } from './cardPaymentState'
 import type { SpendSource } from './spendSource'
 
 /**
@@ -73,6 +74,22 @@ import type { SpendSource } from './spendSource'
  * Anything else is returned unchanged.
  */
 export function asFullyRedeemedRefusal(failure: unknown, meta: Record<string, unknown> | undefined): unknown {
+  // imani-wallet#277: the gateway refused a card voucher whose payment was refunded or disputed.
+  const card = refusalOf(failure)
+  if (card) {
+    const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
+    console.warn('[dmPoll] coupon refused by the gateway: card payment refunded', {
+      reference: couponReference(voucherId),
+      status: card.status,
+    })
+    return new RedemptionRefusedError(
+      REFUSAL_MESSAGES['payment-refunded'].detail,
+      voucherId,
+      0,
+      card.remainingMinor,
+      'payment-refunded',
+    )
+  }
   if (!isVoucherFullyRedeemed(failure)) return failure
   const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
   const signed = Number((meta?.validation as { signedFaceValue?: unknown } | undefined)?.signedFaceValue ?? 0)
