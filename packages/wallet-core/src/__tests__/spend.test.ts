@@ -448,13 +448,14 @@ describe('passedOver (#157)', () => {
     expect(notes.map((n) => [n.voucher.voucher_id, n.reason])).toEqual([['one-sat', 'split']])
   })
 
-  it('calls a sooner coupon worth less than the amount too small, not indivisible', () => {
+  // Owner report 2026-11-17: this used to be the expected answer, and it was the bug. A sooner
+  // coupon worth less than the amount is now spent first in a bundle, so nothing is passed over.
+  it('spends a sooner coupon worth less than the amount, rather than passing it over', () => {
     const vouchers = [
       coupon({ voucher_id: 'big', issuer_id: merchant, expires_at: later }),
       coupon({ voucher_id: 'small', issuer_id: merchant, expires_at: soon, face_value: 200 }),
     ]
-    const notes = passedOver(vouchers, 400, { issuer: merchant, unit: 'EUR' })
-    expect(notes.map((n) => [n.voucher.voucher_id, n.reason])).toEqual([['small', 'small']])
+    expect(passedOver(vouchers, 400, { issuer: merchant, unit: 'EUR' })).toEqual([])
   })
 
   it('says nothing when the soonest usable coupon is the one spent', () => {

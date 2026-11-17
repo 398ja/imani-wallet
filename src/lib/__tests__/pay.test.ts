@@ -21,7 +21,8 @@ import {
 } from '../pay'
 import { VoucherFullyRedeemedError } from '../fullyRedeemed'
 import { RequestAlreadyPaidError } from '../settledSends'
-import { fullyRedeemedRows, spendable } from '../merchants'
+import { fullyRedeemedRows, spendable, toVoucher } from '../merchants'
+import { sendFaceOf } from '../sendFace'
 
 // Stand-ins for the wallet store and imani-apps' classic-script API client. The
 // reconcile path is the only thing here that reaches for either; every other
@@ -1046,6 +1047,30 @@ describe('sendVouchers and payRequest', () => {
     expect(sent[0].bundlePartId).toBeUndefined()
   })
 
+  /**
+   * Owner report 2026-11-17, at the send door with stored rows (`expires_at` epoch seconds, a
+   * number, as perf/snapshots/coupons-20.json holds it). Before: the 10.00 coupon covered 5.00 on its
+   * own and was spent whole while the 2.00 coupon expiring in three days was left to lapse.
+   */
+  it('spends a smaller coupon expiring sooner first, the rest from the next', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const rows = () => [
+      row({ token_id: '7'.repeat(32), voucher_id: 'v-late', face_value: 1000, token_amount: 1000, expires_at: now + 300 * 86_400 } as Partial<VoucherRow>),
+      row({ token_id: '8'.repeat(32), voucher_id: 'v-soon', face_value: 200, token_amount: 200, expires_at: now + 3 * 86_400 } as Partial<VoucherRow>),
+    ]
+    stubs.rows = rows()
+    const sent = gateway()
+    wallet(rows())
+
+    const result = await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount: 500 })
+
+    expect(result).toMatchObject({ requested: 500, delivered: 500, parts: 2 })
+    expect(sent.map((s) => [s.voucherId, s.amount])).toEqual([
+      ['v-soon', 200],
+      ['v-late', 300],
+    ])
+  })
+
   it('draws across several coupons and tags every part of the bundle', async () => {
     stubs.rows = trio()
     const sent = gateway()
@@ -1826,6 +1851,85 @@ describe('sendVouchers and payRequest', () => {
       expect(recordedAmount(token, 150_000, { is_full_send: true })).toBe(150_000)
       expect(recordedAmount(token, 999_950, { is_full_send: true })).toBe(1_000_000)
       expect(recordedAmount(undefined, 150_000, { keep_token: 'k', keep_face_value: 849_913 })).toBe(150_000)
+    })
+  })
+
+  /**
+   * Owner report 2026-11-17, one fixture through every send and pay door. Stored rows: `expires_at`
+   * in epoch seconds, a number. NGN, so `debitFor` shows which coupons it planned (a part split from
+   * the 10,000.00 coupon costs up to a sat more than asked, a whole 200.00 coupon costs exactly 200.00).
+   */
+  describe('every door spends the soonest-expiring coupon first (owner report 2026-11-17)', () => {
+    const nowS = () => Math.floor(Date.now() / 1000)
+    const ngn = (faceValue: number, sats: number[]) =>
+      buildVoucherToken({ unit: 'NGN', faceValue, faceDecimals: 2, issuanceRatio: faceValue / sats.reduce((a, b) => a + b, 0) }, sats).token
+    const holding = () => {
+      const at = nowS()
+      const r = (id: string, n: string, face: number, sats: number[], expires?: number) =>
+        row({
+          token_id: n.repeat(32),
+          voucher_id: id,
+          token: ngn(face, sats),
+          face_value: face,
+          face_unit: 'NGN',
+          face_decimals: 2,
+          token_amount: sats.reduce((a, b) => a + b, 0),
+          amount: sats.reduce((a, b) => a + b, 0),
+          ...(expires === undefined ? {} : { expires_at: expires }),
+        })
+      return [
+        r('v-forever', '1', 1_000_000, [4096, 2048, 1024, 256, 4, 1]),
+        r('v-late', '2', 1_000_000, [4096, 2048, 1024, 256, 4, 1], at + 300 * 86_400),
+        r('v-soon', '3', 20_000, [128, 16, 4, 1], at + 3 * 86_400),
+      ]
+    }
+    const AMOUNT = 50_000
+    const EXPECTED = [
+      ['v-soon', 20_000],
+      ['v-late', 30_000],
+    ]
+
+    const doors: Array<[string, () => Promise<unknown>]> = [
+      ['sendVouchers (P2P)', () => sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'NGN', amount: AMOUNT })],
+      ['payRequest (NUT-18, stall pay)', () => payRequest({ request: request(AMOUNT, { issuerId: ISSUER, unit: 'NGN' }), raw: 'vreqA', merchant, payer: PAYER })],
+      [
+        'gift link / cashlink (sendGift legacy path)',
+        () =>
+          sendVouchers({
+            payer: PAYER,
+            recipient: { pubkey: 'e'.repeat(64), name: 'Link' },
+            merchant,
+            unit: 'NGN',
+            amount: AMOUNT,
+            link: { k: 'k', x: 1_900_000_000, status: 'outstanding' },
+          }),
+      ],
+    ]
+
+    it.each(doors)('%s draws the soonest coupon first, then the next, never the no-expiry one', async (_door, pay) => {
+      stubs.rows = holding()
+      const sent = gateway()
+      wallet(holding())
+
+      await pay()
+
+      expect(sent.map((s) => [s.voucherId, s.amount])).toEqual(EXPECTED)
+    })
+
+    it('debitFor (the confirm screen) plans the same coupons deliver draws', async () => {
+      const vouchers = holding().map(toVoucher)
+      const debit = debitFor(vouchers, AMOUNT)
+
+      stubs.rows = holding()
+      const sent = gateway()
+      wallet(holding())
+      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'NGN', amount: AMOUNT })
+      const tokenOf = new Map(vouchers.map((v) => [v.voucher_id, v.token]))
+      const drawn = sent.map((s) => sendFaceOf(tokenOf.get(s.voucherId as string), s.amount as number)!.sendFace)
+
+      // 200.00 whole, then 300.00 split from the later coupon (+0.17 overcharge): 500.17.
+      expect(debit).toBe(50_017)
+      expect(debit).toBe(drawn.reduce((a, b) => a + b, 0))
     })
   })
 
