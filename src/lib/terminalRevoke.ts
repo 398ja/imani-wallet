@@ -275,6 +275,8 @@ export async function resumeMinting(
         ...(row.idleLockMinutes !== undefined ? { idleLockMinutes: row.idleLockMinutes } : {}),
         ...(row.attestation ? { attestation: row.attestation } : {}),
         ...(row.enrolmentProof ? { enrolmentProof: row.enrolmentProof } : {}),
+        // A shop's resumed first mint carries the same marker the connect screen sent.
+        ...(row.shop ? { onlineShop: true } : {}),
       }
       const minted = row.voucherId
         ? await checkMinted(credential, row.voucherId, spendAtOnce, transport)

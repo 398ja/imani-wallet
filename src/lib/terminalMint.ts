@@ -47,6 +47,9 @@ export const EXPIRES_AT_HEADER = 'X-Idempotency-Expires-At'
 /** The renewed till's current credential, the gateway's proof of an earlier enrolment (rev-option-a R2). */
 export const RENEWS_HEADER = 'X-Imani-Terminal-Renews'
 
+/** Marks the first enrolment of an online shop, which the gateway gates on `ecommerce`. */
+export const ONLINE_SHOP_HEADER = 'X-Imani-Online-Shop'
+
 /** `T` for a credential enrolled at `nowMs`: the credential's year, plus the slack above. */
 export function attestationExpiry(nowMs: number): number {
   return Math.floor(nowMs / 1000) + CREDENTIAL_LIFETIME_DAYS * 86_400 + ATTESTATION_EXPIRY_SLACK_SECONDS
@@ -165,6 +168,8 @@ function mintRequest(credential: PreparedCredential): { body: Record<string, unk
   if (credential.enrolmentProof) headers[ENROLMENT_PROOF_HEADER] = credential.enrolmentProof
   // rev-option-a R2: a renewal names the credential it renews, which the gateway itself signed.
   if (credential.renewsToken) headers[RENEWS_HEADER] = credential.renewsToken
+  // Only on a first enrolment: a renewal is never gated, so a lapsed shop can keep finishing codes.
+  else if (credential.onlineShop) headers[ONLINE_SHOP_HEADER] = '1'
   return { body, headers }
 }
 
