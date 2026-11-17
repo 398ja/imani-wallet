@@ -20,6 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The wallet pulls bundle parts the gateway holds for it** (imani-gateway-core#220, decision B).
+  A part of a multi-coupon payment past its decision is the recipient's money, and a relay outage
+  could keep it away. At login, on resume, and every minute while a payment is "on its way", the
+  wallet calls `GET /api/v1/atomic-send/incoming` (NIP-98, at most once a minute, doubling backoff
+  after a failure) and feeds each row through the same receive path as a token DM: the same parser,
+  the same received-coupon set and the same arrival counting (`DmPollService.processPulledToken`).
+  A part that comes by DM and by pull is credited once. After the mint swap it calls
+  `POST /api/v1/atomic-send/incoming/{sendId}/ack`. A failed ack is kept (across reloads) and
+  retried on the next pull, and never swaps again. A row for another key is ignored. A gateway
+  without the route (404 or 405) is skipped silently for the session.
+- **"Payment on its way" notification for the sender** (imani-gateway-core#220). New notification
+  type `send_retrying`, sent when an operator resumes delivery of a payment you sent. Plain words
+  ("We are retrying a payment you sent. You don't need to do anything."). Server text carrying
+  anything key-shaped is replaced by those words. Uses the "coupon claimed" switch.
+- **`scripts/operator.mjs stuck-sends list | show <sendId> | resume <sendId> --note "..."`**
+  (imani-gateway-core#220), the break-glass CLI for stuck bundle parts. `resume` is a NIP-98 signed
+  POST bound to the note (1 to 500 characters). There is no reclaim or refund command: a part past
+  the decision can only go forward.
+
 - **Cashlink lock and bearer split send `predecessor_document` for a by-reference coupon**
   (cashu-voucher#64 phase B). A v2 predecessor names its voucher only by hash, so the gateway
   (imani-gateway-customer#321) needs the document beside it. Inline and locked predecessors send

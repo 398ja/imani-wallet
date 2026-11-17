@@ -221,6 +221,7 @@ export const RULES: InventoryRule[] = [
   X('imani-wallet:send-intents:', 'idempotency keys'),
   X('imani-wallet:pending-claim', 'a claim link secret'),
   X('imani:afterLogin', 'navigation intent with link secrets'),
+  X('imani:pull-acks:', 'send ids waiting for a pull ack (gateway-core#220), keyed by pubkey'),
   X('imani:pendingPurchase', 'checkout session'),
   X('imani_dm_held', 'held DMs: encrypted payloads'),
   X('imani_pending_bundle_sends', 'bundle sends carry tokens'),

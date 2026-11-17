@@ -207,6 +207,55 @@ describe('the request', () => {
   })
 })
 
+describe('stuck-sends (gateway-core#220)', () => {
+  const op = operatorKey()
+  const opts = { publicBase: PUBLIC, coreUrl: CORE }
+
+  it('list: GET the manual-attention sends, signed, with limit and cursor', () => {
+    const req = operator.buildRequest(op, operator.parseArgs(['stuck-sends', 'list', '--limit', '10', '--cursor', 'c/1']), opts)
+    const path = '/internal/v1/atomic-sends/manual-attention?limit=10&cursor=c%2F1'
+    expect(req.method).toBe('GET')
+    expect(req.url).toBe(CORE + path)
+    expect(req.body).toBeUndefined()
+    const ev = decodeAuth(req.headers.Authorization)
+    expect(tag(ev, 'u')).toBe(PUBLIC + path)
+    expect(tag(ev, 'method')).toBe('GET')
+    expect(verifyEvent(ev)).toBe(true)
+    expect(operator.buildRequest(op, operator.parseArgs(['stuck-sends', 'list']), opts).url)
+      .toBe(`${CORE}/internal/v1/atomic-sends/manual-attention`)
+  })
+
+  it('show: GET one part\'s delivery, the id encoded', () => {
+    const req = operator.buildRequest(op, operator.parseArgs(['stuck-sends', 'show', 'send/9']), opts)
+    expect(req.method).toBe('GET')
+    expect(req.url).toBe(`${CORE}/internal/v1/atomic-sends/send%2F9/delivery`)
+    expect(tag(decodeAuth(req.headers.Authorization), 'u')).toBe(`${PUBLIC}/internal/v1/atomic-sends/send%2F9/delivery`)
+  })
+
+  it('resume: a NIP-98 signed POST bound to the note', () => {
+    const req = operator.buildRequest(op, operator.parseArgs(['stuck-sends', 'resume', 'send-1', '--note', 'relay fixed']), opts)
+    expect(req.method).toBe('POST')
+    expect(req.url).toBe(`${CORE}/internal/v1/atomic-sends/send-1/resume-delivery`)
+    expect(req.body).toBe('{"note":"relay fixed"}')
+    expect(req.headers['Content-Type']).toBe('application/json')
+    const ev = decodeAuth(req.headers.Authorization)
+    expect(tag(ev, 'u')).toBe(`${PUBLIC}/internal/v1/atomic-sends/send-1/resume-delivery`)
+    expect(tag(ev, 'method')).toBe('POST')
+    expect(tag(ev, 'payload')).toBe(bytesToHex(sha256(new TextEncoder().encode(req.body))))
+    expect(verifyEvent(ev)).toBe(true)
+  })
+
+  it('refuses what gateway-core would refuse, before signing anything', () => {
+    expect(() => operator.parseArgs(['stuck-sends', 'resume', 'send-1'])).toThrow(/--note/)
+    expect(() => operator.parseArgs(['stuck-sends', 'resume', 'send-1', '--note', '  '])).toThrow(/--note/)
+    expect(() => operator.parseArgs(['stuck-sends', 'resume', 'send-1', '--note', 'x'.repeat(501)])).toThrow(/500/)
+    expect(() => operator.parseArgs(['stuck-sends', 'resume', '--note', 'n'])).toThrow(/sendId/)
+    expect(() => operator.parseArgs(['stuck-sends', 'show'])).toThrow(/sendId/)
+    // There is no way back for a part past the decision, so no such command.
+    expect(() => operator.parseArgs(['stuck-sends', 'reclaim', 'send-1'])).toThrow(/stuck-sends list/)
+  })
+})
+
 describe('running it', () => {
   it('prints the answer and never the key', async () => {
     const out: string[] = []
