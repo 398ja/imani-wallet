@@ -52,7 +52,7 @@ export {
   type SendPart,
   type SendPlan,
 } from '@imani/wallet-core'
-import { passedOver, planParts, selectVouchers, splitObstacle, type SendPart } from '@imani/wallet-core'
+import { chooseSpend, passedOver, planParts, splitObstacle, type SendPart } from '@imani/wallet-core'
 
 /** Why a bundle was refused for a card voucher, in the badge's terms (gateway-core#221). */
 function refundedReason(status: 'refunded' | 'partly_refunded' | 'disputed'): string {
@@ -1936,9 +1936,9 @@ export function debitFor(vouchers: Voucher[], amount: number): number {
   try {
     if (!Number.isSafeInteger(amount) || amount <= 0) return amount
     const take = (voucher: Voucher, part: number) => Math.max(part, sendFaceOf(voucher.token, part)?.sendFace ?? part)
-    const single = selectVouchers(vouchers, amount)
-    if (single.length > 0) return take(single[0], amount)
-    const plan = planParts(vouchers, amount)
+    const choice = chooseSpend(vouchers, amount)
+    if (choice.kind === 'single') return take(choice.candidates[0], amount)
+    const plan = choice.plan
     if (plan.remaining > 0) return amount
     return plan.parts.reduce((sum, part) => sum + take(part.voucher, part.amount), 0)
   } catch {
@@ -2017,14 +2017,16 @@ async function deliverCounted(
 
   // One coupon first: fewer mint splits, one DM, and the path that has been
   // carrying every payment on this stack since the beginning.
-  const single = selectVouchers(vouchers, amount)
-  if (single.length > 0) {
+  // Owner report 2026-11-17: only when no usable coupon expires sooner (`chooseSpend`). Before,
+  // any one coupon that covered the amount won, so smaller sooner coupons were never spent.
+  const choice = chooseSpend(vouchers, amount)
+  if (choice.kind === 'single') {
     report(ctx.onProgress, { part: 1, parts: 1, retrying: false })
-    const sendId = await sendPart(ctx, single, amount, null)
+    const sendId = await sendPart(ctx, choice.candidates, amount, null)
     return { id: sendId, requested: amount, delivered: amount, parts: 1, vouchers: 1 }
   }
 
-  let plan = planParts(vouchers, amount)
+  let plan = choice.plan
   if (plan.remaining > 0) {
     throw new Error(
       splitObstacle(vouchers, amount) ??

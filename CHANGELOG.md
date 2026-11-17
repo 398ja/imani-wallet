@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sends and payments spend the soonest-expiring vouchers first** (owner report 2026-11-17). Any
+  one voucher big enough to cover the amount used to win, so a smaller voucher expiring sooner was
+  never spent and lapsed. A send, a payment request, a gift link and the pay screen's estimate now
+  share one rule, `chooseSpend` in `@imani/wallet-core`: one voucher only when no usable voucher of
+  the same stall and currency expires sooner, otherwise a bundle drawn in expiry order. A voucher
+  with no expiry goes last. Ties: exact match, then smallest face, then voucher id.
+
 ### Added
 
 - **Cashlink lock and bearer split send `predecessor_document` for a by-reference coupon**
