@@ -266,4 +266,34 @@ export const BUILTIN_TEMPLATES: Record<string, TemplateDef> = {
       returnMailDate: { type: 'line', max: 60, required: true },
     },
   },
+  // The recipient's "expires soon" reminder for an unspent shop code (#410 §6d applied to codes).
+  // Like gift-expiring it carries no secret: not the code (a bearer secret), not a link. It names
+  // the original email by date and subject.
+  'gift-code-expiring': {
+    fromName: 'Imani gifts',
+    subject: 'Your {{stall}} shop code expires soon',
+    text: [
+      '{{from}} sent you a {{amount}} code to spend at {{stall}}, and it has not been used yet.',
+      '',
+      'Use it by {{claimBy}}, or what is left ({{remaining}}) goes back to {{from}}.',
+      '',
+      'The code is in our email of {{sentOn}} from {{sender}}, with the subject:',
+      '"{{claimSubject}}"',
+      'If you cannot find it, check your spam or junk folder.',
+      '',
+      "If you've already used it, you can ignore this email.",
+      '',
+      FOOTER,
+    ].join('\n'),
+    fields: {
+      from: { type: 'line', max: 80, default: 'Someone' },
+      stall: { type: 'line', max: 120, required: true },
+      amount: { type: 'line', max: 40, required: true },
+      remaining: { type: 'line', max: 40, required: true },
+      claimBy: { type: 'line', max: 60, required: true },
+      sentOn: { type: 'line', max: 60, required: true },
+      sender: { type: 'line', max: 254, required: true },
+      claimSubject: { type: 'line', max: 250, required: true },
+    },
+  },
 }
