@@ -62,6 +62,10 @@ export interface GiftPorts {
   anchor(eventId: string, nowMs: number): Promise<number>
   /** The stall's display name for the email, or null. */
   stallName(stallPubkey: string): Promise<string | null>
+  /** #570: payment-adapter's `scrub?all=true` for a gift nobody tracks. Optional. */
+  scrubAll?(eventId: string): Promise<'ok' | 'gone' | 'retry'>
+  /** The From address imani-mailer sends gifts as, named in reminders (G13). Default gifts@imani.casa. */
+  mailFrom?: string
   /** G15 §4.3: record a delivered gift for claimed/expired notices (`giftTracker.ts`). Optional. */
   track?(input: TrackInput, mintUrl: string): Promise<void>
   /** #410 code gifts: the code store. Absent (`PURCHASE_CODE_GIFTS` off), code gifts are parked before minting. */
@@ -328,5 +332,46 @@ export function httpScrub(purchasesUrl: string, token: string, fetchImpl: typeof
     } catch {
       return false
     }
+  }
+}
+
+/**
+ * #570: payment-adapter's `POST /api/v1/purchases/{eventId}/scrub?all=true`, dropping every personal
+ * field of the purchase and its draft. 2xx done; 404 nothing there to scrub (`gone`); else retry.
+ */
+export function httpScrubAll(purchasesUrl: string, token: string, fetchImpl: typeof fetch = fetch) {
+  return async (eventId: string): Promise<'ok' | 'gone' | 'retry'> => {
+    try {
+      const r = await fetchImpl(`${trim(purchasesUrl)}/api/v1/purchases/${encodeURIComponent(eventId)}/scrub?all=true`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (r.ok) return 'ok'
+      return r.status === 404 ? 'gone' : 'retry'
+    } catch {
+      return 'retry'
+    }
+  }
+}
+
+/**
+ * Hard-bounce check: imani-mailer's `POST /v1/suppressions/check` (the client needs `check` or
+ * `bounce`). The address goes in the body, never a URL. Throws when there is no clear answer.
+ */
+export function httpIsBounced(mailerUrl: string, token: string, fetchImpl: typeof fetch = fetch) {
+  return async (email: string): Promise<boolean> => {
+    const r = await fetchImpl(`${trim(mailerUrl)}/v1/suppressions/check`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ to: email }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!r.ok) throw new Error(`mailer answered ${r.status}`)
+    const json = (await r.json()) as { suppressed?: unknown; reason?: unknown }
+    // Only a hard bounce is a bounce. A complaint or manual block also stops mail (the mailer
+    // refuses it), but it is not "we couldn't deliver".
+    return json.suppressed === true && json.reason === 'hard-bounce'
   }
 }
