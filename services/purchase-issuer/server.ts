@@ -38,13 +38,13 @@
  */
 
 import { httpCodeCheck, httpDeposit } from './codeGift'
-import { createServer, type IncomingMessage } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
 import { tokenFor, FileCredentialStore } from './adapters'
 import { confirmAll, CredentialConfirmer, retryUnconfirmed } from './confirmation'
 import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
-import { fileAnchors, httpPublishEvent, httpQueryWraps, httpReportOutcome, httpScrub, httpStallName, type GiftPorts } from './giftDelivery'
+import { fileAnchors, httpIsBounced, httpPublishEvent, httpQueryWraps, httpReportOutcome, httpScrub, httpScrubAll, httpStallName, type GiftPorts } from './giftDelivery'
 import { mailerClient } from '../imani-mailer/client.ts'
 import { countPass, renderMetrics } from './metrics'
 import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPass } from './outbox'
@@ -96,6 +96,8 @@ function giftPortsFor(config: IssuerConfig, g: NonNullable<IssuerConfig['gifts']
     queryWraps: httpQueryWraps(config.gatewayUrl, fetchImpl),
     sendMail: (req) => mailer.send(req),
     scrubSeal: httpScrub(config.purchasesUrl, config.purchasesToken, fetchImpl),
+    scrubAll: httpScrubAll(config.purchasesUrl, config.purchasesToken, fetchImpl),
+    mailFrom: g.mailFrom,
     anchor: fileAnchors(g.anchorsPath),
     stallName: httpStallName(config.gatewayUrl, fetchImpl),
     track: (input, mintUrl) => giftTrackerFor(config, fetchImpl).track(input, mintUrl),
@@ -117,10 +119,61 @@ export function giftTrackerFor(config: IssuerConfig, fetchImpl: typeof fetch = f
       ...(g.sweepEveryMs ? { sweepEveryMs: g.sweepEveryMs } : {}),
       ...(g.checkoutCodesUrl ? { checkCode: httpCodeCheck(g.checkoutCodesUrl, fetchImpl) } : {}),
       reportOutcome: httpReportOutcome(config.purchasesUrl, config.purchasesToken, fetchImpl),
+      // #570: a finished row is dropped only once payment-adapter has scrubbed the purchase.
+      scrubAll: httpScrubAll(config.purchasesUrl, config.purchasesToken, fetchImpl),
+      // §6c/§6d: reminders need the public one-click unsubscribe, so no origin means no reminders.
+      reminderOffsetsMs: g.reminderOffsetsMs,
+      ...(config.publicOrigin ? { unsubscribeUrl: (draftId: string, token: string) => unsubscribeUrl(config.publicOrigin!, draftId, token) } : {}),
+      isBounced: httpIsBounced(g.mailerUrl, g.mailerToken, fetchImpl),
     })
     trackers.set(config, t)
   }
   return t
+}
+
+/** RFC 8058 one-click target for one gift's reminders. */
+export const UNSUBSCRIBE_PREFIX = '/api/v1/gifts/unsubscribe/'
+export function unsubscribeUrl(publicOrigin: string, draftId: string, token: string): string {
+  return `${publicOrigin.replace(/\/+$/, '')}${UNSUBSCRIBE_PREFIX}${encodeURIComponent(draftId)}?t=${encodeURIComponent(token)}`
+}
+
+/** The tracker the unsubscribe endpoint answers for; null (404) when gifts are off. */
+let unsubscribeTracker: Pick<GiftTracker, 'unsubscribe'> | null = null
+export function mountUnsubscribe(tracker: Pick<GiftTracker, 'unsubscribe'> | null): void {
+  unsubscribeTracker = tracker
+}
+
+/**
+ * RFC 8058: `POST <url>` with body `List-Unsubscribe=One-Click` stops that gift's reminders. GET
+ * (a person clicking, or a scanner prefetching) only shows a page with a button, so a link scanner
+ * can never unsubscribe anyone. Logs nothing about the gift or the address.
+ */
+function handleUnsubscribe(req: IncomingMessage, res: ServerResponse, tracker: Pick<GiftTracker, 'unsubscribe'>): void {
+  const url = new URL(req.url ?? '/', 'http://x')
+  const draftId = decodeURIComponent(url.pathname.slice(UNSUBSCRIBE_PREFIX.length))
+  const token = url.searchParams.get('t') ?? ''
+  const html = (status: number, body: string) => {
+    res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; form-action 'self'", 'Referrer-Policy': 'no-referrer' })
+    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Imani gift reminders</title><body style="font-family:sans-serif;max-width:32em;margin:3em auto">${body}</body>`)
+  }
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(draftId) || !/^[A-Za-z0-9_-]{1,64}$/.test(token)) return html(404, '<p>This link is not valid.</p>')
+  if (req.method === 'GET') {
+    return html(200, '<p>Stop the reminder emails for this one gift? The gift itself is not affected.</p><form method="post"><input type="hidden" name="List-Unsubscribe" value="One-Click"><button>Stop reminders</button></form>')
+  }
+  if (req.method !== 'POST') {
+    res.writeHead(405, { Allow: 'GET, POST' })
+    return void res.end()
+  }
+  // The body (`List-Unsubscribe=One-Click`) is drained but not required: the signed token is the authority.
+  void readBody(req)
+    .then(async () => {
+      const result = await tracker.unsubscribe(draftId, token)
+      if (result === 'bad') return html(404, '<p>This link is not valid.</p>')
+      html(200, '<p>Done. You will get no more reminders for this gift.</p>')
+    })
+    .catch(() => {
+      if (!res.headersSent && !res.destroyed) html(500, '<p>Something went wrong. Try again later.</p>')
+    })
 }
 
 /** The stall-validity reader, one per process so the mint and `/ready` share its cache (#312). */
@@ -321,6 +374,10 @@ export const server = createServer((req, res) => {
     res.end(renderMetrics())
     return
   }
+  if (unsubscribeTracker !== null && (req.url ?? '').startsWith(UNSUBSCRIBE_PREFIX)) {
+    handleUnsubscribe(req, res, unsubscribeTracker)
+    return
+  }
   if (enrolment !== null && (req.url ?? '').startsWith(ENROLMENT_PREFIX + '/')) {
     const service = enrolment
     // `.catch`, review of #302: a client that drops mid-body makes `for await` reject ("aborted"),
@@ -371,6 +428,7 @@ function main(): void {
   const confirmer = new CredentialConfirmer(config.gatewayUrl)
   const validityFor = validityReaderFor(config)
   const deps = depsFor(config, vault, confirmer, validityFor)
+  if (config.gifts) mountUnsubscribe(giftTrackerFor(config))
   mountEnrolment(
     new EnrolmentService({
       vault,

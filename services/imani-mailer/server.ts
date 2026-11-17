@@ -4,6 +4,7 @@
  *   POST   /v1/send           send one templated email                  (client token, template scope)
  *   POST   /v1/suppressions   {to, reason}: hard bounce, complaint      (client token with bounce)
  *   DELETE /v1/suppressions   {to}: lift a suppression                  (client token with bounce)
+ *   POST   /v1/suppressions/check {to}: is it suppressed (a bounce)     (client token with bounce or `check`)
  *   GET    /v1/templates      the templates this client may send, with their fields
  *   GET    /health            liveness, no auth
  *   GET    /ready             the transport answers EHLO (and STARTTLS/AUTH), no auth
@@ -128,6 +129,18 @@ export function createApp(config: MailerConfig, opts: { transport?: Transport; l
         const out = await mailer.send(client, body as never)
         const headers: Record<string, string> = out.ok || !out.retryAfterSeconds ? {} : { 'Retry-After': String(out.retryAfterSeconds) }
         return reply(out.status, out, headers)
+      }
+      if (path === '/v1/suppressions/check') {
+        // A sender asks whether a recipient it mailed has since hard-bounced (#410). POST so the
+        // address travels in the body, never in a URL or an access log.
+        if (!client.bounce && !client.check) return reply(403, { error: 'forbidden', message: 'this client may not check suppressions' })
+        if (method !== 'POST') return reply(405, { error: 'method_not_allowed' }, { Allow: 'POST' })
+        const body = await readJson(req, 4096)
+        const extra = Object.keys(body).filter((k) => k !== 'to')
+        if (extra.length) return reply(400, { error: 'invalid_request', message: `unknown property ${extra[0]}` })
+        const to = typeof body.to === 'string' ? body.to.trim() : ''
+        if (!to || to.length > 254 || !to.includes('@')) return reply(400, { error: 'invalid_request', message: 'to must be an email address' })
+        return reply(200, mailer.isSuppressed(client, to))
       }
       if (path === '/v1/suppressions') {
         if (!client.bounce) return reply(403, { error: 'forbidden', message: 'this client may not manage suppressions' })
