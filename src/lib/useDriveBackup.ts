@@ -2,7 +2,8 @@ import { useState } from 'react'
 
 import { createBackup } from './backup'
 import { recordBackup } from './backupRecord'
-import { driveConfigured, putBackup } from './drive'
+import { driveConfigured, putAndVerifyBackup } from './drive'
+import { backupFingerprint, recordKeyBackup } from './keyBackups'
 
 /**
  * Sending the account file to the customer's own Google Drive.
@@ -47,8 +48,11 @@ export function useDriveBackup(pubkey: string) {
       setError(null)
       setDone(false)
       try {
-        await putBackup(createBackup(pubkey))
+        const json = createBackup(pubkey)
+        // #348: read back before it counts, so logout can trust it offline.
+        await putAndVerifyBackup(json)
         recordBackup(pubkey, 'drive')
+        recordKeyBackup(pubkey, 'drive', { verified: true, fingerprint: backupFingerprint(json) })
         setDone(true)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))

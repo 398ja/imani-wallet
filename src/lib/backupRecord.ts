@@ -66,3 +66,9 @@ export function mergeBackupRecord(pubkey: string, incoming: BackupRecord | undef
 export function recordBackup(pubkey: string, kind: BackupKind, at = Date.now()): void {
   mergeBackupRecord(pubkey, { [kind]: at })
 }
+
+/**
+ * #348: the per-device list of key backup locations (keyBackups.ts). Declared here, beside the
+ * record it extends, so the logout sweep's exemption needs no network module.
+ */
+export const KEY_BACKUPS_PREFIX = 'imani-wallet:key-backups:'

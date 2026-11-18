@@ -16,6 +16,8 @@ const putBackup = vi.fn<(json: string) => Promise<void>>(async () => {})
 vi.mock('../../lib/drive', () => ({
   driveConfigured: () => true,
   putBackup,
+  // #348: the hook writes through the read-back variant.
+  putAndVerifyBackup: putBackup,
   listBackups,
 }))
 

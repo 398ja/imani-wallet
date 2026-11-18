@@ -15,6 +15,8 @@ import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { userMessage } from '../lib/userMessage'
 import { ConnectedSites } from '../components/ConnectedSites'
 import { DriveOverwriteWarning } from '../components/DriveOverwriteWarning'
+import { KeyBackupSummary } from '../components/KeyBackup'
+import { backupFingerprint, recordKeyBackup } from '../lib/keyBackups'
 import {
   passphraseStrength,
   validateConfirmation,
@@ -70,6 +72,7 @@ export function SecurityPage({
             <p className="mb-3 text-sm text-mono-500">
               Logging out erases your key from this browser. Make sure you have your backup key first.
             </p>
+            <KeyBackupSummary pubkey={pubkey} />
             <Button variant="outline" className="w-full !text-red-600 dark:!text-red-400" onClick={onLogout}>
               Log out
             </Button>
@@ -271,8 +274,11 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
   const saveFile = async () => {
     setFileError(null)
     try {
-      await downloadText(backupFilename(loadProfile(pubkey)), createBackup(pubkey))
+      const name = backupFilename(loadProfile(pubkey))
+      const json = createBackup(pubkey)
+      await downloadText(name, json)
       recordBackup(pubkey, 'file')
+      recordKeyBackup(pubkey, 'file', { fileName: name, fingerprint: backupFingerprint(json) })
       setFileSaved(true)
     } catch (e) {
       setFileError(userMessage(e))

@@ -10,6 +10,8 @@ import { allTerminals } from '../lib/terminalRoster'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
+import { YourKeyBackup } from '../components/KeyBackup'
+import { isTerminalDevice } from '../lib/terminalEnrol'
 
 /**
  * Settings.
@@ -66,6 +68,14 @@ export function SettingsPage({
           hint="What Imani tells you about"
         />
       </ListSection>
+
+      {/* #348: where this key is backed up, across every device of the account. Not on a
+          terminal, whose key is a disposable credential with no backup. */}
+      {stallPubkey && !isTerminalDevice() && (
+        <div className="mt-6">
+          <YourKeyBackup pubkey={stallPubkey} />
+        </div>
+      )}
 
       {/* Merchant accounts only. A customer has no stall to configure, and
           offering them one here was offering a screen whose every field —

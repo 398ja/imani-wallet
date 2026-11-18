@@ -9,6 +9,8 @@ import { downloadText } from '../lib/download'
 import { recordBackup } from '../lib/backupRecord'
 import { useDriveBackup } from '../lib/useDriveBackup'
 import { DriveOverwriteWarning } from '../components/DriveOverwriteWarning'
+import { KeyBackupSaved } from '../components/KeyBackup'
+import { backupFingerprint, recordKeyBackup } from '../lib/keyBackups'
 import { handleOf } from '../lib/format'
 import { keyStore } from '../lib/nap'
 import { type Profile } from '../lib/profile'
@@ -28,13 +30,18 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
   const [downloaded, setDownloaded] = useState(false)
+  const [fileName, setFileName] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | null>(null)
 
   const download = async () => {
     setError(null)
     try {
-      await downloadText(backupFilename(profile), createBackup(profile.pubkey))
+      const name = backupFilename(profile)
+      const json = createBackup(profile.pubkey)
+      await downloadText(name, json)
       recordBackup(profile.pubkey, 'file')
+      recordKeyBackup(profile.pubkey, 'file', { fileName: name, fingerprint: backupFingerprint(json) })
+      setFileName(name)
       setDownloaded(true)
     } catch (e) {
       setError(userMessage(e))
@@ -128,9 +135,8 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
           <DriveOverwriteWarning who={handleOf(profile.nip05)} />
         </div>
 
-        {drive.done && (
-          <p className="mt-2 text-sm text-green-700 dark:text-green-500">Saved to your Google Drive.</p>
-        )}
+        {drive.done && <KeyBackupSaved location="drive" />}
+        {downloaded && <KeyBackupSaved location="file" fileName={fileName} />}
 
         {canReveal && nsec && (
           <Button variant="ghost" className="mt-2 w-full" onClick={() => setNsec(null)}>
