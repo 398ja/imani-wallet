@@ -167,10 +167,8 @@ export async function sendSaleRecord(
  * minted under. After a delegation renewal it differs in the `delegation` only; the stall still
  * verifies it at the sale time.
  *
- * DEPENDENCY, not built on: the list of a stall's discharged purchases needs a payment-adapter
- * read endpoint. payment-adapter PR #278 proposes `GET /api/v1/purchases/stall/{pubkey}` (under
- * review, may be dropped). Until one lands, `resendSaleRecords` takes the purchases from its
- * caller (an operator, or U8's outbox), and nothing polls.
+ * The caller is `salePull.ts` (imani-wallet#275 item 3): the stall's wallet asks on login, and the
+ * purchases come from payment-adapter's `GET /api/v1/purchases?stall=`, read with the issuer token.
  */
 export async function resendSaleRecords(
   baseUrl: string,

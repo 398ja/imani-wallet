@@ -57,6 +57,7 @@ import { checkDelegation, couponExpiresAtMs, type DelegationCheck } from './dele
 import type { StallCredential } from './issuer'
 import type { StallValidity } from './stallValidity'
 import { countEnrolment } from './metrics'
+import { MAX_RESEND, type ResendResult } from './salePull'
 import { ReplayGuard, verifyNip98 } from './nip98Auth'
 import { allowanceVerdict, normaliseUnit, type AllowanceReader } from './salesAllowance'
 import type { CredentialVault } from './vault'
@@ -69,6 +70,11 @@ export const CARD_SALES_NEED_VALIDITY =
   'Card sales need a voucher validity: vouchers that never expire can’t be sold by card. Choose 30, 60 or 90 days, or your own up to 730, in your shop settings.'
 export const BEGIN_PATH = `${ENROLMENT_PREFIX}/enrolment/begin`
 export const ENROL_PATH = `${ENROLMENT_PREFIX}/enrolment`
+/**
+ * The pull on login (imani-wallet#275): re-send this stall's missed card-sale records. NIP-98 as the
+ * stall; body `{ "voucherIds": [...] }` (a filter, see `salePull.ts`).
+ */
+export const RESEND_PATH = `${ENROLMENT_PREFIX}/sales/resend`
 /** Public: may shoppers be sold a card purchase for this stall? `/ready/<stall pubkey>`. */
 export const READY_PREFIX = `${ENROLMENT_PREFIX}/ready/`
 
@@ -177,6 +183,8 @@ export interface EnrolmentDeps {
    * remaining allowance and so its lifetime sales. Absent or empty: no caller is trusted.
    */
   internalToken?: string
+  /** The pull on login (`salePull.ts`). Absent: `RESEND_PATH` answers 503. */
+  resend?: (stallPubkey: string, voucherIds: readonly string[]) => Promise<ResendResult>
 }
 
 export class EnrolmentService {
@@ -203,6 +211,9 @@ export class EnrolmentService {
       }
       if (request.method === 'GET' && path === ENROL_PATH) {
         return await this.authed(request, async (s) => ({ status: 200, body: { ...(await this.status(s)) } }))
+      }
+      if (request.method === 'POST' && path === RESEND_PATH) {
+        return await this.authed(request, (s) => this.resend(s, request.body))
       }
       return { status: 404, body: { error: 'not found' } }
     } catch {
@@ -244,6 +255,31 @@ export class EnrolmentService {
       return { status: 401, body: { error: 'this signed request was already used; sign a new one' } }
     }
     return then(auth.pubkey)
+  }
+
+  /** The pull on login: re-send the stall's missed sale records (imani-wallet#275). */
+  private async resend(stall: string, raw: string): Promise<EnrolmentResponse> {
+    if (!this.deps.resend) return { status: 503, body: { error: 'sale record resend is not configured' } }
+    let body: { voucherIds?: unknown }
+    try {
+      body = raw === '' ? {} : (JSON.parse(raw) as typeof body)
+    } catch {
+      return { status: 400, body: { error: 'the body is not JSON' } }
+    }
+    const ids = body?.voucherIds === undefined ? [] : body.voucherIds
+    if (
+      !Array.isArray(ids) ||
+      ids.length > MAX_RESEND ||
+      !ids.every((id) => typeof id === 'string' && CREDENTIAL_ID.test(id))
+    ) {
+      return { status: 400, body: { error: `voucherIds must be at most ${MAX_RESEND} voucher ids` } }
+    }
+    const result = await this.deps.resend(stall, ids as string[])
+    if (result.kind === 'not-enrolled') return { status: 404, body: { error: 'card sales are not set up for this stall' } }
+    if (result.kind === 'unavailable') {
+      return { status: 503, body: { error: 'the stall\u2019s card sales could not be read just now; try again later' } }
+    }
+    return { status: 200, body: { sent: result.sent, failed: result.failed, unknown: result.unknown } }
   }
 
   /** Step 1: a fresh lock key for this stall. Its private half stays here. */
