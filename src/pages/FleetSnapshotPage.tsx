@@ -10,7 +10,10 @@ import type { FleetState } from '../lib/fleet/state'
  * the fleet-specific text below (not the #589 ticket text). Turning it off deregisters and forgets at once.
  */
 export const FLEET_CONSENT_TEXT =
-  'Help improve Imani by sharing an anonymised health check now and then. Your wallet may be picked at random, at most twice a month. It then sends, on Wi-Fi only, a snapshot of your vouchers\u2019 amounts and dates, your transaction history, your settings, recent errors and the app\u2019s recent technical log (and, for a stall, your takings and terminals). It never contains your key, your vouchers themselves, gift links, coupon codes, your email, your messages or your memos. Nobody can spend your money with it. It is encrypted so only Imani support can open it, and it is deleted from the upload server within 7 days (sooner once support collects it). Imani\u2019s support assistant (an AI) reads it, and a support person may too. Before the AI sees anything, every name, address, key and id in it is replaced by a placeholder on your phone, so the AI services Imani uses (Anthropic, and possibly OpenAI) never see who you are. Support keeps it for 14 days, then deletes it. Health checks are sent under a separate key made only for this, so they do not carry your wallet\u2019s identity. Each one appears in your snapshot history. You can turn this off at any time, and the server then forgets this device.'
+  'At most twice a month, your wallet may be picked at random to send an anonymised health check, on Wi-Fi only.\n' +
+  'It holds amounts, dates, transactions, settings, recent errors and app logs. Never your key, vouchers, codes, email, messages or memos. Nobody can spend your money with it.\n' +
+  'Only Imani support can open it. Names and ids are replaced on your phone before support\u2019s AI (Anthropic or OpenAI) reads it. It is deleted after 14 days.\n' +
+  'Turn it off any time, and the server forgets this device.'
 
 type Controller = Pick<FleetController, 'available' | 'status' | 'optIn' | 'optOut'>
 
@@ -81,7 +84,7 @@ export function FleetSnapshotView({ controller }: { controller: Controller }) {
       {asking && (
         <Panel>
           <div data-testid="fleet-consent" className="space-y-3 text-sm">
-            <p>{FLEET_CONSENT_TEXT}</p>
+            {FLEET_CONSENT_TEXT.split('\n').map((l) => <p key={l}>{l}</p>)}
           </div>
           <div className="mt-3 flex gap-2">
             <Button variant="secondary" data-testid="fleet-cancel" onClick={() => setAsking(false)}>Not now</Button>
