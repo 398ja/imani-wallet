@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FileCredentialStore } from '../adapters'
 import { CredentialConfirmer } from '../confirmation'
-import { BEGIN_COOLDOWN_MS, BEGIN_PATH, ENROL_PATH, EnrolmentService, MAX_PENDING, READY_PREFIX } from '../enrolment'
+import { BEGIN_COOLDOWN_MS, BEGIN_PATH, ENROL_PATH, EnrolmentService, MAX_PENDING, READY_PREFIX, RESEND_PATH } from '../enrolment'
 import { attemptCount, renderMetrics, resetMetricsForTest } from '../metrics'
 import type { OwedPurchase, PurchasesApi } from '../purchasesApi'
 import { portsFor } from '../server'
@@ -551,5 +551,51 @@ describe('gc#317: readiness follows the stall\u2019s Free plan sales allowance',
     const { ready, asked } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 0 }, never)
     expect(await ready()).toEqual({ ready: false, reason: 'validity_never_expires' })
     expect(asked).toEqual([])
+  })
+})
+
+describe('the pull on login: resend (imani-wallet#275)', () => {
+  async function resendService(result: import('../salePull').ResendResult | undefined) {
+    const { vault, confirmer } = await setup()
+    const asked: Array<{ stall: string; ids: readonly string[] }> = []
+    const service = new EnrolmentService({
+      vault,
+      confirmer,
+      publicOrigin: ORIGIN,
+      validityFor: ninetyDayTerm,
+      ...(result ? { resend: async (stall: string, ids: readonly string[]) => (asked.push({ stall, ids }), result) } : {}),
+    })
+    const call = (body: string, authorization?: string) =>
+      service.handle({ method: 'POST', path: RESEND_PATH, body, authorization: authorization ?? signed('POST', RESEND_PATH, body) })
+    return { call, asked }
+  }
+
+  it('re-sends for the SIGNER, with the ids as a filter', async () => {
+    const { call, asked } = await resendService({ kind: 'sent', sent: 1, failed: [], unknown: ['x-1'] })
+    const answer = await call(JSON.stringify({ voucherIds: ['8027e345', 'x-1'] }))
+    expect(answer).toEqual({ status: 200, body: { sent: 1, failed: [], unknown: ['x-1'] } })
+    expect(asked).toEqual([{ stall: STALL, ids: ['8027e345', 'x-1'] }])
+  })
+
+  it('refuses an unsigned caller, and another key asks only for its own sales', async () => {
+    const { call, asked } = await resendService({ kind: 'sent', sent: 0, failed: [], unknown: [] })
+    expect((await call('{}', 'Nostr e30=')).status).toBe(401)
+    const intruder = bytesToHex(generateSecretKey())
+    await call('{}', signed('POST', RESEND_PATH, '{}', intruder))
+    expect(asked.map((a) => a.stall)).not.toContain(STALL)
+  })
+
+  it('refuses malformed ids and too many of them', async () => {
+    const { call, asked } = await resendService({ kind: 'sent', sent: 0, failed: [], unknown: [] })
+    expect((await call(JSON.stringify({ voucherIds: ['../etc'] }))).status).toBe(400)
+    expect((await call(JSON.stringify({ voucherIds: Array.from({ length: 51 }, (_, i) => `v-${i}000`) }))).status).toBe(400)
+    expect((await call('not json')).status).toBe(400)
+    expect(asked).toEqual([])
+  })
+
+  it('answers 404 for an unenrolled stall, 503 when payment-adapter is down or resend is not wired', async () => {
+    expect((await (await resendService({ kind: 'not-enrolled' })).call('{}')).status).toBe(404)
+    expect((await (await resendService({ kind: 'unavailable' })).call('{}')).status).toBe(503)
+    expect((await (await resendService(undefined)).call('{}')).status).toBe(503)
   })
 })
