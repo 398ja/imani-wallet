@@ -47,6 +47,8 @@ export function blockedMessage(outcome: BlockedLogout): string {
       return LOGOUT_BLOCKED_COPY.inFlight
     case 'other-tab':
       return LOGOUT_BLOCKED_COPY.otherTab
+    case 'key-not-backed-up':
+      return LOGOUT_BLOCKED_COPY.keyNotBackedUp
     case 'checkout-code':
     case 'checkout-code-unconfirmed': {
       const c = outcome.code

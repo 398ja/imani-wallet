@@ -4,6 +4,12 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// #348: the key backup gate is pinned in logoutKeyBackup348.test.ts. Here the key is backed up.
+vi.mock('../keyBackups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../keyBackups')>()),
+  checkKeyBackup: async () => ({ ok: true, backups: [] }),
+}))
+
 /**
  * Fourth check of #334: the receive gate and logout's last checks, pinned where
  * the mutation battery found them unpinned (G5, G6, L4, L6, L9, T1).

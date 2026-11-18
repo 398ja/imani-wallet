@@ -113,6 +113,32 @@ export function putBackup(json: string): Promise<void> {
   })
 }
 
+/**
+ * #348: write this account's file, then read it BACK in the same token and check it holds this
+ * key's envelope and pubkey. Resolves only when the read-back matches, so a Drive backup recorded
+ * as verified is one Drive really holds. Logout then trusts the record and needs no network.
+ */
+export function putAndVerifyBackup(json: string): Promise<void> {
+  return withDriveToken(async (token) => {
+    const { pubkey, appProperties } = accountOf(json)
+    await upload(token, pubkey, appProperties, json)
+    const id = await findAccountFile(token, pubkey)
+    if (!id) throw new DriveError('Google Drive did not keep the backup. Try again.')
+    const text = await (await call(token, `${FILES}/${id}?alt=media`)).text()
+    if (!sameKey(json, text)) throw new DriveError('The backup in Google Drive does not match this key. Try again.')
+  })
+}
+
+function sameKey(written: string, readBack: string): boolean {
+  try {
+    const a = JSON.parse(written) as { pubkey?: unknown; key?: unknown }
+    const b = JSON.parse(readBack) as { pubkey?: unknown; key?: unknown }
+    return a.pubkey === b.pubkey && b.key !== undefined && JSON.stringify(a.key) === JSON.stringify(b.key)
+  } catch {
+    return false
+  }
+}
+
 function accountOf(json: string): { pubkey: string; appProperties: Record<string, string> } {
   const parsed = JSON.parse(json) as { pubkey?: unknown; npub?: unknown; profile?: { nip05?: unknown } | null }
   if (typeof parsed.pubkey !== 'string') {
