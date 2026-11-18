@@ -10,7 +10,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  */
 
 vi.mock('../nap', () => ({ getSigner: () => { throw new Error('locked') } }))
-vi.mock('../relay', () => ({ allEvents: vi.fn(async () => { throw new Error('offline') }), publish: vi.fn() }))
+vi.mock('../relay', () => ({ allEvents: vi.fn(async () => { throw new Error('offline') }) }))
+vi.mock('../relayDelivery', () => ({ deliverToRelay: vi.fn(async () => ({ delivered: false, why: 'unreachable' })) }))
 vi.mock('../transferSignature', () => ({ mirrorToGateway: vi.fn(async () => false) }))
 
 const kb = await import('../keyBackups')
