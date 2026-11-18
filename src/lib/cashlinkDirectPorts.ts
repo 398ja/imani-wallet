@@ -1,6 +1,6 @@
 /**
  * #543: the app's side of the direct Cashlink ports. The Cashlink ports (`cashlinkPorts.ts`), the
- * wallet key, a publish that does not read back, the coupon rows and the link's sent rows.
+ * wallet key, a publish read back from the relay by id (#532), the coupon rows and the link's sent rows.
  */
 import type { TransactionRow } from '@imani/wallet-storage'
 
@@ -11,7 +11,7 @@ import type { DirectPorts } from './cashlinkDirect'
 import { linkPubOf, secretFromText } from './giftLink'
 import { getSigner } from './nap'
 import { replaceVoucherToken } from './pay'
-import { publish } from './relay'
+import { defaultRelayDeliveryPorts, deliverToRelay } from './relayDelivery'
 import { buildSentTransaction, type GiftLinkArm, type GiftLinkRecord } from './transactions'
 import { mirrorToGateway } from './transferSignature'
 import { publishTx } from './txRecords'
@@ -25,22 +25,12 @@ import { getWallet, notifyWalletChanged } from './wallet'
  * start. A relay that answered `OK false` (too large, #532) is never retried: it will refuse again.
  */
 export const WRAP_RELAY_ATTEMPTS = 3
-const WRAP_CONNECT_MS = 8_000
-const unreachable = (errors: string[]) => errors.length > 0 && errors.every((e) => /connection failure|timed out|could not connect/i.test(e))
-
-async function relayWrap(wrap: Parameters<typeof publish>[0], sleep: (ms: number) => Promise<void>): Promise<boolean> {
-  for (let attempt = 1; ; attempt++) {
-    const result = await publish(wrap, undefined, { connectMs: WRAP_CONNECT_MS }).catch(() => ({ ok: 0, total: 1, errors: ['connection failure: threw'] }))
-    if (result.ok > 0) return true
-    if (attempt >= WRAP_RELAY_ATTEMPTS || !unreachable(result.errors)) return false
-    await sleep(400 * attempt)
-  }
-}
 
 /**
  * One locked wrap onto its link, to the relay and the gateway's cache at once. Delivered means the
- * relay said OK and the gateway mirror answered 2xx (#532 follow-up): the claimer reads the gateway,
- * so a relay-only copy is not yet "on the link". Nothing is read back.
+ * RELAY holds it (publish OK and a read-back by id from the relay, #532) and the gateway mirror
+ * answered 2xx (#543 review: the claimer reads the gateway). The mirror alone never counts: the
+ * gateway keeps events strfry refused.
  */
 export async function publishWrap(linkSecret: Uint8Array, token: string, sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<boolean> {
   let me: string | undefined
@@ -50,8 +40,12 @@ export async function publishWrap(linkSecret: Uint8Array, token: string, sleep: 
     me = undefined
   }
   const wrap = wrapForLink(linkSecret, token, me)
-  const [relayed, mirrored] = await Promise.all([relayWrap(wrap, sleep), mirrorToGateway(wrap)])
-  return relayed && mirrored
+  const [relayed, mirrored] = await Promise.all([
+    deliverToRelay(wrap, { ...defaultRelayDeliveryPorts, sleep }, { attempts: WRAP_RELAY_ATTEMPTS }),
+    mirrorToGateway(wrap),
+  ])
+  if (!relayed.delivered && relayed.why === 'too_large') console.error('[cashlink] the relay refused a link wrap as too large (#532)')
+  return relayed.delivered && mirrored
 }
 
 async function settleSource(tokenId: string, rest: string | null): Promise<void> {

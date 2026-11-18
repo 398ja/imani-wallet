@@ -138,6 +138,19 @@ describe('the size model', () => {
   it('keeps the budget clear of the relay limit', () => {
     expect(EVENT_BUDGET_BYTES).toBeLessThan(RELAY_MAX_EVENT_BYTES)
   })
+
+  it('#532: kind-7375 token events share the one wrap budget, 55,121 bytes', () => {
+    expect(EVENT_BUDGET_BYTES).toBe(55_121)
+  })
+
+  it('#532: a record the size of the 65,381-byte 7375 found on staging is no longer one event', async () => {
+    // Plaintext whose single NIP-44 event would be ~65.4 KB: under the relay limit, over the budget.
+    const plain = noise(48_000)
+    expect(estimateEventBytes(plain.length, [['d', 'x'], ['spent', 'false']])).toBeGreaterThan(EVENT_BUDGET_BYTES)
+    const templates = await buildRecordEvents(7375, 'ab'.repeat(32), plain, [['spent', 'false']], sealer)
+    expect(templates.length).toBeGreaterThan(1)
+    for (const t of templates) expect(bytes(finalizeEvent(t, sk))).toBeLessThanOrEqual(EVENT_BUDGET_BYTES)
+  })
 })
 
 describe('publishVoucher with the real 7-proof terminal coupon', () => {
@@ -361,7 +374,7 @@ describe('a misconfigured chunk size is loud (review L1)', () => {
   it('throws rather than build a chunk event over the budget', async () => {
     await expect(
       buildRecordEvents(7375, 'ab'.repeat(32), noise(200_000), [['spent', 'false']], sealer, { chunkSize: 60_000 }),
-    ).rejects.toThrow(/over the 60000 budget/)
+    ).rejects.toThrow(new RegExp(`over the ${EVENT_BUDGET_BYTES} budget`))
   })
 })
 

@@ -46,6 +46,7 @@ import { readConfig, ConfigError, type IssuerConfig } from './config'
 import type { Ports } from './discharge'
 import { fileAnchors, httpIsBounced, httpPublishEvent, httpQueryWraps, httpReportOutcome, httpScrub, httpScrubAll, httpStallName, type GiftPorts } from './giftDelivery'
 import { mailerClient } from '../imani-mailer/client.ts'
+import { wsRelayPort } from './relayPort'
 import { countPass, renderMetrics } from './metrics'
 import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPass } from './outbox'
 import { PurchasesApi, ReportLostError } from './purchasesApi'
@@ -94,6 +95,8 @@ function giftPortsFor(config: IssuerConfig, g: NonNullable<IssuerConfig['gifts']
     testWindowSeconds: g.testWindowSeconds,
     publishEvent: httpPublishEvent(config.gatewayUrl, fetchImpl),
     queryWraps: httpQueryWraps(config.gatewayUrl, fetchImpl),
+    // #532: delivered means the relay holds it, not the gateway's cache.
+    ...(g.relayUrl ? { relay: wsRelayPort(g.relayUrl) } : {}),
     sendMail: (req) => mailer.send(req),
     scrubSeal: httpScrub(config.purchasesUrl, config.purchasesToken, fetchImpl),
     scrubAll: httpScrubAll(config.purchasesUrl, config.purchasesToken, fetchImpl),

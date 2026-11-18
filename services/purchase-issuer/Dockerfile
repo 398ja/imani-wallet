@@ -23,14 +23,15 @@ WORKDIR /app
 # silent major bump is a signing library nobody tested doing the one thing this
 # service exists to do.
 #
-# No `ws`. Unlike its siblings, this service never touches a relay: it talks
-# HTTP to payment-adapter and to the gateway, and nothing else. Adding it would
-# imply a relay dependency that does not exist.
+# `ws` since imani-wallet#532: gift wraps go to the RELAY and are read back from it by id, because
+# the gateway's events endpoint stores into its cache only (a wrap strfry refused still looked
+# delivered). Pinned to package-lock's 8.21.3, as audit-api, subscription and wallet-api pin it.
 RUN npm install --no-package-lock --omit=dev \
       @noble/curves@2.0.1 \
       @noble/hashes@1.8.0 \
       nostr-tools@2.24.1 \
       @cashu/crypto@0.3.4 \
+      ws@8.21.3 \
       tsx@4.19.2
 
 COPY services/purchase-issuer ./services/purchase-issuer
@@ -42,7 +43,9 @@ COPY services/purchase-issuer ./services/purchase-issuer
 # blinding and hash-to-curve those readers use, pinned to package-lock's 0.3.4. Note cashlinkLock.ts
 # also holds the WALLET's refund signer (one `schnorr.sign`); purchase-issuer imports only its two
 # readers (`readLinkLock`, `assertNotOpenAfterLocktime`) and holds no key that signer would take.
-COPY src/lib/voucherToken.ts src/lib/cashlinkLock.ts src/lib/walletSwap.ts ./src/lib/
+# #532: the shared relay size model and proof packer, and the relay refusal reader (no imports
+# beyond these files).
+COPY src/lib/voucherToken.ts src/lib/cashlinkLock.ts src/lib/walletSwap.ts src/lib/plainToken.ts src/lib/wrapSize.ts src/lib/wrapPacking.ts src/lib/relayRefusal.ts ./src/lib/
 COPY services/imani-mailer/client.ts services/imani-mailer/mailer.ts ./services/imani-mailer/
 
 # The shared currency table, mounted where a bare Node resolver will find it.
@@ -119,7 +122,7 @@ RUN node -e " \
 
 # And the copied wallet files must load in the image as the service loads them (a missing package
 # fails here, not at the first sale).
-RUN npx tsx -e "Promise.all([import('./src/lib/voucherToken.ts'), import('./src/lib/cashlinkLock.ts'), import('./services/imani-mailer/client.ts')]).then(ms => { if (ms.some(m => Object.keys(m).length === 0)) { console.error('FAIL: a copied module exports nothing'); process.exit(1) } }).catch(e => { console.error('FAIL: a copied module does not load:', e.message); process.exit(1) })"
+RUN npx tsx -e "Promise.all([import('./src/lib/voucherToken.ts'), import('./src/lib/cashlinkLock.ts'), import('./src/lib/wrapPacking.ts'), import('./src/lib/relayRefusal.ts'), import('./services/imani-mailer/client.ts')]).then(ms => { if (ms.some(m => Object.keys(m).length === 0)) { console.error('FAIL: a copied module exports nothing'); process.exit(1) } }).catch(e => { console.error('FAIL: a copied module does not load:', e.message); process.exit(1) })"
 
 # Where sealed credentials live. A VOLUME, because losing this file loses every
 # stall's issuing credential and each one can only be replaced by that stall
