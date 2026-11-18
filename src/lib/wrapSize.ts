@@ -45,13 +45,13 @@ export const WRAP_CONTENT_MAX_BYTES = RUMOR_KNEE_BYTES - RUMOR_FIXED_BYTES
 
 /** A builder asked to make an event the relay would refuse. Permanent: a retry builds the same. */
 export class OversizeEventError extends Error {
-  constructor(
-    readonly bytes: number,
-    readonly budget: number,
-    what = 'event',
-  ) {
+  readonly bytes: number
+  readonly budget: number
+  constructor(bytes: number, budget: number, what = 'event') {
     super(`${what} would be ${bytes} bytes, over the ${budget}-byte relay budget`)
     this.name = 'OversizeEventError'
+    this.bytes = bytes
+    this.budget = budget
   }
 }
 

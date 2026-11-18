@@ -14,6 +14,7 @@ import { xOnlyPub } from './cashlinkLock'
 import { fetchGiftWraps, type GiftWrap, type ProofState } from './giftLink'
 import { sealAuthorOf } from './transferSignature'
 import { creditableFaceValue, parseVoucherToken, tokenProofs } from './voucherToken'
+import { encodePlainTokenV4 } from './plainToken'
 import {
   acceptGiftSent,
   asLockedGiftRecord,
@@ -348,9 +349,14 @@ export async function readGiftReturn(r: Uint8Array, t: string | undefined, nowMs
         const ok = acceptGiftSent(msg, xOnlyPub(r), sealAuthorOf(wrap as never, r), issuerKey)
         if (!ok.ok) continue
         if (msg.gift === 'code' && giftReturnSeam.codeGifts()) return await readCodeReturn(r, msg, nowMs)
-        token = msg.token
-        stall = msg.stall
-        break
+        // #532: a gift too large for one wrap was handed over as several parts of the SAME voucher,
+        // each its own wrap. Merge the parts of the first voucher found into one token.
+        if (!token) {
+          token = msg.token
+          stall = msg.stall
+        } else {
+          token = mergeSameVoucher(token, msg.token)
+        }
       }
       if (!token) return { kind: 'not_found' }
     }
@@ -373,6 +379,21 @@ export async function readGiftReturn(r: Uint8Array, t: string | undefined, nowMs
       expiresAt: typeof parsed.voucher.expiresAt === 'number' && Number.isFinite(parsed.voucher.expiresAt) ? parsed.voucher.expiresAt : null,
       state: returnStateOf(states, check.x, nowMs),
     },
+  }
+}
+
+/** `b`'s proofs added to `a` when both are parts of one voucher on one mint; else `a` unchanged. */
+function mergeSameVoucher(a: string, b: string): string {
+  try {
+    const pa = parseVoucherToken(a)
+    const pb = parseVoucherToken(b)
+    if (pa.voucher.voucherId !== pb.voucher.voucherId || pa.mintUrl !== pb.mintUrl || pa.unit !== pb.unit) return a
+    const proofs = tokenProofs(a)
+    const seen = new Set(proofs.map((p) => p.secret))
+    const extra = tokenProofs(b).filter((p) => !seen.has(p.secret))
+    return extra.length === 0 ? a : encodePlainTokenV4(pa.mintUrl, pa.unit || 'sat', [...proofs, ...extra])
+  } catch {
+    return a
   }
 }
 
