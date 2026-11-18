@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.2] - 2026-11-18
+
+### Changed
+
+- **Help improve Imani: the consent text is four short lines instead of one long paragraph** (#591, owner review). It still says how often (at most twice a month, Wi-Fi only), what is in a health check and what never is, who reads it (support's AI, after names and ids are replaced on the phone), that it is deleted after 14 days, and that turning it off makes the server forget the device. 87 words, down from 211.
+
 ## [0.62.1] - 2026-11-17
 
 ### Fixed
