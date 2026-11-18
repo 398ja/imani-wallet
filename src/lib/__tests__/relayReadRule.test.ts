@@ -15,8 +15,10 @@ const READ = /\.(querySync|subscribeMany|subscribeManyEose)\s*\(|new\s+WebSocket
 /**
  * Kept relay reads, each because correctness depends on it. terminalDeliveryNet.giftWraps: the
  * gateway answers wraps with one capped page, and a wrap past that page was hidden (#402).
+ * relay.relayHasEvent: a read of ONE id after a publish, the only proof the relay holds it; the
+ * gateway's cache keeps events strfry refused (#532).
  */
-const ALLOWED = new Set(['lib/terminalDeliveryNet.ts'])
+const ALLOWED = new Set(['lib/terminalDeliveryNet.ts', 'lib/relay.ts'])
 
 function sources(dir: string): string[] {
   const out: string[] = []
