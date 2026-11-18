@@ -21,7 +21,10 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 import type { SendOutcome, SendRequest } from '../imani-mailer/mailer.ts'
-import { giftSentRumor, wrapForLink } from './giftLock'
+import { giftSentRumor, linkWrapContent, wrapForLink } from './giftLock'
+import type { RelayPort } from './relayPort'
+import { packTokenForWraps } from '../../src/lib/wrapPacking'
+import { eventBytes, OversizeEventError, WRAP_BUDGET_BYTES } from '../../src/lib/wrapSize'
 import type { TrackInput } from './giftTracker'
 import type { CodeGiftPorts } from './codeGift'
 
@@ -48,6 +51,12 @@ export interface GiftPorts {
   walletOrigin: string
   /** POST a signed event to the gateway relay, NIP-98 by `signer`. True when stored. */
   publishEvent(signer: Uint8Array, event: WrapEvent): Promise<boolean>
+  /**
+   * #532: the relay itself (strfry). The gateway's events endpoint stores into its cache only, so a
+   * wrap is delivered only once the relay holds it: OK on publish and found by id. Absent (tests of
+   * other steps), only the gateway is used, as before.
+   */
+  relay?: RelayPort
   /** Every kind-1059 wrap p-tagged to getPublicKey(reader), read with `reader`'s NIP-98. Throws when unreachable. */
   queryWraps(reader: Uint8Array): Promise<WrapEvent[]>
   /** imani-mailer. */
@@ -88,33 +97,77 @@ function carries(wrap: WrapEvent, linkSecret: Uint8Array, token: string): boolea
 }
 
 /**
- * Publish the Cashlink wrap for ℓ unless one with this token is already stored (a retry publishes
- * nothing new), then confirm it by reading it back.
+ * #532: one wrap onto the RELAY, then read back from the relay by id. `too_large` is permanent: the
+ * relay will refuse the same bytes again. Ports without a relay skip this step.
+ */
+async function relayHolds(ports: GiftPorts, wrap: WrapEvent, what: string): Promise<StepResult> {
+  if (!ports.relay) return ok
+  if (eventBytes(wrap) > WRAP_BUDGET_BYTES) return { ok: false, reason: `${what} is over the relay budget`, permanent: true }
+  if ((await ports.relay.has(wrap.id)) === true) return ok
+  const published = await ports.relay.publish(wrap as never)
+  if (published === 'too_large') return { ok: false, reason: `the relay refused ${what} as too large`, permanent: true }
+  if (published !== 'ok') return { ok: false, reason: `the relay did not take ${what} (${published})`, permanent: false }
+  const held = await ports.relay.has(wrap.id)
+  if (held !== true) return { ok: false, reason: `${what} was accepted by the relay but is not readable back from it`, permanent: false }
+  return ok
+}
+
+/** The gateway cache copy (the wallet reads the gateway, #428). */
+async function gatewayStores(ports: GiftPorts, signer: Uint8Array, wrap: WrapEvent, what: string): Promise<StepResult> {
+  let stored = false
+  try {
+    stored = await ports.publishEvent(signer, wrap)
+  } catch {
+    stored = false
+  }
+  return stored ? ok : { ok: false, reason: `the gateway relay did not store ${what}`, permanent: false }
+}
+
+/**
+ * The token cut into parts whose wraps fit the relay budget (#532), each a self-contained token of
+ * the same voucher. A token that fits is one part, unchanged.
+ */
+function partsFor(token: string, contentOf: (t: string) => string): { ok: true; parts: string[] } | { ok: false; result: StepResult } {
+  try {
+    return { ok: true, parts: packTokenForWraps(token, contentOf) }
+  } catch (error) {
+    if (error instanceof OversizeEventError) return { ok: false, result: { ok: false, reason: error.message, permanent: true } }
+    return { ok: false, result: { ok: false, reason: 'the gift token could not be read to fit the relay budget', permanent: true } }
+  }
+}
+
+/**
+ * Publish the Cashlink wrap(s) for ℓ and confirm each is on the RELAY (publish OK, read back by id)
+ * and in the gateway's cache (the claimer reads the gateway). A token too large for one wrap goes out
+ * as several, each a self-contained part of the same voucher (#532): the claim page reads every wrap
+ * on the link. A retry publishes nothing new: a part already in the gateway is re-sent to the relay
+ * as the SAME event (same id) when the relay lacks it.
  */
 export async function publishLinkWrap(ports: GiftPorts, linkSecret: Uint8Array, token: string): Promise<StepResult> {
+  const packed = partsFor(token, linkWrapContent)
+  if (!packed.ok) return packed.result
   let existing: WrapEvent[]
   try {
     existing = await ports.queryWraps(linkSecret)
   } catch {
     return { ok: false, reason: 'the gateway relay could not be queried for the gift wrap', permanent: false }
   }
-  if (!existing.some((w) => carries(w, linkSecret, token))) {
-    const wrap = wrapForLink(linkSecret, token) as unknown as WrapEvent
-    let stored = false
-    try {
-      stored = await ports.publishEvent(linkSecret, wrap)
-    } catch {
-      stored = false
-    }
-    if (!stored) return { ok: false, reason: 'the gateway relay did not store the gift wrap', permanent: false }
-    try {
-      existing = await ports.queryWraps(linkSecret)
-    } catch {
-      return { ok: false, reason: 'the gift wrap could not be confirmed (relay query failed)', permanent: false }
-    }
-    if (!existing.some((w) => carries(w, linkSecret, token))) {
-      return { ok: false, reason: 'the gift wrap was accepted but is not readable back', permanent: false }
-    }
+  for (const part of packed.parts) {
+    const found = existing.find((w) => carries(w, linkSecret, part))
+    const wrap = found ?? (wrapForLink(linkSecret, part) as unknown as WrapEvent)
+    const relayed = await relayHolds(ports, wrap, 'the gift wrap')
+    if (!relayed.ok) return relayed
+    if (found) continue
+    const stored = await gatewayStores(ports, linkSecret, wrap, 'the gift wrap')
+    if (!stored.ok) return stored
+  }
+  try {
+    existing = await ports.queryWraps(linkSecret)
+  } catch {
+    return { ok: false, reason: 'the gift wrap could not be confirmed (relay query failed)', permanent: false }
+  }
+  if (!packed.parts.every((part) => existing.some((w) => carries(w, linkSecret, part)))) {
+    return { ok: false, reason: 'the gift wrap was accepted but is not readable back', permanent: false }
   }
   return ok
 }
@@ -150,20 +203,26 @@ export async function sendCodeEmail(
   return { ok: false, reason: `the code email was refused: ${out.error}`, permanent: !out.retryable }
 }
 
-/** Hand the buyer the locked token (contract §3): a NIP-17 wrap to the refund key. */
+/**
+ * Hand the buyer the locked token (contract §3): a NIP-17 wrap to the refund key, on the relay
+ * (read back by id) and in the gateway's cache. A token too large for one wrap is handed over as
+ * several `imani_gift_sent` wraps, each a self-contained part (#532); the return page merges them.
+ */
 export async function handBuyerTheGift(
   ports: GiftPorts,
   input: { refundPubkey: string; token: string; stall: string; to: string | null; claimBy: number; gift?: 'code' },
 ): Promise<StepResult> {
   const sealKey = hexToBytes(ports.sealSecretHex)
-  const wrap = nip17.wrapEvent(sealKey, { publicKey: input.refundPubkey }, giftSentRumor(input)) as unknown as WrapEvent
-  let stored = false
-  try {
-    stored = await ports.publishEvent(sealKey, wrap)
-  } catch {
-    stored = false
+  const packed = partsFor(input.token, (token) => giftSentRumor({ ...input, token }))
+  if (!packed.ok) return packed.result
+  for (const token of packed.parts) {
+    const wrap = nip17.wrapEvent(sealKey, { publicKey: input.refundPubkey }, giftSentRumor({ ...input, token })) as unknown as WrapEvent
+    const relayed = await relayHolds(ports, wrap, "the buyer's copy of the gift")
+    if (!relayed.ok) return relayed
+    const stored = await gatewayStores(ports, sealKey, wrap, "the buyer's copy of the gift")
+    if (!stored.ok) return { ok: false, reason: "the buyer's copy of the gift was not stored by the gateway relay", permanent: false }
   }
-  return stored ? ok : { ok: false, reason: "the buyer's copy of the gift was not stored by the gateway relay", permanent: false }
+  return ok
 }
 
 // ─── HTTP adapters ──────────────────────────────────────────────────────────

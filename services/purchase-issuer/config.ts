@@ -84,6 +84,12 @@ export interface IssuerConfig {
     /** TEST MODE ONLY: the claim window in seconds instead of the draft's days. */
     testWindowSeconds: number | null
     /**
+     * #532: the relay (strfry) gift wraps are published to and read back from by id
+     * (`PURCHASE_RELAY_URL`). Null publishes to the gateway's cache only, as before, which a relay
+     * reader never sees: deployments set it.
+     */
+    relayUrl: string | null
+    /**
      * #410 code gifts: imani-checkout-codes, or null when `PURCHASE_CODE_GIFTS` is not `true` (the
      * default). Off, every code gift is parked before minting.
      */
@@ -209,9 +215,15 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
         reminderOffsetsMs.push(h * 3_600_000)
       }
     }
+    const rawRelay = (env.PURCHASE_RELAY_URL ?? '').trim()
+    let relayUrl: string | null = null
+    if (rawRelay !== '') {
+      if (!/^wss?:\/\/[^\s/]+/.test(rawRelay)) missing.push('PURCHASE_RELAY_URL: a ws:// or wss:// relay URL')
+      else relayUrl = rawRelay
+    }
     const mailFrom = (env.PURCHASE_GIFT_MAIL_FROM ?? 'gifts@imani.casa').trim()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mailFrom)) missing.push('PURCHASE_GIFT_MAIL_FROM: the From address imani-mailer sends gifts as')
-    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, reminderOffsetsMs, mailFrom, mintTransportUrl, sweepEveryMs, testWindowSeconds, checkoutCodesUrl }
+    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, reminderOffsetsMs, mailFrom, mintTransportUrl, sweepEveryMs, testWindowSeconds, checkoutCodesUrl, relayUrl }
   }
 
   if (missing.length > 0) throw new ConfigError(missing)

@@ -10,7 +10,7 @@ import { useWebSocketImplementation as setWebSocketImplementation } from 'nostr-
 import { secp256k1 } from '@noble/curves/secp256k1.js'
 import WebSocket from 'ws'
 
-import { publish } from '../relay'
+import { classifyRelayError, publish, refusedTooLarge, relayHasEvent } from '../relay'
 
 setWebSocketImplementation(WebSocket)
 // relay.ts imports SimplePool from 'nostr-tools', a different module instance
@@ -90,6 +90,9 @@ describe('publish against a relay that refuses', () => {
       const result = await publish(event(), [`ws://127.0.0.1:${port}`])
       expect(result).toMatchObject({ ok: 0, total: 1 })
       expect(result.errors).toEqual(['invalid: event too large: 66031'])
+      // #532: classified, so a caller can tell "permanent, re-split" from "transient, retry".
+      expect(result.refusals).toEqual([{ kind: 'too_large', bytes: 66031, reason: 'invalid: event too large: 66031' }])
+      expect(refusedTooLarge(result)).toBe(true)
     } finally {
       server.close()
     }
@@ -102,6 +105,48 @@ describe('publish against a relay that refuses', () => {
  * reached strfry. The default 3 s window stays for every other publish; the Terminals page asks
  * for 8 s (`connectMs`), which a 4 s accept fits.
  */
+describe('relay refusal classes (#532)', () => {
+  it('tells a size refusal from an unreachable relay and any other refusal', () => {
+    expect(classifyRelayError('invalid: event too large: 66045')).toMatchObject({ kind: 'too_large', bytes: 66045 })
+    expect(classifyRelayError('connection failure: ECONNREFUSED')).toMatchObject({ kind: 'unreachable' })
+    expect(classifyRelayError('blocked: pubkey not admitted')).toMatchObject({ kind: 'refused' })
+  })
+  it('an unreachable relay is not a size refusal', async () => {
+    const result = await publish(event(), [`ws://127.0.0.1:${deadPort}`])
+    expect(refusedTooLarge(result)).toBe(false)
+    expect(result.refusals?.[0]?.kind).toBe('unreachable')
+  })
+})
+
+/**
+ * #532: the read-back that proves delivery asks the RELAY for one id. A fake relay that holds one
+ * event answers it; one that holds nothing answers EOSE (false); a dead port is null (not asked).
+ */
+describe('relayHasEvent (#532)', () => {
+  it('true when the relay returns the id, false on EOSE without it, null when unreachable', async () => {
+    const held = event()
+    const { WebSocketServer } = await import('ws')
+    const server = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((resolve) => server.on('listening', () => resolve()))
+    server.on('connection', (socket) =>
+      socket.on('message', (raw) => {
+        const [type, sub, filter] = JSON.parse(String(raw)) as [string, string, { ids?: string[] }]
+        if (type !== 'REQ') return
+        if (filter.ids?.includes(held.id)) socket.send(JSON.stringify(['EVENT', sub, held]))
+        socket.send(JSON.stringify(['EOSE', sub]))
+      }),
+    )
+    try {
+      const { port } = server.address() as { port: number }
+      expect(await relayHasEvent(held.id, [`ws://127.0.0.1:${port}`])).toBe(true)
+      expect(await relayHasEvent('00'.repeat(32), [`ws://127.0.0.1:${port}`])).toBe(false)
+      expect(await relayHasEvent(held.id, [`ws://127.0.0.1:${deadPort}`], 1_500)).toBe(null)
+    } finally {
+      server.close()
+    }
+  }, 15_000)
+})
+
 describe('publish against a relay slow to accept', () => {
   it('gives up at the default 3 s window', async () => {
     const { createServer: http } = await import('node:http')

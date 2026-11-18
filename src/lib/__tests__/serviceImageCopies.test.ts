@@ -56,9 +56,13 @@ describe('service images copy every wallet file their copied wallet files import
     })
   }
 
-  it('catches the v0.55.3 break (voucherToken importing plainToken for its value)', () => {
+  it('catches the v0.55.3 break (a copied file importing one the image does not copy)', () => {
+    // v0.55.3's purchase-issuer copied voucherToken.ts without plainToken.ts. Since #532 the image
+    // copies plainToken.ts (wrapPacking needs it), so the break is replayed by dropping it again.
     const copied = copiedFiles('services/purchase-issuer/Dockerfile')
-    expect(covered(copied, 'src/lib/voucherToken.ts')).toBe(true)
-    expect(covered(copied, 'src/lib/plainToken.ts')).toBe(false)
+    expect(covered(copied, 'src/lib/plainToken.ts')).toBe(true)
+    const without = new Set([...copied].filter((c) => c !== 'src/lib/plainToken.ts'))
+    const missing = ['src/lib/wrapPacking.ts'].flatMap((f) => valueImports(f).filter((dep) => !covered(without, dep)))
+    expect(missing).toEqual(['src/lib/plainToken.ts'])
   })
 })
