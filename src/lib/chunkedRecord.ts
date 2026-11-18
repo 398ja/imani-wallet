@@ -11,6 +11,8 @@ import {
   type ChunkEventData,
 } from 'nostr-chunked-events'
 
+import { RELAY_MAX_EVENT_BYTES as SHARED_RELAY_MAX_EVENT_BYTES, WRAP_BUDGET_BYTES } from './wrapSize'
+
 /**
  * Self-encrypted records that may be too large for one relay event (#203).
  *
@@ -33,23 +35,23 @@ import {
  * event budget, not the cipher, decides the count.
  */
 
-/** strfry's `maxEventSize` on staging, prod's stock config and the local gate. */
-export const RELAY_MAX_EVENT_BYTES = 65_536
+/** strfry's `maxEventSize` on staging, prod's stock config and the local gate (`wrapSize.ts`). */
+export const RELAY_MAX_EVENT_BYTES = SHARED_RELAY_MAX_EVENT_BYTES
 
 /**
- * Every event we publish must estimate at or under this. 5.5 KB below the limit,
- * for what the estimate does not model exactly (JSON escaping in tags, a relay
- * that counts the envelope).
+ * Every event we publish must estimate at or under this: the one relay budget every builder shares
+ * (#532, `wrapSize.ts`), 55,121 bytes, the top NIP-44 bucket under the 64 KB cliff. It was 60,000
+ * here: a kind-7375 token event of 65,381 bytes was found on staging (2026-11-05), 155 bytes under
+ * the limit, so NIP-60 token events now get the same 10 KB of headroom as gift wraps.
  */
-export const EVENT_BUDGET_BYTES = 60_000
+export const EVENT_BUDGET_BYTES = WRAP_BUDGET_BYTES
 
 /**
- * Plaintext per chunk: the library's strfry sizing, the largest plaintext whose
- * NIP-44 payload leaves 1.5 KB of a 65,536-byte event for id, pubkey, sig and
- * tags. That is 40,960 bytes (pads to itself), about 55 KB per event, and the
- * per-chunk guard below checks every chunk against our own 60,000 budget too.
+ * Plaintext per chunk: the largest plaintext whose NIP-44 payload leaves 1.5 KB of the budget for
+ * id, pubkey, sig and tags. That is 32,768 bytes (pads to itself), and the per-chunk guard below
+ * checks every chunk against the budget too.
  */
-export const CHUNK_PLAINTEXT_BYTES = maxNip44PlaintextSize(RELAY_MAX_EVENT_BYTES - 1_536)
+export const CHUNK_PLAINTEXT_BYTES = maxNip44PlaintextSize(EVENT_BUDGET_BYTES - 1_536)
 
 /**
  * The record a chunk belongs to (#203 review V1). Explicit, so a chunk written
