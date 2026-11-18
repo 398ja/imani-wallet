@@ -74,8 +74,18 @@ export const READY_PREFIX = `${ENROLMENT_PREFIX}/ready/`
 
 /** How long a begun enrolment waits for its credential. Minting takes seconds; a phone may sleep. */
 export const PENDING_TTL_MS = 30 * 60_000
-/** Begun enrolments held at once. Anyone can make a key and begin, so this is bounded. */
+/**
+ * Begun enrolments held at once. Anyone can make a key and begin, so this is bounded, and when it
+ * is full the OLDEST begun enrolment is dropped rather than the newcomer refused (#306): refusing
+ * let anyone with a thousand throwaway keys lock every real stall out of enrolling.
+ */
 export const MAX_PENDING = 1_000
+/**
+ * A stall that begins again within this long gets the SAME lock key back (#306). So one key
+ * cannot churn fresh lock keys in a loop, and a phone retrying a lost answer, or retrying its
+ * enrol, keeps the key its minted credential is locked to.
+ */
+export const BEGIN_COOLDOWN_MS = 60_000
 /** The largest body accepted. A delegation event is well under 1 KiB. */
 export const MAX_BODY_BYTES = 16 * 1024
 
@@ -103,6 +113,11 @@ export interface EnrolmentResponse {
 /** What a stall is told about itself. */
 export interface EnrolmentStatus {
   enrolled: boolean
+  /**
+   * The enrolled credential's id (#306). Told only to the stall itself (the NIP-98 caller), never
+   * on `/ready`: the phone uses it to cancel the credential a re-enrolment supersedes.
+   */
+  credentialId?: string
   /** The credential's standing at the gateway, when this process knows it. */
   confirmation: ConfirmStanding | 'unknown' | null
   /** The delegation's expiry, epoch seconds. */
@@ -234,13 +249,28 @@ export class EnrolmentService {
   /** Step 1: a fresh lock key for this stall. Its private half stays here. */
   private async begin(stall: string): Promise<EnrolmentResponse> {
     this.sweep()
-    if (!this.pending.has(stall) && this.pending.size >= MAX_PENDING) {
-      return { status: 503, body: { error: 'too many enrolments in progress; try again in a few minutes' } }
+    const earlier = this.pending.get(stall)
+    let lockKeyHex: string
+    if (earlier && this.now() - earlier.at < BEGIN_COOLDOWN_MS) {
+      // Within the cooldown the same key is answered again (#306). Not refreshed: the cooldown
+      // runs from the key's own creation, so a loop of begins cannot keep one alive past it.
+      lockKeyHex = earlier.lockKeyHex
+    } else {
+      // Full: drop the OLDEST begun enrolment, never refuse this one (#306). A `Map` iterates in
+      // insertion order, and every entry is re-inserted when it is replaced, so the first is the
+      // oldest.
+      this.pending.delete(stall)
+      while (this.pending.size >= MAX_PENDING) {
+        const oldest = this.pending.keys().next().value
+        if (oldest === undefined) break
+        this.pending.delete(oldest)
+      }
+      lockKeyHex = bytesToHex(schnorr.utils.randomSecretKey())
+      // Beginning again after the cooldown REPLACES a begun one: the phone simply starts over.
+      this.pending.set(stall, { lockKeyHex, at: this.now() })
     }
-    const lockKeyHex = bytesToHex(schnorr.utils.randomSecretKey())
     const lockPubkey = getPublicKey(hexToBytes(lockKeyHex))
-    // Beginning again REPLACES a begun one: the phone that lost its answer simply starts over.
-    this.pending.set(stall, { lockKeyHex, at: this.now() })
+    const begunAt = this.pending.get(stall)!.at
     const createdAt = Math.floor(this.now() / 1000)
     const digest = sha256(utf8ToBytes([ENROLMENT_TAG, '1', lockPubkey, String(createdAt)].join(US)))
     const sig = bytesToHex(schnorr.sign(digest, hexToBytes(lockKeyHex)))
@@ -250,7 +280,7 @@ export class EnrolmentService {
         lockPubkey,
         // `X-Imani-Terminal-Enrolment` for the mint: proof that this key was made as a terminal.
         enrolmentProof: `1:${createdAt}:${sig}`,
-        expiresAt: Math.floor((this.now() + PENDING_TTL_MS) / 1000),
+        expiresAt: Math.floor((begunAt + PENDING_TTL_MS) / 1000),
       },
     }
   }
@@ -367,6 +397,7 @@ export class EnrolmentService {
     // gateway blip must not take a working stall off sale.
     return {
       enrolled: true,
+      credentialId: credential.credentialId,
       confirmation,
       delegationExpiresAt,
       // A delegation that cannot back this term is not "valid" for card sales, whatever its date.

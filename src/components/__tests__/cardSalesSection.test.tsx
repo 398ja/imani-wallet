@@ -34,6 +34,18 @@ describe('the card-sales step', () => {
     expect(screen.queryByRole('button', { name: /turn on card sales/i })).toBeNull()
   })
 
+  // #306: an enrolled stall can renew early, without waiting for Buy to switch off.
+  it('offers Renew card sales while on, and renews', async () => {
+    const renewed: CardSalesStatus = { ...ON, delegationExpiresAt: 2_100_000_000 }
+    const turnOn = vi.fn(ok(renewed))
+    render(<CardSalesSection deps={{ status: ok(ON), turnOn }} />)
+    expect(await screen.findByText('Card sales: on')).toBeTruthy()
+    expect(screen.getByText(/^Set up until /)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Renew card sales' }))
+    expect(await screen.findByText('Card sales: on')).toBeTruthy()
+    await vi.waitFor(() => expect(turnOn).toHaveBeenCalledTimes(1))
+  })
+
   // Needs setup: one primary button, which enrols, and then the state reads on.
   it('turns card sales on for a stall that needs setup', async () => {
     const turnOn = vi.fn(ok(ON))

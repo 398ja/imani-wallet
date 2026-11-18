@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Turning on card sales no longer locks a stall out for a day after two failures** (#306). The enrol step is retried on a 502 or a lost answer with the SAME minted credential, instead of minting a new one each attempt (the gateway holds at most two unconfirmed per stall for 24 hours). If it never lands, the phone cancels its own unconfirmed credential so the slot comes back at once. A lost answer that did land is recognised from the stall's status and counted as on.
+- **Re-enrolling cancels the card-sales credential it replaced** (#306). It used to stay live at the gateway for a year.
+- **purchase-issuer: the begin map can no longer be filled to lock stalls out** (#306). A stall that begins again within a minute gets the same lock key back, and when 1000 enrolments are in progress the oldest is dropped instead of refusing the newcomer.
+
+### Added
+
+- **Renew card sales** (#306). While card sales are on, Settings shows until when, and a Renew button that renews the credential and delegation early.
+- The stall's own card-sales status names its credential (`credentialId`); the public `/ready` answer does not.
+
+### Changed
+
+- The "no key material leaves the phone" test for card-sales enrolment is now an allowlist of every field and header each request may carry, with the shape of each value (#306), so a key split in two or written as a decimal is caught too.
+
 ## [0.62.2] - 2026-11-18
 
 ### Changed
