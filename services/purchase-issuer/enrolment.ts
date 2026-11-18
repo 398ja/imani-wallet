@@ -75,6 +75,8 @@ export const ENROL_PATH = `${ENROLMENT_PREFIX}/enrolment`
  * stall; body `{ "voucherIds": [...] }` (a filter, see `salePull.ts`).
  */
 export const RESEND_PATH = `${ENROLMENT_PREFIX}/sales/resend`
+/** At most one resend per stall in this window (each one may publish `MAX_RESEND` records). */
+export const RESEND_COOLDOWN_MS = 60_000
 /** Public: may shoppers be sold a card purchase for this stall? `/ready/<stall pubkey>`. */
 export const READY_PREFIX = `${ENROLMENT_PREFIX}/ready/`
 
@@ -190,6 +192,8 @@ export interface EnrolmentDeps {
 export class EnrolmentService {
   private readonly pending = new Map<string, Pending>()
   private readonly replay = new ReplayGuard()
+  /** Last resend per stall (epoch ms): one stall cannot turn the issuer into a publish amplifier. */
+  private readonly lastResend = new Map<string, number>()
   private readonly deps: EnrolmentDeps
   private readonly now: () => number
 
@@ -274,7 +278,16 @@ export class EnrolmentService {
     ) {
       return { status: 400, body: { error: `voucherIds must be at most ${MAX_RESEND} voucher ids` } }
     }
+    const now = this.now()
+    const last = this.lastResend.get(stall)
+    if (last !== undefined && now - last < RESEND_COOLDOWN_MS) {
+      return { status: 429, body: { error: 'sale records were re-sent moments ago; try again later' } }
+    }
+    this.lastResend.set(stall, now)
+    for (const [s, at] of this.lastResend) if (now - at >= RESEND_COOLDOWN_MS) this.lastResend.delete(s)
     const result = await this.deps.resend(stall, ids as string[])
+    // An outage must not cost the stall its next try.
+    if (result.kind !== 'sent') this.lastResend.delete(stall)
     if (result.kind === 'not-enrolled') return { status: 404, body: { error: 'card sales are not set up for this stall' } }
     if (result.kind === 'unavailable') {
       return { status: 503, body: { error: 'the stall\u2019s card sales could not be read just now; try again later' } }

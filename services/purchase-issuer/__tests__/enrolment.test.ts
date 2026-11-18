@@ -593,6 +593,16 @@ describe('the pull on login: resend (imani-wallet#275)', () => {
     expect(asked).toEqual([])
   })
 
+  it('allows one resend per stall per cooldown, and does not burn it on an outage', async () => {
+    const { call, asked } = await resendService({ kind: 'sent', sent: 0, failed: [], unknown: [] })
+    expect((await call('{}')).status).toBe(200)
+    expect((await call('{}')).status).toBe(429)
+    expect(asked).toHaveLength(1)
+    const down = await resendService({ kind: 'unavailable' })
+    expect((await down.call('{}')).status).toBe(503)
+    expect((await down.call('{}')).status).toBe(503)
+  })
+
   it('answers 404 for an unenrolled stall, 503 when payment-adapter is down or resend is not wired', async () => {
     expect((await (await resendService({ kind: 'not-enrolled' })).call('{}')).status).toBe(404)
     expect((await (await resendService({ kind: 'unavailable' })).call('{}')).status).toBe(503)
