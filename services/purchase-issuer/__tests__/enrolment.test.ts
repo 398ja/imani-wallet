@@ -571,10 +571,10 @@ describe('the pull on login: resend (imani-wallet#275)', () => {
   }
 
   it('re-sends for the SIGNER, with the ids as a filter', async () => {
-    const { call, asked } = await resendService({ kind: 'sent', sent: 1, failed: [], unknown: ['x-1'] })
-    const answer = await call(JSON.stringify({ voucherIds: ['8027e345', 'x-1'] }))
-    expect(answer).toEqual({ status: 200, body: { sent: 1, failed: [], unknown: ['x-1'] } })
-    expect(asked).toEqual([{ stall: STALL, ids: ['8027e345', 'x-1'] }])
+    const { call, asked } = await resendService({ kind: 'sent', sent: 1, failed: [], unknown: ['x-100000'] })
+    const answer = await call(JSON.stringify({ voucherIds: ['8027e345', 'x-100000'] }))
+    expect(answer).toEqual({ status: 200, body: { sent: 1, failed: [], unknown: ['x-100000'] } })
+    expect(asked).toEqual([{ stall: STALL, ids: ['8027e345', 'x-100000'] }])
   })
 
   it('refuses an unsigned caller, and another key asks only for its own sales', async () => {
