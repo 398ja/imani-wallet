@@ -112,6 +112,9 @@ const AUDITED = new Set<string>([
   'src/lib/licences.ts#licenceFromToken#7fa34d6c8a4e',
   'src/lib/licences.ts#licenceSignatureVerifier#fd266fd0a09b',
   'src/lib/lockedGiftsApp.ts#readGiftReturn#d4de9e2ef54a',
+  // #532: merging a buyer's copy handed over in parts. On any failure the first part is kept as it
+  // is, unmerged; checkLockedGift then decides it, so nothing is credited or spent by the catch.
+  'src/lib/lockedGiftsApp.ts#mergeSameVoucher#023567cb5c07',
   'src/lib/lockedGiftsApp.ts#runSweep#4d51dc63f638',
   'src/lib/lockedGiftsApp.ts#runSweep#a29d28c626f5',
   'src/lib/lockedGifts.ts#checkLockedGift#29e0cbd762d4',
