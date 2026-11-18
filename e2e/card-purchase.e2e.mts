@@ -160,9 +160,11 @@ async function saleRecordRows(): Promise<Array<Record<string, unknown>>> {
   return rows
 }
 
+// The key goes to the CLI through its environment, never argv (argv is readable by any local user via ps).
+const STRIPE_ENV = { ...process.env, STRIPE_API_KEY: KEY }
 let listener: ChildProcess | null = null
 function listen(): void {
-  listener = spawn('stripe', ['listen', '--api-key', KEY, '--forward-connect-to', `${PA}${WEBHOOK_PATH}`], { stdio: 'ignore' })
+  listener = spawn('stripe', ['listen', '--forward-connect-to', `${PA}${WEBHOOK_PATH}`], { stdio: 'ignore', env: STRIPE_ENV })
 }
 function stopListening(): void {
   listener?.kill('SIGTERM')
@@ -287,7 +289,7 @@ try {
   console.log('F2  replay the paid event')
   const event = await paidEventFor(paid.session)
   check('the paid event is found', Boolean(event))
-  if (event) execFileSync('stripe', ['events', 'resend', event, '--api-key', KEY, '--stripe-account', account], { stdio: 'ignore' })
+  if (event) execFileSync('stripe', ['events', 'resend', event, '--stripe-account', account], { stdio: 'ignore', env: STRIPE_ENV })
   await new Promise((r) => setTimeout(r, 15_000))
   check('still exactly one row after the replay', rowsFor(pi).length === 1)
   check('still exactly one coupon after the replay', (await stallList()).filter((p) => p.ref === pi).length === 1)
@@ -302,7 +304,7 @@ try {
   listen()
   await new Promise((r) => setTimeout(r, 5000))
   const lateEvent = await paidEventFor(late.session)
-  if (lateEvent) execFileSync('stripe', ['events', 'resend', lateEvent, '--api-key', KEY, '--stripe-account', account], { stdio: 'ignore' })
+  if (lateEvent) execFileSync('stripe', ['events', 'resend', lateEvent, '--stripe-account', account], { stdio: 'ignore', env: STRIPE_ENV })
   const lateRows = await until(() => {
     const rows = rowsFor(latePi)
     return rows.length === 1 && rows[0].status === 'DISCHARGED' ? rows : undefined
