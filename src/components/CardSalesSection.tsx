@@ -19,7 +19,7 @@ import { getSigner } from '../lib/nap'
  *
  * Three states, one sentence each, and the action only where there is something to do:
  *
- * - **Card sales: on.** Nothing to press.
+ * - **Card sales: on.** A quiet Renew card sales, for renewing early (#306).
  * - **Card sales: needs setup.** One primary button, which does the whole thing.
  * - **Couldn't check.** Said plainly, with Check again. Not "off": a blip is not a fact.
  */
@@ -44,6 +44,11 @@ function sentence(text: string): string {
   if (trimmed === '') return 'Something went wrong.'
   const capped = trimmed[0].toUpperCase() + trimmed.slice(1)
   return /[.!?]$/.test(capped) ? capped : `${capped}.`
+}
+
+/** The delegation's end, as a date the stall reads. */
+function renewByDate(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
 }
 
 export function CardSalesSection({ deps = {} }: { deps?: CardSalesDeps }) {
@@ -124,6 +129,21 @@ export function CardSalesSection({ deps = {} }: { deps?: CardSalesDeps }) {
       {busy && (
         <div className="mt-3">
           <Notice tone="warning">Setting up card sales. This takes a few seconds. Keep this screen open.</Notice>
+        </div>
+      )}
+
+      {/* #306: a stall renews early, without waiting for Buy to switch off. Quiet, since nothing
+          is wrong; it says when the current setup runs out. */}
+      {loaded && on && state && (
+        <div className="mt-4 grid gap-2">
+          {state.delegationExpiresAt !== null && (
+            <p className="text-sm leading-relaxed text-mono-500">
+              Set up until {renewByDate(state.delegationExpiresAt)}.
+            </p>
+          )}
+          <Button size="lg" variant="outline" disabled={busy} onClick={() => run(turnOn)}>
+            {busy ? 'Renewing…' : 'Renew card sales'}
+          </Button>
         </div>
       )}
 
