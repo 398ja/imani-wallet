@@ -66,6 +66,8 @@ export const CARD_SALES_TERMINAL_NAME = 'Card sales'
 /** What the issuer says about this stall. Mirrors `EnrolmentStatus` in purchase-issuer. */
 export interface CardSalesStatus {
   enrolled: boolean
+  /** The enrolled credential, told to the stall itself only (#306). */
+  credentialId?: string
   confirmation: 'confirmed' | 'expired' | 'unconfirmed' | 'unknown' | null
   delegationExpiresAt: number | null
   delegationValid: boolean
@@ -74,6 +76,9 @@ export interface CardSalesStatus {
   /** Set for the reasons the stall fixes in its shop settings (#312). */
   reasonCode?: 'validity_never_expires' | 'validity_outlives_delegation' | 'validity_unknown'
 }
+
+/** How long one call to the issuer may take. The enrol includes a confirm at the gateway. */
+export const CALL_TIMEOUT_MS = 20_000
 
 export type CardSalesResult =
   | { kind: 'ok'; status: CardSalesStatus }
@@ -91,6 +96,10 @@ export interface EnrolDeps {
   /** Spends a credential that came back wrong. Optional: absent, a wrong one is reported, kept. */
   spendAtOnce?: (token: string) => Promise<boolean>
   now?: () => number
+  /** Cancels a credential at the gateway, as the stall (#306). Never throws. */
+  cancelCredential?: (credentialId: string) => Promise<void>
+  /** Waits between enrol attempts. Tests pass an instant one. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 async function reason(response: Response, fallback: string): Promise<string> {
@@ -116,13 +125,23 @@ export async function fetchCardSalesStatus(signer: RequestSigner): Promise<CardS
 
 /**
  * Turn card sales on: begin, mint, delegate, enrol. Safe to run again: a second run replaces the
- * stall's one record with a fresh credential (the issuer's `vault.put`).
+ * stall's one record with a fresh credential (the issuer's `vault.put`), and the credential it
+ * replaced is cancelled at the gateway (#306). This is also how a stall renews early.
  */
 export async function turnOnCardSales(deps: EnrolDeps): Promise<CardSalesResult> {
   const { signer } = deps
   const now = deps.now ?? (() => Date.now())
-  const call = deps.call ?? ((path: string, method: string, body?: unknown) => signedFetch(path, method, body, signer))
+  const call =
+    deps.call ??
+    ((path: string, method: string, body?: unknown) =>
+      // A bound on each call, so a hung enrol is retried rather than waited on forever (#306).
+      signedFetch(path, method, body, signer, { signal: AbortSignal.timeout(CALL_TIMEOUT_MS) }))
   const stall = signer.pubkey.toLowerCase()
+  const cancel = deps.cancelCredential ?? cancelCredentialWith(signer)
+
+  // 0. The credential this replaces, if any, so it can be cancelled once the new one is in (#306).
+  const before = await fetchCardSalesStatusWith(call)
+  const previous = before.kind === 'ok' && before.status.enrolled ? before.status.credentialId : undefined
 
   // 1. A lock key, made by the issuer. Only its public half and its terminal proof come back.
   let begun: { lockPubkey?: unknown; enrolmentProof?: unknown }
@@ -170,12 +189,78 @@ export async function turnOnCardSales(deps: EnrolDeps): Promise<CardSalesResult>
   )
 
   // 4. Hand over the signed artefacts. The issuer confirms the credential before it seals it.
+  //
+  // Retried with the SAME credential on a 502 or a lost answer (#306): every attempt used to mint
+  // a fresh credential, and the gateway holds at most two unconfirmed per stall for 24 hours, so
+  // two failed attempts locked the stall out for a day. The issuer keeps the begun enrolment on a
+  // 502, so the same id and delegation can simply be sent again.
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  let failure = 'Could not reach the card-sales service. Try again.'
+  for (let attempt = 0; attempt < ENROL_ATTEMPTS; attempt++) {
+    if (attempt > 0) await sleep(ENROL_RETRY_DELAYS_MS[attempt - 1] ?? 4000)
+    let response: Response
+    try {
+      response = await call(ENROL_PATH, 'POST', { credentialId, delegation })
+    } catch {
+      failure = 'Could not reach the card-sales service. Try again.'
+      continue
+    }
+    if (response.ok) {
+      const status = (await response.json()) as CardSalesStatus
+      await supersede(previous, credentialId, cancel)
+      return { kind: 'ok', status }
+    }
+    failure = await reason(response, 'Could not turn on card sales')
+    // A 409 after a lost answer: the issuer may have sealed it and forgotten the begun one.
+    if (response.status === 409 && attempt > 0) break
+    if (response.status !== 502 && response.status !== 503 && response.status !== 504) break
+  }
+
+  // Did it land after all (an answer lost on the way back)? Then it is on.
+  const after = await fetchCardSalesStatusWith(call)
+  if (after.kind === 'ok' && after.status.credentialId === credentialId) {
+    await supersede(previous, credentialId, cancel)
+    return after
+  }
+  // It did not. Give the credential's pending slot back now rather than in 24 hours. Only when
+  // the issuer answered and does not hold it: an unknown answer leaves it to lapse on its own,
+  // so a credential that is in fact selling is never cancelled.
+  if (after.kind === 'ok') await cancel(credentialId)
+  return { kind: 'error', reason: failure }
+}
+
+/** Enrol attempts with one minted credential, and the waits between them (#306). */
+export const ENROL_ATTEMPTS = 3
+export const ENROL_RETRY_DELAYS_MS = [1500, 4000]
+
+/**
+ * Take the credential a re-enrolment replaced out of service at the gateway (#306). The issuer
+ * no longer holds it, so nothing sells with it, but left alone it stayed live for a year.
+ */
+async function supersede(previous: string | undefined, current: string, cancel: (id: string) => Promise<void>) {
+  if (previous && previous !== current) await cancel(previous)
+}
+
+/** `POST /api/v1/wallet/terminal-credentials/{id}/cancel`, as the stall. Never throws. */
+export function cancelCredentialWith(signer: RequestSigner): (id: string) => Promise<void> {
+  return async (id) => {
+    try {
+      await signedFetch(`/api/v1/wallet/terminal-credentials/${encodeURIComponent(id)}/cancel`, 'POST', {}, signer)
+    } catch {
+      // Offline: an unconfirmed one lapses in 24 hours.
+    }
+  }
+}
+
+async function fetchCardSalesStatusWith(
+  call: (path: string, method: string, body?: unknown) => Promise<Response>,
+): Promise<CardSalesResult> {
   try {
-    const response = await call(ENROL_PATH, 'POST', { credentialId, delegation })
-    if (!response.ok) return { kind: 'error', reason: await reason(response, 'Could not turn on card sales') }
+    const response = await call(ENROL_PATH, 'GET')
+    if (!response.ok) return { kind: 'error', reason: await reason(response, 'Could not check card sales') }
     return { kind: 'ok', status: (await response.json()) as CardSalesStatus }
   } catch {
-    return { kind: 'error', reason: 'Could not reach the card-sales service. Try again.' }
+    return { kind: 'error', reason: 'Could not reach the card-sales service.' }
   }
 }
 

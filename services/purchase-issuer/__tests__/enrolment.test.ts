@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FileCredentialStore } from '../adapters'
 import { CredentialConfirmer } from '../confirmation'
-import { BEGIN_PATH, ENROL_PATH, EnrolmentService, READY_PREFIX } from '../enrolment'
+import { BEGIN_COOLDOWN_MS, BEGIN_PATH, ENROL_PATH, EnrolmentService, MAX_PENDING, READY_PREFIX } from '../enrolment'
 import { attemptCount, renderMetrics, resetMetricsForTest } from '../metrics'
 import type { OwedPurchase, PurchasesApi } from '../purchasesApi'
 import { portsFor } from '../server'
@@ -249,6 +249,24 @@ describe('enrolment', () => {
     expect(await vault.get(STALL)).toBeNull()
   })
 
+  // #306: after a 502 the phone sends the SAME credential again, and it is sealed. The status the
+  // stall reads names the credential (so the phone can tell a lost answer from a failure); the
+  // public `/ready` never does.
+  it('seals the same credential when the phone retries a 502', async () => {
+    const { call, vault, gw } = await setup()
+    gw.confirmStatus = 503
+    const begun = await call('POST', BEGIN_PATH)
+    const body = JSON.stringify({ credentialId: 'cred-0001', delegation: delegationJson({ delegate: begun.body.lockPubkey as string }) })
+    expect((await call('POST', ENROL_PATH, body)).status).toBe(502)
+    gw.confirmStatus = 204
+    const retried = await call('POST', ENROL_PATH, body)
+    expect(retried.status).toBe(200)
+    expect(retried.body.credentialId).toBe('cred-0001')
+    expect((await vault.get(STALL))?.credentialId).toBe('cred-0001')
+    const ready = await call('GET', `${READY_PREFIX}${STALL}`)
+    expect(JSON.stringify(ready.body)).not.toContain('cred-0001')
+  })
+
   // Re-enrolling REPLACES the stall's one record with the new credential and key, safely.
   it('replaces the record on re-enrolment', async () => {
     const { call, vault, path } = await setup()
@@ -261,6 +279,43 @@ describe('enrolment', () => {
     expect(held?.lockKeyHex).not.toBe(firstKey)
     expect(JSON.parse(await readFile(path, 'utf8'))).toHaveLength(1)
   })
+})
+
+describe('#306: the begin map cannot be filled to lock stalls out', () => {
+  afterEach(() => vi.useRealTimers())
+
+  // A stall that begins again within the cooldown gets the SAME lock key: its minted credential
+  // stays enrollable, and a loop of begins cannot churn keys.
+  it('answers the same lock key within the cooldown, a fresh one after', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const { call } = await setup()
+    const first = await call('POST', BEGIN_PATH)
+    vi.setSystemTime(Date.now() + BEGIN_COOLDOWN_MS - 1000)
+    const again = await call('POST', BEGIN_PATH)
+    expect(again.status).toBe(200)
+    expect(again.body.lockPubkey).toBe(first.body.lockPubkey)
+    expect(again.body.expiresAt).toBe(first.body.expiresAt)
+    vi.setSystemTime(Date.now() + 2000)
+    const later = await call('POST', BEGIN_PATH)
+    expect(later.body.lockPubkey).not.toBe(first.body.lockPubkey)
+  })
+
+  // A thousand throwaway keys begin; a real stall still can, and it is the oldest that goes.
+  it('evicts the oldest begun enrolment instead of refusing a new one', async () => {
+    const { call } = await setup()
+    const firstIntruder = bytesToHex(generateSecretKey())
+    expect((await call('POST', BEGIN_PATH, '', signed('POST', BEGIN_PATH, '', firstIntruder))).status).toBe(200)
+    for (let i = 1; i < MAX_PENDING; i++) {
+      expect((await call('POST', BEGIN_PATH, '', signed('POST', BEGIN_PATH, '', bytesToHex(generateSecretKey())))).status).toBe(200)
+    }
+    // Full. The real stall still begins, and enrols.
+    const { enrolled } = await enrolAs(call, 'cred-0001')
+    expect(enrolled.status).toBe(200)
+    // The oldest was the one dropped: its enrol now finds nothing in progress.
+    const body = JSON.stringify({ credentialId: 'cred-0002', delegation: delegationJson() })
+    const evicted = await call('POST', ENROL_PATH, body, signed('POST', ENROL_PATH, body, firstIntruder))
+    expect(evicted.status).toBe(409)
+  }, 60_000)
 })
 
 describe('status', () => {
