@@ -6,9 +6,8 @@
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { httpCashlinkGateway, httpCashlinkMint, wrapForLink, type CashlinkPorts, type KeptCoupon } from './cashlinkFlow'
-import { fetchGiftWraps, giftTokensFrom } from './giftLink'
 import { mirrorToGateway } from './transferSignature'
-import { publish } from './relay'
+import { deliverToRelay } from './relayDelivery'
 import { getSigner } from './nap'
 import { parseVoucherToken, creditableFaceValue } from './voucherToken'
 import { SWAPPED_TO_SATS_STATUS } from './swapBack'
@@ -18,8 +17,12 @@ import { cashlinkMovingKey } from './inFlightMoney'
 import { buildReceivedTransaction, CASHLINK_TAKEN_BACK_MEMO } from './transactions'
 import { cashbackValidation } from './cashbackValidation'
 
-/** Put the locked gift on its link, then read it back: delivered only once a copy is found there. */
-async function deliver(linkSecret: Uint8Array, token: string): Promise<boolean> {
+/**
+ * Put the locked gift on its link. Delivered only once the RELAY holds it: publish OK and a read by
+ * id from the relay itself (#532). The gateway mirror is a cache warm-up and never counts: it keeps
+ * what strfry refused, so a 66 KB wrap read back from it looked delivered while no relay held it.
+ */
+export async function deliver(linkSecret: Uint8Array, token: string): Promise<boolean> {
   let me: string | undefined
   try {
     me = getSigner().pubkey?.toLowerCase()
@@ -27,21 +30,9 @@ async function deliver(linkSecret: Uint8Array, token: string): Promise<boolean> 
     me = undefined
   }
   const wrap = wrapForLink(linkSecret, token, me)
-  const [relayed, mirrored] = await Promise.all([
-    publish(wrap).then((r) => r.ok > 0, () => false),
-    mirrorToGateway(wrap),
-  ])
-  if (!relayed && !mirrored) return false
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      const found = await giftTokensFrom(linkSecret, await fetchGiftWraps(linkSecret))
-      if (found.some((t) => t.token === token)) return true
-    } catch {
-      // Read again.
-    }
-    await new Promise((r) => setTimeout(r, 1200))
-  }
-  return false
+  const [relayed] = await Promise.all([deliverToRelay(wrap), mirrorToGateway(wrap).catch(() => false)])
+  if (!relayed.delivered && relayed.why === 'too_large') console.error('[cashlink] the relay refused a link wrap as too large (#532)')
+  return relayed.delivered
 }
 
 /**

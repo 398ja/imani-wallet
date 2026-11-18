@@ -61,6 +61,30 @@ export interface PublishResult {
   total: number
   /** Reasons the failed relays gave, for a message the user can act on. */
   errors: string[]
+  /**
+   * #532: each failure, classified, in the order of `errors`. `too_large` is PERMANENT (the relay
+   * will refuse the same event again: re-split it), `unreachable` is transient (retry), `refused`
+   * is any other `OK false`.
+   */
+  refusals?: RelayRefusal[]
+}
+
+export type RelayRefusal =
+  | { kind: 'too_large'; bytes: number | null; reason: string }
+  | { kind: 'unreachable'; reason: string }
+  | { kind: 'refused'; reason: string }
+
+/** #532: what a relay's failure means. strfry says `invalid: event too large: 66045`. */
+export function classifyRelayError(reason: string): RelayRefusal {
+  const large = /too large(?::\s*(\d+))?/i.exec(reason)
+  if (large) return { kind: 'too_large', bytes: large[1] ? Number(large[1]) : null, reason }
+  if (/connection failure|timed out|could not connect|connection (closed|error)/i.test(reason)) return { kind: 'unreachable', reason }
+  return { kind: 'refused', reason }
+}
+
+/** True when a relay refused the event for its size (permanent, never retried as it is). */
+export function refusedTooLarge(result: Pick<PublishResult, 'errors' | 'refusals'>): boolean {
+  return (result.refusals ?? result.errors.map(classifyRelayError)).some((r) => r.kind === 'too_large')
 }
 
 export { GatewayUnreachableError }
@@ -115,10 +139,62 @@ export async function publish(
       return typeof r.value === 'string' && r.value.startsWith('connection failure') ? [r.value] : []
     })
 
-    return { ok: results.length - errors.length, total: results.length, errors }
+    const refusals = errors.map(classifyRelayError)
+    // A path that budgets its events should never be refused for size: that is a bug, say it loudly.
+    if (refusals.some((r) => r.kind === 'too_large')) {
+      console.error(`[relay] event kind ${event.kind} refused as too large (${new TextEncoder().encode(JSON.stringify(event)).length} bytes)`, errors)
+    }
+    return { ok: results.length - errors.length, total: results.length, errors, refusals }
   } finally {
     // Without this the WebSocket stays open for the life of the page. Each
     // profile save would leak another connection to the same relay.
+    pool.close(relays)
+  }
+}
+
+/**
+ * #532: whether the RELAY itself holds the event `id`, by a direct REQ by id (never the gateway's
+ * cache, which keeps what the relay refused). True found, false the relay answered without it,
+ * null the relay could not be asked.
+ *
+ * The one exception to the owner's no-relay-read rule (#428) beside terminal delivery: a read by
+ * ONE id, after a publish, to prove delivery. A gateway read cannot prove it, because the gateway
+ * answers from nostrdb, which stores events strfry refused (#532 point 1).
+ */
+export async function relayHasEvent(id: string, relays: string[] = [RELAY_URL], maxWait = 4_000): Promise<boolean | null> {
+  const pool = new SimplePool()
+  let connected = false
+  ;(pool as unknown as { onRelayConnectionSuccess?: (url: string) => void }).onRelayConnectionSuccess = () => {
+    connected = true
+  }
+  try {
+    let reached = false
+    const found = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), maxWait)
+      const sub = pool.subscribeMany(relays, { ids: [id], limit: 1 }, {
+        onevent: (e: Event) => {
+          if (e.id === id && verifyEvent({ ...e })) {
+            clearTimeout(timer)
+            sub.close()
+            resolve(true)
+          }
+        },
+        oneose: () => {
+          reached = connected
+          clearTimeout(timer)
+          sub.close()
+          resolve(false)
+        },
+        onclose: () => {
+          clearTimeout(timer)
+          resolve(false)
+        },
+      })
+    })
+    return found ? true : reached ? false : null
+  } catch {
+    return null
+  } finally {
     pool.close(relays)
   }
 }

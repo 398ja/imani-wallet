@@ -18,6 +18,7 @@ vi.mock('../relay', async (orig) => ({
     if (next) return { ...next, total: 1 }
     return { ok: h.relayOk, total: 1, errors: h.relayOk ? [] : h.errors }
   },
+  relayHasEvent: async () => h.relayOk > 0 || h.script.length === 0,
 }))
 vi.mock('../transferSignature', async (orig) => ({ ...(await orig<typeof import('../transferSignature')>()), mirrorToGateway: async () => h.mirrored }))
 vi.mock('../nap', async (orig) => ({ ...(await orig<typeof import('../nap')>()), getSigner: () => ({ pubkey: 'ab'.repeat(32) }) }))
