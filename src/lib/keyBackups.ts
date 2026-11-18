@@ -3,7 +3,9 @@ import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 import { verifyEvent, type Event } from 'nostr-tools'
 
 import { getSigner } from './nap'
-import { allEvents, publish } from './relay'
+import { allEvents } from './relay'
+import { deliverToRelay } from './relayDelivery'
+import { WRAP_BUDGET_BYTES } from './wrapSize'
 import { mirrorToGateway } from './transferSignature'
 import { buildRecordEvents, isChunkEvent, reassembleRecords, recordIdOf, type Sealer } from './chunkedRecord'
 import { KEY_BACKUPS_PREFIX } from './backupRecord'
@@ -323,18 +325,17 @@ export async function readKeyBackupsRecord(pubkey: string): Promise<KeyBackup[] 
 export async function publishKeyBackupsRecord(list: readonly KeyBackup[]): Promise<boolean> {
   const signer = getSigner()
   const plaintext = JSON.stringify({ v: 1, backups: list })
-  const templates = await buildRecordEvents(KEY_BACKUPS_KIND, KEY_BACKUPS_D_TAG, plaintext, [], selfSealer())
+  // Sized to the shared relay budget (#532): chunked above it, so no event can be refused for size.
+  const templates = await buildRecordEvents(KEY_BACKUPS_KIND, KEY_BACKUPS_D_TAG, plaintext, [], selfSealer(), {
+    budget: WRAP_BUDGET_BYTES,
+  })
   let all = true
   for (const template of templates) {
     const event = (await signer.signEvent(template)) as Event
-    const [relayed, mirrored] = await Promise.all([
-      publish(event).then(
-        (r) => r.ok > 0,
-        () => false,
-      ),
-      mirrorToGateway(event).catch(() => false),
-    ])
-    if (!relayed && !mirrored) all = false
+    // #532: delivered only when the RELAY holds it (OK and read back by id). The gateway mirror
+    // is a second read path, never proof of delivery. Oversize events are refused before sending.
+    const [relayed] = await Promise.all([deliverToRelay(event), mirrorToGateway(event).catch(() => false)])
+    if (!relayed.delivered) all = false
   }
   return all
 }

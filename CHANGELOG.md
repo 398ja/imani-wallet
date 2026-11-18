@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Logout is refused until your key is backed up somewhere Imani knows of** (#348). One Google Drive backup (read back right after the upload) or one downloaded backup file is enough, and the check works offline. There is no override: the refusal leads to Backup. A backup made before a passphrase change does not count.
+- **Imani tells you where your key went, and not to delete it** (#348). After a backup, the screen names your Google Drive (private app storage) or the file in your Downloads. Settings has a new "Your key backup" section listing every known backup across your devices, with a "Check a backup file" step, and the logout screen shows the same before you confirm.
+- **Each install has a device id and a friendly name** (#348), and the backup locations travel between your devices in one record encrypted to your own key, read from the relay and the gateway.
+
 ### Fixed
 
 - **Turning on card sales no longer locks a stall out for a day after two failures** (#306). The enrol step is retried on a 502 or a lost answer with the SAME minted credential, instead of minting a new one each attempt (the gateway holds at most two unconfirmed per stall for 24 hours). If it never lands, the phone cancels its own unconfirmed credential so the slot comes back at once. A lost answer that did land is recognised from the stall's status and counted as on.
