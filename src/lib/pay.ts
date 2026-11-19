@@ -652,7 +652,7 @@ async function settleSend(
    * awaited here, so a slow gateway cannot hold up the local row.
    */
   transferIdLater?: () => Promise<string | undefined>,
-): Promise<boolean> {
+): Promise<number | false> {
   const spentTokenId = pending.tokenId
   // #461: never settle an answer that describes some other send. No removeVoucher, no row, no
   // ack (the ack belongs to the send that really completed).
@@ -704,13 +704,14 @@ async function settleSend(
   // Which row depends on where the money went, and `recipientPubkey` is the only
   // thing that knows: same saga, same settle, two records. See
   // `buildSentTransaction` for why a send keeps the ISSUER in `merchantId`.
+  // What left the coupon, which is up to a sat more than asked where a sat is worth more than a
+  // minor unit (NGN): recording the request there made the balance fall by more than the history
+  // said. See `recordedAmount`. Also what the done screen says was sent (#635).
+  const taken = recordedAmount(sourceToken, pending.amount, status)
   try {
     const common = {
       tokenId: spentTokenId,
-      // What left the coupon, which is up to a sat more than asked where a sat is worth more
-      // than a minor unit (NGN): recording the request there made the balance fall by more than
-      // the history said. See `recordedAmount`.
-      amount: recordedAmount(sourceToken, pending.amount, status),
+      amount: taken,
       unit: pending.unit,
       decimals: pending.decimals,
       merchantId: pending.merchantPubkey,
@@ -804,7 +805,7 @@ async function settleSend(
   await api.ackKeepToken(pending.sendId).catch(() => {
     // Non-fatal: the backend expires its copy anyway, and the money has moved.
   })
-  return true
+  return taken
 }
 
 /**
@@ -875,7 +876,7 @@ async function reconcileOnce(pubkey: string): Promise<number> {
       }
 
       if (status.status === 'COMPLETED') {
-        if (await settleSend(api, wallet, pubkey, send, status)) settled += 1
+        if ((await settleSend(api, wallet, pubkey, send, status)) !== false) settled += 1
         continue
       }
 
@@ -1464,7 +1465,7 @@ async function awaitAndSettle(
   initialStatus: SendStatus,
   /** Called once, when the gateway is first seen retrying this part (#552). */
   onRetrying?: () => void,
-): Promise<void> {
+): Promise<number> {
   // ponytail: poll rather than subscribe. The saga also streams over SSE
   // (api.subscribeAtomicSendEvents), which is what the vanilla app uses — but
   // SSE on this stack drops with ERR_INCOMPLETE_CHUNKED_ENCODING (§11.4), and a
@@ -1622,9 +1623,11 @@ async function awaitAndSettle(
     )
   }
 
-  await settleSend(api, wallet, payer, pending, status, transferIdLater)
+  // What really left (#635). Settled already elsewhere (another tab): the request, as before.
+  const taken = await settleSend(api, wallet, payer, pending, status, transferIdLater)
   forgetPendingSend(payer, pending.sendId)
   notifyWalletChanged()
+  return taken === false ? pending.amount : taken
 }
 
 export async function payRequest({
@@ -1731,6 +1734,12 @@ export type SendResult = {
   /** Minor units that reached the recipient. Equal to `requested` on success. */
   delivered: number
   /**
+   * Minor units that really left the sender for `delivered`, as the gateway confirmed them (#635).
+   * Above `delivered` by up to a sat per part where a sat is worth more than a minor unit (NGN),
+   * else equal. What the done screen headlines. Absent: take `delivered`.
+   */
+  sent?: number
+  /**
    * Minor units of a part the gateway accepted but whose outcome the wallet could not learn.
    * It may already have arrived, so it must never be offered to send again.
    */
@@ -1815,7 +1824,7 @@ async function sendPart(
   candidates: Voucher[],
   amount: number,
   bundle: BundleTag | null,
-): Promise<string> {
+): Promise<{ sendId: string; taken: number }> {
   // #179: a send whose answer was lost is retried on the coupon it was first drawn on, so the
   // retry's body matches the stored key and the gateway replays it rather than refusing it.
   const firstDrawnOn =
@@ -1879,7 +1888,7 @@ async function sendPart(
     (key) => forgetSendIntent(ctx.payer, key),
   )
 
-  await awaitAndSettle(
+  const taken = await awaitAndSettle(
     ctx.api,
     ctx.payer,
     {
@@ -1915,7 +1924,7 @@ async function sendPart(
       }),
   )
 
-  return sendId
+  return { sendId, taken }
 }
 
 /**
@@ -2188,8 +2197,8 @@ async function deliverCounted(
   const choice = chooseSpend(vouchers, amount)
   if (choice.kind === 'single') {
     report(ctx.onProgress, { part: 1, parts: 1, retrying: false })
-    const sendId = await sendPart(ctx, choice.candidates, amount, null)
-    return { id: sendId, requested: amount, delivered: amount, parts: 1, vouchers: 1 }
+    const { sendId, taken } = await sendPart(ctx, choice.candidates, amount, null)
+    return { id: sendId, requested: amount, delivered: amount, sent: taken, parts: 1, vouchers: 1 }
   }
 
   let plan = choice.plan
@@ -2219,16 +2228,18 @@ async function deliverCounted(
   // Vouchers, not parts, for the screen: see `SendResult.vouchers`.
   const vouchersIn = (n: number) => new Set(plan.parts.slice(0, n).map((p) => p.voucher.voucher_id)).size
   let delivered = 0
+  let sent = 0
   for (const [index, part] of plan.parts.entries()) {
     report(ctx.onProgress, { part: index + 1, parts: plan.parts.length, retrying: false })
     try {
-      await sendPart(ctx, [part.voucher], part.amount, {
+      const { taken } = await sendPart(ctx, [part.voucher], part.amount, {
         bundleId,
         total: amount,
         index,
         count: plan.parts.length,
       })
       delivered += part.amount
+      sent += taken
     } catch (error) {
       // Nothing has moved yet, so there is nothing to explain away.
       if (delivered === 0) throw error
@@ -2240,6 +2251,7 @@ async function deliverCounted(
         id: bundleId,
         requested: amount,
         delivered,
+        sent,
         ...(unknownOutcome ? { inFlight: part.amount } : {}),
         parts: unknownOutcome ? index + 1 : index,
         vouchers: vouchersIn(unknownOutcome ? index + 1 : index),
@@ -2248,7 +2260,7 @@ async function deliverCounted(
     }
   }
 
-  return { id: bundleId, requested: amount, delivered, parts: plan.parts.length, vouchers: vouchersIn(plan.parts.length) }
+  return { id: bundleId, requested: amount, delivered, sent, parts: plan.parts.length, vouchers: vouchersIn(plan.parts.length) }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -2411,8 +2423,9 @@ async function applyBundle(
   payer: string,
   bundle: PendingBundle,
   status: BundleStatus,
-): Promise<boolean> {
+): Promise<{ taken: number } | false> {
   if (status.state === 'DELIVERED') {
+    let taken = 0
     for (const part of bundle.parts) {
       const answer = partStatusOf(status, part)
       if (answer?.send_id) part.sendId = answer.send_id
@@ -2420,12 +2433,14 @@ async function applyBundle(
       // until acked, so a missing one is an answer to ask for again, never a guess.
       if (!answer || (!answer.keep_token && answer.is_full_send !== true)) {
         if (await wallet.getVoucher(part.tokenId)) return false
+        taken += part.amount
         continue
       }
-      await settleSend(api, wallet, payer, asPendingSend(bundle, part), { ...answer, status: 'COMPLETED' })
+      const settled = await settleSend(api, wallet, payer, asPendingSend(bundle, part), { ...answer, status: 'COMPLETED' })
+      taken += settled === false ? part.amount : settled
     }
     notifyWalletChanged()
-    return true
+    return { taken }
   }
 
   if (status.state === 'ABORTED') {
@@ -2453,7 +2468,7 @@ async function applyBundle(
       if (part.sendId) await api.ackKeepToken(part.sendId).catch(() => {})
     }
     notifyWalletChanged()
-    return true
+    return { taken: 0 }
   }
   return false
 }
@@ -2629,7 +2644,8 @@ async function sendBundle(ctx: SendContext, plan: SendPart[], amount: number): P
   }
 
   const wallet = getWallet()
-  if (!(await applyBundle(api, wallet, ctx.payer, pending, status))) {
+  const applied = await applyBundle(api, wallet, ctx.payer, pending, status)
+  if (!applied) {
     throw stillSending(`, ${status.state}`)
   }
   forgetPendingBundle(ctx.payer, bundleId)
@@ -2641,5 +2657,5 @@ async function sendBundle(ctx: SendContext, plan: SendPart[], amount: number): P
         `is back with you.${why ? ` (${why})` : ''}`,
     )
   }
-  return { id: bundleId, requested: amount, delivered: amount, parts: plan.length, vouchers: vouchersUsed }
+  return { id: bundleId, requested: amount, delivered: amount, sent: applied.taken, parts: plan.length, vouchers: vouchersUsed }
 }

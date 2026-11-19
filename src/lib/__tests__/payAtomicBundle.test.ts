@@ -138,7 +138,8 @@ describe('atomic bundle send (#552)', () => {
     // PUBLISHING on the POST answer, DELIVERED on the first read (one real 1 s poll).
     const calls = gateway((reads, b) => (reads < 1 ? { bundle_id: b.bundle_id, state: 'PUBLISHING', parts: [] } : delivered(b)))
     const result = await send()
-    expect(result).toMatchObject({ requested: 1000, delivered: 1000, parts: 3 })
+    // #635: `sent` sums what each part's settle confirmed; EUR parts go exactly.
+    expect(result).toMatchObject({ requested: 1000, delivered: 1000, sent: 1000, parts: 3 })
     expect(result.shortfall).toBeUndefined()
     expect(calls.posts).toHaveLength(1)
     expect(calls.perPart).toBe(0)
