@@ -2,6 +2,12 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// #348: the key backup gate is pinned in logoutKeyBackup348.test.ts. Here the key is backed up.
+vi.mock('../keyBackups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../keyBackups')>()),
+  checkKeyBackup: async () => ({ ok: true, backups: [] }),
+}))
+
 /**
  * Owner rule 2026-10-18 17:52Z (review of #326): "Never allow a logout until
  * we have verifiable confirmation that the vouchers were backed up."

@@ -1,5 +1,6 @@
 import { Button } from './ui'
 import { LOGOUT_BLOCKED_COPY } from '../lib/logout'
+import { KEY_BACKUP_COPY } from '../lib/keyBackups'
 import { blockedMessage, type BlockedLogout } from '../lib/logoutBlockedCopy'
 
 /**
@@ -48,6 +49,16 @@ export function LogoutBlockedDialog({
           </a>
         )}
         <div className="mt-5 space-y-2">
+          {/* #348: guided to the backup, never past it. There is still no "log out anyway". */}
+          {outcome.reason === 'key-not-backed-up' && (
+            <a
+              href="/settings/backup"
+              data-testid="logout-backup-link"
+              className="flex h-12 w-full items-center justify-center rounded-xl bg-mono-900 text-[15px] font-medium text-white dark:bg-mono-50 dark:text-mono-900"
+            >
+              {KEY_BACKUP_COPY.backUp}
+            </a>
+          )}
           <Button size="lg" className="w-full" disabled={busy} onClick={onRetry}>
             {busy ? 'Checking your vouchers…' : LOGOUT_BLOCKED_COPY.retry}
           </Button>

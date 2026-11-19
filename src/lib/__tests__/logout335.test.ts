@@ -3,6 +3,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// #348: the key backup gate is pinned in logoutKeyBackup348.test.ts. Here the key is backed up.
+vi.mock('../keyBackups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../keyBackups')>()),
+  checkKeyBackup: async () => ({ ok: true, backups: [] }),
+}))
+
 /**
  * #335 items 2 and 4, at logout itself:
  * - a stop function that throws mid-logout must not leave receiving (or sending)
