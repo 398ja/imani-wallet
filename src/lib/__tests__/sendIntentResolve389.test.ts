@@ -142,6 +142,14 @@ describe('a lost-answer send is resolved on the next start (#389)', () => {
     expect(loadPendingSends(PAYER)).toEqual([])
   })
 
+  it('two intents of one identity and one send in the history: only one is taken as arrived', async () => {
+    lostAnswer(10_000)
+    keyForSend(PAYER, { ...send, memo: 'dinner' }, pending)
+    Object.assign(stubs.api, { getAtomicSendHistory: async () => [historyRow({ status: 'TOKEN_HELD' })], getAtomicSendStatus: async () => ({ status: 'TOKEN_HELD' }) })
+    expect(await resolveSendIntents(PAYER)).toMatchObject({ arrived: 1, unknown: 1 })
+    expect(loadSendIntents(PAYER)).toHaveLength(1)
+  })
+
   it('still unknown: within the grace the request may be on its way, so it is kept', async () => {
     lostAnswer(10_000)
     Object.assign(stubs.api, { getAtomicSendHistory: async () => [] })

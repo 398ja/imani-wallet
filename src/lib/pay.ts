@@ -980,7 +980,9 @@ export async function resolveSendIntents(pubkey: string): Promise<{ arrived: num
   const claimed = new Set(loadPendingSends(pubkey).map((p) => p.sendId))
   let rowsById: Map<string, VoucherRow> | undefined
   for (const intent of intents) {
-    const match = historyMatches(intent, history)[0]
+    // Review: a send another intent already took in this pass (or one in the pending ledger) is not
+    // this intent's. Without this, a second intent of the same identity was cleared as "arrived".
+    const match = historyMatches(intent, history).find((h) => !claimed.has(h.send_id!))
     if (match?.send_id) {
       const sendId = match.send_id
       if (!claimed.has(sendId) && !isSettledSend(pubkey, sendId)) {
