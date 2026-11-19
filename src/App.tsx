@@ -25,7 +25,7 @@ import { sweepInterruptedReceives } from './lib/receiveSweep'
 import { saveRecoveredSwapBack } from './lib/swapBack'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
-import { collectTillSalesForOwner } from './lib/tillSalesNet'
+import { collectTillSalesForOwner, pullCardSalesForOwner } from './lib/tillSalesNet'
 import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
 import { startOnlineShopSync } from './lib/onlineShopPublisher'
 import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
@@ -346,6 +346,13 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           .then(() => collectTillSalesForOwner(pubkey))
           .then((tillSales) => {
             if (tillSales > 0) console.info(`[app] filed ${tillSales} till sale(s)`)
+          })
+          // Card sales whose sale record never reached this device (#275 item 3): listed from
+          // payment-adapter, re-sent by the purchase issuer, filed through the same checks. After
+          // the till sales, so a record that did arrive is already a row. Never throws.
+          .then(() => pullCardSalesForOwner(pubkey))
+          .then((cardSales) => {
+            if (cardSales > 0) console.info(`[app] filed ${cardSales} missed card sale(s)`)
           })
           // Last, once both the coupons and the history are back: re-files
           // redemptions written without their claim (pre-#90 rows) against

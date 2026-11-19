@@ -24,10 +24,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Renew card sales** (#306). While card sales are on, Settings shows until when, and a Renew button that renews the credential and delegation early.
 - The stall's own card-sales status names its credential (`credentialId`); the public `/ready` answer does not.
 - `src/lib/wrapSize.ts`: the one relay size model (gateway-customer's `GiftWrapSizeModel`, ported), checked byte for byte against real NIP-17 wraps, with `OversizeEventError` (#532).
+- **Missed card sales are pulled on login** (#275 item 3, card atomicity U9). After the till
+  sales, the owner's login lists the stall's card sales from payment-adapter
+  (`GET /api/v1/purchases?stall=<self>`, NIP-98 as the stall) and, for any sale with no
+  `issued:<voucher>` row, asks purchase-issuer to re-send its sale record
+  (`POST /api/v1/card-sales/sales/resend`, NIP-98 as the stall). The issuer rebuilds each record
+  from payment-adapter's own list (read with its token, the wallet's ids are only a filter) with
+  the deterministic warrant, via the existing `resendSaleRecords`, and the stall files it through
+  the same checks as any sale record. At most 50 per login. Never throws.
+- **A card sale's time is checked against the payment** (#275, review residual R1). A card row
+  dated more than an hour from when payment-adapter recorded its payment is re-dated to the
+  payment time; the sender's time is kept as `senderSaleAt` and the mismatch is logged. A re-sent
+  record is dated by the payment from the start.
+- **`e2e/card-purchase.e2e.mts`** (#267 item 1): a card purchase against the local stack with a
+  real Stripe test key and the Stripe CLI (seed a `charges_enabled` account, pay 4242, assert one
+  `stripe_purchase` row, one coupon, a delegated warrant with the `pi_`; decline 0002, replayed
+  event, delayed webhook). Reads `STRIPE_SECRET_KEY` from the environment only and skips cleanly
+  (exit 0) without a test key, the CLI, the stack or an enrolled stall.
 
 ### Changed
 
 - The "no key material leaves the phone" test for card-sales enrolment is now an allowlist of every field and header each request may carry, with the shape of each value (#306), so a key split in two or written as a decimal is caught too.
+
+**Deploy:** the edge must route `GET /api/v1/purchases` (that exact path) on the wallet origin to
+payment-adapter, which needs payment-adapter with the stall purchases list.
 
 ## [0.62.2] - 2026-11-18
 

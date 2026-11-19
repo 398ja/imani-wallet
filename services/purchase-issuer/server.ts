@@ -52,6 +52,7 @@ import { DEFAULT_OUTBOX_OPTIONS, DeliveryOutbox, FileOutboxStore, runDeliveryPas
 import { PurchasesApi, ReportLostError } from './purchasesApi'
 import { sendSaleRecord } from './saleRecord'
 import { ENROLMENT_PREFIX, EnrolmentService, MAX_BODY_BYTES } from './enrolment'
+import { resendStallSales } from './salePull'
 import { cachedValidityReader, readStallValidity, type ValidityReader } from './stallValidity'
 import { cachedAllowanceReader, readSalesAllowance } from './salesAllowance'
 import { CredentialVault } from './vault'
@@ -442,6 +443,22 @@ function main(): void {
       allowanceFor: cachedAllowanceReader((credential, unit) => readSalesAllowance(config.gatewayUrl, credential, unit)),
       // payment-adapter asks about one amount with the token it already shares with this service.
       internalToken: config.purchasesToken,
+      // #275: the pull on login. Rebuilt from payment-adapter's own list, never the wallet's word.
+      resend: (stall, voucherIds) =>
+        resendStallSales(
+          {
+            purchasesUrl: config.purchasesUrl,
+            purchasesToken: config.purchasesToken,
+            gatewayUrl: config.gatewayUrl,
+            livemode: config.livemode,
+            credentialFor: async (s) => {
+              const credential = await vault.get(s)
+              return credential ? confirmer.annotate(credential) : null
+            },
+          },
+          stall,
+          voucherIds,
+        ),
     }),
   )
   // #290: a record sealed by somebody else (the operator script) is picked up on the next read,
