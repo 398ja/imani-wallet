@@ -415,6 +415,8 @@
   "^Cannot read properties of (undefined|null)$"
  ],
  "key_prefixes": [
+  "imani-device-id",
+  "imani-device-name",
   "imani-subscription",
   "imani-subscription-status",
   "imani-terminal-attestation",
@@ -450,6 +452,7 @@
   "imani-wallet:held-coupons:",
   "imani-wallet:identity:",
   "imani-wallet:incoming-seen:",
+  "imani-wallet:key-backups:",
   "imani-wallet:logout",
   "imani-wallet:merchant:",
   "imani-wallet:nap-consent",
@@ -483,6 +486,7 @@
   "imani:checkout-codes",
   "imani:issued:",
   "imani:issuer-delegation",
+  "imani:key-backups",
   "imani:merchant",
   "imani:pendingPurchase",
   "imani:pull-acks:",

@@ -3,6 +3,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// #348: the key backup gate is pinned in logoutKeyBackup348.test.ts. Here the key is backed up.
+vi.mock('../keyBackups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../keyBackups')>()),
+  checkKeyBackup: async () => ({ ok: true, backups: [] }),
+}))
+
 /**
  * Third check of #326. Pins the parts of the in-flight refusal that the second
  * check's tests reached only through injected doubles: the DEFAULT settle step

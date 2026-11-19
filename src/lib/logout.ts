@@ -34,6 +34,8 @@ import {
   tokenRedemptionsInFlight,
 } from './receiveGate'
 import { pauseOtherTabs, type PauseResult } from './logoutTabs'
+import { checkKeyBackup, KEY_BACKUP_COPY, logoutBackupLines, type KeyBackupCheck } from './keyBackups'
+import { isTerminalDevice } from './terminalEnrol'
 
 /**
  * Log out: end the session and erase the key from this browser.
@@ -110,6 +112,8 @@ export const LOGOUT_BLOCKED_COPY = {
   checkoutCodeUnconfirmed: (shop: string, amount: string) =>
     `Backing up your checkout code for ${shop} worth ${amount}. Logging out stays off until the backup is ` +
     'confirmed, so the code comes back when you log in again. Nothing has been erased. Check your connection and try again.',
+  /** #348: no known backup holds this key. No override: the dialog leads to Backup. */
+  keyNotBackedUp: KEY_BACKUP_COPY.blocked,
   otherTab:
     'This wallet is open in another tab or window, and it could not be paused safely. ' +
     'Close the other tabs of this wallet, or wait for them to finish, then try again. Nothing has been erased.',
@@ -133,6 +137,7 @@ export type LogoutOutcome =
         | 'checkout-code'
         | 'checkout-code-unconfirmed'
         | 'other-tab'
+        | 'key-not-backed-up'
       unconfirmed: UnconfirmedCoupon[]
       /** For 'cashback-unconfirmed': how many stashed cashback tokens are not confirmed. */
       cashback?: number
@@ -191,10 +196,26 @@ export interface LogoutDeps {
    * stopped. Account deletion deletes the handle here. False cancels the logout.
    */
   proceed?: () => Promise<boolean>
+  /**
+   * #348: whether a known backup (Drive verified at backup time, or a recorded download) holds the
+   * key this browser holds. Must never answer ok on a failure. Not asked on a terminal device,
+   * whose key is a disposable credential with no backup.
+   */
+  checkKey?: (pubkey: string) => Promise<KeyBackupCheck>
+  /** Whether this device is a terminal. Injected for tests. */
+  isTerminal?: () => boolean
 }
 
 /** How long logout gives the pending sends to settle before it checks them. */
 export const SETTLE_IN_FLIGHT_TIMEOUT_MS = 20_000
+
+function safeIsTerminal(read: () => boolean): boolean {
+  try {
+    return read()
+  } catch {
+    return false
+  }
+}
 
 async function defaultSettleInFlight(pubkey: string): Promise<void> {
   if (moneyInFlight(pubkey).sends === 0) return
@@ -356,6 +377,15 @@ export async function attemptLogout(
   // does not refuse the logout for no reason (second check of #326).
   await settleInFlight(pubkey).catch(() => undefined)
 
+  // 0b. #348: the key itself. Logout erases the only copy on this device, so it is refused, with
+  // no override, until a known backup holds THIS key (owner rule 2026-10-20). Offline-safe: it
+  // trusts what was verified at backup time and only reads the relay record when it answers.
+  let keyCheck: KeyBackupCheck = { ok: true, backups: [] }
+  if (!safeIsTerminal(deps.isTerminal ?? isTerminalDevice)) {
+    keyCheck = await (deps.checkKey ?? checkKeyBackup)(pubkey).catch((): KeyBackupCheck => ({ ok: false, backups: [] }))
+    if (!keyCheck.ok) return { status: 'blocked', reason: 'key-not-backed-up', unconfirmed: [] }
+  }
+
   // 1. Before anything is asked or stopped.
   const first = await safeCheck(check, pubkey)
   if (!first.ok) return blocked(first)
@@ -378,7 +408,9 @@ export async function attemptLogout(
   const writesAtConfirm = writes()
 
   // 2.
-  if (!confirm(LOGOUT_WARNING)) return { status: 'cancelled' }
+  // Where the key is, and not to delete it, on the logout screen before confirming (#348).
+  const where = logoutBackupLines(keyCheck.backups)
+  if (!confirm(where ? `${where}\n\n${LOGOUT_WARNING}` : LOGOUT_WARNING)) return { status: 'cancelled' }
 
   // 2b. Every other tab of this wallet pauses first, or nothing happens (#335).
   // Asked after the confirmation, so a declined logout never disturbs them.
