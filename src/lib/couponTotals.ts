@@ -6,7 +6,9 @@
  * sats at 0.0691443 c/sat is 899.43 c exactly, but the six rows round to 566 + 283 + 35 + 9 + 4 + 1
  * = 898. Nothing is lost.
  *
- * The rule: a voucher's total is `floor(sum of its rows' exact shares)`, clamped to the signed face.
+ * The rule: a voucher's total is `floor(sum of its rows' exact shares)`, clamped to the signed face,
+ * unless its rows' stored faces already sum to that exact total ROUNDED (#551: shares filed by
+ * largest remainder, as #384 files a take-back and a split receive does), when that sum is the total.
  * FLOOR, not round, because that is what the redemption ledger books for the same parts
  * (`cumulativeCredit` in `@imani/redemption`: the credits of a voucher's parts always sum to
  * `floor(total exact)`), so the total never shows a cent the coupons cannot cover (899.6 shows 899,
@@ -44,6 +46,15 @@ function readable(row: Row): { voucherId: string; exact: number; credit: number;
  * A voucher held as one row counts its stored face, unchanged. Assumes one unit (callers group).
  */
 export function roundedOnceTotal(rows: readonly Row[]): number {
+  return groupTotal(rows, true)
+}
+
+/** The ledger's figure: the floor of each voucher's exact total, never the shares' rounded sum. */
+function ledgerTotal(rows: readonly Row[]): number {
+  return groupTotal(rows, false)
+}
+
+function groupTotal(rows: readonly Row[], shares: boolean): number {
   let total = 0
   const byVoucher = new Map<string, { rows: Row[]; exact: number; stored: number; cap: number }>()
   for (const row of rows) {
@@ -63,7 +74,13 @@ export function roundedOnceTotal(rows: readonly Row[]): number {
       total += g.stored
       continue
     }
-    const once = Math.floor(g.exact + 1e-9)
+    // #551: rows filed with shares of one exact total (#384's largest remainder, a split receive)
+    // already add up to that total ROUNDED, not floored: two €0.50 parts of 49.9 c exact each are
+    // filed as 50 + 50 (0-face proofs included), and flooring 99.8 showed €0.99. When the stored
+    // faces are exactly the rounded exact total, they are that total. Otherwise the floor stands,
+    // which is what corrects per-row rounding drift in either direction (georges, 0.6 c/sat).
+    const rounded = Math.round(g.exact + 1e-9)
+    const once = shares && g.stored === rounded ? rounded : Math.floor(g.exact + 1e-9)
     total += g.cap > 0 ? Math.min(once, g.cap) : once
   }
   return total
@@ -71,10 +88,13 @@ export function roundedOnceTotal(rows: readonly Row[]): number {
 
 /**
  * What a spend may draw from these rows, minor units: never more than the per-row credits a spend
- * draws part by part, and never more than `roundedOnceTotal` (what the ledger covers).
+ * draws part by part, and never more than the floor of each voucher's exact total (what the ledger
+ * covers). Never above `roundedOnceTotal` either, which is never below that floor.
  */
 export function spendableTotal(rows: readonly (Row & { face_value?: number | null })[], perRow: readonly number[] = rows.map((r) => Number(r.face_value ?? 0))): number {
-  return Math.min(perRow.reduce((s, v) => s + v, 0), roundedOnceTotal(rows))
+  // The ledger's floor, not the balance shown: #551's shares are what was received, but a spend is
+  // credited `cumulativeCredit` of the exact value, so a code never offers the cent it cannot cover.
+  return Math.min(perRow.reduce((s, v) => s + v, 0), ledgerTotal(rows))
 }
 
 /**
