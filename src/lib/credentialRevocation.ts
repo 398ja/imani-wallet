@@ -78,6 +78,9 @@ export async function credentialState(
     // SPENT is the only state that means revoked. PENDING is a proof mid-swap,
     // which is a transient the mint resolves — treating it as revoked would
     // retire a terminal over a race.
+    // #261 review: kept as a single read. Nothing is written from it: the state is asked again at
+    // every check (login, revoke), so a wrong SPENT (cashu-mint#556, fixed in 0.44.2) heals by itself
+    // on the next read, and revoke's "already revoked" leaves the credential's proofs untouched.
     if (answer.state === 'SPENT') return CREDENTIAL_STATE.REVOKED
     if (answer.state === 'UNSPENT') return CREDENTIAL_STATE.LIVE
     if (answer.valid === true) return CREDENTIAL_STATE.LIVE
