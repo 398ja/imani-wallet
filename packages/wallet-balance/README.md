@@ -75,7 +75,6 @@ const manager = new BalanceManager({
 | `getIssuerBalances()` | Get all issuer balances |
 | `getCurrencyBalances()` | Get all currency balances |
 | `getTopIssuers(limit?)` | Get top N issuers by balance |
-| `selectVouchersForAmount(request)` | Select vouchers for payment |
 | `refresh()` | Force refresh balance |
 
 #### Events
@@ -150,38 +149,6 @@ registerCurrency('CUSTOM', {
   decimals: 2,
   symbolPosition: 'before',
 });
-```
-
-### SelectionOptimizer
-
-Smart voucher selection for payments.
-
-```typescript
-import { SelectionOptimizer } from '@imani/wallet-balance';
-
-// Select vouchers for payment
-const result = SelectionOptimizer.selectForAmount(vouchers, {
-  amount: 1000,            // Amount in minor units (cents)
-  currency: 'EUR',
-  strategy: 'prefer-single', // or 'minimize-change', 'use-expiring-first'
-  preferredIssuerId: 'issuer-1',
-  excludeVoucherIds: ['exclude-this'],
-});
-
-// Result
-{
-  vouchers: Voucher[];      // Selected vouchers
-  totalAmount: number;      // Total selected
-  changeAmount: number;     // Overage
-  needsConsolidation: boolean;
-  sufficient: boolean;
-  shortfall: number;
-  consolidationGroups?: Voucher[][];
-}
-
-// Check consolidation compatibility
-const check = SelectionOptimizer.checkConsolidation(vouchers);
-// { canConsolidate: boolean, reason?: string, compatibleGroups: Voucher[][] }
 ```
 
 ## Supported Currencies
