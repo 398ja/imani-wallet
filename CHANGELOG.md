@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-11-19
+
 ### Added
 
 - **Logout is refused until your key is backed up somewhere Imani knows of** (#348). One Google Drive backup (read back right after the upload) or one downloaded backup file is enough, and the check works offline. There is no override: the refusal leads to Backup. A backup made before a passphrase change does not count.
