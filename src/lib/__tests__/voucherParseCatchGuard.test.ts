@@ -132,6 +132,9 @@ const AUDITED = new Set<string>([
   // send-side check. Display and UX only: gateway-customer's receive guard still refuses it.
   'src/lib/cardVoucherRef.ts#cardReferenceOfRow#e6d14ec06b1e',
   'src/lib/receiveSwap.ts#receiveByOwnSwap#95ffa067ed7a',
+  // imani-wallet#248: rethrows everything except a 12002 MintRefusal, which restores the old
+  // outputs (NUT-09) before any re-blind. Swallows nothing. Re-audited after the review fix.
+  'src/lib/receiveSwap.ts#receiveByOwnSwap#5ebf8b729932',
   'src/lib/redemptionRows.ts#refile#4e947b60885a',
   'src/lib/selfLockedCoupons.ts#faceShare#e6d14ec06b1e',
   'src/lib/selfLockedCoupons.ts#hasSelfLockedProof#fd266fd0a09b',

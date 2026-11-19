@@ -1,6 +1,7 @@
 import type { MintTransport, ReceivableProof } from './receiveSwap'
 import type { BlindSignatureResponse } from './walletSwap'
 import { referencedDocuments } from './voucherToken'
+import { MintRefusal } from './mintRefusal'
 
 /**
  * Talking to the mint over HTTP.
@@ -48,10 +49,15 @@ async function refusal(response: Response, what: string): Promise<Error> {
   // "Token already spent" and "amounts do not balance" lead to entirely different
   // actions, so losing it would send somebody to the logs for an answer the
   // response already carried.
-  const body = (await response.json().catch(() => null)) as { detail?: string } | null
-  const detail = body?.detail
-  return new Error(
+  const body = (await response.json().catch(() => null)) as { detail?: string; code?: unknown } | null
+  const detail = typeof body?.detail === 'string' ? body.detail : undefined
+  // The NUT-00 code too, so a caller can act on a specific refusal (12002, #248).
+  const code = typeof body?.code === 'number' ? body.code : undefined
+  return new MintRefusal(
     detail ? `${what} refused by the mint: ${detail}` : `${what} failed with HTTP ${response.status}`,
+    response.status,
+    code,
+    detail,
   )
 }
 

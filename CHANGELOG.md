@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A receive left unfinished across a mint keyset rotation now completes on retry** (#248). The mint refuses the stored outputs with `12002 keyset_inactive` before spending anything, so the wallet now drops them, re-blinds against the active keyset and swaps again. Every other failure still replays the original request byte for byte, and nothing is re-blinded once any signature has come back.
+
 ## [0.63.0] - 2026-11-19
 
 ### Added
