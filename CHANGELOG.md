@@ -9,11 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A coupon or Cashlink closed on one SPENT reading from the mint can now come back** (#261). When a merchant's own coupon is marked redeemed, or a Cashlink is marked claimed, because a single checkstate said SPENT (rather than by this wallet's own burn or a confirmed claim), the wallet records why and when, reads the mint again on a later pass (after 10 minutes), and undoes it if the proofs are UNSPENT: the coupon goes back to active and is burnt properly, and the Cashlink opens again so it can be taken back. A second SPENT reading confirms it for good.
+- **A send whose answer was lost no longer holds logout off for a day** (#389). On every start, and before logout, the wallet now asks the gateway's send history what became of each unanswered send. One that arrived moves to the pending-send ledger and is settled like any other; one that never arrived is cleared, so pressing Send again is a new send. Only a send the gateway cannot place yet keeps logout off, with copy that says so instead of "try again in a moment". Nothing is re-sent to find out.
+
 ## [0.64.0] - 2026-11-19
 
 ### Fixed
 
-- **A send whose answer was lost no longer holds logout off for a day** (#389). On every start, and before logout, the wallet now asks the gateway's send history what became of each unanswered send. One that arrived moves to the pending-send ledger and is settled like any other; one that never arrived is cleared, so pressing Send again is a new send. Only a send the gateway cannot place yet keeps logout off, with copy that says so instead of "try again in a moment". Nothing is re-sent to find out.
 - **A receive left unfinished across a mint keyset rotation now completes on retry** (#248). The mint refuses the stored outputs with `12002 keyset_inactive` before spending anything, so the wallet now drops them, re-blinds against the active keyset and swaps again. Every other failure still replays the original request byte for byte, and nothing is re-blinded once any signature has come back.
 
 ## [0.63.0] - 2026-11-19
