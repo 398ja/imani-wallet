@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An NGN send says what it really sends, before and after the tap** (Closes #635). A coupon part is whole sats and an NGN sat is worth more than a kobo, so NGN 200 can really send 200.74. The confirm screens (Send, Pay) now headline the 200.74 with the asked 200.00 under it, and the done screens (Send, Pay, Cashlink) headline what the gateway confirmed left: `SendResult.sent`, summed from each settled part on the single, bundle and per-part paths. An overcharge is never read as a partial send. GBP and EUR are unchanged.
+
 ## [0.65.0] - 2026-11-19
 
 ### Security

@@ -1809,10 +1809,12 @@ describe('sendVouchers and payRequest', () => {
       const { transactions } = wallet([source])
 
       // Act
-      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'NGN', amount: 150_000 })
+      const result = await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'NGN', amount: 150_000 })
 
       // Assert
       expect(transactions[0]).toMatchObject({ type: 'sent', amount: 150_087, unit: 'NGN' })
+      // #635: the done screen gets the same confirmed figure, and the send is whole, not partial.
+      expect(result).toMatchObject({ requested: 150_000, delivered: 150_000, sent: 150_087 })
     })
 
     it('records the request when the gateway still reports parent minus request (not yet upgraded)', async () => {
@@ -1823,10 +1825,11 @@ describe('sendVouchers and payRequest', () => {
       const { transactions } = wallet([source])
 
       // Act
-      await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'NGN', amount: 150_000 })
+      const result = await sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'NGN', amount: 150_000 })
 
       // Assert
       expect(transactions[0]).toMatchObject({ type: 'sent', amount: 150_000 })
+      expect(result.sent).toBe(150_000)
     })
 
     it('debitFor says 1500.87 before the tap, and the exact amount on a EUR coupon', () => {
