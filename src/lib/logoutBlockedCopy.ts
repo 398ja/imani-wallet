@@ -45,6 +45,8 @@ export function blockedMessage(outcome: BlockedLogout): string {
       return LOGOUT_BLOCKED_COPY.changed
     case 'in-flight':
       return LOGOUT_BLOCKED_COPY.inFlight
+    case 'send-unknown':
+      return LOGOUT_BLOCKED_COPY.sendUnknown
     case 'other-tab':
       return LOGOUT_BLOCKED_COPY.otherTab
     case 'key-not-backed-up':
