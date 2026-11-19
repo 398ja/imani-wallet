@@ -11,7 +11,7 @@ import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 
-import { authorization, IssuanceFailed, ISSUE_PATH, type StallCredential } from './issuer'
+import { authorization, CREDENTIAL_HEADER, IssuanceFailed, ISSUE_PATH, type StallCredential } from './issuer'
 import type { CredentialStore } from './vault'
 
 /**
@@ -117,8 +117,15 @@ export async function tokenFor(
     // The body is the EMPTY STRING, not '{}'. A NIP-98 payload tag is the hash
     // of the body actually sent, and a GET sends nothing; hashing '{}' would
     // produce a signature over a body that never existed.
+    //
+    // The terminal credential is named, as it is on the mint (gc#233): the
+    // gateway checks it is still live for this key, so a revoked credential or
+    // a newer delegation stops this key reading the coupons it minted.
     response = await fetchImpl(url, {
-      headers: { Authorization: authorization('GET', url, '', credential.lockKeyHex) },
+      headers: {
+        Authorization: authorization('GET', url, '', credential.lockKeyHex),
+        [CREDENTIAL_HEADER]: credential.credentialId,
+      },
     })
   } catch (error) {
     throw new IssuanceFailed(
