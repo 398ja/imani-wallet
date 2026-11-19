@@ -21,7 +21,7 @@
  *   - STRIPE_SECRET_KEY starting `sk_test_`
  *   - the `stripe` CLI on PATH
  *   - payment-adapter at E2E_PA (default http://localhost:28087), started with
- *     STRIPE_CONNECT_WEBHOOK_SECRET = the secret `stripe listen --print-secret` prints
+ *     STRIPE_WEBHOOK_SECRET = the secret `stripe listen --print-secret` prints
  *   - purchase-issuer at E2E_ISSUER (default http://localhost:8791) and the gateway at E2E_GATEWAY
  *     (default http://localhost:8082), test mode
  *   - E2E_STALL_SK: hex key of a stall already enrolled for card sales at the issuer (`local-sell`)
@@ -31,13 +31,16 @@
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { hexToBytes } from '@noble/hashes/utils'
-import { finalizeEvent, getPublicKey, type Event } from 'nostr-tools/pure'
+import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from 'nostr-tools/pure'
 import * as nip44 from 'nostr-tools/nip44'
 
 const PA = (process.env.E2E_PA ?? 'http://localhost:28087').replace(/\/$/, '')
 const ISSUER = (process.env.E2E_ISSUER ?? 'http://localhost:8791').replace(/\/$/, '')
 const GATEWAY = (process.env.E2E_GATEWAY ?? 'http://localhost:8082').replace(/\/$/, '')
-const WEBHOOK_PATH = process.env.E2E_WEBHOOK_PATH ?? '/api/v1/stripe/connect/webhooks'
+// The PURCHASE handler (`StripeWebhookHandler`, checkout.session.completed) is `/webhook/stripe`,
+// verified with STRIPE_WEBHOOK_SECRET. `/api/v1/stripe/connect/webhooks` only handles account events,
+// so forwarding there recorded nothing (found running this for real, 2026-11-18).
+const WEBHOOK_PATH = process.env.E2E_WEBHOOK_PATH ?? '/webhook/stripe'
 const DB_CONTAINER = process.env.E2E_PA_DB_CONTAINER ?? 'cashu-mint-payment-adapter-db-1'
 const DB = process.env.E2E_PA_DB ?? 'payment_adapter'
 const ORIGIN = (process.env.E2E_ORIGIN ?? PA).replace(/\/$/, '')
@@ -78,6 +81,7 @@ for (const [name, url] of [['payment-adapter', PA], ['purchase-issuer', ISSUER],
 }
 
 const STALL = getPublicKey(hexToBytes(STALL_SK))
+const BUYER = getPublicKey(generateSecretKey())
 
 // ---------------------------------------------------------------- helpers
 
@@ -163,8 +167,36 @@ async function saleRecordRows(): Promise<Array<Record<string, unknown>>> {
 // The key goes to the CLI through its environment, never argv (argv is readable by any local user via ps).
 const STRIPE_ENV = { ...process.env, STRIPE_API_KEY: KEY }
 let listener: ChildProcess | null = null
+// The events payment-adapter's purchase handler acts on. Stripe CLI >= 1.5x refuses `listen` without
+// `--events` and exits at once, which with stdio ignored looked like webhooks just never arriving.
+const LISTEN_EVENTS = [
+  'checkout.session.completed',
+  'checkout.session.async_payment_succeeded',
+  'checkout.session.async_payment_failed',
+  'checkout.session.expired',
+  'payment_intent.payment_failed',
+].join(',')
 function listen(): void {
-  listener = spawn('stripe', ['listen', '--forward-connect-to', `${PA}${WEBHOOK_PATH}`], { stdio: 'ignore', env: STRIPE_ENV })
+  listener = spawn('stripe', ['listen', '--events', LISTEN_EVENTS, '--forward-connect-to', `${PA}${WEBHOOK_PATH}`], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: STRIPE_ENV,
+  })
+  const proc = listener
+  let err = ''
+  proc.stderr?.on('data', (d: Buffer) => (err += d.toString()))
+  proc.on('exit', (code) => {
+    // A listener we did not stop died on its own: say so, or every later check fails as a mystery.
+    if (listener === proc && code !== null) console.log(`  stripe listen exited ${code}: ${err.replace(/whsec_\w+/g, 'whsec_…').trim().slice(-300)}`)
+  })
+}
+/**
+ * Re-deliver a connected account's event to the running listener. The CLI flag is `--account`:
+ * `--stripe-account` is not a flag of `events resend`, so the platform was asked for an event that
+ * only exists on the connected account ("No such notification") and nothing was ever redelivered.
+ * The CLI also needs a LIVE `stripe listen` to deliver to.
+ */
+function redeliver(event: string): void {
+  execFileSync('stripe', ['events', 'resend', event, '--account', account], { stdio: 'ignore', env: STRIPE_ENV })
 }
 function stopListening(): void {
   listener?.kill('SIGTERM')
@@ -176,7 +208,9 @@ async function buy(card: string): Promise<{ pi?: string; session: string }> {
   const r = await fetch(`${PA}/api/v1/checkout/purchase`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ stallPubkey: STALL, amountMinor: AMOUNT, buyerPubkey: 'c'.repeat(64) }),
+    // A REAL key: the coupon is NIP-44 encrypted to the buyer, and 'c'.repeat(64) is not a point on
+    // the curve ("Invalid point compression"), so delivery failed and every row stuck at ISSUED.
+    body: JSON.stringify({ stallPubkey: STALL, amountMinor: AMOUNT, buyerPubkey: BUYER }),
   })
   const body = (await r.json()) as { checkoutUrl?: string }
   if (!r.ok || !body.checkoutUrl) throw new Error(`checkout refused: HTTP ${r.status} ${JSON.stringify(body)}`)
@@ -186,14 +220,33 @@ async function buy(card: string): Promise<{ pi?: string; session: string }> {
   try {
     const page = await browser.newPage()
     await page.goto(body.checkoutUrl, { waitUntil: 'load' })
-    await page.locator('#email').fill('e2e-buyer@example.invalid').catch(() => {})
-    await page.locator('#cardNumber').fill(card)
-    await page.locator('#cardExpiry').fill('12 / 34')
-    await page.locator('#cardCvc').fill('123')
-    await page.locator('#billingName').fill('E2E Buyer').catch(() => {})
-    await page.locator('#billingPostalCode').fill('SW1A 1AA').catch(() => {})
-    await page.locator('button[type=submit]').click()
+    // Two Checkout layouts exist. The current one (seen 2026-11-18) renders the whole form in a
+    // Payment Element iframe (`elements-inner-habanero`): a Card/Klarna accordion, then
+    // `#payment-numberInput` etc. The older one had `#cardNumber` on the page itself.
+    await page.waitForTimeout(4000)
+    const inner = page.frames().find((f) => f.url().includes('elements-inner-habanero'))
+    if (inner) {
+      await inner.locator('#linkAuthentication-emailInput').fill('e2e-buyer@example.com').catch(() => {})
+      await inner.getByText('Card', { exact: true }).first().click().catch(() => {})
+      await inner.locator('#payment-numberInput').fill(card)
+      await inner.locator('#payment-expiryInput').fill('12 / 34')
+      await inner.locator('#payment-cvcInput').fill('123')
+      await inner.locator('#payment-nameInput').fill('E2E Buyer').catch(() => {})
+      await inner.locator('#payment-postalCodeInput').fill('SW1A 1AA', { timeout: 2000 }).catch(() => {})
+      const optIn = inner.locator('#payment-linkOptInInput')
+      if (await optIn.isChecked().catch(() => false)) await optIn.uncheck({ force: true }).catch(() => {})
+      await inner.getByTestId('payment-form-submit-button').click()
+    } else {
+      await page.locator('#email').fill('e2e-buyer@example.com').catch(() => {})
+      await page.locator('#cardNumber').fill(card)
+      await page.locator('#cardExpiry').fill('12 / 34')
+      await page.locator('#cardCvc').fill('123')
+      await page.locator('#billingName').fill('E2E Buyer').catch(() => {})
+      await page.locator('#billingPostalCode').fill('SW1A 1AA').catch(() => {})
+      await page.locator('button[type=submit]').click()
+    }
     await page.waitForTimeout(8000)
+    if (process.env.E2E_SHOTS) await page.screenshot({ path: `${process.env.E2E_SHOTS}/checkout-${card.slice(-4)}-${Date.now()}.png` })
   } finally {
     await browser.close()
   }
@@ -234,13 +287,16 @@ if (!account) {
     'individual[email]': 'e2e-stall@example.invalid',
     'individual[phone]': '+447700900000',
     'business_profile[mcc]': '5734',
-    'business_profile[url]': 'https://example.invalid',
+    // Stripe refuses placeholder sites (.invalid, example.com: url_invalid). A product description
+    // satisfies the same requirement in test mode.
+    'business_profile[product_description]': 'E2E test stall selling vouchers',
     'external_account': 'btok_gb',
     'tos_acceptance[date]': String(Math.floor(Date.now() / 1000)),
     'tos_acceptance[ip]': '127.0.0.1',
   })
   account = String(created.id)
-  const ready = await until(async () => ((await stripe('GET', `/accounts/${account}`)).charges_enabled === true ? true : undefined), 60_000)
+  // Measured 2026-11-18: a fresh GB Custom account took over 60 s to reach charges_enabled.
+  const ready = await until(async () => ((await stripe('GET', `/accounts/${account}`)).charges_enabled === true ? true : undefined), 240_000)
   check('Stripe says the account is charges_enabled', ready === true)
   sql(
     `insert into connected_stripe_account (id, merchant_pubkey, stripe_account_id, onboarding_complete, charges_enabled,` +
@@ -289,7 +345,7 @@ try {
   console.log('F2  replay the paid event')
   const event = await paidEventFor(paid.session)
   check('the paid event is found', Boolean(event))
-  if (event) execFileSync('stripe', ['events', 'resend', event, '--stripe-account', account], { stdio: 'ignore', env: STRIPE_ENV })
+  if (event) redeliver(event)
   await new Promise((r) => setTimeout(r, 15_000))
   check('still exactly one row after the replay', rowsFor(pi).length === 1)
   check('still exactly one coupon after the replay', (await stallList()).filter((p) => p.ref === pi).length === 1)
@@ -304,7 +360,8 @@ try {
   listen()
   await new Promise((r) => setTimeout(r, 5000))
   const lateEvent = await paidEventFor(late.session)
-  if (lateEvent) execFileSync('stripe', ['events', 'resend', lateEvent, '--stripe-account', account], { stdio: 'ignore', env: STRIPE_ENV })
+  check('the late event is found', Boolean(lateEvent))
+  if (lateEvent) redeliver(lateEvent)
   const lateRows = await until(() => {
     const rows = rowsFor(latePi)
     return rows.length === 1 && rows[0].status === 'DISCHARGED' ? rows : undefined
