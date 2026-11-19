@@ -288,7 +288,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
                   memo: memo.trim() || undefined,
                   x,
                 })
-                setSent({ link: out.link, x: out.x, face: formatFace(out.result.delivered, chosen), delivered: out.delivered, onItsOwn: out.returnsOnItsOwn === true })
+                setSent({ link: out.link, x: out.x, face: formatFace(Math.max(out.result.sent ?? out.result.delivered, out.result.delivered), chosen) /* #635: what really left */, delivered: out.delivered, onItsOwn: out.returnsOnItsOwn === true })
               } catch (e) {
                 setStatus({
                   step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',

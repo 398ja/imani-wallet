@@ -5,6 +5,9 @@
  * 134.6 kobo, so 1500.00 cannot be sent exactly: the fewest sats worth it are worth 1500.87, and
  * that is what leaves the balance. Pay and Send now say so before the tap. A EUR coupon, where a
  * sat is worth less than a cent, still shows no such line.
+ *
+ * #635: the headline on the confirm screen is that real figure, the asked amount under it, and the
+ * done screen headlines what the gateway confirmed left, never calling an overcharge "partial".
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -74,6 +77,16 @@ vi.mock('../../lib/merchant', async (orig) => ({
   merchantStatus: () => Promise.resolve('customer'),
   isMerchantPubkey: () => Promise.resolve(false),
 }))
+/** When set, the send or payment resolves with it instead of reaching a gateway. */
+let answer: Record<string, unknown> | null = null
+vi.mock('../../lib/pay', async (orig) => {
+  const real = await orig<typeof import('../../lib/pay')>()
+  return {
+    ...real,
+    sendVouchers: (args: Parameters<typeof real.sendVouchers>[0]) => (answer ? Promise.resolve(answer) : real.sendVouchers(args)),
+    payRequest: (args: Parameters<typeof real.payRequest>[0]) => (answer ? Promise.resolve(answer) : real.payRequest(args)),
+  }
+})
 vi.mock('../../lib/giftLinks', async (orig) => ({
   ...(await orig<typeof import('../../lib/giftLinks')>()),
   settleAndCountLinks: () => Promise.resolve({ waiting: 0, expiredUnreturned: 0 }),
@@ -85,10 +98,12 @@ import { SendPage } from '../SendPage'
 beforeEach(() => {
   localStorage.clear()
   held = [ngnCoupon()]
+  answer = null
 })
 afterEach(cleanup)
 
-const taken = () => screen.getByText('Taken from your balance').nextElementSibling?.textContent ?? ''
+/** The confirm screen's big figure. */
+const headline = () => document.querySelector('.text-amount')?.textContent ?? ''
 
 function drawPay(amount: number, unit: string) {
   ;(window as unknown as { NUT18V: unknown }).NUT18V = {
@@ -107,8 +122,9 @@ describe('Pay', () => {
     drawPay(150_000, 'NGN')
 
     // Assert
-    await waitFor(() => expect(screen.getByText('Taken from your balance')).toBeTruthy())
-    expect(taken()).toMatch(/1,?500\.87/)
+    await waitFor(() => expect(screen.getByText(/cannot make exactly/)).toBeTruthy())
+    expect(headline()).toMatch(/1,?500\.87/)
+    expect(screen.getByText(/^Asked:/).textContent).toMatch(/1,?500\.00/)
     expect(screen.getByText(/cannot make exactly/).textContent).toMatch(/0\.87 more/)
   })
 
@@ -121,7 +137,8 @@ describe('Pay', () => {
 
     // Assert
     await waitFor(() => expect(screen.getByText('Your balance')).toBeTruthy())
-    expect(screen.queryByText('Taken from your balance')).toBeNull()
+    expect(headline()).toMatch(/2\.50/)
+    expect(screen.queryByText(/^Asked:/)).toBeNull()
     expect(screen.queryByText(/cannot make exactly/)).toBeNull()
   })
 })
@@ -141,8 +158,73 @@ describe('Send', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
 
     // Assert
-    await waitFor(() => expect(screen.getByText('Taken from your balance')).toBeTruthy())
-    expect(taken()).toMatch(/1,?500\.87/)
-    expect(screen.getByText(/cannot make exactly/)).toBeTruthy()
+    await waitFor(() => expect(screen.getByText(/cannot make exactly/)).toBeTruthy())
+    expect(headline()).toMatch(/1,?500\.87/)
+    expect(screen.getByText(/You asked to send/).textContent).toMatch(/1,?500\.00/)
+  })
+
+  it('the done screen says what the gateway confirmed was sent, not the request (#635)', async () => {
+    // Arrange: the gateway confirmed 1500.87 left for 1500.00 asked.
+    answer = { id: 's1', requested: 150_000, delivered: 150_000, sent: 150_087, parts: 1, vouchers: 1 }
+    render(
+      <MemoryRouter initialEntries={[`/send?to=${'b'.repeat(64)}`]}>
+        <SendPage pubkey={ME} />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByText(/available from/)).toBeTruthy())
+    fireEvent.change(screen.getByLabelText(/Amount/), { target: { value: '1500' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy())
+
+    // Act
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    // Assert
+    await waitFor(() => expect(screen.getByText(/You asked to send/)).toBeTruthy())
+    expect(headline()).toMatch(/1,?500\.87/)
+    expect(screen.getByText(/You asked to send/).textContent).toMatch(/1,?500\.00/)
+    expect(screen.queryByText(/ reached /)).toBeNull()
+  })
+
+  it('a EUR send reads as before: the request, no second line', async () => {
+    // Arrange
+    held = [eurCoupon()]
+    answer = { id: 's2', requested: 250, delivered: 250, sent: 250, parts: 1, vouchers: 1 }
+    render(
+      <MemoryRouter initialEntries={[`/send?to=${'b'.repeat(64)}`]}>
+        <SendPage pubkey={ME} />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByText(/available from/)).toBeTruthy())
+    fireEvent.change(screen.getByLabelText(/Amount/), { target: { value: '2.50' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy())
+    expect(headline()).toMatch(/2\.50/)
+
+    // Act
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    // Assert
+    await waitFor(() => expect(screen.getByText(/Sent to/)).toBeTruthy())
+    expect(headline()).toMatch(/2\.50/)
+    expect(screen.queryByText(/You asked to send/)).toBeNull()
+  })
+})
+
+describe('Pay done (#635)', () => {
+  it('headlines what was paid, the asked amount beside it, and is not "Not all paid"', async () => {
+    // Arrange: a two-part bundle, each part a sat over.
+    answer = { id: 'b1', requested: 150_000, delivered: 150_000, sent: 150_087, parts: 2, vouchers: 2 }
+    drawPay(150_000, 'NGN')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Pay' })).toBeTruthy())
+
+    // Act
+    fireEvent.click(screen.getByRole('button', { name: 'Pay' }))
+
+    // Assert
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Paid' })).toBeTruthy())
+    const line = screen.getByText(/asked /).textContent ?? ''
+    expect(line).toMatch(/1,?500\.87 \(asked .*1,?500\.00\)/)
+    expect(screen.queryByText('Not all paid')).toBeNull()
   })
 })
