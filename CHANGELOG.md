@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`SelectionOptimizer` is gone from `@imani/wallet-balance`** (#435). It was a second voucher selector that nothing in the app used. `chooseSpend` in `@imani/wallet-core` is the one rule for every send and payment.
+
 ### Fixed
 
 - **Receiving €0.50 + €0.50 as split coupons now adds €1.00 to the balance, not €0.99** (#551). A voucher held as several rows whose faces were filed as shares of one exact value (largest remainder, as #384 does for a take-back) is shown at the sum of those shares, its exact total rounded once across the whole group. Other multi-row vouchers keep the floor of their exact total. What a payment may draw still never exceeds what the redemption ledger credits, and Pay and Send say so when it is a cent below the balance.
