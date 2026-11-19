@@ -180,6 +180,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
     // reports: showing the asking price would send the customer away believing
     // the sale is settled when the merchant is still short.
     const partial = status.result.delivered < status.result.requested
+    // #635: what really left (see SendPage). Never read as partial.
+    const paidFace = Math.max(status.result.sent ?? status.result.delivered, status.result.delivered)
     // See SendPage: an unconfirmed part may already have arrived, so it is never offered again (#125).
     const inFlight = status.result.inFlight ?? 0
     // The parts after an unconfirmed one were never tried: that money did not move.
@@ -195,7 +197,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           {inFlight > 0 ? 'Still sending' : partial ? 'Not all paid' : 'Paid'}
         </h1>
         <p className="text-sm text-mono-500">
-          {formatFace(status.result.delivered, denom)}
+          {formatFace(paidFace, denom)}
+          {!partial && paidFace > status.result.requested ? ` (asked ${formatFace(status.result.requested, denom)})` : ''}
           {partial ? ` of ${formatFace(status.result.requested, denom)}` : ''} to {issuerLabel}
           {/* In the sentence, not a second line: see SendPage (#94). */}
           {!partial && usedVouchers(status.result) > 1 ? ` as ${usedVouchers(status.result)} vouchers` : ''}
@@ -254,14 +257,15 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       </div>
 
       <Panel className="mb-6 p-5">
+        {/* #635: the headline is what really leaves; the asked amount, when it differs, under it. */}
         <p className="text-amount text-mono-900 dark:text-mono-50">
-          {formatFace(request.amount, denom)}
+          {formatFace(overNote ? debit : request.amount, denom)}
         </p>
+        {overNote && <p className="mt-1 text-xs text-mono-500">Asked: {formatFace(request.amount, denom)}.</p>}
         {request.description && (
           <p className="mt-2 text-sm text-mono-500">{request.description}</p>
         )}
         <dl className="mt-4 space-y-1 text-sm">
-          {overNote && <Row label="Taken from your balance" value={formatFace(debit, denom)} />}
           <Row label="Your balance" value={formatFace(available, denom)} />
           <Row label="Vouchers held" value={String(group?.voucherCount ?? 0)} />
         </dl>
