@@ -132,7 +132,7 @@ describe('no protocol jargon in the UI (#324)', () => {
       tooManyExpiredMessage(),
       blockedMessage({ status: 'blocked', reason: 'other-tab', unconfirmed: [] }),
       ...(
-        ['unconfirmed', 'locked', 'store-unreadable', 'changed', 'in-flight', 'cashback-unconfirmed'] as const
+        ['unconfirmed', 'locked', 'store-unreadable', 'changed', 'in-flight', 'send-unknown', 'cashback-unconfirmed'] as const
       ).map((reason) => blockedMessage({ status: 'blocked', reason, unconfirmed: [coupon], cashback: 1 })),
     ]
     for (const text of copy) {

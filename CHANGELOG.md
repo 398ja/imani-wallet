@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A send whose answer was lost no longer holds logout off for a day** (#389). On every start, and before logout, the wallet now asks the gateway's send history what became of each unanswered send. One that arrived moves to the pending-send ledger and is settled like any other; one that never arrived is cleared, so pressing Send again is a new send. Only a send the gateway cannot place yet keeps logout off, with copy that says so instead of "try again in a moment". Nothing is re-sent to find out.
 - **A receive left unfinished across a mint keyset rotation now completes on retry** (#248). The mint refuses the stored outputs with `12002 keyset_inactive` before spending anything, so the wallet now drops them, re-blinds against the active keyset and swaps again. Every other failure still replays the original request byte for byte, and nothing is re-blinded once any signature has come back.
 
 ## [0.63.0] - 2026-11-19

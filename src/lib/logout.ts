@@ -105,6 +105,15 @@ export const LOGOUT_BLOCKED_COPY = {
   inFlight:
     'A payment or a Cashlink is still going through. Logging out now could lose it, so ' +
     'logging out stays off until it finishes. Nothing has been erased. Try again in a moment.',
+  /**
+   * #389: a send whose request got no answer, and the gateway cannot say yet whether it arrived.
+   * Waiting a moment does not help; reaching the gateway does.
+   */
+  sendUnknown:
+    'A send you made did not get an answer, and Imani could not check yet whether it went ' +
+    'through. Logging out now could lose that money, so logging out stays off until Imani can check. ' +
+    'Nothing has been erased. Check your connection, then try again. Imani also checks each time it starts, ' +
+    'and stops counting the send after 24 hours.',
   checkoutCode: (shop: string, amount: string, back: string) =>
     `Your checkout code for ${shop} worth ${amount} is still being made. Logging out now could lose it, ` +
     `so logging out stays off until it is ready. If it cannot be finished, its value comes back to this wallet on ${back}. ` +
@@ -133,6 +142,7 @@ export type LogoutOutcome =
         | 'store-unreadable'
         | 'changed'
         | 'in-flight'
+        | 'send-unknown'
         | 'cashback-unconfirmed'
         | 'checkout-code'
         | 'checkout-code-unconfirmed'
@@ -160,7 +170,7 @@ export interface LogoutDeps {
    * Live entries in the pending-send and swap-intent ledgers, which hold value
    * no coupon row describes and which the sweep below would delete.
    */
-  inFlight?: (pubkey: string) => { sends: number; swaps: number; cashlinks?: number; codes?: number }
+  inFlight?: (pubkey: string) => { sends: number; swaps: number; cashlinks?: number; codes?: number; unanswered?: number }
   /** Try to finish pending sends first, so a settled one does not block. Bounded, never throws. */
   settleInFlight?: (pubkey: string) => Promise<void>
   /** The read-back check of the cashback stash (#331). Must never answer ok on a failure. */
@@ -234,16 +244,23 @@ async function defaultSettleInFlight(pubkey: string): Promise<void> {
   }
 }
 
-function hasMoneyInFlight(read: NonNullable<LogoutDeps['inFlight']>, pubkey: string): boolean {
+/**
+ * Why money in flight refuses the logout, or undefined when none does. #389: when the only thing
+ * left is a send with no answer at all, the refusal says so ('send-unknown'), since "try again in
+ * a moment" does not fit a send only the gateway can place.
+ */
+function inFlightReason(read: NonNullable<LogoutDeps['inFlight']>, pubkey: string): 'in-flight' | 'send-unknown' | undefined {
   try {
     // #557: `codes` is not read here. An outstanding checkout code is checked on its own, by the
     // read-back of its relay backup (`codesBlocked`).
-    const { sends, swaps, cashlinks } = read(pubkey)
+    const { sends, swaps, cashlinks, unanswered } = read(pubkey)
     // #295 phase 4: a Cashlink claim part way, or a Cashlink whose value is moving, is value no
     // coupon row describes yet, and the sweep below would delete its only record.
-    return sends > 0 || swaps > 0 || (cashlinks ?? 0) > 0
+    if (!(sends > 0 || swaps > 0 || (cashlinks ?? 0) > 0)) return undefined
+    const onlyUnanswered = (unanswered ?? 0) > 0 && sends === unanswered && swaps === 0 && (cashlinks ?? 0) === 0
+    return onlyUnanswered ? 'send-unknown' : 'in-flight'
   } catch {
-    return true
+    return 'in-flight'
   }
 }
 
@@ -399,7 +416,8 @@ export async function attemptLogout(
   if (!firstCodes.ok) return codesBlocked(firstCodes)
   // A send or swap still in flight holds value outside every coupon row, and
   // the sweep below would delete its only record (second check of #326).
-  if (hasMoneyInFlight(inFlight, pubkey)) return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
+  const firstInFlight = inFlightReason(inFlight, pubkey)
+  if (firstInFlight) return { status: 'blocked', reason: firstInFlight, unconfirmed: [] }
   // #379: and no Cashlink whose gift only this wallet can still take back. Its only record is the
   // History row and this device's key; a logout before the next run would leave it at the mint.
   if ((await safeStranded(deps.strandedLinks ?? defaultStrandedLinks, pubkey)) > 0) {
@@ -513,8 +531,9 @@ export async function attemptLogout(
 
   // Last, with the writers stopped: nothing may have started a send or a swap
   // since step 1 (a second tab can). From here on nothing is checked again.
-  if (hasMoneyInFlight(inFlight, pubkey)) {
-    return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
+  const lastInFlight = inFlightReason(inFlight, pubkey)
+  if (lastInFlight) {
+    return { status: 'blocked', reason: lastInFlight, unconfirmed: [] }
   }
   // And no receive is running (#331). With the gate closed and the poller's
   // generation bumped none can START, so this only catches one this list does
