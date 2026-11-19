@@ -24,7 +24,19 @@ import { withSpend } from './receiveGate'
 import { PENDING_SEND_LIFETIME_MS as SEND_LIFETIME, pendingBundlesKey, pendingSendsKey } from './inFlightMoney'
 import { checkoutHeldTokenIds } from './checkoutCodeRecords'
 import { cashlinkHeldTokenIds } from './cashlinkIntents'
-import { forgetSendIntent, gatewayAnswered, keyForSend, pendingIntentVoucher } from './sendIntent'
+import {
+  INTENT_ARRIVAL_GRACE_MS,
+  forgetSendIntent,
+  gatewayAnswered,
+  historyMatches,
+  historyTime,
+  keyForSend,
+  loadSendIntents,
+  pendingIntentVoucher,
+  type HistorySend,
+  type IntentPending,
+  type SendIntent,
+} from './sendIntent'
 import {
   RequestAlreadyPaidError,
   isSettledSend,
@@ -825,6 +837,10 @@ async function reconcileOnce(pubkey: string): Promise<number> {
   // #552: atomic bundles first. Each is one record for all its parts, never dropped while its
   // state is unknown.
   const bundlesSettled = await reconcilePendingBundles(pubkey)
+  // #389: a send whose initiate answer was lost is only an intent: no send id, so nothing below
+  // could ask about it. The gateway's history says whether it arrived; one that did joins the
+  // pending ledger here and is settled by the loop below, in this same pass.
+  await resolveSendIntents(pubkey)
   const pending = loadPendingSends(pubkey)
   if (pending.length === 0) return bundlesSettled
 
@@ -888,6 +904,148 @@ async function reconcileOnce(pubkey: string): Promise<number> {
   savePendingSends(pubkey, unresolved)
   if (settled > 0) notifyWalletChanged()
   return settled + bundlesSettled
+}
+
+/** #389: the pending-send record of a person-to-person send, kept with its intent. */
+function intentPendingOf(ctx: SendContext, candidate: Voucher): IntentPending | undefined {
+  const row = ctx.rowOf.get(candidate)
+  if (!row || ctx.link) return undefined
+  return {
+    tokenId: row.token_id,
+    unit: candidate.face_unit ?? ctx.unit ?? '',
+    decimals: candidate.face_decimals ?? 2,
+    merchantPubkey: ctx.merchant.pubkey,
+    ...(ctx.merchant.name && ctx.merchant.name !== ctx.merchant.pubkey ? { merchantName: ctx.merchant.name } : {}),
+    ...(ctx.recipient.name ? { recipientName: ctx.recipient.name } : {}),
+    sourceFaceValue: candidate.face_value ?? 0,
+  }
+}
+
+/** How many of this wallet's latest sends one history read covers. */
+export const INTENT_HISTORY_PAGE = 50
+
+type HistoryApi = { getAtomicSendHistory?(limit?: number, offset?: number): Promise<unknown> }
+
+function historyRows(answer: unknown): HistorySend[] | undefined {
+  if (Array.isArray(answer)) return answer as HistorySend[]
+  const wrapped = (answer as { sends?: unknown; items?: unknown } | null) ?? {}
+  if (Array.isArray(wrapped.sends)) return wrapped.sends as HistorySend[]
+  if (Array.isArray(wrapped.items)) return wrapped.items as HistorySend[]
+  return undefined
+}
+
+/**
+ * Resolve every stored send intent with the gateway (#389), on start and before logout.
+ *
+ * An intent is a send whose `POST /api/v1/atomic-send` went out and got no answer. Until this ran,
+ * nothing asked the gateway what became of it: the pending-send reconcile reads send ids, and a
+ * lost answer never gave one. So the intent sat as money in flight and refused logout for up to
+ * its 24 h lifetime.
+ *
+ * Looked up, never re-sent. The gateway has no lookup by Idempotency-Key, and repeating the POST
+ * with the same key replays a send that arrived, but STARTS one that never did: money would leave
+ * without the customer asking twice. The sender's own history (`GET /atomic-send/history`) is a
+ * read with no side effect, and gateway-core allows one active send per voucher, so a send of the
+ * same recipient, amount and voucher made after the intent is this send.
+ *
+ * Three answers, two of them definite:
+ * - in the history: the send arrived. Its id goes into the pending-send ledger (the loop after
+ *   this settles it, or keeps waiting on it like any accepted send), and the intent is cleared.
+ * - not in a history that reaches back past the intent, once a request could no longer be on its
+ *   way (`INTENT_ARRIVAL_GRACE_MS`): it never arrived. Nothing moved; the intent is cleared, and
+ *   pressing Send again is a new send.
+ * - anything else (no gateway, a history that does not reach back far enough, inside the grace):
+ *   unknown. The intent is kept, and logout stays off with copy that says so.
+ *
+ * Never throws.
+ */
+export async function resolveSendIntents(pubkey: string): Promise<{ arrived: number; neverArrived: number; unknown: number }> {
+  const result = { arrived: 0, neverArrived: 0, unknown: 0 }
+  const intents = loadSendIntents(pubkey)
+  if (intents.length === 0) return result
+  let history: HistorySend[] | undefined
+  try {
+    const api = (await legacyApi()) as unknown as HistoryApi
+    if (api?.getAtomicSendHistory) history = historyRows(await api.getAtomicSendHistory(INTENT_HISTORY_PAGE, 0))
+  } catch (error) {
+    console.warn('[pay] could not read the send history to resolve unanswered sends', error)
+  }
+  if (!history) {
+    result.unknown = intents.length
+    return result
+  }
+  // A full page may stop short of an old intent; a short page is the whole history.
+  const oldest = history.reduce((min, h) => Math.min(min, historyTime(h) ?? Number.POSITIVE_INFINITY), Number.POSITIVE_INFINITY)
+  const reachesBack = (intent: SendIntent) => history!.length < INTENT_HISTORY_PAGE || oldest < intent.at
+  const claimed = new Set(loadPendingSends(pubkey).map((p) => p.sendId))
+  let rowsById: Map<string, VoucherRow> | undefined
+  for (const intent of intents) {
+    const match = historyMatches(intent, history)[0]
+    if (match?.send_id) {
+      const sendId = match.send_id
+      if (!claimed.has(sendId) && !isSettledSend(pubkey, sendId)) {
+        let pending = intent.pending
+        if (!pending) {
+          // An intent written before #389 holds no source row. The coupon it was drawn on is
+          // still here (nothing settled it), found by its voucher id.
+          rowsById ??= await rowsByVoucherId()
+          const row = rowsById.get(intent.voucherId)
+          if (row) {
+            pending = {
+              tokenId: row.token_id,
+              unit: row.face_unit ?? '',
+              decimals: row.face_decimals ?? 2,
+              merchantPubkey: row.issuer_id ?? '',
+              sourceFaceValue: row.face_value ?? 0,
+            }
+          }
+        }
+        if (!pending) {
+          console.error('[pay] an unanswered send arrived but its coupon is not here, kept:', sendId)
+          result.unknown += 1
+          continue
+        }
+        rememberPendingSend(pubkey, {
+          sendId,
+          tokenId: pending.tokenId,
+          amount: intent.amount,
+          unit: pending.unit,
+          decimals: pending.decimals,
+          merchantPubkey: pending.merchantPubkey,
+          ...(pending.merchantName ? { merchantName: pending.merchantName } : {}),
+          recipientPubkey: intent.recipientPubkey,
+          ...(pending.recipientName ? { recipientName: pending.recipientName } : {}),
+          voucherId: intent.voucherId,
+          ...(intent.memo ? { memo: intent.memo } : {}),
+          sourceFaceValue: pending.sourceFaceValue,
+          at: intent.at,
+        })
+        claimed.add(sendId)
+      }
+      forgetSendIntent(pubkey, intent.key)
+      result.arrived += 1
+      continue
+    }
+    if (Date.now() - intent.at >= INTENT_ARRIVAL_GRACE_MS && reachesBack(intent)) {
+      forgetSendIntent(pubkey, intent.key)
+      result.neverArrived += 1
+      continue
+    }
+    result.unknown += 1
+  }
+  return result
+}
+
+async function rowsByVoucherId(): Promise<Map<string, VoucherRow>> {
+  const byId = new Map<string, VoucherRow>()
+  try {
+    for (const row of await listVouchers()) {
+      if (row.voucher_id && (row.status ?? 'active') === 'active' && !byId.has(row.voucher_id)) byId.set(row.voucher_id, row)
+    }
+  } catch {
+    // No rows: the intent stays unknown.
+  }
+  return byId
 }
 
 /**
@@ -1704,12 +1862,18 @@ async function sendPart(
           ? // #461: keyed on the source TOKEN, not voucher_id. The change of a split keeps its
             // voucher_id, so the old key made a second payment from the change replay the first.
             `pay_${ctx.paymentRequestId}_${ctx.rowOf.get(candidate)?.token_id ?? candidate.voucher_id}`
-          : keyForSend(ctx.payer, {
-              recipientPubkey: ctx.recipient.pubkey,
-              amount,
-              voucherId: candidate.voucher_id,
-              memo: ctx.memo,
-            }),
+          : keyForSend(
+              ctx.payer,
+              {
+                recipientPubkey: ctx.recipient.pubkey,
+                amount,
+                voucherId: candidate.voucher_id,
+                memo: ctx.memo,
+              },
+              // #389: what the pending ledger needs, so a send whose answer is lost can be settled
+              // on the next start once the gateway's history shows it.
+              intentPendingOf(ctx, candidate),
+            ),
     (key) => forgetSendIntent(ctx.payer, key),
   )
 

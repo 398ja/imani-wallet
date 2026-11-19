@@ -143,7 +143,7 @@ function movingIntents(key: string): number {
 }
 
 /** Live (unexpired) entries in each ledger. Never throws. */
-export function moneyInFlight(pubkey: string): { sends: number; swaps: number; cashlinks: number; codes: number } {
+export function moneyInFlight(pubkey: string): { sends: number; swaps: number; cashlinks: number; codes: number; unanswered: number } {
   return {
     sends:
       liveEntries(pendingSendsKey(pubkey), PENDING_SEND_LIFETIME_MS) +
@@ -154,5 +154,8 @@ export function moneyInFlight(pubkey: string): { sends: number; swaps: number; c
     // #557: outstanding checkout codes, on their own. Logout lets one through once its relay backup
     // is read back (checkoutCodeBackup.ts); anything else that reads this still counts it as value.
     codes: outstandingCodes(checkoutCodesLedgerKey(pubkey)),
+    // #389: of `sends`, those whose request got no answer at all and that the gateway's history
+    // could not place yet. Counted in `sends` too; told apart so logout can say what it waits for.
+    unanswered: liveEntries(sendIntentsKey(pubkey), SEND_INTENT_LIFETIME_MS),
   }
 }
