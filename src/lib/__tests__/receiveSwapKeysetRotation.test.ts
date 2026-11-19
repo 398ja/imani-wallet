@@ -168,3 +168,37 @@ describe('the transport reports the mint code', () => {
     }
   })
 })
+
+describe('a 12002 that hides an earlier signed swap', () => {
+  it('restores the old outputs instead of re-blinding over them', async () => {
+    const mint = await rotatedMint()
+    const { outputs } = await pendingOnOldKeyset()
+    // The first attempt succeeded before the rotation, the NUT-19 cache has since expired, and
+    // the mint's validation refuses the archived output keyset before it looks at spent inputs.
+    const first = await mint.transport.swap(MINT, { inputs: [], outputs: outputs.map((o) => ({ ...o, id: NEW })) })
+    mint.swaps.length = 0
+    const signedEarlier = {
+      ...mint.transport,
+      restore: vi.fn(async () => ({
+        outputs: outputs.map(({ B_ }) => ({ B_ })),
+        signatures: first.signatures.map((s) => ({ ...s, id: OLD })),
+      })),
+    }
+
+    const result = await receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs }, signedEarlier)
+    expect(mint.swaps, 'no second swap with new outputs').toHaveLength(1)
+    expect(signedEarlier.restore).toHaveBeenCalledTimes(1)
+    expect(result.proofs.reduce((s, p) => s + p.amount, 0)).toBe(2)
+    expect(result.proofs.every((p) => p.id === OLD)).toBe(true)
+    expect(pendingSwapIntents(PUBKEY)[0].outputs.map((o) => o.B_)).toEqual(outputs.map((o) => o.B_))
+  })
+
+  it('keeps the old intent when the restore check itself fails', async () => {
+    const mint = await rotatedMint()
+    const { outputs } = await pendingOnOldKeyset()
+    const down = { ...mint.transport, restore: vi.fn(async () => { throw new Error('restore down') }) }
+    await expect(receiveByOwnSwap({ pubkey: PUBKEY, mintUrl: MINT, proofs }, down)).rejects.toThrow(/restore down/)
+    expect(mint.swaps).toHaveLength(1)
+    expect(pendingSwapIntents(PUBKEY)[0].outputs.map((o) => o.B_)).toEqual(outputs.map((o) => o.B_))
+  })
+})
