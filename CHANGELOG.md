@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **purchase-issuer names its terminal credential when it reads a card coupon's token** (imani-gateway-customer#233 step 1, #274). `tokenFor` now sends `X-Imani-Terminal-Credential`, as the mint already does, so the gateway can check the delegate's credential is still live. **Deploy order:** imani-gateway-customer with #233 first. An older gateway sends a request that names a credential down the till-only path, which refuses a delegated card coupon with 404.
+
 ### Removed
 
 - **`SelectionOptimizer` is gone from `@imani/wallet-balance`** (#435). It was a second voucher selector that nothing in the app used. `chooseSpend` in `@imani/wallet-core` is the one rule for every send and payment.
