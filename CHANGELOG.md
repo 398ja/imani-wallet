@@ -9,24 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-11-19
+
 ### Added
 
 - **Logout is refused until your key is backed up somewhere Imani knows of** (#348). One Google Drive backup (read back right after the upload) or one downloaded backup file is enough, and the check works offline. There is no override: the refusal leads to Backup. A backup made before a passphrase change does not count.
 - **Imani tells you where your key went, and not to delete it** (#348). After a backup, the screen names your Google Drive (private app storage) or the file in your Downloads. Settings has a new "Your key backup" section listing every known backup across your devices, with a "Check a backup file" step, and the logout screen shows the same before you confirm.
 - **Each install has a device id and a friendly name** (#348), and the backup locations travel between your devices in one record encrypted to your own key, read from the relay and the gateway.
-
-### Fixed
-
-- **Turning on card sales no longer locks a stall out for a day after two failures** (#306). The enrol step is retried on a 502 or a lost answer with the SAME minted credential, instead of minting a new one each attempt (the gateway holds at most two unconfirmed per stall for 24 hours). If it never lands, the phone cancels its own unconfirmed credential so the slot comes back at once. A lost answer that did land is recognised from the stall's status and counted as on.
-- **Re-enrolling cancels the card-sales credential it replaced** (#306). It used to stay live at the gateway for a year.
-- **purchase-issuer: the begin map can no longer be filled to lock stalls out** (#306). A stall that begins again within a minute gets the same lock key back, and when 1000 enrolments are in progress the oldest is dropped instead of refusing the newcomer.
-- **A Cashlink is "delivered" only once the relay holds it** (#532). `deliver` and the direct-send `publishWrap` count a wrap only when strfry said OK and a read by id from the relay finds it. The gateway mirror kept wraps strfry refused, so a 66 KB wrap could read as delivered while no relay held it.
-- **`relay.ts` tells a size refusal apart** (#532): `publish` returns `refusals` (`too_large` with the byte count, `unreachable`, `refused`), logs a `too_large` loudly, and a size refusal is never retried as it is.
-- **purchase-issuer email gifts and the buyer's copy go to the relay, fit its budget, and are read back** (#532). A large token is cut into self-contained parts of the same voucher (one wrap each, at most 55,121 bytes); each wrap is published to strfry (`PURCHASE_RELAY_URL`) and read back by id before the gateway copy. A size refusal is permanent. The return page merges a copy handed over in parts.
-- **NIP-60 kind 7375 token events share the 55,121-byte budget** (#532), down from 60,000: the largest stored on staging was 65,381 bytes, 155 under the limit.
-
-### Added
-
 - **Renew card sales** (#306). While card sales are on, Settings shows until when, and a Renew button that renews the credential and delegation early.
 - The stall's own card-sales status names its credential (`credentialId`); the public `/ready` answer does not.
 - `src/lib/wrapSize.ts`: the one relay size model (gateway-customer's `GiftWrapSizeModel`, ported), checked byte for byte against real NIP-17 wraps, with `OversizeEventError` (#532).
@@ -47,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `stripe_purchase` row, one coupon, a delegated warrant with the `pi_`; decline 0002, replayed
   event, delayed webhook). Reads `STRIPE_SECRET_KEY` from the environment only and skips cleanly
   (exit 0) without a test key, the CLI, the stack or an enrolled stall.
+
+### Fixed
+
+- **Turning on card sales no longer locks a stall out for a day after two failures** (#306). The enrol step is retried on a 502 or a lost answer with the SAME minted credential, instead of minting a new one each attempt (the gateway holds at most two unconfirmed per stall for 24 hours). If it never lands, the phone cancels its own unconfirmed credential so the slot comes back at once. A lost answer that did land is recognised from the stall's status and counted as on.
+- **Re-enrolling cancels the card-sales credential it replaced** (#306). It used to stay live at the gateway for a year.
+- **purchase-issuer: the begin map can no longer be filled to lock stalls out** (#306). A stall that begins again within a minute gets the same lock key back, and when 1000 enrolments are in progress the oldest is dropped instead of refusing the newcomer.
+- **A Cashlink is "delivered" only once the relay holds it** (#532). `deliver` and the direct-send `publishWrap` count a wrap only when strfry said OK and a read by id from the relay finds it. The gateway mirror kept wraps strfry refused, so a 66 KB wrap could read as delivered while no relay held it.
+- **`relay.ts` tells a size refusal apart** (#532): `publish` returns `refusals` (`too_large` with the byte count, `unreachable`, `refused`), logs a `too_large` loudly, and a size refusal is never retried as it is.
+- **purchase-issuer email gifts and the buyer's copy go to the relay, fit its budget, and are read back** (#532). A large token is cut into self-contained parts of the same voucher (one wrap each, at most 55,121 bytes); each wrap is published to strfry (`PURCHASE_RELAY_URL`) and read back by id before the gateway copy. A size refusal is permanent. The return page merges a copy handed over in parts.
+- **NIP-60 kind 7375 token events share the 55,121-byte budget** (#532), down from 60,000: the largest stored on staging was 65,381 bytes, 155 under the limit.
 
 ### Changed
 
