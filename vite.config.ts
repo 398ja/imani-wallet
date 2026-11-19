@@ -257,6 +257,12 @@ export const proxy = {
    */
   '/api/v1/purchase-state': { target: 'http://localhost:28087', changeOrigin: false },
   /*
+   * imani-wallet#275: a stall's own card sales (`GET /api/v1/purchases?stall=`), on payment-adapter.
+   * NIP-98 for the browser origin, so changeOrigin false. Only that exact path: everything under
+   * `/api/v1/purchases/` is the issuer's and is not routed from the browser.
+   */
+  '^/api/v1/purchases(\\?|$)': { target: 'http://localhost:28087', changeOrigin: false },
+  /*
    * Card-sales enrolment and readiness (imani-wallet#298), on purchase-issuer. NOT in the local
    * compose stack: run it from this repo (`npx tsx services/purchase-issuer/server.ts`, default
    * port 8791, with PURCHASE_PUBLIC_ORIGIN=http://localhost:5173). With it down, readiness reads
