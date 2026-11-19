@@ -16,6 +16,7 @@ import {
   unblindOutputs,
   unblindRestored,
   type BlindSignatureResponse,
+  type BlindedOutput,
   type UnblindedProof,
 } from './walletSwap'
 
@@ -257,7 +258,7 @@ export async function receiveByOwnSwap(
       // signatures. A failure after any signature came back (unblinding, the keys) is outside
       // this catch, so it can never lead to re-blinding over outputs the mint may have signed.
       if (!isKeysetInactive(failure)) throw failure
-      return await reblindAfterRotation(request, transport, swapId, keysetId)
+      return await reblindAfterRotation(request, transport, swapId, keysetId, outputs)
     }
     const keys = await transport.keysetKeys(mintUrl, keysetId)
     const unblinded = unblindOutputs(outputs, swapped.signatures, keys)
@@ -297,8 +298,25 @@ async function reblindAfterRotation(
   transport: MintTransport,
   swapId: string,
   staleKeysetId: string,
+  staleOutputs: BlindedOutput[],
 ): Promise<ReceiveResult> {
   const { pubkey, mintUrl, proofs } = request
+  // A 12002 does NOT prove the old outputs were never signed. The mint answers a replay from its
+  // NUT-19 cache only within the cache ttl, and its validation refuses an archived output keyset
+  // BEFORE it checks spent inputs or already-signed outputs. So a first attempt that succeeded
+  // before the rotation, replayed after the cache expired, also comes back 12002. Overwriting
+  // its intent would discard the only blinding factors for signed outputs and lose the money.
+  // Ask the mint first (NUT-09). A throw here keeps the old intent, like any other failure.
+  const restored = await transport.restore(mintUrl, asMintOutputs(staleOutputs))
+  if (restored.signatures.length > 0) {
+    const keys = await transport.keysetKeys(mintUrl, staleKeysetId)
+    const { proofs: recovered } = unblindRestored(staleOutputs, restored, keys)
+    console.info('[receiveSwap] recovered an interrupted receive', {
+      swapId,
+      amount: recovered.reduce((sum, proof) => sum + proof.amount, 0),
+    })
+    return { swapId, proofs: recovered }
+  }
   const keysetId = await transport.activeKeysetId(mintUrl)
   console.info('[receiveSwap] the mint retired this receive’s keyset, re-blinding against the active one', {
     swapId,
