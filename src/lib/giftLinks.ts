@@ -56,7 +56,7 @@ import {
   type CashlinkPorts,
   type ReturnOutcome,
 } from './cashlinkFlow'
-import { isUnverifiedClaim, unconfirmedClaimLinks, type GiftLinkArm } from './transactions'
+import { CLAIM_RECHECK_AFTER_MS, isSingleReadClaim, isUnverifiedClaim, unconfirmedClaimLinks, type GiftLinkArm } from './transactions'
 import { pendingSendsKey } from './inFlightMoney'
 import { cashlinkIntentLinkKeys, movingCashlinkLinkKeys } from './cashlinkIntents'
 
@@ -443,9 +443,73 @@ function serialised<T>(run: () => Promise<T>): Promise<T> {
 
 function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.now(), extra: Partial<GiftLinkRecord> = {}): Promise<void> {
   // #379: every "claimed" this module writes has been decided by the mint (the gift is spent, and
-  // not into this wallet's own outputs), so it is recorded as confirmed.
-  const confirmed = status === 'claimed' ? { verifiedAt: at, ...extra } : extra
+  // not into this wallet's own outputs), so it is recorded as confirmed. #261: except one resting on
+  // a single SPENT checkstate, which says so (`claimReason`) and is read again on a later pass.
+  const confirmed = status === 'claimed' && extra.claimReason === undefined ? { verifiedAt: at, ...extra } : extra
   return serialised(() => writeLinkStatus(rows, status, at, confirmed))
+}
+
+/** #261: a claim decided by one SPENT checkstate: why and when, so a later read can undo it. */
+function spentReadClaim(at: number): Partial<GiftLinkRecord> {
+  return { claimReason: 'mint-spent', spentSeenAt: at }
+}
+
+/**
+ * #261: the second read of a claim that rested on one SPENT checkstate. Every bearer gift still
+ * SPENT confirms it (`verifiedAt`); every one UNSPENT opens the link again, so the take-back it
+ * stopped can run; anything else (the mint unreachable, PENDING, a mix) leaves it for the next pass.
+ */
+async function recheckSpentRead(rows: LinkRow[], tokens: GiftToken[], state: (token: string) => Promise<ProofState>, nowMs: number): Promise<'open' | 'left'> {
+  const link = rows.map((r) => r.link).find(isSingleReadClaim)
+  if (!link || nowMs - (link.spentSeenAt ?? 0) < CLAIM_RECHECK_AFTER_MS) return 'left'
+  const gifts = giftCandidates(tokens)
+  if (gifts.length === 0) return 'left'
+  const states = await Promise.all(gifts.map((t) => state(t.token)))
+  if (states.every((s) => s === 'SPENT')) {
+    await confirmSpentRead(rows, nowMs)
+    return 'left'
+  }
+  if (states.every((s) => s === 'UNSPENT')) {
+    await reopenSpentRead(rows)
+    return 'open'
+  }
+  return 'left'
+}
+
+/** #261: the second SPENT read agrees: the claim stands, confirmed. */
+function confirmSpentRead(rows: LinkRow[], at: number): Promise<void> {
+  return serialised(async () => {
+    const wallet = getWallet()
+    const fresh = await currentLinks()
+    for (const r of rows) {
+      const now = fresh.get(r.id) ?? r.link
+      if (!isSingleReadClaim(now)) continue
+      const merged = await wallet.updateTransaction(r.id, { link: { ...now, verifiedAt: at } } as unknown as Partial<TransactionRow>)
+      if (merged) void publishTx(merged)
+    }
+    notifyWalletChanged()
+  })
+}
+
+/** #261: the mint now says UNSPENT: the claim is undone and the link is outstanding again. */
+function reopenSpentRead(rows: LinkRow[]): Promise<void> {
+  return serialised(async () => {
+    const wallet = getWallet()
+    const fresh = await currentLinks()
+    for (const r of rows) {
+      const now = fresh.get(r.id) ?? r.link
+      if (!isSingleReadClaim(now)) continue
+      const { closedAt: _c, claimReason: _r, spentSeenAt: _s, ...rest } = now
+      void _c
+      void _r
+      void _s
+      const link: GiftLinkRecord = { ...rest, status: 'outstanding' }
+      const merged = await wallet.updateTransaction(r.id, { link } as unknown as Partial<TransactionRow>)
+      if (merged) void publishTx(merged)
+    }
+    console.warn('[gift] a Cashlink closed as claimed on one SPENT read is UNSPENT now; opened again')
+    notifyWalletChanged()
+  })
 }
 
 /**
@@ -1247,7 +1311,8 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
       }
       return { kind: 'failed', message: 'Could not take it back just now. Try again.' }
     }
-    await setLinkStatus(rows, 'claimed', Date.now(), told)
+    const at = Date.now()
+    await setLinkStatus(rows, 'claimed', at, { ...told, ...spentReadClaim(at) })
     return { kind: 'claimed' }
   }
   const unspent = tokens.filter((_, n) => states[n] !== 'SPENT')
@@ -1411,7 +1476,9 @@ export async function reconcileGiftLinks(
     )
     const reconcileOne = async (k: string, snapshot: LinkRow[]): Promise<void> => {
       const doubted = doubtedLinks.has(k)
-      if (!doubted && !snapshot.some((p) => p.link.status === 'outstanding')) return
+      // #261: a claim that rests on one SPENT read is read again once it is due.
+      const singleRead = !doubted && snapshot.some((p) => isSingleReadClaim(p.link) && nowMs - (p.link.spentSeenAt ?? 0) >= CLAIM_RECHECK_AFTER_MS)
+      if (!doubted && !singleRead && !snapshot.some((p) => p.link.status === 'outstanding')) return
       const secret = secretFromText(k)
       if (!secret) return
       let tokens: GiftToken[]
@@ -1427,7 +1494,8 @@ export async function reconcileGiftLinks(
         if (verdict === 'returned') reclaimed += 1
         if (verdict !== 'open') return
       }
-      const parts = doubted ? (await linkRows()).filter((r) => r.link.k === k) : snapshot
+      if (singleRead && (await recheckSpentRead(snapshot, tokens, state, nowMs)) !== 'open') return
+      const parts = doubted || singleRead ? (await linkRows()).filter((r) => r.link.k === k) : snapshot
       if (!parts.some((p) => p.link.status === 'outstanding')) return
       // #295 phase 4, first: a link part way through being locked is finished, and a link whose gift
       // is locked to it is settled by its own rules. Its original bearer gift, spent by the lock,
@@ -1472,7 +1540,7 @@ export async function reconcileGiftLinks(
           if (link.i !== undefined) await armLink(sessionAccount(getSigner) ?? '', k, secret, link.i, link.x)
           return
         }
-        await setLinkStatus(parts, 'claimed')
+        await setLinkStatus(parts, 'claimed', nowMs, spentReadClaim(nowMs))
         claimed += 1
         return
       }

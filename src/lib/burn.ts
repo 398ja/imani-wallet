@@ -206,7 +206,14 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
     try {
       const api = (await legacyApi()) as unknown as BurnApi
       if (await alreadySpent(api, row.token)) {
-        await getWallet().saveVoucher({ ...row, status: 'redeemed' })
+        // #261: one checkstate decided this, so the row says so and when. `sweepBurnable` reads it
+        // again on a later pass; an UNSPENT answer then puts the row back to `active` and burns it.
+        await getWallet().saveVoucher({
+          ...row,
+          status: 'redeemed',
+          redeemed_reason: REDEEMED_ON_SPENT_READ,
+          redeemed_spent_seen_at: new Date().toISOString(),
+        } as VoucherRow)
         notifyWalletChanged()
         console.warn('[burn] proofs were already spent — row settled as redeemed', {
           token_id: row.token_id,
@@ -234,6 +241,53 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
   }
 }
 
+/** #261: `redeemed_reason` of a row marked redeemed on one SPENT checkstate, not by its own burn. */
+export const REDEEMED_ON_SPENT_READ = 'mint-spent'
+
+/** #261: how long after the first SPENT read the second is due. */
+export const REDEEMED_RECHECK_AFTER_MS = 10 * 60 * 1000
+
+type SpentReadRow = VoucherRow & {
+  redeemed_reason?: string
+  redeemed_spent_seen_at?: string
+  redeemed_verified_at?: string
+}
+
+/**
+ * #261: read a row marked redeemed on one SPENT checkstate again. SPENT again confirms it
+ * (`redeemed_verified_at`, never read again). UNSPENT undoes it: the row goes back to `active`,
+ * with the reason recorded, so it counts as money and the burn below can finish it. Anything else
+ * (no answer, PENDING) leaves it for the next pass. Never throws. Returns the row to sweep on.
+ */
+export async function recheckSpentRead(row: VoucherRow, nowMs = Date.now()): Promise<VoucherRow> {
+  const r = row as SpentReadRow
+  if (!isRedeemed(r) || r.redeemed_reason !== REDEEMED_ON_SPENT_READ || r.redeemed_verified_at) return row
+  const seen = Date.parse(r.redeemed_spent_seen_at ?? '')
+  if (Number.isFinite(seen) && nowMs - seen < REDEEMED_RECHECK_AFTER_MS) return row
+  try {
+    const api = (await legacyApi()) as unknown as BurnApi
+    const state = ((await api.validateToken(row.token))?.state ?? '').toUpperCase()
+    if (state === 'SPENT') {
+      const confirmed = { ...r, redeemed_verified_at: new Date(nowMs).toISOString() } as VoucherRow
+      await getWallet().saveVoucher(confirmed)
+      return confirmed
+    }
+    if (state === 'UNSPENT') {
+      const { redeemed_reason: _r, redeemed_spent_seen_at: _s, ...rest } = r
+      void _r
+      void _s
+      const live = { ...rest, status: 'active', redeemed_undone_at: new Date(nowMs).toISOString() } as VoucherRow
+      await getWallet().saveVoucher(live)
+      notifyWalletChanged()
+      console.warn('[burn] a coupon marked redeemed on one SPENT read is UNSPENT now; back to active', { token_id: row.token_id })
+      return live
+    }
+  } catch {
+    // Read again next pass.
+  }
+  return row
+}
+
 /**
  * Burn anything a previous attempt missed. Never throws. Returns the count.
  *
@@ -246,7 +300,9 @@ export async function burnIfSelfIssued(row: VoucherRow, ownPubkey: string): Prom
 export async function sweepBurnable(pubkey: string): Promise<number> {
   try {
     let burnt = 0
-    for (const row of await listVouchers()) {
+    for (const stored of await listVouchers()) {
+      // #261: a redeemed row that rests on one SPENT read is read again first; undone, it is burnt.
+      const row = await recheckSpentRead(stored)
       if (await burnIfSelfIssued(row, pubkey)) burnt += 1
     }
     return burnt

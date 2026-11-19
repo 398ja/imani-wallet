@@ -345,3 +345,57 @@ describe('when the burn fails', () => {
     expect(received, 'a settled row must not call the mint again').toEqual([])
   })
 })
+
+describe('a row marked redeemed on one SPENT read is recoverable (#261)', () => {
+  const failingReceive = async () => {
+    throw Object.assign(new Error('Token already spent'), { status: 400 })
+  }
+
+  it('records the reason and the time with the redeemed status', async () => {
+    stubs.api.receive = failingReceive
+    stubs.api.validateToken = async () => ({ state: 'SPENT' })
+    expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(true)
+    expect(stubs.saved[0]).toMatchObject({ status: 'redeemed', redeemed_reason: 'mint-spent' })
+    expect(typeof (stubs.saved[0] as { redeemed_spent_seen_at?: string }).redeemed_spent_seen_at).toBe('string')
+  })
+
+  it('a burn that succeeds records no reason: its proofs are burnt by this wallet', async () => {
+    expect(await burnIfSelfIssued(row(), MERCHANT)).toBe(true)
+    expect((stubs.saved[0] as { redeemed_reason?: string }).redeemed_reason).toBeUndefined()
+  })
+
+  it('a later UNSPENT read on the sweep puts it back to active and burns it', async () => {
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    stubs.rows = [row({ status: 'redeemed', redeemed_reason: 'mint-spent', redeemed_spent_seen_at: old } as Partial<VoucherRow>)]
+    stubs.api.validateToken = async () => ({ state: 'UNSPENT' })
+    expect(await sweepBurnable(MERCHANT)).toBe(1)
+    expect(stubs.saved[0]).toMatchObject({ status: 'active' })
+    expect((stubs.saved[0] as { redeemed_reason?: string }).redeemed_reason).toBeUndefined()
+    expect(received).toEqual(['cashuBv2xyz'])
+    expect(stubs.saved.at(-1)).toMatchObject({ status: 'redeemed' })
+  })
+
+  it('SPENT again confirms it; a confirmed row is not read again', async () => {
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    stubs.rows = [row({ status: 'redeemed', redeemed_reason: 'mint-spent', redeemed_spent_seen_at: old } as Partial<VoucherRow>)]
+    const validateToken = vi.fn(async () => ({ state: 'SPENT' }))
+    stubs.api.validateToken = validateToken
+    expect(await sweepBurnable(MERCHANT)).toBe(0)
+    expect(typeof (stubs.saved[0] as { redeemed_verified_at?: string }).redeemed_verified_at).toBe('string')
+    stubs.rows = [stubs.saved[0]]
+    await sweepBurnable(MERCHANT)
+    expect(validateToken).toHaveBeenCalledTimes(1)
+  })
+
+  it('not re-read before it is due, and a row redeemed by its own burn is never re-read', async () => {
+    const validateToken = vi.fn(async () => ({ state: 'UNSPENT' }))
+    stubs.api.validateToken = validateToken
+    stubs.rows = [
+      row({ token_id: 'fresh', status: 'redeemed', redeemed_reason: 'mint-spent', redeemed_spent_seen_at: new Date().toISOString() } as Partial<VoucherRow>),
+      row({ token_id: 'burnt', status: 'redeemed' }),
+    ]
+    await sweepBurnable(MERCHANT)
+    expect(validateToken).not.toHaveBeenCalled()
+    expect(stubs.saved).toEqual([])
+  })
+})

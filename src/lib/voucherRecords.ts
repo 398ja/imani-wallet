@@ -354,6 +354,10 @@ async function liveRecords(events: Event[], pubkey: string): Promise<VoucherRow[
  * cost the user a live coupon — a phantom coupon fails visibly at spend time,
  * while a dropped one is silently gone. Only a definite SPENT verdict discards.
  */
+// #261 review: kept as a single read. The relay record is not deleted on SPENT: the row is written
+// as `spent` with RESTORE_FLAG_MINT_SPENT and the relay copy stays, so nothing is lost for good, and
+// support can find it by that flag. Not re-read automatically, on purpose: a flagged row is skipped on
+// later restores (see `flagged`) so a coupon the mint refuses is never turned back into a balance.
 async function isStillLive(token: string): Promise<boolean> {
   try {
     const api = (await legacyApi()) as unknown as {
