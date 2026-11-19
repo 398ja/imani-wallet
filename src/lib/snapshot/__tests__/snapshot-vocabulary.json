@@ -885,6 +885,7 @@
   "[receiveSwap] recovered an interrupted receive",
   "[receiveSwap] resuming an earlier attempt at this receive, not restarting it",
   "[receiveSwap] the mint never signed this swap, so nothing was spent: dropping it",
+  "[receiveSwap] the mint retired this receive’s keyset, re-blinding against the active one",
   "[receiveSwap] the mint signed only part of this swap, taking what it did sign",
   "[receiveSweep] recovered proofs could not be saved and are now unrecorded",
   "[receiveSweep] recovered proofs from receives that were interrupted after the mint signed",
