@@ -860,6 +860,15 @@ export function cashlinkReturnsOf(all: readonly WalletTransaction[], sent: Walle
  * every path that brings it back: the locked one (`cashlinkPorts.takenBackRow`) and a link that was
  * never locked, received back through TokenRedemption (`giftLinks.swapGiftTokens`).
  */
+/** Where a return row's link goes, and what it says, by the kind of row it reverses (#643). */
+export function returnOfLabel(returnOf: string): { title: string; link: string; to: string } {
+  const checkout = /^checkout:([^:]+)$/.exec(returnOf)
+  if (checkout) return { title: 'Checkout code', link: 'See the checkout code', to: `/online/code/${encodeURIComponent(checkout[1])}` }
+  const to = `/transaction/${encodeURIComponent(returnOf)}`
+  if (returnOf.startsWith('locked-gift:')) return { title: 'Gift', link: 'See the gift you sent', to }
+  return { title: 'Cashlink', link: 'See the Cashlink you sent', to }
+}
+
 export const CASHLINK_TAKEN_BACK_MEMO = 'Taken back from Cashlink'
 
 /**

@@ -157,6 +157,8 @@ export interface KeptCoupon {
   takenBack?: true
   /** With `takenBack`: the id of the `sent` row that made the Cashlink, for the return row's link. */
   returnOf?: string
+  /** With `takenBack`: the return row's memo, when it is not a Cashlink's ("Taken back from Cashlink"). */
+  returnMemo?: string
 }
 
 /**
@@ -401,7 +403,7 @@ async function keepAsSats(
   proofs: UnblindedProof[],
   why: KeptCoupon['why'],
   faceValue?: number,
-  { bundleId, takenBack, returnOf }: Pick<KeptCoupon, 'bundleId' | 'takenBack' | 'returnOf'> = {},
+  { bundleId, takenBack, returnOf, returnMemo }: Pick<KeptCoupon, 'bundleId' | 'takenBack' | 'returnOf' | 'returnMemo'> = {},
 ): Promise<void> {
   const couponToken = tokenOf(mintUrl, [{ amount: source.amount, id: source.id, secret: source.secret, C: source.C }])
   await ports.keep({
@@ -411,7 +413,7 @@ async function keepAsSats(
     why,
     ...faceOf(faceValue),
     ...(bundleId ? { bundleId } : {}),
-    ...(takenBack && bundleId ? { takenBack: true as const, ...(returnOf ? { returnOf } : {}) } : {}),
+    ...(takenBack && (bundleId || returnOf) ? { takenBack: true as const, ...(returnOf ? { returnOf } : {}), ...(returnMemo ? { returnMemo } : {}) } : {}),
   })
 }
 
@@ -1230,6 +1232,11 @@ export interface ReturnContext {
   takeBackNow?: boolean
   /** The `sent` row that made the Cashlink: a take-back's History row links to it. */
   returnOf?: string
+  /**
+   * #643: a return with no link key (an expired checkout code, an unclaimed minted-locked gift) gets
+   * its own incoming History row too, with this memo, linked by `returnOf` to the row it reverses.
+   */
+  returnMemo?: string
   /** Called before anything leaves the link, so a page that dies finishes the return on the next run. */
   onReturning(): Promise<void>
 }
@@ -1421,9 +1428,11 @@ async function reform(
  * incoming row, in the link's bundle (#530) so the coupons of one link fold into one entry. Other
  * returns through `settle` (code and guest gifts, no link key) keep their own records.
  */
-function takenBackOf(ctx: ReturnContext, locked: TokenProof): Pick<KeptCoupon, 'bundleId' | 'takenBack' | 'returnOf'> {
+function takenBackOf(ctx: ReturnContext, locked: TokenProof): Pick<KeptCoupon, 'bundleId' | 'takenBack' | 'returnOf' | 'returnMemo'> {
   const linkPub = ctx.linkSecret ? readLinkLock(locked.secret)?.linkPub : undefined
-  return linkPub ? { bundleId: cashlinkBundleId(linkPub), takenBack: true, ...(ctx.returnOf ? { returnOf: ctx.returnOf } : {}) } : {}
+  if (linkPub) return { bundleId: cashlinkBundleId(linkPub), takenBack: true, ...(ctx.returnOf ? { returnOf: ctx.returnOf } : {}) }
+  // #643: no link key, but the caller names the debit it reverses: its own credit row.
+  return ctx.returnOf && ctx.returnMemo ? { takenBack: true, returnOf: ctx.returnOf, returnMemo: ctx.returnMemo } : {}
 }
 
 /** Mint a signed successor from plain proofs, or find it if an earlier run already did. */

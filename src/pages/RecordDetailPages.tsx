@@ -44,7 +44,7 @@ import {
   validationStatus,
   type ValidationStatus,
 } from '../lib/validationStatus'
-import { cashlinkReturnsOf, otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
+import { cashlinkReturnsOf, returnOfLabel, otherParty, toTransaction, transactionLabel, type WalletTransaction } from '../lib/transactions'
 import { RefusedCouponsNote } from '../components/ui/RefusedCouponsNote'
 import { fetchCashbackLink, useCashbackStatus } from '../lib/cashback'
 import { formatCashbackLink } from '../lib/claimLink'
@@ -498,14 +498,16 @@ function CashlinkReturnSection({ tx }: { tx: WalletTransaction }) {
   }, [sentLink, tx.id])
 
   if (tx.returnOf) {
+    // #643: a return off a checkout code or an unclaimed gift links to that row, not a Cashlink.
+    const what = returnOfLabel(tx.returnOf)
     return (
-      <ListSection title="Cashlink">
+      <ListSection title={what.title}>
         <Link
-          to={`/transaction/${encodeURIComponent(tx.returnOf)}`}
+          to={what.to}
           className="press-row -mx-1 flex items-center gap-3 rounded-xl p-3"
         >
           <span className="min-w-0 flex-1">
-            <span className="block font-medium text-mono-900 dark:text-mono-50">See the Cashlink you sent</span>
+            <span className="block font-medium text-mono-900 dark:text-mono-50">{what.link}</span>
             <span className="block text-sm text-mono-500">This voucher came back from it</span>
           </span>
           <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" aria-hidden />

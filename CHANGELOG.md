@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A dust coupon remnant was still planned into a send and aborted the whole bundle (#638 regression on v0.67.0, staging 2026-11-20: 8 sats of a ratio-0.058 GBP coupon stored as face 1). Rows received by DM, cash link, checkout code or unlocked change never store `issuance_ratio`, and the fallback derived it as face / sats (0.125), so `couponValue` read 1 instead of 0. The ratio now comes from the token's signed voucher first, missing sats come from its proofs, and the face repair runs before every send plans instead of only on the DM catch-up.
+- **Value back from an expired checkout code or an unclaimed gift now has its own credit in History** (Closes #643). The balance went up but only the code's or gift's own row changed, so the returned money had no incoming entry. Each coupon that comes back off a checkout code ("Checkout code expired, returned") or a minted-locked gift the buyer takes back ("Gift not claimed, returned") now gets an incoming row at the kept coupon's face, linked by `returnOf` to the code or gift row it reverses, as Cashlink take-backs already do. The row is keyed `returned:<token_id>`, so a rerun, a restore or another device overwrites it instead of adding a second one. The return row's link now opens the checkout code or gift, not "the Cashlink you sent".
 
 ## [0.67.0] - 2026-11-20
 
