@@ -47,25 +47,55 @@ export function minSplitStep(voucher: Voucher): number {
 /**
  * What a coupon can really be sent for, in face minor units (#638).
  *
- * The row's `face_value` is a claim; the gateway credits what the token's sats are worth, rounded
- * DOWN (`CouponRate.shownFaceOf`), and refuses a draw above that ("Insufficient balance: requested
- * 1, available 0"). So a coupon is worth the smaller of the two: never more than its stored face
- * (a row already restated down stays down), never more than `floor(sats x ratio)`.
+ * The row's `face_value` is a claim. The gateway's split (`VoucherSplitCalculator.previewSplit`,
+ * gateway-core v0.42.0) values the token at `CouponRate.shownFaceOf(sats)`, its sats' worth rounded
+ * HALF UP, and refuses a draw above that ("Insufficient balance: requested 1, available 0"). Any
+ * request up to that value goes through: a PROPORTIONAL part that needs more sats than are left is
+ * sent as the whole token. So a coupon is worth the smaller of its stored face (a row already
+ * restated down stays down) and `halfUp(sats x ratio)`. Not floor: 10 sats at 0.0579... are 0.58,
+ * which the gateway sends as 1, and valuing them at 0 would hide that penny.
  *
  * The motivating row: face 1, 8 sats of a 407-face / 7020-sat GBP coupon. 8 x 0.05797... = 0.46,
  * worth 0. Planned at its stored 1, it led every bundle (it expired first) and the gateway aborted
  * each one.
  *
- * The epsilon absorbs a double landing a hair under a whole unit (7020 x 407/7020). Without sats
- * or a ratio there is nothing to check against and the stored face stands.
+ * On the ratio as written, in exact decimals (`BigDecimal.valueOf(ratio)`), as the gateway does for
+ * a coupon whose minted sats it cannot prove. The proven path (`sats x face / mintedSats`) needs the
+ * signed face, which a row does not carry. The two differ only a hair from a half unit, and the
+ * whole coupon is its signed face either way. Without sats or a ratio there is nothing to check
+ * against and the stored face stands (legacy rows).
  */
 export function couponValue(voucher: Voucher): number {
   const face = voucher.face_value ?? 0
   const sats = voucher.token_amount ?? 0
   const ratio = voucher.issuance_ratio
   if (!(face > 0)) return 0
-  if (!(sats > 0) || typeof ratio !== 'number' || !(ratio > 0) || !Number.isFinite(ratio)) return face
-  return Math.min(face, Math.floor(sats * ratio + 1e-9))
+  if (!Number.isSafeInteger(sats) || !(sats > 0)) return face
+  if (typeof ratio !== 'number' || !(ratio > 0) || !Number.isFinite(ratio)) return face
+  const shown = halfUpTimes(sats, ratio)
+  if (shown === null) return face
+  // Other strategies send `floor(amount / ratio)` sats and refuse more than the token holds, so the
+  // most they can draw is the largest amount under (sats + 1) x ratio (10 sats at 0.0579... under
+  // FULL: 0.637, so 0, though it shows as 1). A row with no strategy keeps the PROPORTIONAL reading.
+  const strategy = String(voucher.backing_strategy ?? '').toUpperCase()
+  if (strategy !== '' && strategy !== 'PROPORTIONAL') {
+    const reach = Math.ceil((sats + 1) * ratio) - 1
+    return Math.max(0, Math.min(face, shown, reach))
+  }
+  return Math.min(face, shown)
+}
+
+/** `BigDecimal.valueOf(sats).multiply(BigDecimal.valueOf(ratio)).setScale(0, HALF_UP)`. */
+function halfUpTimes(sats: number, ratio: number): number | null {
+  const [mantissa, exp = '0'] = String(ratio).toLowerCase().split('e')
+  const [whole, frac = ''] = mantissa.split('.')
+  const scale = frac.length - Number(exp)
+  const digits = BigInt(whole + frac)
+  const n = BigInt(sats) * (scale < 0 ? digits * 10n ** BigInt(-scale) : digits)
+  const d = scale > 0 ? 10n ** BigInt(scale) : 1n
+  const q = n / d
+  const v = 2n * (n % d) >= d ? q + 1n : q
+  return v > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(v)
 }
 
 export type SplitCheck = { ok: true } | { ok: false; reason: string }

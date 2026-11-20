@@ -40,6 +40,35 @@ describe('#638 dust coupon', () => {
     expect(couponValue(gbp('under', 500, 15972, 30))).toBe(500)
   })
 
+  it('rounds half up like CouponRate.shownFaceOf: 10 sats (0.58p) are a penny the gateway sends', () => {
+    expect(couponValue(gbp('ten', 1, 10, 1))).toBe(1)
+    expect(chooseSpend([gbp('ten', 1, 10, 1)], 1).kind).toBe('single')
+    // Not PROPORTIONAL: floor(1 / 0.0579...) = 17 sats, more than the 10 held, so it cannot pay 1.
+    expect(couponValue({ ...gbp('ten', 1, 10, 1), backing_strategy: 'FULL' } as Voucher)).toBe(0)
+  })
+
+  it('never drops real money to 0: EUR, NGN, KES and legacy rows', () => {
+    const at = (face: number, sats: number | undefined, ratio: number | undefined, unit = 'EUR') =>
+      ({ ...gbp('x', face, sats ?? 0, 30), face_unit: unit, token_amount: sats, issuance_ratio: ratio }) as Voucher
+    expect(couponValue(at(76, 1084, 0.06969334926324174))).toBe(76) // 75.55, half up
+    expect(couponValue(at(128, 1, 128.3, 'NGN'))).toBe(128)
+    expect(couponValue(at(99952, 27014, 3.7, 'KES'))).toBe(99952)
+    expect(couponValue(at(2500, 19, 131.57894736842104))).toBe(2500) // a hair under, still its face
+    // Legacy: no sats or no ratio, nothing to check against. The stored face stands.
+    expect(couponValue(at(500, undefined, undefined))).toBe(500)
+    expect(couponValue(at(500, 100, undefined))).toBe(500)
+    expect(couponValue(at(500, undefined, 0.5))).toBe(500)
+  })
+
+  it('still spends the soonest-expiring coupon first when it can really pay', () => {
+    const soon = gbp('soon', 300, 5175, 2) // 300.03 -> 300
+    const plan = planParts([big, soon], 1000)
+    expect(plan.parts.map((p) => [p.voucher.voucher_id, p.amount])).toEqual([['soon', 300], ['big', 700]])
+    const single = chooseSpend([big, soon], 200)
+    expect(single.kind).toBe('single')
+    if (single.kind === 'single') expect(single.candidates[0].voucher_id).toBe('soon')
+  })
+
   it('a 200 send is a single part from the 926, not a bundle with the dust', () => {
     const choice = chooseSpend([dust, big], 200)
     expect(choice.kind).toBe('single')
