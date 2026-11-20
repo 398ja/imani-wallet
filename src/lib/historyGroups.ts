@@ -88,12 +88,21 @@ export function entryKey(entry: HistoryEntry): string {
  * code's change, a Cashlink take-back, one row per proof), so a single €8.99 voucher read as
  * "6 vouchers". Rows naming the same `voucherId` (and stall) are one voucher. A row with no
  * `voucherId` is counted on its own, never merged into another.
+ *
+ * But that merge is right ONLY for rows that are the proofs of one held voucher coming back (a
+ * Cashlink take-back, `returned:` rows). The parts of a multi-voucher send, payment or receive are
+ * each a separate voucher on the wire, each its own token, even when the planner drew all of them
+ * from ONE source voucher: they carry that source's `voucherId`, so merging on it told the sender
+ * "1 voucher" for a bundle the recipient got as five (staging bundle 1d67db42: ten parts, one
+ * source voucher_id). Those parts count one each, by token.
  */
 export function entryVoucherCount(entry: HistoryEntry): number {
   if (entry.kind === 'single') return 1
   const ids = new Set<string>()
   for (const [i, tx] of entry.parts.entries()) {
-    ids.add(tx.voucherId ? `v:${(tx.merchantId ?? '').toLowerCase()}:${tx.voucherId}` : `row:${i}`)
+    const proofOfHeldVoucher = tx.id.startsWith('returned:')
+    if (proofOfHeldVoucher && tx.voucherId) ids.add(`v:${(tx.merchantId ?? '').toLowerCase()}:${tx.voucherId}`)
+    else ids.add(tx.tokenId ? `t:${tx.tokenId}` : `row:${i}`)
   }
   return ids.size
 }
