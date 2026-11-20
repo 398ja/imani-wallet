@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A card backlog minted right after a stall enrolled no longer reads as "does not match its signature"** (Closes #648). A stall that turns on card sales after taking card payments mints that backlog seconds after it signs the delegation. `cardSalePull` then re-dates each row to the Stripe payment time, which is before the delegation, and the warrant was judged at that time, so every such sale was refused as issued before the delegation existed (corda on staging: 3 sales, GBP 20.00, all genuine). The warrant is now judged at the time the sender recorded (`senderSaleAt`, the mint time), which `cardSalePull` already kept beside the re-dated `timestamp`. The row's own time stays the payment time for the books. A coupon really minted before its delegation is still refused.
+
 ## [0.68.0] - 2026-11-20
 
 ### Fixed
