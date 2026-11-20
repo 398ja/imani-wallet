@@ -57,6 +57,7 @@ import { cachedValidityReader, readStallValidity, type ValidityReader } from './
 import { cachedAllowanceReader, readSalesAllowance } from './salesAllowance'
 import { CredentialVault } from './vault'
 import { fileTrackerStore, GiftTracker, httpCheckStates } from './giftTracker'
+import { forwardAllReceipts } from './receiptForward'
 import { runPass, type WorkerDeps } from './worker'
 
 /** Build the real ports from config. Exported so a test can see the wiring. */
@@ -220,6 +221,7 @@ export function depsFor(
       now: () => Date.now(),
     }),
     ...(config.gifts ? { giftTracker: giftTrackerFor(config) } : {}),
+    receiptForwarder: async () => forwardAllReceipts(config.gatewayUrl, await vault.all()),
   }
 }
 
