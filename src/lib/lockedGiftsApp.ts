@@ -169,7 +169,7 @@ async function runSweep(): Promise<{ claimed: number; returned: number }> {
         try {
           const out = await takeBackLockedGift(ports, key, rec.token, async () => {
             if (rec.status !== 'returning') await save({ ...rec, status: 'returning' }, now)
-          })
+          }, true)
           if (out.kind === 'returned') {
             returned += 1
             await save({ ...rec, status: 'returned', closedAt: now }, now)

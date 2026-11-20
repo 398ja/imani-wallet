@@ -44,6 +44,7 @@ import {
 } from './cashlinkLock'
 import { armGift, armPreflight, cashlinkSteps, inParallel, retryDeposit, settleLockedGift, type ArmOutcome, type CashlinkPorts, type GatewayAnswer } from './cashlinkFlow'
 import { normalise } from './checkoutCode'
+import { checkoutTxId } from './checkoutCodeHistory'
 import type { OnlineShop } from './onlineShop'
 import { checkLockedGift } from './lockedGifts'
 import {
@@ -651,6 +652,9 @@ export async function settleLockedParts(
         noRelay: part.armed === false,
         lockedToken: part.lockedToken,
         ...(part.depositKeyset ? { depositKeyset: part.depositKeyset } : {}),
+        // #643: each coupon back gets its own incoming History row, linked to the code's row.
+        returnOf: checkoutTxId(record.id),
+        returnMemo: CHECKOUT_CODE_RETURNED_MEMO,
         onReturning: async () => {},
       })
       const doubted = suspect === 'all' || suspect.has(idx)
@@ -668,6 +672,9 @@ export async function settleLockedParts(
     identity.fill(0)
   }
 }
+
+/** #643: the memo on a coupon's own row when it comes back off a checkout code. */
+export const CHECKOUT_CODE_RETURNED_MEMO = 'Checkout code expired, returned'
 
 // --- Notifications ----------------------------------------------------------
 
