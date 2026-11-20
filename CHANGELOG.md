@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-11-20
+
 ### Fixed
 
 - **A card sale now gets the same customer receipt as a cash sale.** The purchase issuer delivers a card-bought coupon with the key the stall delegated `coupon:issue` to, and the gateway names that key as the sender, so the customer's wallet posted its receipt (and the signed attestation inside it) to the delegate, whose queue nobody drains. The stall's record read "Customer receipt: Not collected" for every card sale (staging, voucher ee84bf74, 2026-11-20). The wallet now addresses the receipt to the coupon's issuer when the sender is exactly the delegate named by the coupon's own `delegated` warrant and the stall's delegation verifies (`receiptAddressee`). Read off the signed voucher only, so no envelope field can redirect a receipt.
