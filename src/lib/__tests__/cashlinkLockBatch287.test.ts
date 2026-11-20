@@ -139,7 +139,7 @@ describe('gateway-customer#287: a gift is locked in one gateway call', () => {
 
     const out = await armGift(armCtx(gift))
 
-    expect(out).toEqual({ kind: 'unarmed', why: 'lock_refused' })
+    expect(out).toEqual({ kind: 'unarmed', why: 'lock_refused', detail: 'ISSUER_SELF_SWAP' })
     expect(w.mint.log.swaps).toHaveLength(0)
     expect(armState).toEqual([])
   })

@@ -184,15 +184,54 @@ describe('Use online', () => {
     expect(deps.start).not.toHaveBeenCalled()
   })
 
-  it('#402: split, but no code: says both parts are in the wallet', async () => {
+  it('#644: split, but no code: says nothing was spent, never counts parts, shows the gateway reason', async () => {
     deps.rows = async () => [splittableRow()]
     deps.split = vi.fn(async () => ({ kind: 'split' as const, parts: [{ tokenId: 'p', token: 't', amount: 337, faceValue: 337 }] }))
-    deps.start = vi.fn(async (req) => ({ kind: 'refused' as const, why: 'x', record: record({ amount: req.amount }) }))
+    deps.start = vi.fn(async (req) => ({ kind: 'refused' as const, why: 'lock_refused', record: record({ amount: req.amount, refusalDetail: 'SHOP_KEY_UNKNOWN' }) }))
     at(`/online?stall=${W.STALL}`)
     await screen.findByText('Usable at shop.example')
     fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '3.37' } })
     fireEvent.click(await screen.findByRole('button', { name: 'Get code' }))
-    expect(await screen.findByText('Your voucher was split, but no code could be made. Both parts are in your wallet.')).toBeTruthy()
+    expect(await screen.findByText('No code could be made. Nothing was spent and your voucher is still in your wallet. Reason given: SHOP_KEY_UNKNOWN.')).toBeTruthy()
+    expect(screen.queryByText(/Both parts|was split/)).toBeNull()
+  })
+
+  it('#644: the lock check runs before the split, and a refusal it sees does not split at all', async () => {
+    deps.rows = async () => [splittableRow()]
+    const order: string[] = []
+    deps.checkSource = vi.fn(async () => (order.push('check'), { why: 'lock_refused', detail: 'SHOP_KEY_UNKNOWN' }))
+    deps.split = vi.fn(async () => (order.push('split'), { kind: 'refused' as const, why: 'unused' }))
+    at(`/online?stall=${W.STALL}`)
+    await screen.findByText('Usable at shop.example')
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '3.37' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Get code' }))
+    expect(await screen.findByText('No code could be made. Nothing was spent and your voucher is still in your wallet. Reason given: SHOP_KEY_UNKNOWN.')).toBeTruthy()
+    expect(order).toEqual(['check'])
+    expect(deps.split).not.toHaveBeenCalled()
+    expect(deps.start).not.toHaveBeenCalled()
+    expect((deps.checkSource as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ stall: W.STALL, unit: 'GBP', token: expect.any(String) })
+  })
+
+  it('#644: a lock check that passes goes on to split, then make the code', async () => {
+    deps.rows = async () => [splittableRow()]
+    const order: string[] = []
+    deps.checkSource = vi.fn(async () => (order.push('check'), null))
+    deps.split = vi.fn(async () => (order.push('split'), { kind: 'split' as const, parts: [{ tokenId: 'p', token: 't', amount: 337, faceValue: 337 }] }))
+    at(`/online?stall=${W.STALL}`)
+    await screen.findByText('Usable at shop.example')
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '3.37' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Get code' }))
+    await waitFor(() => expect(deps.start).toHaveBeenCalled())
+    expect(order).toEqual(['check', 'split'])
+  })
+
+  it('#644: a refusal without a split shows the gateway reason too', async () => {
+    deps.start = vi.fn(async (req) => ({ kind: 'refused' as const, why: 'lock_refused', record: record({ amount: req.amount, refusalDetail: 'SHOP_KEY_UNKNOWN' }) }))
+    at(`/online?stall=${W.STALL}`)
+    await screen.findByText('Usable at shop.example')
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '0.08' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Get code' }))
+    expect(await screen.findByText('These vouchers cannot be used online right now. Nothing has changed. Reason given: SHOP_KEY_UNKNOWN.')).toBeTruthy()
   })
 
   it('a carvable amount does not split', async () => {
