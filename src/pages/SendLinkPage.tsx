@@ -294,6 +294,17 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
                   step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
                   message: userMessage(e, 'Send failed.'),
                 })
+                // #651: the wallet keeps checking; the screen follows when the answer comes.
+                if (e instanceof SendOutcomeUnknownError) {
+                  void e.settled?.then((out) => {
+                    if (!out) return
+                    setStatus(
+                      out instanceof Error
+                        ? { step: 'failed', message: userMessage(out, 'Send failed.') }
+                        : { step: 'unconfirmed', message: 'It went through. Your Cashlink is in your history.' },
+                    )
+                  })
+                }
               }
             }}
           >

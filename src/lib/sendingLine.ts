@@ -10,6 +10,10 @@ import type { SendProgress } from './pay'
  * going, and says plainly when the network is being slow and the gateway is trying again.
  */
 export function sendingLine(progress: SendProgress | null): string {
+  // #651: the gateway called it off. That is the outcome, said now, not after the reclaim lands.
+  if (progress?.aborting) {
+    return 'Not sent: nothing reached the recipient. Your vouchers are coming back to you. Keep this screen open.'
+  }
   const of = progress && progress.parts > 1 ? ` Voucher ${progress.part} of ${progress.parts}.` : ''
   if (progress?.retrying) {
     return (
