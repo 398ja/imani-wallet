@@ -9,11 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.73.0] - 2026-11-20
+## [0.74.0] - 2026-11-20
 
 ### Fixed
 
 - **A multi-voucher payment's History line now counts its vouchers: five parts read "5 vouchers", not "1 voucher".** The folded line's chip (`entryVoucherCount`, since #587) merged rows sharing a `voucherId`, which is right for the proofs of one held voucher coming back (a Cashlink take-back) but wrong for a bundle's parts: when the planner draws every part of a send from ONE source voucher, each part is its own token and its own voucher to the recipient, yet all carry the source's `voucherId` (staging bundle `1d67db42`: ten parts, one source id; `4643f289`: three). A bundle's parts now count one per token; only `returned:` take-back rows still fold by voucher. Display only; amounts and rows are unchanged.
+
+## [0.73.0] - 2026-11-20
+
+### Fixed
 
 - **A card sale now shows the customer's receipt ("Customer signed for it") instead of "Not collected".** Since 0.72.0 the receipt reached the stall, and the stall drained and acknowledged it, but the attestation inside was dropped. A card sale's `issued:<voucher>` row is not written at a till: it arrives as the purchase issuer's sealed sale record, filed on the stall's next inbox read, and the customer's receipt routinely gets there first. `recordCashAttestation` found no row and returned, and the drain acknowledged the receipt anyway, so the evidence was gone from the gateway and from the device. The drain now keeps every attestation on the device (`pendingAttestations.ts`, per account, keyed on voucher and attestation so a junk one cannot evict the genuine one) before acknowledging, asks for an inbox read, and files it once the sale row lands: on every drain pass and after each batch of filed sale rows. It is dropped once filed or definitely refused, and after 30 days. Receipts already acknowledged before this release are not recoverable by the stall: the gateway removed them from the queue on ack, and only the customer's device could re-send them.
 
