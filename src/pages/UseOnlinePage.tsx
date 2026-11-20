@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { checkoutRefusalMessage } from '../lib/checkoutRefusal'
+import { checkoutRefusalMessage, splitCheckoutRefusalMessage } from '../lib/checkoutRefusal'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Copy, ExternalLink, Globe } from 'lucide-react'
 
@@ -13,7 +13,7 @@ import { availableOf, checkoutPlan, maxExpiryFor, type CheckoutExclusion, type C
 import { display } from '../lib/checkoutCode'
 import { reconcileCheckoutCodesNow } from '../lib/checkoutCodesApp'
 import { loadCheckoutCodes, remainingOf, type CheckoutCodeRecord } from '../lib/checkoutCodeRecords'
-import { CHECKOUT_CODES_PATH, startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
+import { CHECKOUT_CODES_PATH, checkCheckoutSource, startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
 import { asCheckoutCodeSnapshot, checkoutTxId, CHECKOUT_STATUS_WORDS } from '../lib/checkoutCodeHistory'
 import { appCheckoutPorts } from '../lib/checkoutCodePorts'
 import { splitVoucher } from '../lib/voucherSplit'
@@ -52,6 +52,8 @@ export interface UseOnlineDeps {
   codes: (pubkey: string) => CheckoutCodeRecord[]
   ports: typeof appCheckoutPorts
   split: typeof splitVoucher
+  /** #644: the lock check on the voucher a split would carve, before the split. */
+  checkSource?: typeof checkCheckoutSource
   /** #477: open the mint connection and read its keyset while the amount is typed. */
   warm?: () => void
   /** #557: the code's History row, for a code whose record is not on this device. */
@@ -78,6 +80,7 @@ const realDeps: UseOnlineDeps = {
   codes: loadCheckoutCodes,
   ports: appCheckoutPorts,
   split: splitVoucher,
+  checkSource: checkCheckoutSource,
   historyRow: async (txId) => ((await getTransactionRow(txId)) as unknown as Record<string, unknown> | null) ?? null,
   mine: async () => {
     const answer = await appCheckoutPorts().store.call('GET', `${CHECKOUT_CODES_PATH}/mine`)
@@ -319,6 +322,11 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
   /** The split part replaced by the coupons the split made, or a sentence saying what happened. */
   const runSplit = async (ports: ReturnType<typeof deps.ports>): Promise<CheckoutPlanPart[] | string> => {
     if (!splitting) return []
+    // #644: the lock check first, so a refusal it can see leaves the voucher as it was (no split,
+    // no re-signs to undo it).
+    const refused = await (deps.checkSource ?? (async () => null))({ ports, stall, shop, unit, x, token: splitting.row.token })
+    if (refused) return splitCheckoutRefusalMessage(refused)
+    setBusy('splitting')
     const out = await deps.split(ports, pubkey, { tokenId: splitting.row.token_id, token: splitting.row.token, amount: splitting.amount })
     if (out.kind === 'split') return out.parts
     if (out.kind === 'refused') return 'Your voucher could not be split right now. Nothing has changed.'
@@ -329,7 +337,7 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
   const notInPlan = acceptsNew === false
   const onGet = async () => {
     if (!plan.plan || notInPlan) return
-    setBusy(splitting ? 'splitting' : 'making')
+    setBusy('making')
     setError(null)
     try {
       const ports = deps.ports()
@@ -353,9 +361,11 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
         x,
         parts,
       })
+      const detail = out.record.refusalDetail
       if (out.kind === 'issued' || out.kind === 'pending') navigate(`/online/code/${out.record.id}`)
-      else if (splitting) setError('Your voucher was split, but no code could be made. Both parts are in your wallet.')
-      else setError(checkoutRefusalMessage(out))
+      // #644: refused means nothing was burnt; never count the parts a split made.
+      else if (splitting && out.kind === 'refused') setError(splitCheckoutRefusalMessage({ why: out.why, ...(detail ? { detail } : {}) }))
+      else setError(checkoutRefusalMessage({ kind: out.kind, why: out.why, ...(detail ? { detail } : {}) }))
       // #402: the split's change is locked to this wallet's own key; make it an ordinary coupon again
       // now, so the next send can draw on it. The catch-up sweep finishes it if this is cut short.
       if (splitting) void import('../lib/selfLockedCouponsApp').then((m) => m.unlockSelfLockedCouponsNow(pubkey)).catch(() => 0)

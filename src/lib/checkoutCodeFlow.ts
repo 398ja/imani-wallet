@@ -41,6 +41,7 @@ import {
   unlockedProposal,
   xOnlyPub,
   isTheSuccessorAskedFor,
+  randomRefundSecret,
 } from './cashlinkLock'
 import { armGift, armPreflight, cashlinkSteps, inParallel, retryDeposit, settleLockedGift, type ArmOutcome, type CashlinkPorts, type GatewayAnswer } from './cashlinkFlow'
 import { normalise } from './checkoutCode'
@@ -259,6 +260,52 @@ function armContext(
   }
 }
 
+export interface CheckoutSourceCheck {
+  ports: CheckoutPorts
+  stall: string
+  shop: OnlineShop
+  unit: string
+  x: number
+  /** The whole voucher that would be split. */
+  token: string
+}
+
+/** Why a voucher cannot be locked to the shop, or null when it can. */
+export type CheckoutSourceRefusal = { why: string; detail?: string }
+
+/**
+ * #644: the lock check, on the voucher a split would carve, BEFORE the split. Read-only: the same
+ * checks `lockParts` runs on each part (lockable, window, amount proof, unspent, a dry run of the
+ * lock to `S`, the relay), against a throwaway refund key, so a refusal it can see changes nothing.
+ * A part that passes here can still be refused after the split; `lockParts` checks again.
+ */
+export async function checkCheckoutSource(req: CheckoutSourceCheck): Promise<CheckoutSourceRefusal | null> {
+  const record = { stall: req.stall.toLowerCase(), unit: req.unit } as CheckoutCodeRecord
+  if (!sameStallAndUnit(req.token, record)) return { why: 'not_this_stall' }
+  const identity = req.ports.identitySecret()
+  const R = randomRefundSecret()
+  try {
+    const out = await armPreflight({
+      ports: req.ports,
+      linkSecret: R,
+      refundSecret: R,
+      lockPub: req.shop.redeemKey,
+      x: req.x,
+      gifts: [{ token: req.token, sentAt: 0 }],
+      merchant: false,
+      onArming: async () => {},
+      onLocked: async () => {},
+      ...(identity ? { selfSecret: identity } : {}),
+    })
+    if (!out) return null
+    if (out.kind === 'unarmed') return { why: out.why, ...(out.detail ? { detail: out.detail } : {}) }
+    return { why: out.kind }
+  } finally {
+    R.fill(0)
+    identity?.fill(0)
+  }
+}
+
 /** Null when every part is locked and the record moved on to `depositing`. */
 async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutCodeRecord, identity: Uint8Array): Promise<CheckoutOutcome | null> {
   const R = (part: CheckoutPartRecord) => deriveCheckoutRefundSecret(identity, part.i)
@@ -285,8 +332,8 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
       PART_CONCURRENCY,
     )
     for (const c of checks) {
-      const refusal = c.ok ? c.value : ({ kind: 'unarmed', why: 'unreachable' } as const)
-      if (refusal) return refuse(pubkey, record, refusal.kind === 'unarmed' ? refusal.why : refusal.kind)
+      const refusal: ArmOutcome | null = c.ok ? c.value : { kind: 'unarmed', why: 'unreachable' }
+      if (refusal) return refuse(pubkey, record, refusal.kind === 'unarmed' ? refusal.why : refusal.kind, refusal.kind === 'unarmed' ? refusal.detail : undefined)
     }
     for (const part of record.parts) checkedNow.add(part)
   }
@@ -373,6 +420,7 @@ async function lockParts(ports: CheckoutPorts, pubkey: string, record: CheckoutC
     // was), or gone. Whatever is locked comes back at `x`.
     part.state = out.kind === 'kept_as_sats' ? 'kept' : out.kind === 'claimed' ? 'settled' : 'unarmed'
     record.refusal ??= out.kind === 'unarmed' ? out.why : out.kind
+    if (out.kind === 'unarmed' && out.detail) record.refusalDetail ??= out.detail
     save(pubkey, record)
     if (part.state !== 'unarmed' && part.sourceTokenId && !part.split) await ports.consume(part.sourceTokenId)
   }
@@ -398,9 +446,10 @@ function sameStallAndUnit(token: string, record: CheckoutCodeRecord): boolean {
   }
 }
 
-function refuse(pubkey: string, record: CheckoutCodeRecord, why: string): CheckoutOutcome {
+function refuse(pubkey: string, record: CheckoutCodeRecord, why: string, detail?: string): CheckoutOutcome {
   record.status = 'abandoned'
   record.refusal = why
+  if (detail) record.refusalDetail = detail
   record.done = true
   for (const p of record.parts) {
     p.state = 'unarmed'

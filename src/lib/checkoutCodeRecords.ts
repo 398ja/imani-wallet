@@ -122,6 +122,8 @@ export interface CheckoutCodeRecord {
   change?: number
   /** Why no code was issued. */
   refusal?: string
+  /** #644: the gateway's own refusal name behind `refusal`, when it gave one (e.g. a dry lock's). */
+  refusalDetail?: string
   /** Set once every part's value is spent or back: the code no longer holds anything. */
   done?: boolean
   /** In the store's `idx` order: a part's index here is its `idx` on the code, for good. */
