@@ -10,11 +10,12 @@
  *
  * Only ever DOWN, and only past rounding: a stored figure within one minor unit of the token's credit
  * is the gateway's own rounding of a split (`keep_face_value`) and is left alone, and a stored figure
- * below the credit is never raised.
+ * below the credit is never raised. A row whose token is credited for 0 is restated to 0 however close
+ * it was (#638): it is dust, not money, and a row claiming 1 had every bundle that drew on it aborted.
  */
 import type { VoucherRow } from '@imani/wallet-storage'
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
-import { creditableFaceValue, parseVoucherToken } from './voucherToken'
+import { creditableFaceValue, exactFaceValue, parseVoucherToken } from './voucherToken'
 
 /** The face this row should show, or null when its stored figure is right. Pure. Never throws. */
 export function restatedFace(row: Pick<VoucherRow, 'token' | 'face_value' | 'status'>): number | null {
@@ -22,11 +23,18 @@ export function restatedFace(row: Pick<VoucherRow, 'token' | 'face_value' | 'sta
   const status = String(row.status ?? '').toLowerCase()
   if (status !== '' && status !== 'active') return null
   let credit: number
+  let floorCredit: number
   try {
-    credit = creditableFaceValue(parseVoucherToken(row.token)).faceValue
+    const parsed = parseVoucherToken(row.token)
+    credit = creditableFaceValue(parsed).faceValue
+    // The gateway's own rule (`CouponRate.shownFaceOf`) floors: 0.6 of a unit is 0 to it.
+    floorCredit = Math.floor(exactFaceValue(parsed) + 1e-9)
   } catch {
     return null
   }
+  // A token credited for 0 is dust no send can move (#638: face 1 on 8 sats worth 0.46p). The
+  // one-unit tolerance is for a split's rounding of real value, not for a row worth nothing.
+  if (floorCredit <= 0) return row.face_value > 0 ? 0 : null
   return row.face_value - credit > 1 ? credit : null
 }
 

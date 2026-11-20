@@ -101,7 +101,8 @@ describe('checkSplittable', () => {
   })
 
   it('refuses to split a voucher backed by a single sat', () => {
-    const check = checkSplittable(xaf({ token_amount: 1 }), 25)
+    // Ratio 5000 so the one sat really is worth the face (#638: value is what the sats credit).
+    const check = checkSplittable(xaf({ token_amount: 1, issuance_ratio: 5000 }), 25)
     expect(check.ok).toBe(false)
     expect(check.ok === false && check.reason).toContain('single sat')
   })
@@ -127,7 +128,7 @@ describe('checkSplittable', () => {
 describe('selectVouchers and splitObstacle', () => {
   it('offers only vouchers that can actually produce the amount', () => {
     const divisible = xaf()
-    const indivisible = xaf({ voucher_id: 'v-1sat', token_amount: 1 })
+    const indivisible = xaf({ voucher_id: 'v-1sat', token_amount: 1, issuance_ratio: 5000 })
 
     const chosen = selectVouchers([indivisible, divisible], 25)
 
