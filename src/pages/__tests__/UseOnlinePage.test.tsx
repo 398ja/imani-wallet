@@ -68,6 +68,55 @@ const at = (path: string) =>
     </MemoryRouter>,
   )
 
+describe('#639: a stall whose plan takes no new checkout codes', () => {
+  const NOT_IN_PLAN = 'This shop is not taking new checkout codes right now. Nothing has changed: your vouchers are still in your wallet and still work at the stall.'
+
+  const typed = async () => {
+    at(`/online?stall=${W.STALL}`)
+    await screen.findByText('Usable at shop.example')
+    fireEvent.change(screen.getByLabelText(/^Amount/), { target: { value: '0.08' } })
+    return screen.getByRole('button', { name: 'Get code' }) as HTMLButtonElement
+  }
+
+  it('lists the stall with the not_in_plan words', async () => {
+    deps.acceptsNew = vi.fn(async () => false)
+    at('/online')
+    expect(await screen.findByTestId('not-in-plan')).toBeTruthy()
+    expect(screen.getByTestId('not-in-plan').textContent).toBe(NOT_IN_PLAN)
+    expect(deps.acceptsNew).toHaveBeenCalledWith(W.STALL)
+  })
+
+  it('disables Get code on the amount screen with the same words, and never starts a code', async () => {
+    deps.acceptsNew = vi.fn(async () => false)
+    const get = await typed()
+    expect(await screen.findByText(NOT_IN_PLAN)).toBeTruthy()
+    expect(get.disabled).toBe(true)
+    fireEvent.click(get)
+    expect(deps.start).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['accepts', async () => true],
+    ['unknown (503, 404, malformed)', async () => null],
+    ['throws', async () => { throw new Error('network') }],
+  ])('leaves Get code on when the answer %s, and the lock decides', async (_label, answer) => {
+    deps.acceptsNew = vi.fn(answer as () => Promise<boolean | null>)
+    const get = await typed()
+    await waitFor(() => expect(deps.acceptsNew).toHaveBeenCalled())
+    await waitFor(() => expect(get.disabled).toBe(false))
+    expect(screen.queryByTestId('not-in-plan')).toBeNull()
+    fireEvent.click(get)
+    await waitFor(() => expect(deps.start).toHaveBeenCalled())
+  })
+
+  it('says nothing in the picker when the answer is not a clear no', async () => {
+    deps.acceptsNew = vi.fn(async () => null)
+    at('/online')
+    expect(await screen.findByText(/shop\.example/)).toBeTruthy()
+    expect(screen.queryByTestId('not-in-plan')).toBeNull()
+  })
+})
+
 describe('Use online', () => {
   it('offers only stalls whose profile names an online shop', async () => {
     at('/online')
