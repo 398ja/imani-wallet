@@ -298,6 +298,7 @@ export const RULES: InventoryRule[] = [
   X('imani-wallet:held-coupons:', 'held coupons carry tokens'),
   X('imani-wallet:refused-coupons:', 'refused coupons carry tokens'),
   X('imani-wallet:bundle-claims:', 'bundle claims carry tokens'),
+  X('imani-wallet:pending-attestations:', 'customer signatures awaiting their card-sale row'),
   X('imani-wallet:pending-bundles:', 'pending bundles carry tokens'),
   R('imani-wallet:receive-trouble:', counted, 'receive trouble entries'),
 ]
