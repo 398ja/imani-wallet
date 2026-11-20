@@ -1161,6 +1161,9 @@ async function spendableFrom(merchantPubkey: string, payer: string): Promise<{
   // on staging, 2026-11-01. Unlock such rows first, so what the send draws on is ordinary coupons.
   // Never blocks: a row that could not be unlocked yet is simply left out below.
   await unlockSelfLockedFirst(payer)
+  // #638 regression: restate dust rows before planning, not only on the DM catch-up, so a row
+  // its token values at 0 is dropped here rather than leading a bundle the gateway aborts.
+  await import('./couponFaceRepair').then((m) => m.restateOverstatedRowsNow()).catch(() => 0)
   const rows = withoutSelfLocked(withoutInFlight(couponsFor(await listVouchers(), merchantPubkey), payer))
 
   /**

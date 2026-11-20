@@ -238,8 +238,8 @@ describe('the signed expiry wins over a stored one (#169 review)', () => {
   it('keeps a coupon live and orders it by the signed date when the stored one is earlier', async () => {
     const merchantKey = schnorr.utils.randomSecretKey()
     const issuer = bytesToHex(schnorr.getPublicKey(merchantKey))
-    const wronglyStored = buildVoucherToken({ expiresAt: LATER, voucherId: 'v-signed-later' }, [500], {}, merchantKey)
-    const sooner = buildVoucherToken({ expiresAt: SECONDS, voucherId: 'v-sooner' }, [500], {}, merchantKey)
+    const wronglyStored = buildVoucherToken({ expiresAt: LATER, voucherId: 'v-signed-later', issuanceRatio: 1 }, [500], {}, merchantKey)
+    const sooner = buildVoucherToken({ expiresAt: SECONDS, voucherId: 'v-sooner', issuanceRatio: 1 }, [500], {}, merchantKey)
     const base = { amount: 500, face_value: 500, face_unit: 'GBP', face_decimals: 2, token_amount: 500, status: 'active', issuer_id: issuer }
     await seedLegacy([
       { ...base, token: wronglyStored.token, voucher_id: 'v-signed-later', expires_at: PAST },
