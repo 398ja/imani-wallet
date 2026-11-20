@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.70.0] - 2026-11-20
+
 ### Fixed
 
 - **A checkout code the shop lock refuses no longer splits your voucher first, and says plainly that nothing was spent** (Closes #644). "Use online" split a voucher before checking that its parts could be locked to the shop key, so a refusal the check could have caught still split the voucher and then re-signed every part back, and the page said "Your voucher was split... Both parts are in your wallet" (there can be more than two parts). The lock check (`checkCheckoutSource`, the same read-only `armPreflight` the parts get) now runs on the voucher before any split, so a refused attempt changes nothing. A refusal now reads "No code could be made. Nothing was spent and your voucher is still in your wallet.", without counting parts. When the gateway gave a reason for refusing the dry lock, it is kept on the code record (`refusalDetail`) and shown as "Reason given: ...". No value was ever lost.
