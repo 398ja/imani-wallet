@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import {
+  BUNDLE_BACKGROUND_POLL_MS,
   BUNDLE_WAIT_MS,
   DEFAULT_BUNDLE_MAX_PARTS,
   loadPendingBundles,
@@ -120,7 +121,8 @@ const aborted = (b: Record<string, unknown>) => ({
   ),
 })
 
-const send = (amount = 1000) => sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount })
+const send = (amount = 1000, onProgress?: (p: unknown) => void) =>
+  sendVouchers({ payer: PAYER, recipient: { pubkey: FRIEND }, merchant, unit: 'EUR', amount, onProgress })
 
 beforeEach(() => {
   for (const k of ['pending-sends', 'pending-bundles', 'settled-sends', 'send-intents']) {
@@ -176,6 +178,60 @@ describe('atomic bundle send (#552)', () => {
       vi.useRealTimers()
     }
     expect(balance()).toBe(before)
+    expect(loadPendingBundles(PAYER)).toEqual([])
+  })
+
+  it('says not sent the moment the bundle is ABORTING, and stays open until ABORTED (#651)', async () => {
+    stubs.rows = trio()
+    const { balance } = store(trio())
+    const seen: Record<string, unknown>[] = []
+    // Staging 2f757a36: PREPARING, then 85 s of ABORTING while the split retries ran out, then ABORTED.
+    gateway((reads, b) =>
+      reads < 2 ? { bundle_id: b.bundle_id, state: 'PREPARING', parts: [] } : reads < 80 ? { bundle_id: b.bundle_id, state: 'ABORTING', parts: [] } : aborted(b),
+    )
+    vi.useFakeTimers()
+    try {
+      let outcome: unknown = 'pending'
+      const sending = send(1000, (p) => void seen.push(p as Record<string, unknown>)).then((r) => r, (e: unknown) => e).then((v) => (outcome = v))
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(seen.at(-1)).toMatchObject({ aborting: true })
+      expect(outcome).toBe('pending') // not final yet: nothing reclaimed until ABORTED
+      expect(balance()).toBe(1200)
+      await vi.runAllTimersAsync()
+      await sending
+      expect(outcome).toBeInstanceOf(Error)
+      expect(outcome).not.toBeInstanceOf(SendOutcomeUnknownError)
+      expect((outcome as Error).message).toMatch(/Not sent: nothing left your wallet/)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(seen.filter((p) => p.aborting)).toHaveLength(1)
+    expect(loadPendingBundles(PAYER)).toEqual([])
+  })
+
+  it('keeps checking after the live wait and hands the screen the final answer (#651)', async () => {
+    stubs.rows = trio()
+    const { balance } = store(trio())
+    let finished = false
+    gateway((_reads, b) => (finished ? aborted(b) : { bundle_id: b.bundle_id, state: 'ABORTING', parts: [] }))
+    vi.useFakeTimers()
+    try {
+      const sending = send().catch((e: unknown) => e)
+      await vi.advanceTimersByTimeAsync(BUNDLE_WAIT_MS + 5_000)
+      const error = (await sending) as SendOutcomeUnknownError
+      expect(error).toBeInstanceOf(SendOutcomeUnknownError)
+      // Said as not sent, not as "still sending", and not silent: a promise follows the bundle.
+      expect(error.message).toMatch(/Not sent: nothing reached the recipient/)
+      expect(error.settled).toBeInstanceOf(Promise)
+      finished = true
+      await vi.advanceTimersByTimeAsync(BUNDLE_BACKGROUND_POLL_MS * 2)
+      const out = await error.settled
+      expect(out).toBeInstanceOf(Error)
+      expect((out as Error).message).toMatch(/back with you/)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(balance()).toBe(1200)
     expect(loadPendingBundles(PAYER)).toEqual([])
   })
 

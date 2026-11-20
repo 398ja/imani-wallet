@@ -20,4 +20,7 @@ describe('sendingLine (#552)', () => {
     expect(line).toMatch(/Voucher 5 of 8/)
     expect(line).toMatch(/Nothing is lost/)
   })
+  it('says not sent while the gateway calls it off (#651)', () => {
+    expect(sendingLine({ part: 1, parts: 3, retrying: true, aborting: true })).toMatch(/^Not sent: .*coming back/)
+  })
 })
