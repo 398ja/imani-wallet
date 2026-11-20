@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.68.0] - 2026-11-20
+
 ### Fixed
 
 - A dust coupon remnant was still planned into a send and aborted the whole bundle (#638 regression on v0.67.0, staging 2026-11-20: 8 sats of a ratio-0.058 GBP coupon stored as face 1). Rows received by DM, cash link, checkout code or unlocked change never store `issuance_ratio`, and the fallback derived it as face / sats (0.125), so `couponValue` read 1 instead of 0. The ratio now comes from the token's signed voucher first, missing sats come from its proofs, and the face repair runs before every send plans instead of only on the DM catch-up.
