@@ -509,6 +509,17 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                   message: userMessage(e, 'Send failed.'),
                   swapBackTokenId: e instanceof VoucherFullyRedeemedError ? e.tokenId : undefined,
                 })
+                // #651: the wallet keeps checking; the screen follows when the answer comes.
+                if (e instanceof SendOutcomeUnknownError) {
+                  void e.settled?.then((out) => {
+                    if (!out) return
+                    if (out instanceof Error) setStatus({ step: 'failed', message: userMessage(out, 'Send failed.') })
+                    else {
+                      setSent(out)
+                      setStatus({ step: 'idle' })
+                    }
+                  })
+                }
               }
             }}
           >

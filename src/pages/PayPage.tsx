@@ -325,6 +325,14 @@ export function PayPage({ pubkey }: { pubkey: string }) {
               setStatus({ step: 'alreadyPaid', message: e.message })
               return
             }
+            // #651: the wallet keeps checking; the screen follows when the answer comes.
+            if (e instanceof SendOutcomeUnknownError) {
+              void e.settled?.then((out) => {
+                if (!out) return
+                if (out instanceof Error) setStatus({ step: 'failed', message: userMessage(out, 'Payment failed.') })
+                else setStatus({ step: 'done', result: out })
+              })
+            }
             setStatus({
               step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',
               message: userMessage(e, 'Payment failed.'),
