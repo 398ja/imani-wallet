@@ -1448,6 +1448,12 @@ export class SendOutcomeUnknownError extends Error {
   constructor(
     message: string,
     readonly sendId: string,
+    /**
+     * #651: when set, the wallet is still checking in the background. Resolves with the result
+     * once the gateway answers (a thrown "Not sent" arrives as an Error), or null if it never
+     * does while the page is open. Never rejects.
+     */
+    readonly settled?: Promise<SendResult | Error | null>,
   ) {
     super(message)
     this.name = 'SendOutcomeUnknownError'
@@ -1799,6 +1805,11 @@ export type SendProgress = {
   parts: number
   /** True while the gateway is retrying this part's delivery by itself. */
   retrying: boolean
+  /**
+   * #651: the gateway has called the send off (ABORTING). Nothing reaches the recipient and the
+   * vouchers are on their way back. Final as an outcome, even though ABORTED comes later.
+   */
+  aborting?: boolean
 }
 
 function report(onProgress: ((p: SendProgress) => void) | undefined, progress: SendProgress): void {
@@ -2327,6 +2338,9 @@ export const DEFAULT_BUNDLE_MAX_PARTS = 10
 /** How long the live wait follows a bundle: the 60 s prepare deadline plus the DM retry sweep. */
 export const BUNDLE_WAIT_MS = 180_000
 export const BUNDLE_POLL_INTERVAL_MS = 1_000
+/** #651: after the live wait, the screen keeps asking at this pace, for this long. */
+export const BUNDLE_BACKGROUND_POLL_MS = 5_000
+export const BUNDLE_BACKGROUND_WAIT_MS = 15 * 60 * 1000
 /** A bundle the gateway still does not know this long after the request is taken as never created. */
 const BUNDLE_NEVER_CREATED_MS = 10 * 60 * 1000
 
@@ -2578,13 +2592,55 @@ async function sendBundle(ctx: SendContext, plan: SendPart[], amount: number): P
   rememberPendingBundle(ctx.payer, pending)
 
   const vouchersUsed = new Set(plan.map((p) => p.voucher.voucher_id)).size
-  const stillSending = (detail: string) =>
+  const what = ctx.paymentRequestId ? 'payment' : 'send'
+  const stillSending = (detail: string, last?: BundleStatus) =>
     new SendOutcomeUnknownError(
-      `This ${ctx.paymentRequestId ? 'payment' : 'send'} is still sending (bundle ${bundleId}${detail}). ` +
-        'It has NOT failed: it reaches the recipient in full or comes back in full. Check your ' +
-        'history in a moment before trying again.',
+      last?.state === 'ABORTING'
+        ? `Not sent: nothing reached the recipient. Your vouchers are on their way back (bundle ${bundleId}). ` +
+          'This screen updates when they are back.'
+        : `This ${what} is still sending (bundle ${bundleId}${detail}). ` +
+          'It has NOT failed: it reaches the recipient in full or comes back in full. This screen ' +
+          'keeps checking and updates when it is done.',
       bundleId,
+      last ? keepChecking(last) : undefined,
     )
+
+  /** Apply a final answer: the result on DELIVERED, a "Not sent" Error on ABORTED, false if not final. */
+  const finish = async (status: BundleStatus): Promise<SendResult | Error | false> => {
+    if (!BUNDLE_FINAL.includes(String(status.state))) return false
+    const applied = await applyBundle(api, getWallet(), ctx.payer, pending, status)
+    if (!applied) return false
+    forgetPendingBundle(ctx.payer, bundleId)
+    if (status.state === 'ABORTED') {
+      const why = status.error_message ?? status.error_code
+      return new Error(
+        `Not sent: nothing left your wallet. Every voucher in this ${what} ` +
+          `is back with you.${why ? ` (${why})` : ''}`,
+      )
+    }
+    return { id: bundleId, requested: amount, delivered: amount, sent: applied.taken, parts: plan.length, vouchers: vouchersUsed }
+  }
+
+  /** #651: after the live wait, keep asking so the screen can update instead of going quiet. */
+  const keepChecking = async (from: BundleStatus): Promise<SendResult | Error | null> => {
+    const until = Date.now() + BUNDLE_BACKGROUND_WAIT_MS
+    let status = from
+    while (Date.now() < until) {
+      try {
+        const done = await finish(status)
+        if (done) return done
+      } catch {
+        // Not applied: ask again. Not logged, so the shared data/ vocabulary is unchanged.
+      }
+      await new Promise((resolve) => setTimeout(resolve, BUNDLE_BACKGROUND_POLL_MS))
+      try {
+        status = (await api.getAtomicSendBundle!(bundleId)) ?? status
+      } catch {
+        // Unreadable: ask again. The record stays, so the next login finishes it regardless.
+      }
+    }
+    return null
+  }
 
   let status: BundleStatus
   try {
@@ -2624,16 +2680,19 @@ async function sendBundle(ctx: SendContext, plan: SendPart[], amount: number): P
   }
 
   const startedAt = Date.now()
-  let lastReported = -1
+  let lastReported = ''
   while (!BUNDLE_FINAL.includes(String(status.state))) {
     const done = (status.parts ?? []).filter((p) => p.status === 'COMPLETED').length
     const retrying = (status.parts ?? []).some((p) => GATEWAY_RETRYING.includes(String(p.status)) || p.status === 'MANUAL_ATTENTION')
-    if (done !== lastReported) {
-      lastReported = done
-      report(ctx.onProgress, { part: Math.min(done + 1, plan.length), parts: plan.length, retrying })
+    // #651: ABORTING is the outcome (not sent), said the moment it is known, not when ABORTED lands.
+    const aborting = status.state === 'ABORTING'
+    const key = aborting ? 'aborting' : String(done)
+    if (key !== lastReported) {
+      lastReported = key
+      report(ctx.onProgress, { part: Math.min(done + 1, plan.length), parts: plan.length, retrying, ...(aborting ? { aborting } : {}) })
     }
     if (Date.now() + BUNDLE_POLL_INTERVAL_MS > startedAt + BUNDLE_WAIT_MS) {
-      throw stillSending(status.state ? `, ${status.state}` : '')
+      throw stillSending(status.state ? `, ${status.state}` : '', status)
     }
     await new Promise((resolve) => setTimeout(resolve, BUNDLE_POLL_INTERVAL_MS))
     try {
@@ -2646,19 +2705,8 @@ async function sendBundle(ctx: SendContext, plan: SendPart[], amount: number): P
     }
   }
 
-  const wallet = getWallet()
-  const applied = await applyBundle(api, wallet, ctx.payer, pending, status)
-  if (!applied) {
-    throw stillSending(`, ${status.state}`)
-  }
-  forgetPendingBundle(ctx.payer, bundleId)
-
-  if (status.state === 'ABORTED') {
-    const why = status.error_message ?? status.error_code
-    throw new Error(
-      `Not sent: nothing left your wallet. Every voucher in this ${ctx.paymentRequestId ? 'payment' : 'send'} ` +
-        `is back with you.${why ? ` (${why})` : ''}`,
-    )
-  }
-  return { id: bundleId, requested: amount, delivered: amount, sent: applied.taken, parts: plan.length, vouchers: vouchersUsed }
+  const done = await finish(status)
+  if (!done) throw stillSending(`, ${status.state}`, status)
+  if (done instanceof Error) throw done
+  return done
 }
