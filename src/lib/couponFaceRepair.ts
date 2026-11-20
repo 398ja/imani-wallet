@@ -10,7 +10,8 @@
  *
  * Only ever DOWN, and only past rounding: a stored figure within one minor unit of the token's credit
  * is the gateway's own rounding of a split (`keep_face_value`) and is left alone, and a stored figure
- * below the credit is never raised.
+ * below the credit is never raised. A row whose token is credited for 0 is restated to 0 however close
+ * it was (#638): it is dust, not money, and a row claiming 1 had every bundle that drew on it aborted.
  */
 import type { VoucherRow } from '@imani/wallet-storage'
 import { getWallet, listVouchers, notifyWalletChanged } from './wallet'
@@ -27,6 +28,11 @@ export function restatedFace(row: Pick<VoucherRow, 'token' | 'face_value' | 'sta
   } catch {
     return null
   }
+  // A token credited for 0 is dust no send can move (#638: face 1 on 8 sats worth 0.46p, which
+  // `CouponRate.shownFaceOf` rounds half up to 0, so the gateway refuses even a 1 draw). The
+  // one-unit tolerance is for a split's rounding of real value, not for a row worth nothing. 0.58
+  // of a unit rounds to 1, which the gateway does send, so that row is left alone.
+  if (credit <= 0) return row.face_value > 0 ? 0 : null
   return row.face_value - credit > 1 ? credit : null
 }
 
