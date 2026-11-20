@@ -461,6 +461,7 @@
   "imani-wallet:onboarding-nsec",
   "imani-wallet:online-shop-published:",
   "imani-wallet:payment-requests:",
+  "imani-wallet:pending-attestations:",
   "imani-wallet:pending-bundles:",
   "imani-wallet:pending-claim",
   "imani-wallet:pending-sends:",

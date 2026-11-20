@@ -552,15 +552,16 @@ export async function recheckCashbackRowOnOpen(id: string): Promise<void> {
 export async function recordCashAttestation(
   voucherId: string,
   attestation: string,
-): Promise<void> {
+): Promise<'filed' | 'no-row' | 'refused' | 'error'> {
   try {
     const id = 'issued:' + voucherId
     const existing = await getWallet().getTransaction(id)
 
     // No such sale on this device. Not an error: the coupon may have been
     // issued on another terminal, or this may be a customer's wallet with no
-    // issuance history at all.
-    if (!existing) return
+    // issuance history at all. Or, for a CARD sale, the purchase issuer's sale record has not
+    // been filed here YET: the caller keeps the attestation and retries (`pendingAttestations`).
+    if (!existing) return 'no-row'
 
     const decision = mayFileAttestation(
       existing as unknown as {
@@ -573,15 +574,17 @@ export async function recordCashAttestation(
 
     if (!decision.file) {
       console.warn('[wallet] not filing a cash attestation for', voucherId, decision.reason)
-      return
+      return 'refused'
     }
 
     await getWallet().updateTransaction(id, {
       cashAttestation: attestation,
     } as unknown as Partial<TransactionRow>)
     notifyWalletChanged()
+    return 'filed'
   } catch (error) {
     console.error('[wallet] cash attestation not recorded', error)
+    return 'error'
   }
 }
 
