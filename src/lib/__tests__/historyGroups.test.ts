@@ -99,9 +99,9 @@ describe('review fixes', () => {
 
 describe('entryVoucherCount: the folded line counts vouchers, not rows', () => {
   const M = 'f'.repeat(64)
-  it('six rows of one voucher (a checkout code change, one per proof) are 1 voucher', () => {
+  it('six rows of one voucher (a Cashlink take-back, one per proof) are 1 voucher', () => {
     const rows = [566, 283, 35, 9, 4, 1].map((amount, i) =>
-      tx(`r${i}`, { amount, bundleId: 'b1', merchantId: M, voucherId: 'v-one' }),
+      tx(`returned:r${i}`, { amount, bundleId: 'b1', merchantId: M, voucherId: 'v-one', tokenId: `r${i}` }),
     )
     const [entry] = groupHistory(rows)
     expect(entry!.kind).toBe('bundle')
@@ -114,6 +114,20 @@ describe('entryVoucherCount: the folded line counts vouchers, not rows', () => {
       tx('b', { bundleId: 'b2', merchantId: M, voucherId: 'v-b' }),
     ])
     expect(entryVoucherCount(entry!)).toBe(2)
+  })
+
+  it('a 5-part send drawn from ONE source voucher is 5 vouchers (staging: bundle read "1 voucher")', () => {
+    const rows = [700, 500, 500, 400, 300].map((amount, i) =>
+      tx(`sent:t${i}`, { type: 'sent', direction: 'out', amount, bundleId: 'b5', merchantId: M, voucherId: 'v-src', tokenId: `t${i}`, counterparty: 'r' }),
+    )
+    const [entry] = groupHistory(rows)
+    expect(entry!.kind).toBe('bundle')
+    expect(entryVoucherCount(entry!)).toBe(5)
+  })
+
+  it('5 received parts sharing one voucher id (stall paid with its own coupon) are 5 vouchers', () => {
+    const rows = [1, 2, 3, 4, 5].map((n) => tx(`received:t${n}`, { bundleId: 'b6', merchantId: M, voucherId: 'v-own', tokenId: `t${n}` }))
+    expect(entryVoucherCount(groupHistory(rows)[0]!)).toBe(5)
   })
 
   it('rows with no voucher id are never merged into one', () => {
