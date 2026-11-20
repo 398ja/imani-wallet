@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-11-20
+
 ### Fixed
 
 - **A dust coupon no longer sinks every send from its stall** (Closes #638). A coupon row can say face 1 while its token holds 8 sats of a 407-face / 7020-sat coupon, worth 0 to the gateway. It expired first, so every send planned it as a bundle part and the gateway aborted the whole bundle (`Insufficient balance: requested 1, available 0`). `@imani/wallet-core` now values a coupon at `couponValue`: the smaller of its stored face and what its sats are worth to the nearest unit (half up), as gateway-core's `CouponRate.shownFaceOf` values them. `planParts`, `selectVouchers`, `chooseSpend`, `checkSplittable`, `passedOver` and `splitObstacle` plan by it, a coupon worth 0 is never a part, and `valueHolding` reports it as `no-value` rather than spendable. The face repair restates such a row to 0, which its one-unit tolerance used to leave alone, so the balance and coupon list stop showing value no send can move.
