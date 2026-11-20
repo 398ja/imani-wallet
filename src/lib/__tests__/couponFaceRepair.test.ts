@@ -40,3 +40,22 @@ describe('a carve left the row overstated (staging 2026-11-01: 5.19 shown, 5.10 
     expect(restatedFace(row(t, credit(t) + 50, 'swapped_to_sats'))).toBeNull()
   })
 })
+
+describe('#638: a row whose token is credited for 0 is dust', () => {
+  // staging 2026-11-20: face 1 on 8 sats of a 407-face / 7020-sat GBP coupon, worth 0.46p.
+  const dust = buildVoucherToken({ voucherId: 'v-d', faceValue: 407, unit: 'GBP', issuanceRatio: 0.05797720797720798, expiresAt: 1_900_000_000 }, [8], {}, KEY).token
+
+  it('restates the 1-vs-0 row to 0, which the one-unit tolerance used to leave alone', () => {
+    expect(credit(dust)).toBe(0)
+    expect(restatedFace(row(dust, 1))).toBe(0)
+  })
+
+  it('floors like the gateway: a token worth 0.6 of a unit is restated too', () => {
+    const t = buildVoucherToken({ voucherId: 'v-d2', faceValue: 407, unit: 'GBP', issuanceRatio: 0.05797720797720798, expiresAt: 1_900_000_000 }, [8, 2], {}, KEY).token
+    expect(restatedFace(row(t, 1))).toBe(0)
+  })
+
+  it('leaves a row already at 0 alone', () => {
+    expect(restatedFace(row(dust, 0))).toBeNull()
+  })
+})
