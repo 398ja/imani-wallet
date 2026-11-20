@@ -42,6 +42,7 @@ import { attestRedemption, nullifierFor, publishRedeemed } from './attestation'
 import { attestationForReceivedCoupon } from './cashAttestation'
 import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
+import { receiptAddressee } from './receiptAddressee'
 import {
   awaitsHeldWrap,
   noteTransferReceived,
@@ -1452,8 +1453,12 @@ function redemptionAdapter(): RedemptionAdapter {
         //      coupon straight to a customer the stall IS the sender, so this
         //      still reaches the right party in the one case it is right, and
         //      is now unreachable in the case where it was wrong.
-        senderPubkeyHex: String(
-          meta?.senderPubkey ?? opts?.senderPubkey ?? meta?.issuerId ?? '',
+        //
+        // A card sale's sender is the stall's DELEGATE (the purchase issuer), whose receipt queue
+        // nobody drains; `receiptAddressee` sends those to the stall instead (card receipts).
+        senderPubkeyHex: receiptAddressee(
+          String(meta?.senderPubkey ?? opts?.senderPubkey ?? meta?.issuerId ?? ''),
+          token,
         ),
         deliveryEventId: String(opts?.deliveryEventId ?? ''),
         voucherId: meta?.voucherId as string | undefined,
