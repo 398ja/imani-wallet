@@ -27,6 +27,13 @@ export interface WalletTransaction {
   direction: 'in' | 'out'
   /** Normalised to epoch milliseconds. */
   at: number
+  /**
+   * The time the sender recorded for a card sale, kept when `cardSalePull` re-dates `at` to the
+   * payment time. It is the mint time, so the issuer delegation is judged against it (#648): a
+   * stall that enrols after taking card payments mints the backlog after signing, but `at` then
+   * says the coupon predates the delegation.
+   */
+  senderSaleAt?: number
   amount: number
   unit: string
   decimals: number
@@ -238,6 +245,16 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
+/**
+ * When the coupon on this row was issued, for judging its issuance warrant: the sender's recorded
+ * time when `cardSalePull` re-dated the row to the payment, else the row's time. Undefined when the
+ * row has no time, so the caller judges it now (#648).
+ */
+export function warrantIssuedAt(tx: Pick<WalletTransaction, 'at' | 'senderSaleAt'>): number | undefined {
+  const when = tx.senderSaleAt ?? tx.at
+  return when > 0 ? when : undefined
+}
+
 export function toTransaction(row: TransactionRow): WalletTransaction {
   const r = row as unknown as Record<string, unknown>
   const type = String(r.type ?? 'received')
@@ -257,6 +274,10 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
         ? 'out'
         : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
+    senderSaleAt:
+      typeof r.senderSaleAt === 'number' && Number.isFinite(r.senderSaleAt) && r.senderSaleAt > 0
+        ? toEpochMs(r.senderSaleAt)
+        : undefined,
     amount: Number(r.amount ?? 0),
     unit: String(r.unit ?? r.face_unit ?? 'UNKNOWN'),
     // The unit decides, and only then the row. A history row written before
