@@ -196,7 +196,7 @@ describe('arming a Cashlink (burn with R, lock, mint, deposit)', () => {
 
   it('the lock route refuses the dry run (e.g. ISSUER_SELF_SWAP, 422): not armed, nothing burnt', async () => {
     w.gateway.override.set(LOCK_PATH, { status: 422, body: { refusal: 'ISSUER_SELF_SWAP' } })
-    expect(await armGift(armCtx(giftOn(w)))).toEqual({ kind: 'unarmed', why: 'lock_refused' })
+    expect(await armGift(armCtx(giftOn(w)))).toEqual({ kind: 'unarmed', why: 'lock_refused', detail: 'ISSUER_SELF_SWAP' })
     expect(w.mint.log.swaps).toHaveLength(0)
   })
 

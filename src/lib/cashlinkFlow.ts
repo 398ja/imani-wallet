@@ -449,7 +449,7 @@ export type ArmOutcome =
   /** Locked, but the relay did not take the take-back: this wallet takes it back itself. */
   | { kind: 'not_armed'; keyset: string; why: string }
   /** Left as an ordinary gift, untouched. */
-  | { kind: 'unarmed'; why: UnarmedReason }
+  | { kind: 'unarmed'; why: UnarmedReason; /** #644: the gateway's own refusal name, when it gave one. */ detail?: string }
   /** Part way; the next run carries on (`arm.s = 'arming'`). Nothing is lost. */
   | { kind: 'arming'; why: string }
   /** The gift left the link before it could be locked: it was claimed. */
@@ -758,7 +758,11 @@ async function preflight(
     if (dry.status === 429) return { kind: 'unarmed', why: 'rate_limited' }
     if (dry.status === 404 || dry.status === 405 || dry.status >= 500) return { kind: 'unarmed', why: 'lock_route_unavailable' }
     if (dry.status === 422 && refusalOf(dry) === 'FEATURE_NOT_IN_PLAN') return { kind: 'unarmed', why: 'not_in_plan' }
-    if (!(dry.status === 409 && dry.body?.refusal === 'PREDECESSOR_NOT_SPENT')) return { kind: 'unarmed', why: 'lock_refused' }
+    if (!(dry.status === 409 && dry.body?.refusal === 'PREDECESSOR_NOT_SPENT')) {
+      // #644: keep the gateway's reason, so the customer (and support) can read why.
+      const detail = typeof dry.body?.refusal === 'string' ? dry.body.refusal : undefined
+      return { kind: 'unarmed', why: 'lock_refused', ...(detail ? { detail } : {}) }
+    }
     return null
   }
   const dryBodies = proofs.map(({ proof }) =>
