@@ -12,6 +12,7 @@
 
 export {
   minSplitStep,
+  couponValue,
   checkSplittable,
   selectVouchers,
   chooseSpend,

@@ -30,7 +30,7 @@
 
 import type { Voucher } from '@imani/voucher-send'
 
-import { toEpochMs } from './spend'
+import { couponValue, toEpochMs } from './spend'
 
 /**
  * Why a coupon cannot be spent.
@@ -128,7 +128,9 @@ function unusableReason(coupon: Voucher, now: number): UnusableReason | undefine
 
   // A zero-value coupon is not money. Reported rather than dropped, because a
   // caller holding one wants to know it is there.
-  if ((coupon.face_value ?? 0) <= 0) return 'no-value'
+  // Nor is one whose token is worth 0 to the gateway, whatever its row says (#638): no send can
+  // move it, so it is not spendable value.
+  if (couponValue(coupon) <= 0) return 'no-value'
 
   return undefined
 }

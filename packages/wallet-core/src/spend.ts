@@ -44,6 +44,60 @@ export function minSplitStep(voucher: Voucher): number {
   return Math.max(1, Math.ceil(ratio))
 }
 
+/**
+ * What a coupon can really be sent for, in face minor units (#638).
+ *
+ * The row's `face_value` is a claim. The gateway's split (`VoucherSplitCalculator.previewSplit`,
+ * gateway-core v0.42.0) values the token at `CouponRate.shownFaceOf(sats)`, its sats' worth rounded
+ * HALF UP, and refuses a draw above that ("Insufficient balance: requested 1, available 0"). Any
+ * request up to that value goes through: a PROPORTIONAL part that needs more sats than are left is
+ * sent as the whole token. So a coupon is worth the smaller of its stored face (a row already
+ * restated down stays down) and `halfUp(sats x ratio)`. Not floor: 10 sats at 0.0579... are 0.58,
+ * which the gateway sends as 1, and valuing them at 0 would hide that penny.
+ *
+ * The motivating row: face 1, 8 sats of a 407-face / 7020-sat GBP coupon. 8 x 0.05797... = 0.46,
+ * worth 0. Planned at its stored 1, it led every bundle (it expired first) and the gateway aborted
+ * each one.
+ *
+ * On the ratio as written, in exact decimals (`BigDecimal.valueOf(ratio)`), as the gateway does for
+ * a coupon whose minted sats it cannot prove. The proven path (`sats x face / mintedSats`) needs the
+ * signed face, which a row does not carry. The two differ only a hair from a half unit, and the
+ * whole coupon is its signed face either way. Without sats or a ratio there is nothing to check
+ * against and the stored face stands (legacy rows).
+ */
+export function couponValue(voucher: Voucher): number {
+  const face = voucher.face_value ?? 0
+  const sats = voucher.token_amount ?? 0
+  const ratio = voucher.issuance_ratio
+  if (!(face > 0)) return 0
+  if (!Number.isSafeInteger(sats) || !(sats > 0)) return face
+  if (typeof ratio !== 'number' || !(ratio > 0) || !Number.isFinite(ratio)) return face
+  const shown = halfUpTimes(sats, ratio)
+  if (shown === null) return face
+  // Other strategies send `floor(amount / ratio)` sats and refuse more than the token holds, so the
+  // most they can draw is the largest amount under (sats + 1) x ratio (10 sats at 0.0579... under
+  // FULL: 0.637, so 0, though it shows as 1). A row with no strategy keeps the PROPORTIONAL reading.
+  const strategy = String(voucher.backing_strategy ?? '').toUpperCase()
+  if (strategy !== '' && strategy !== 'PROPORTIONAL') {
+    const reach = Math.ceil((sats + 1) * ratio) - 1
+    return Math.max(0, Math.min(face, shown, reach))
+  }
+  return Math.min(face, shown)
+}
+
+/** `BigDecimal.valueOf(sats).multiply(BigDecimal.valueOf(ratio)).setScale(0, HALF_UP)`. */
+function halfUpTimes(sats: number, ratio: number): number | null {
+  const [mantissa, exp = '0'] = String(ratio).toLowerCase().split('e')
+  const [whole, frac = ''] = mantissa.split('.')
+  const scale = frac.length - Number(exp)
+  const digits = BigInt(whole + frac)
+  const n = BigInt(sats) * (scale < 0 ? digits * 10n ** BigInt(-scale) : digits)
+  const d = scale > 0 ? 10n ** BigInt(scale) : 1n
+  const q = n / d
+  const v = 2n * (n % d) >= d ? q + 1n : q
+  return v > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(v)
+}
+
 export type SplitCheck = { ok: true } | { ok: false; reason: string }
 
 /**
@@ -56,7 +110,8 @@ export type SplitCheck = { ok: true } | { ok: false; reason: string }
  * side by capping it at `floor(max / step)`; both are checked explicitly here.
  */
 export function checkSplittable(voucher: Voucher, amount: number): SplitCheck {
-  const face = voucher.face_value ?? 0
+  // What the token can be credited for, not the row's claim (#638).
+  const face = couponValue(voucher)
   const sats = voucher.token_amount ?? 0
 
   if (amount <= 0) return { ok: false, reason: 'The amount must be more than zero.' }
@@ -133,10 +188,10 @@ export function selectVouchers(vouchers: Voucher[], amount: number): Voucher[] {
       if (byExpiry !== 0) return byExpiry
       // An exact match needs no split, so it beats anything else at the same
       // expiry — including a smaller coupon that would have to be divided.
-      const exactA = a.face_value === amount ? 0 : 1
-      const exactB = b.face_value === amount ? 0 : 1
+      const exactA = couponValue(a) === amount ? 0 : 1
+      const exactB = couponValue(b) === amount ? 0 : 1
       if (exactA !== exactB) return exactA - exactB
-      const byFace = (a.face_value ?? 0) - (b.face_value ?? 0)
+      const byFace = couponValue(a) - couponValue(b)
       if (byFace !== 0) return byFace
       return String(a.voucher_id ?? '').localeCompare(String(b.voucher_id ?? ''))
     })
@@ -212,11 +267,12 @@ export function planParts(
   options: { largestFirst?: boolean } = {},
 ): SendPlan {
   const usable = vouchers
-    .filter((v) => v.token && isUnspent(v) && (v.face_value ?? 0) > 0)
+    // A coupon worth 0 to the gateway is never a part (#638): the gateway aborts the whole bundle.
+    .filter((v) => v.token && isUnspent(v) && couponValue(v) > 0)
     .sort((a, b) => {
       const byExpiry = options.largestFirst ? 0 : expiryMs(a) - expiryMs(b)
       if (byExpiry !== 0) return byExpiry
-      const byFace = (b.face_value ?? 0) - (a.face_value ?? 0)
+      const byFace = couponValue(b) - couponValue(a)
       if (byFace !== 0) return byFace
       return String(a.voucher_id ?? '').localeCompare(String(b.voucher_id ?? ''))
     })
@@ -225,7 +281,7 @@ export function planParts(
   let remaining = amount
   for (const voucher of usable) {
     if (remaining <= 0) break
-    const face = voucher.face_value ?? 0
+    const face = couponValue(voucher)
     if (face <= remaining) {
       parts.push({ voucher, amount: face })
       remaining -= face
@@ -320,7 +376,7 @@ export function passedOver(
   amount: number,
   payee: { issuer: string; unit: string },
 ): PassedOver[] {
-  const live = vouchers.filter((v) => v.token && isUnspent(v) && (v.face_value ?? 0) > 0)
+  const live = vouchers.filter((v) => v.token && isUnspent(v) && couponValue(v) > 0)
   const eligible = live.filter(
     (v) => sameIssuer(v.issuer_id, payee.issuer) && sameUnit(v.face_unit, payee.unit),
   )
@@ -344,7 +400,7 @@ export function passedOver(
       // Worth less than the amount: it could only pay as part of a bundle, and
       // one coupon that covers the amount is preferred over drawing several.
       // Not "cannot be divided", which would be untrue of it.
-      if ((voucher.face_value ?? 0) < amount) return { voucher, reason: 'small' }
+      if (couponValue(voucher) < amount) return { voucher, reason: 'small' }
       const check = checkSplittable(voucher, amount)
       return {
         voucher,
@@ -381,8 +437,8 @@ export function splitObstacle(vouchers: Voucher[], amount: number): string | nul
 
   const spent = new Set(plan.parts.map((p) => p.voucher))
   const best = vouchers
-    .filter((v) => v.token && isUnspent(v) && !spent.has(v))
-    .sort((a, b) => (b.face_value ?? 0) - (a.face_value ?? 0))[0]
+    .filter((v) => v.token && isUnspent(v) && !spent.has(v) && couponValue(v) > 0)
+    .sort((a, b) => couponValue(b) - couponValue(a))[0]
   if (!best) return null
 
   const check = checkSplittable(best, plan.remaining)
