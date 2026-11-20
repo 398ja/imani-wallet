@@ -4,6 +4,7 @@ import { displayDecimals, formatFace } from './format'
 import { getSigner } from './nap'
 import { signedFetch } from './nip98'
 import { recordCashAttestation } from './wallet'
+import { retryPendingAttestations, settleAttestation, stashAttestation } from './pendingAttestations'
 import { recordNotification, upsertNotification } from './notifications/inbox'
 import { wantsInApp } from './notifications/wants'
 import { createAccountStore } from './accountStore'
@@ -107,7 +108,28 @@ function fileReceipt(pubkey: string, delivery: ReceiptDelivery): boolean {
   // notification preference silently determine whether sales can be
   // reconciled.
   if (payload.cashAttestation && payload.voucherId) {
-    void recordCashAttestation(payload.voucherId, payload.cashAttestation)
+    const voucherId = payload.voucherId
+    const attestation = payload.cashAttestation
+    // A card sale's row arrives as a sealed record from the purchase issuer, often AFTER the
+    // customer's receipt. With no row yet the attestation is kept on this device and filed once
+    // the row lands, because the receipt is acknowledged below and the gateway will not send it
+    // again: dropping it here is what left every card sale "Not collected".
+    // Kept BEFORE the receipt is acknowledged below (synchronously, so a page that dies between
+    // here and the ack cannot lose it), and dropped again once it files or is refused.
+    stashAttestation(pubkey, voucherId, attestation)
+    void recordCashAttestation(voucherId, attestation)
+      .then((outcome) => {
+        if (outcome === 'filed' || outcome === 'refused') {
+          settleAttestation(pubkey, voucherId, attestation)
+          return
+        }
+        // Read the inbox now rather than at next login, so the sale record that is probably
+        // already there is filed and this attestation lands on it.
+        void import('./tillSalesNet')
+          .then((m) => m.collectTillSalesForOwner(pubkey))
+          .catch(() => 0)
+      })
+      .catch(() => undefined)
   }
 
   // The sender's own switch for "a coupon you sent was claimed". Consumed
@@ -351,6 +373,9 @@ export async function runReceiptDrainTick(): Promise<void> {
   const pubkey = activePubkey
 
   try {
+    // Attestations kept from earlier receipts whose card-sale row had not landed yet.
+    await retryPendingAttestations(pubkey, recordCashAttestation).catch(() => 0)
+
     const response = await signedFetch(DRAIN_ENDPOINT, 'POST', { limit: DRAIN_LIMIT })
     if (!response.ok) {
       // 401 during a lock/reunlock cycle is routine; anything else is worth a
@@ -380,6 +405,8 @@ export async function runReceiptDrainTick(): Promise<void> {
 
     // Consume even the ones that failed to decrypt or file: they will never
     // succeed on a retry, and leaving them re-delivers the same blob forever.
+    // An attestation whose sale row is not here yet is NOT lost by this: it was
+    // kept on this device by fileReceipt (`pendingAttestations`).
     if (body.nonce && consumeTokens.length > 0) {
       const ack = await signedFetch(ACK_ENDPOINT, 'POST', {
         nonce: body.nonce,
