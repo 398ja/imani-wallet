@@ -102,7 +102,7 @@ vi.mock('../../lib/identity', async (importOriginal) => ({
 }))
 
 import { warrantSaleDigest } from '../../lib/issuanceWarrant'
-import { IssuedCouponsPage, IssuedCouponPage } from '../MerchantRecordPages'
+import { IssuedCouponsPage, IssuedCouponPage, VoucherClaimsPage } from '../MerchantRecordPages'
 
 afterEach(cleanup)
 
@@ -393,5 +393,72 @@ describe('a till sale on the vouchers list', () => {
     act(() => replaceRoster(STALL, [{ terminalPubkey: TILL, name: 'Sales counter', role: 'issue-and-redeem', enrolledAt: 1 }], []))
 
     await waitFor(() => expect(screen.getByText(/Sold on Sales counter/)).toBeTruthy())
+  })
+})
+
+describe('claims against one voucher', () => {
+  const claimAt = (n: number, extra: Record<string, unknown> = {}) => ({
+    ...claim({ id: 'v1', amount: 10 }),
+    id: `received:c${n}`,
+    timestamp: Date.now() - n * 1000,
+    memo: `claim-${n}`,
+    ...extra,
+  })
+
+  function showClaims(transactions: Record<string, unknown>[], search = '') {
+    rows.length = 0
+    rows.push(...transactions)
+    return render(
+      <MemoryRouter initialEntries={[`/merchant/coupon/v1/claims${search}`]}>
+        <Routes>
+          <Route path="/merchant/coupon/:voucherId/claims" element={<VoucherClaimsPage pubkey={STALL} />} />
+          <Route path="/merchant/coupon/:voucherId" element={<p>voucher screen</p>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('shows the newest three on the voucher, and links to the rest past three', async () => {
+    showVoucher('v1', [issued({ id: 'v1', amount: 1000, inDays: 30 }), ...[1, 2, 3, 4].map((n) => claimAt(n))])
+    await waitFor(() => expect(screen.getByText('Recent claims')).toBeTruthy())
+    expect(screen.getByText(/claim-1/)).toBeTruthy()
+    expect(screen.queryByText(/claim-4/)).toBeNull()
+    expect(screen.getByRole('link', { name: /See all claims/ }).getAttribute('href')).toBe('/merchant/coupon/v1/claims')
+  })
+
+  it('offers no link at three, and folds a bundle into one row', async () => {
+    showVoucher('v1', [
+      issued({ id: 'v1', amount: 1000, inDays: 30 }),
+      claimAt(1),
+      claimAt(2),
+      claimAt(3, { bundleId: 'B' }),
+      claimAt(4, { bundleId: 'B' }),
+    ])
+    await waitFor(() => expect(screen.getByText('Recent claims')).toBeTruthy())
+    expect(screen.queryByRole('link', { name: /See all claims/ })).toBeNull()
+    expect(screen.getByText('2 vouchers')).toBeTruthy()
+  })
+
+  it('pages at 21 records, with the page in the URL', async () => {
+    showClaims([issued({ id: 'v1', amount: 1000, inDays: 30 }), ...Array.from({ length: 22 }, (_, i) => claimAt(i + 1))], '?page=2')
+    await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeTruthy())
+    expect(screen.getByText(/claim-22/)).toBeTruthy()
+    expect(screen.queryByText(/claim-1 /)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Previous/ }))
+    await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeTruthy())
+    expect(screen.getAllByText(/claim-\d+/)).toHaveLength(21)
+  })
+
+  it('says so on a page past the end and offers the last one', async () => {
+    showClaims([issued({ id: 'v1', amount: 1000, inDays: 30 }), claimAt(1)], '?page=5')
+    await waitFor(() => expect(screen.getByText(/There is no page 5/)).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Go to the last page' }))
+    await waitFor(() => expect(screen.getByText(/claim-1/)).toBeTruthy())
+  })
+
+  it('has an empty state and a way back to the voucher', async () => {
+    showClaims([issued({ id: 'v1', amount: 1000, inDays: 30 })])
+    await waitFor(() => expect(screen.getByText(/No claims yet/)).toBeTruthy())
+    expect(screen.getByRole('link', { name: /Voucher/ }).getAttribute('href')).toBe('/merchant/coupon/v1')
   })
 })

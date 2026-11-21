@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -15,7 +15,6 @@ import {
   PageHeader,
   EmptyRow,
   HistoryListItem,
-  TransactionListItem,
   Panel,
   ListSection,
   DetailRow,
@@ -39,6 +38,7 @@ import { collectTillSalesForOwner } from '../lib/tillSalesNet'
 import { repairedTransactions } from '../lib/redemptionLedger'
 import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
+import { claimEntries, pageOf, parsePage, recentClaims } from '../lib/voucherClaims'
 import { expiringSoon } from '../lib/stats'
 import { formatDate, formatFace } from '../lib/format'
 import { identityLabel, useIdentity } from '../lib/identity'
@@ -90,14 +90,21 @@ function useMerchantTransactions() {
   const [state, setState] = useState<{
     transactions: WalletTransaction[]
     loadedAt: number
+    /** The local read threw. Rows are empty; a screen that can say so does. */
+    failed?: boolean
   } | null>(null)
 
   useEffect(() => {
     const load = async () => {
       // Repaired (#145): the claimed figure must read the same rows the
       // till's ceiling does, or the two disagree about what is left.
-      const rows = await repairedTransactions()
-      setState({ transactions: rows.sort((a, b) => b.at - a.at), loadedAt: Date.now() })
+      try {
+        const rows = await repairedTransactions()
+        setState({ transactions: rows.sort((a, b) => b.at - a.at), loadedAt: Date.now() })
+      } catch (err) {
+        console.warn('[merchant] could not read transactions', err)
+        setState({ transactions: [], loadedAt: Date.now(), failed: true })
+      }
     }
     load()
     // Live for the same reason every other list here is: a redemption landing by
@@ -403,12 +410,107 @@ export function IssuedCouponPage({ pubkey }: { pubkey: string }) {
   return <VoucherRecordDetail voucher={voucher} stallPubkey={pubkey} />
 }
 
+/**
+ * Every claim against one voucher, behind the voucher screen's "See all claims".
+ *
+ * Folded by bundle like History and paged at 21 RECORDS (one record = one displayed row: a
+ * single claim or one folded bundle). The page lives in `?page=N`, so back, refresh and a
+ * shared link all land on the same page. Reads the same one local list the voucher screen
+ * does: no fetch per row, no fetch per page.
+ */
+export function VoucherClaimsPage({ pubkey }: { pubkey: string }) {
+  const { voucherId = '' } = useParams()
+  const [params, setParams] = useSearchParams()
+  const state = useMerchantTransactions()
+  const page = parsePage(params.get('page'))
+
+  const voucher = useMemo(
+    () =>
+      state === null || state.failed
+        ? undefined
+        : issuedVoucher(state.transactions, voucherId, { now: state.loadedAt, stallPubkey: pubkey }),
+    [state, voucherId, pubkey],
+  )
+  const entries = useMemo(() => (voucher ? claimEntries(voucher.claims) : []), [voucher])
+  const paged = pageOf(entries, page)
+
+  const back = `/merchant/coupon/${encodeURIComponent(voucherId)}`
+  // Push, not replace: each page is a place, and Back should step through them.
+  const goTo = (to: number) => setParams(to <= 1 ? {} : { page: String(to) })
+
+  const money = (minor: number) =>
+    voucher ? formatFace(minor, { unit: voucher.row.unit, decimals: voucher.row.decimals }) : ''
+
+  let body: React.ReactNode
+  if (state === null) {
+    body = (
+      <div role="status" aria-live="polite">
+        <EmptyRow>Loading claims…</EmptyRow>
+      </div>
+    )
+  } else if (state.failed) {
+    body = (
+      <div role="alert">
+        <EmptyRow>These records could not be read. Close and reopen this screen to try again.</EmptyRow>
+      </div>
+    )
+  } else if (voucher === undefined) {
+    body = <EmptyRow>No record of this voucher.</EmptyRow>
+  } else if (entries.length === 0) {
+    body = <EmptyRow>No claims yet. Each time a customer spends this voucher it shows up here.</EmptyRow>
+  } else if (paged.outOfRange) {
+    body = (
+      <div className="p-4">
+        <p className="text-sm text-mono-500">
+          There is no page {page}. This voucher has {paged.pageCount} {paged.pageCount === 1 ? 'page' : 'pages'} of claims.
+        </p>
+        <button
+          type="button"
+          onClick={() => goTo(paged.pageCount)}
+          className="pressable mt-3 inline-flex min-h-11 items-center rounded-xl border border-mono-200 px-4 text-sm font-medium text-mono-900 dark:border-mono-800 dark:text-mono-50"
+        >
+          Go to the last page
+        </button>
+      </div>
+    )
+  } else {
+    body = paged.visible.map((entry) => <HistoryListItem key={entryKey(entry)} entry={entry} />)
+  }
+
+  const subtitle =
+    voucher && entries.length > 0
+      ? `${money(voucher.claimedMinor)} claimed of ${money(voucher.row.amount)} · ${entries.length} ${entries.length === 1 ? 'claim' : 'claims'}`
+      : undefined
+
+  return (
+    <Screen>
+      <BackLink to={back} label="Voucher" />
+      <PageHeader title="Claims" subtitle={subtitle} />
+      <section aria-label="Claims against this voucher">
+        <div
+          // Re-keyed per page so the new rows fade in where the old ones were (`expand-row` is
+          // already reduced to nothing under prefers-reduced-motion).
+          key={paged.page}
+          className="expand-row divide-y divide-mono-200 overflow-hidden rounded-2xl border border-mono-200 dark:divide-mono-800 dark:border-mono-800"
+        >
+          {body}
+        </div>
+      </section>
+      {!paged.outOfRange && voucher ? (
+        <Pagination page={paged.page} pageCount={paged.pageCount} onPage={goTo} label="Claims pages" />
+      ) : null}
+    </Screen>
+  )
+}
+
 /** Exported for its page test; routed through `IssuedCouponPage`. */
 export function VoucherRecordDetail({ voucher, stallPubkey }: { voucher: VoucherRecord; stallPubkey?: string }) {
   const { row, expired, claimedMinor, outstandingMinor, claims } = voucher
   // What the public ledger says (#310). The stall is the voucher's issuerId.
   const ledger = describeLedger(useVoucherLedgerStatus(stallPubkey, row.voucherId))
   const money = (minor: number) => formatFace(minor, { unit: row.unit, decimals: row.decimals })
+  const claimEntriesAll = useMemo(() => claimEntries(claims), [claims])
+  const recent = recentClaims(claimEntriesAll)
 
   const rail = describeRail(voucher.rail)
   // A sale that is signed for more than reached the customer reads as that,
@@ -471,10 +573,28 @@ export function VoucherRecordDetail({ voucher, stallPubkey }: { voucher: Voucher
         "0.00 claimed" line says the same thing twice, and the line above
         already answers it.
       */}
-      {claims.length > 0 ? (
-        <ListSection title={claims.length === 1 ? 'Claim' : 'Claims'}>
-          {claims.map((tx) => (
-            <TransactionListItem key={tx.id} tx={tx} />
+      {/*
+        Folded by bundle exactly as History is (#106, #661) and capped at the
+        newest three records, a bundle counting as one. The rest is a page of
+        its own rather than an ever-longer screen: this one is about the
+        voucher, and its claims are the evidence, not the subject.
+      */}
+      {recent.visible.length > 0 ? (
+        <ListSection
+          title={claimEntriesAll.length === 1 ? 'Claim' : 'Recent claims'}
+          action={
+            recent.hasMore ? (
+              <Link
+                to={`/merchant/coupon/${encodeURIComponent(row.voucherId ?? '')}/claims`}
+                className="pressable -my-2 inline-flex min-h-11 items-center text-sm text-mono-500 hover:text-mono-900 dark:hover:text-mono-50"
+              >
+                See all claims ({claimEntriesAll.length})
+              </Link>
+            ) : undefined
+          }
+        >
+          {recent.visible.map((entry) => (
+            <HistoryListItem key={entryKey(entry)} entry={entry} />
           ))}
         </ListSection>
       ) : null}
