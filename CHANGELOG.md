@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Cashlink confirm prompt shows the issuing stall's avatar above its name, from the same cached
+  kind-0 lookup (no extra request). Initials or a placeholder when there is no picture, it fails to
+  load or the profile is slow; Add is never blocked. Clearer hierarchy (stall, amount, action),
+  44px touch targets, and announced verification / progress states.
 - **A voucher's claims are grouped by bundle and paged on their own screen.** The merchant's
   voucher screen folds claims sharing a bundle id into one line, exactly as History does (same
   `groupHistory`, same per-part voucher count from #661), and shows only the newest three records,
