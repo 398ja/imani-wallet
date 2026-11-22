@@ -22,7 +22,7 @@ export function reconcileWallet(pubkey: string, now = Date.now()): Promise<void>
   inFlight = (async () => {
     try {
       await restoreVouchers(pubkey)
-      await pruneMintSpent()
+      await pruneMintSpent(pubkey)
     } finally {
       inFlight = null
     }
