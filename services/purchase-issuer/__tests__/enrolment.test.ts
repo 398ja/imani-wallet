@@ -482,6 +482,30 @@ describe('gc#317: readiness follows the stall\u2019s Free plan sales allowance',
     },
   )
 
+  // Card payments are Essentials and above: no paid plan, no card sale, allowance or not.
+  it.each<SalesPosition>([
+    { kind: 'unlimited', paidPlan: false },
+    { kind: 'limited', unit: 'GBP', remainingMinor: 10_000, paidPlan: false },
+  ])('answers not ready, card_payments_not_in_plan, for a Starter stall (%o)', async (position) => {
+    const { ready } = await enrolledWithAllowance(position)
+    expect(await ready()).toEqual({ ready: false, reason: 'card_payments_not_in_plan' })
+  })
+
+  // The checkout's own question (payment-adapter, with the token and an amount) is refused too.
+  it('refuses the checkout for a Starter stall, before any amount is judged', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 10_000, paidPlan: false })
+    expect(await ready('?unit=GBP&amount=500', `Bearer ${TOKEN}`)).toEqual({ ready: false, reason: 'card_payments_not_in_plan' })
+  })
+
+  // A paid plan sells; a gateway that said nothing about the plan (older, or its store down) refuses nothing.
+  it.each<SalesPosition>([
+    { kind: 'unlimited', paidPlan: true },
+    { kind: 'unlimited' },
+  ])('stays ready for %o', async (position) => {
+    const { ready } = await enrolledWithAllowance(position)
+    expect(await ready()).toEqual({ ready: true })
+  })
+
   // Advice only: a gateway that cannot answer must not take every stall off sale. The mint re-checks.
   it('stays ready when the allowance cannot be read', async () => {
     const { ready } = await enrolledWithAllowance({ kind: 'unknown', reason: 'down' })

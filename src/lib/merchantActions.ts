@@ -46,12 +46,19 @@ export const LOG_IN_FOR_CODE = 'Log in to use your vouchers online'
 
 export type StallOpen = 'open' | 'closed' | 'customer' | 'unknown' | 'loading'
 
-export type CardSalesReadiness = 'checking' | 'ready' | 'not-ready' | 'no-expiry' | 'sales-limit'
+/**
+ * The stall's plan does not include card payments (Starter). Worded for the shopper, like the
+ * sales limit: the plan is the stall's to change.
+ */
+export const CARD_SALES_NOT_IN_PLAN = "This merchant doesn't take card payments on their current plan."
+
+export type CardSalesReadiness = 'checking' | 'ready' | 'not-ready' | 'no-expiry' | 'sales-limit' | 'not-in-plan'
 
 /** The line under a disabled Buy for a readiness that is not `ready`. */
 export function cardSalesReason(readiness: Exclude<CardSalesReadiness, 'ready'>): string {
   if (readiness === 'checking') return CARD_SALES_CHECKING
   if (readiness === 'sales-limit') return CARD_SALES_LIMIT_REACHED
+  if (readiness === 'not-in-plan') return CARD_SALES_NOT_IN_PLAN
   return readiness === 'no-expiry' ? CARD_SALES_NEEDS_EXPIRY : CARD_SALES_NOT_READY
 }
 

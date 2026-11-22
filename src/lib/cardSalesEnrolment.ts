@@ -288,13 +288,15 @@ export async function cardSalesReadiness(
   stallPubkey: string,
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 5000,
-): Promise<'ready' | 'not-ready' | 'no-expiry' | 'sales-limit'> {
+): Promise<'ready' | 'not-ready' | 'no-expiry' | 'sales-limit' | 'not-in-plan'> {
   try {
     const response = await fetchImpl(readyPath(stallPubkey), { signal: AbortSignal.timeout(timeoutMs) })
     if (!response.ok) return 'not-ready'
     const body = (await response.json()) as { ready?: unknown; reason?: unknown }
     if (body.ready === true) return 'ready'
     if (body.reason === 'sales_limit_reached' || body.reason === 'sales_limit_exceeded') return 'sales-limit'
+    // Card payments are Essentials and above; the issuer refuses a stall with no paid plan.
+    if (body.reason === 'card_payments_not_in_plan') return 'not-in-plan'
     return body.reason === 'validity_never_expires' ? 'no-expiry' : 'not-ready'
   } catch {
     return 'not-ready'
