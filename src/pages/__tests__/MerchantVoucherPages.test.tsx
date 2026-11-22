@@ -456,6 +456,16 @@ describe('claims against one voucher', () => {
     await waitFor(() => expect(screen.getByText(/claim-1/)).toBeTruthy())
   })
 
+  it('heads the page with the voucher id, its face value and what has been claimed', async () => {
+    showClaims([issued({ id: 'v1', amount: 1000, inDays: 30 }), claim({ id: 'v1', amount: 400 })])
+    await waitFor(() => expect(screen.getByText(/outstanding/)).toBeTruthy())
+    expect(screen.getByText('v1')).toBeTruthy()
+    expect(screen.getByText(/1[\s,]?000/)).toBeTruthy()
+    expect(screen.getAllByText(/400/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/claimed/)).toBeTruthy()
+    expect(screen.getByText(/600\s*outstanding/)).toBeTruthy()
+  })
+
   it('has an empty state and a way back to the voucher', async () => {
     showClaims([issued({ id: 'v1', amount: 1000, inDays: 30 })])
     await waitFor(() => expect(screen.getByText(/No claims yet/)).toBeTruthy())

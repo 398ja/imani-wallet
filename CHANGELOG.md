@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The claims page is headed by its voucher.** `/merchant/coupon/:id/claims` now opens with the same panel as the voucher screen: the face value, the voucher id, and the claimed bar with claimed and outstanding amounts, so the list is read against the voucher it belongs to. The subtitle keeps only the claim count.
+
 ## [0.75.0] - 2026-11-22
 
 ### Added
