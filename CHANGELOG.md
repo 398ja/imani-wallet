@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Coupons spent on another device (e.g. in the browser) no longer stay live on this one (e.g. the Android app). The relay restore now applies other devices' spend tombstones to coupons this device already holds (before, it only skipped them as restore candidates, so a held copy stayed `active` forever), and every coupon still counted as money is checked against the mint (NUT-07) so a spend whose tombstone was lost is pruned too. Runs at login and on every return to the foreground (Capacitor `resume`, `visibilitychange`), throttled to once per 30s.
+
 ## [0.75.0] - 2026-11-22
 
 ### Added

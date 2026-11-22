@@ -296,7 +296,19 @@ export function pickLive(entries: { id: string; at: number; record: TokenRecord 
   return [...newest.entries()].filter(([id]) => !spent.has(id)).map(([, v]) => v.row)
 }
 
+/** Every coupon id a tombstone says is spent. Final, like in `pickLive`. */
+export function tombstonedIds(entries: { id: string; record: TokenRecord }[]): Set<string> {
+  return new Set(entries.filter((e) => e.record.spent).map((e) => e.id))
+}
+
 async function liveRecords(events: Event[], pubkey: string): Promise<VoucherRow[]> {
+  return pickLive(await recordEntries(events, pubkey))
+}
+
+async function recordEntries(
+  events: Event[],
+  pubkey: string,
+): Promise<{ id: string; at: number; record: TokenRecord }[]> {
   const entries: { id: string; at: number; record: TokenRecord }[] = []
 
   // Chunked records (#203): reassembled, hash-checked and decompressed first.
@@ -344,7 +356,80 @@ async function liveRecords(events: Event[], pubkey: string): Promise<VoucherRow[
     const parsed = parseRecord(event)
     if (parsed) entries.push({ id: parsed.id, at: event.created_at, record: parsed.record })
   }
-  return pickLive(entries)
+  return entries
+}
+
+/** Already not money on this device: nothing to mark. */
+function settled(row: VoucherRow): boolean {
+  const status = (row.status ?? '').toLowerCase()
+  return status === 'spent' || isRedeemed(row) || isSwappedToSats(row)
+}
+
+/**
+ * Mark every held coupon a tombstone names as spent. Returns how many changed.
+ * Written through `addRestoredVoucher`, so it does not republish anything.
+ */
+async function applyTombstones(spent: Set<string>): Promise<number> {
+  if (spent.size === 0) return 0
+  let changed = 0
+  for (const row of await getWallet().getAllVouchers()) {
+    if (!row.token_id || !spent.has(row.token_id) || settled(row)) continue
+    await addRestoredVoucher({ ...row, status: 'spent' } as VoucherRow)
+    noteSpent(row.token_id)
+    changed += 1
+  }
+  return changed
+}
+
+function noteSpent(tokenId: string): void {
+  try {
+    noteSpentLocally(getSigner().pubkey, tokenId)
+  } catch {
+    // No signer: nothing cached for it either.
+  }
+}
+
+/**
+ * NUT-07 pass over the coupons this device counts as money (#cross-device).
+ *
+ * The local store is not the authority on balance: a spend made on another
+ * device whose tombstone never reached this one (lost publish, closed tab,
+ * relay gap) leaves a row here that the mint has already burnt. Only a
+ * definite SPENT answer marks a row; anything inconclusive keeps it.
+ * Rows are marked `spent` (never deleted), so a wrong answer is visible and
+ * recoverable. Never throws. Returns how many rows it marked.
+ */
+export async function pruneMintSpent(): Promise<number> {
+  try {
+    const rows = (await getWallet().getAllVouchers()).filter((row) => row.token && !settled(row))
+    let changed = 0
+    for (const row of rows) {
+      if (await mintSaysSpent(row.token)) {
+        await addRestoredVoucher({ ...row, status: 'spent' } as VoucherRow)
+        if (row.token_id) noteSpent(row.token_id)
+        changed += 1
+      }
+    }
+    if (changed > 0) {
+      console.info(`[voucherRecords] ${changed} coupon(s) spent at the mint marked spent`)
+      notifyWalletChanged()
+    }
+    return changed
+  } catch (error) {
+    console.warn('[voucherRecords] mint state check skipped', error)
+    return 0
+  }
+}
+
+async function mintSaysSpent(token: string): Promise<boolean> {
+  try {
+    const api = (await legacyApi()) as unknown as {
+      validateToken(token: string): Promise<{ valid?: boolean; state?: string } | null>
+    }
+    return ((await api.validateToken(token))?.state ?? '').toUpperCase() === 'SPENT'
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -389,11 +474,16 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
     // Relay AND gateway (#2026-10-18 incident). Relay-only, a browser that
     // could not open a socket to strfry read as "no coupons" and restored a
     // zero balance over a coupon whose record was sitting on the relay.
-    const candidates = await liveRecords(
-      await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND),
-      pubkey,
-    )
-    if (candidates.length === 0) return 0
+    const entries = await recordEntries(await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND), pubkey)
+    const candidates = pickLive(entries)
+    // Cross-device spends: a tombstone published by ANOTHER device for a
+    // coupon THIS device holds. `pickLive` only answers "what is live", so the
+    // held copy used to stay `active` forever and kept counting as balance.
+    const applied = await applyTombstones(tombstonedIds(entries))
+    if (candidates.length === 0) {
+      if (applied > 0) notifyWalletChanged()
+      return 0
+    }
 
     // What this device already has, read once.
     //
@@ -473,7 +563,7 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
 
     // Any write at all, not only a recovery: a screen showing a stale copy of
     // a coupon this device already had is still showing the wrong thing.
-    if (restored + written > 0) notifyWalletChanged()
+    if (restored + written + applied > 0) notifyWalletChanged()
     return restored
   } catch (error) {
     console.error('[voucherRecords] could not restore coupons from the relay', error)
