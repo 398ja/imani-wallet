@@ -16,7 +16,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const listeners: Record<string, (payload: unknown) => void> = {}
-const capacitor = { isNativePlatform: vi.fn(), isPluginAvailable: vi.fn(), getPlatform: vi.fn() }
+// Hoisted: nativePush.ts calls registerPlugin() at module load.
+const support = vi.hoisted(() => ({ status: vi.fn() }))
+const capacitor = {
+  isNativePlatform: vi.fn(),
+  isPluginAvailable: vi.fn(),
+  getPlatform: vi.fn(),
+  registerPlugin: vi.fn(() => support),
+}
 const push = {
   checkPermissions: vi.fn(),
   requestPermissions: vi.fn(),
@@ -28,7 +35,7 @@ const push = {
   }),
 }
 
-vi.mock('@capacitor/core', () => ({ Capacitor: capacitor }))
+vi.mock('@capacitor/core', () => ({ Capacitor: capacitor, registerPlugin: capacitor.registerPlugin }))
 vi.mock('@capacitor/push-notifications', () => ({ PushNotifications: push }))
 
 const { NativePushTransport } = await import('../nativePush')
@@ -40,6 +47,7 @@ describe('NativePushTransport', () => {
     capacitor.isNativePlatform.mockReturnValue(true)
     capacitor.isPluginAvailable.mockReturnValue(true)
     capacitor.getPlatform.mockReturnValue('android')
+    support.status.mockResolvedValue({ configured: true })
     push.register.mockResolvedValue(undefined)
     push.unregister.mockResolvedValue(undefined)
     push.addListener.mockClear()
@@ -47,9 +55,13 @@ describe('NativePushTransport', () => {
 
   afterEach(() => vi.clearAllMocks())
 
-  /** Registration resolves before the token arrives; the token comes by event. */
+  /**
+   * Registration resolves before the token arrives; the token comes by event.
+   * A macrotask, not a microtask: subscribe() first asks the APK whether
+   * Firebase is configured, so the listener is attached a few ticks later.
+   */
   function deliverToken(value: string) {
-    queueMicrotask(() => listeners.registration?.({ value }))
+    setTimeout(() => listeners.registration?.({ value }), 0)
   }
 
   describe('what it hands the gateway', () => {
@@ -108,6 +120,53 @@ describe('NativePushTransport', () => {
       expect(availability.reason).toMatch(/update/i)
     })
 
+    describe('an APK built without Firebase (google-services.json)', () => {
+      // PushNotifications.register()/unregister() throw natively in that APK and
+      // Capacitor rethrows on a native thread: the app crashes the moment the
+      // user approves the permission prompt. Calling them is never safe there.
+
+      it('is not usable when the APK says Firebase is missing', async () => {
+        support.status.mockResolvedValue({ configured: false })
+
+        const availability = await new NativePushTransport().describe()
+
+        expect(availability.usable).toBe(false)
+        expect(availability.reason).toMatch(/not available in the Imani app/i)
+      })
+
+      it('is not usable on an older APK that cannot answer', async () => {
+        // Every APK before NativePushSupport was built without Firebase.
+        capacitor.isPluginAvailable.mockImplementation((name: string) => name !== 'NativePushSupport')
+
+        const availability = await new NativePushTransport().describe()
+
+        expect(availability.usable).toBe(false)
+      })
+
+      it('is not usable when the APK check itself fails', async () => {
+        support.status.mockRejectedValue(new Error('bridge gone'))
+
+        expect((await new NativePushTransport().describe()).usable).toBe(false)
+      })
+
+      it('never calls register()', async () => {
+        support.status.mockResolvedValue({ configured: false })
+
+        const subscription = await new NativePushTransport().subscribe(null)
+
+        expect(subscription).toBeNull()
+        expect(push.register).not.toHaveBeenCalled()
+      })
+
+      it('never calls unregister()', async () => {
+        support.status.mockResolvedValue({ configured: false })
+
+        await new NativePushTransport().unsubscribe()
+
+        expect(push.unregister).not.toHaveBeenCalled()
+      })
+    })
+
     it('gives up rather than hanging when no token ever arrives', async () => {
       // A device with no Play Services fires NEITHER event. Waiting forever
       // would leave the settings screen spinning with nothing to say.
@@ -124,7 +183,7 @@ describe('NativePushTransport', () => {
     it('returns null when registration is refused', async () => {
       const transport = new NativePushTransport()
       const pending = transport.subscribe(null)
-      queueMicrotask(() => listeners.registrationError?.({ error: 'SERVICE_NOT_AVAILABLE' }))
+      setTimeout(() => listeners.registrationError?.({ error: 'SERVICE_NOT_AVAILABLE' }), 0)
 
       expect(await pending).toBeNull()
     })

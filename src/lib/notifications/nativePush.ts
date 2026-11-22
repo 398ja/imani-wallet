@@ -37,7 +37,7 @@
  * settings screen explaining why. This way the app tells the truth.
  */
 
-import { Capacitor } from '@capacitor/core'
+import { Capacitor, registerPlugin } from '@capacitor/core'
 import { PushNotifications } from '@capacitor/push-notifications'
 
 import type { PushTransport, TransportAvailability, TransportSubscription } from './transport'
@@ -80,6 +80,37 @@ const FCM_KEY_PLACEHOLDER = 'fcm-no-key'
 
 const TOKEN_STORAGE_KEY = 'imani-wallet:fcm-token'
 
+/**
+ * The app's own `NativePushSupportPlugin` (MainActivity registers it).
+ *
+ * `PushNotifications.register()` and `unregister()` call
+ * `FirebaseMessaging.getInstance()`, which throws when the APK was built without
+ * `google-services.json`. Capacitor rethrows that on a native thread, so the app
+ * crashes and the JS promise never settles: no try/catch here can save it. The
+ * only defence is not to call them, which needs the APK to say whether Firebase
+ * is in it.
+ *
+ * An APK older than this plugin cannot answer, and none of those was ever built
+ * with Firebase, so a missing plugin counts as "not configured". That is what
+ * keeps an already-installed app from crashing as soon as this file is served.
+ */
+interface NativePushSupport {
+  status(): Promise<{ configured: boolean }>
+}
+const NativePushSupport = registerPlugin<NativePushSupport>('NativePushSupport')
+
+const NOT_CONFIGURED_REASON =
+  'Notifications are not available in the Imani app yet. They will arrive in a future update.'
+
+async function firebaseConfigured(): Promise<boolean> {
+  if (!Capacitor.isPluginAvailable('NativePushSupport')) return false
+  try {
+    return (await NativePushSupport.status()).configured === true
+  } catch {
+    return false
+  }
+}
+
 export class NativePushTransport implements PushTransport {
   readonly kind = 'native' as const
 
@@ -92,6 +123,9 @@ export class NativePushTransport implements PushTransport {
         usable: false,
         reason: 'This build of the app cannot receive notifications. Update it and try again.',
       }
+    }
+    if (!(await firebaseConfigured())) {
+      return { usable: false, reason: NOT_CONFIGURED_REASON }
     }
     return { usable: true }
   }
@@ -133,6 +167,9 @@ export class NativePushTransport implements PushTransport {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for transport parity, see above
   async subscribe(_vapidPublicKey?: string | null): Promise<TransportSubscription | null> {
     try {
+      // describe() already refuses this case; checked again because register()
+      // crashes the app rather than failing, so no caller gets to skip it.
+      if (!(await firebaseConfigured())) return null
       const token = await this.awaitToken()
       if (!token) return null
 
@@ -153,8 +190,9 @@ export class NativePushTransport implements PushTransport {
 
   async unsubscribe(): Promise<void> {
     try {
-      // Removes the FCM registration for this app instance.
-      await PushNotifications.unregister()
+      // Removes the FCM registration for this app instance. Same crash as
+      // register() without Firebase, and nothing is registered then anyway.
+      if (await firebaseConfigured()) await PushNotifications.unregister()
     } catch (e) {
       console.warn('[push] native unregister failed:', e)
     }

@@ -9,6 +9,9 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         // Local plugins are not in capacitor.plugins.json; register before the bridge starts.
         registerPlugin(DriveAuthPlugin.class);
+        // Lets the web layer skip push registration when the APK has no Firebase config, where
+        // calling PushNotifications.register() would crash the app (NativePushSupportPlugin).
+        registerPlugin(NativePushSupportPlugin.class);
         super.onCreate(savedInstanceState);
         // targetSdk 36 forces edge-to-edge on Android 15+. Enabling it here as
         // well makes older releases match, so the web layer has one inset model

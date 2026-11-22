@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Android app no longer crashes when you switch notifications on and approve the system prompt. The APK is built without `google-services.json`, so `PushNotifications.register()` hit an uninitialised Firebase (`IllegalStateException: Default FirebaseApp is not initialized`) and Capacitor rethrew it on a native thread, killing the process. A new `NativePushSupport` plugin reports whether the APK carries a Firebase config, and the native push transport no longer calls `register()` / `unregister()` without one; the settings screen says notifications are not available in the app yet instead. APKs older than the plugin are treated as unconfigured (none was built with Firebase), so the web deploy alone stops the crash on installed apps.
+
 ## [0.77.0] - 2026-11-22
 
 ### Fixed
