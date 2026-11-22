@@ -46,6 +46,34 @@ New to Imani? Start with [How Imani works in 50 seconds](https://www.youtube.com
 **Online checkout:** the demo WooCommerce store at
 <https://shop.staging.398ja.xyz> takes `IMANI-` coupon codes made in the wallet.
 
+**Free test vouchers (the faucet)**
+
+Need vouchers to try spending, splitting or gifting without setting up a shop?
+The faucet at **<https://faucet.staging.398ja.xyz>** issues them from test shops
+straight into your wallet. It is staging only, and its vouchers are as unreal as
+everything else here.
+
+1. In the wallet, open **Settings > Backup**, enter your passphrase and tap
+   **Show my backup key**, then **Copy backup key**. It starts with `nsec1`.
+2. Open the faucet and paste the key under **Sign in**. It is checked in your
+   browser, and only your public key is sent to the faucet.
+3. Pick a shop. The **Starter**, **Essentials** and **Pro** filter shows shops on
+   each plan.
+4. Enter an amount (or tap a suggested one) and tap **Send to my wallet**. The
+   voucher arrives in your wallet as a message within a few seconds, and
+   **Your requests** shows it as delivered.
+
+Limits: up to the shop's maximum per voucher (2,000 minor units, so £20 or
+€20, by default) and 20 requests per account per day.
+
+Use a **customer** account. A key that already runs a shop is refused, so a shop
+cannot fund itself. Faucet admins and the super admin cannot request vouchers
+either: they create the test shops under **Admin**, and can read the audit log
+there. Ask on a GitHub issue if you need a shop added.
+
+The backup key controls your account. Paste it only into the faucet and the
+wallet, and only on staging.
+
 Staging is reset from time to time, and feedback is welcome as GitHub issues.
 
 ## Two things to know first
