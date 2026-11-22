@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Logout no longer stays refused for good on a device holding coupons already spent on another device of the same account (staging, Android app with the account also open in a browser). The voucher backup check behind "You can't log out yet" counted those stale `active` coupons as unbacked money, and since their relay record is a spend tombstone it could never read them back. The check now reconciles first (tombstones and mint state, as above) and treats a held coupon named by this account's own verified tombstone as spent, marking it so. A coupon with no backup at all, or one the mint cannot be asked about, still refuses the logout.
 - Coupons spent on another device (e.g. in the browser) no longer stay live on this one (e.g. the Android app). The relay restore now applies other devices' spend tombstones to coupons this device already holds (before, it only skipped them as restore candidates, so a held copy stayed `active` forever), and every coupon still counted as money is checked against the mint (NUT-07) so a spend whose tombstone was lost is pruned too. Runs at login and on every return to the foreground (Capacitor `resume`, `visibilitychange`), throttled to once per 30s.
 
 ## [0.76.0] - 2026-11-22

@@ -517,7 +517,9 @@ export async function attemptLogout(
   // 4. Re-verify only if the held set changed since step 1.
   if ((await safeHeld(() => heldNow(pubkey))) !== first.fingerprint || writes() !== writesAtConfirm) {
     const writesBeforeFinal = writes()
-    const final = await safeCheck(check, pubkey)
+    // No reconcile here: its writes would read as the race this re-check exists to catch, and
+    // the first check already converged with the account's other devices.
+    const final = await safeCheck(check, pubkey, { reconcile: async () => undefined })
     // 5. Refused, or something still wrote DURING the check (the writers are
     // stopped, so that would be a writer this list does not know about):
     // restart what was stopped, erase nothing.
@@ -708,9 +710,10 @@ async function safeHeld(heldNow: () => Promise<string>): Promise<string | null> 
 async function safeCheck(
   check: NonNullable<LogoutDeps['checkBackups']>,
   pubkey: string,
+  options?: ConfirmOptions,
 ): Promise<BackupCheck> {
   try {
-    return await check(pubkey)
+    return await (options ? check(pubkey, options) : check(pubkey))
   } catch {
     return { ok: false, reason: 'store-unreadable', unconfirmed: [], fingerprint: '' }
   }
