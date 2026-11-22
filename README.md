@@ -1,162 +1,79 @@
 # Imani Wallet
 
-A phone wallet for **coupons you can spend like cash** at the local businesses you
-already visit: the market stall, the farm gate, the corner shop.
+**Gift vouchers for local shops, built on [Cashu](https://cashu.space) ecash.**
 
-A merchant sells you a coupon (think of it as a gift card or an IOU for goods).
-It lands in your wallet in seconds. Later you spend it back with that same
-merchant, in full or in part, and your change comes back as a smaller coupon.
-No bank account, no card reader, no app store sign-in with an email and password.
+A shop sells a voucher. It lands in the customer's phone in seconds. The customer
+spends it back **at that same shop**, in full or in part, at the counter or at the
+shop's online checkout, and the change comes back as a smaller voucher. No card
+reader, no account holding your balance, and no percentage taken on sales.
 
-> **New here?** The guides live in the **imani-docs** repository, under `wallet/`
-> (see [docs/README.md](docs/README.md) for the full list):
->
-> - **I'm a shopper**: `imani-docs/wallet/customers.md`. Receive coupons and pay with them.
-> - **I sell things**: `imani-docs/wallet/merchants.md`. Issue coupons and take payment.
-> - **I run more than one till**: `imani-docs/wallet/terminals.md`. Set up, limit, and revoke terminals.
-> - **I need to prove I honoured a coupon**: `imani-docs/wallet/redemption-ledger-user-guide.md`. Your ledger ID, gaps, and audits.
-> - **How it actually works**: `imani-docs/wallet/how-it-works.md`. The ideas behind it, in plain terms.
-> - **The decentralised posture**: `imani-docs/wallet/decentralised-posture.md`. Why there's no honeypot to raid.
-> - **[For developers](#for-developers)** — run and build the app.
+Watch the 60-second explainer on our [YouTube channel](https://www.youtube.com/@imani.wallet), or visit
+[imani.casa](https://www.imani.casa).
 
----
+## Two things to know first
 
-## Why this exists
+1. **Redemption happens at the shop, not at the mint.** Imani vouchers follow
+   the Model B design: each one names the shop that issued it, and only that
+   shop honours it. The mint signs vouchers and stops double spends, but it
+   refuses to `melt` a voucher. There is nothing to cash out.
+2. **Sats are only the unit of account.** Cashu counts value in powers of two
+   of a base unit, so Imani keeps the `sat` unit to split vouchers precisely.
+   They are **not real sats**: no bitcoin backs a voucher and none can be
+   withdrawn. What a customer holds is a face value in pounds or euros, written
+   in the voucher's signed document.
 
-Small sellers, especially at weekend markets and farm stalls, often sell
-**coupons as IOUs** and redeem them later for goods. It helps them predict how
-much they'll sell, and it gives regulars a reason to come back. But doing it on
-paper is fiddly: paper coupons get lost, they're easy to forge, and nobody has a
-running total.
+Details: [docs/units-and-redemption.md](docs/units-and-redemption.md).
 
-Imani Wallet turns that coupon into something digital that:
-
-- **arrives instantly**, even before the payment fully settles behind the scenes,
-- **can't be copied or forged**, because each coupon is a one-of-a-kind digital token,
-- **can be split**, so a €5 coupon can pay for a €2 purchase and hand you €3 back,
-- **keeps its own history**, so both sides can see what was issued, spent, and is still valid.
-
-You hold your own coupons. There's no company account in the middle holding your
-balance for you. The value lives on your phone, and only you can spend it.
-
-## The two sides
-
-The same app serves everyone. You pick your side when you create your account,
-and you can start selling later if you begin as a shopper.
-
-| | **Shopper** | **Merchant** |
-| --- | --- | --- |
-| Home screen | Your coupons, grouped by the merchant who issued them | A till: **Sell** and **Redeem** |
-| Main actions | **Scan** to pay, **Receive** to show your code | **Sell** a coupon, **Redeem** one back |
-| Sees | Total balance, each merchant's coupons and history | Sales history, coupons issued, what's expiring, simple stats |
-
-Everything else, the account, the profile, backing up your key, works the same
-for both.
-
-## How a coupon moves, at a glance
+## How it fits together
 
 ```mermaid
 flowchart LR
-    M[Merchant issues a coupon] -->|sent to your wallet| C[Shopper receives it]
-    C -->|scan & confirm| P[Shopper pays the merchant]
-    P -->|full or partial| M2[Merchant redeems it]
-    P -.change.-> C2[Change returns as a smaller coupon]
+    W[Wallet app<br/>customer, shop, till] <-->|NIP-17 DMs| N[Nostr relays]
+    W --> G[Imani gateway services]
+    G --> M[cashu-mint + cashu-vault<br/>cashu-voucher, cashu-lib]
+    G --> P[payment-adapter] --> S[Stripe Connect<br/>direct charges to the shop]
+    E[Shopify / WooCommerce / Magento] -->|IMANI- coupon codes| C[checkout-codes] --> M
 ```
 
-1. **Issue.** A merchant creates a coupon for a value (say €5) and sends it to a
-   shopper's code. The shopper's phone shows a toast: *payment on its way*.
-2. **Receive.** Seconds later the coupon settles and appears in the shopper's
-   wallet, filed under that merchant.
-3. **Pay.** The shopper scans the merchant's payment QR, confirms the amount, and
-   the coupon (or part of it) goes back to the merchant.
-4. **Change.** If the shopper paid less than the coupon was worth, the leftover
-   returns as a new, smaller coupon.
+Full component map, Stripe flow and e-commerce flow:
+[docs/architecture.md](docs/architecture.md).
 
-The how-it-works guide (`imani-docs/wallet/how-it-works.md`) explains what a coupon really is,
-why it can't be forged, and why your key matters so much.
+## Why it is private
 
-## What you need
-
-- A phone or a browser. The wallet runs on the web and as an Android app.
-- A one-time setup: pick a handle (like `alice@imani.casa`) and a passphrase.
-- **Your backup key.** This is the one thing you must keep safe. It is the only
-  way to recover your coupons on a new phone, and nobody can reset it for you.
-  The app shows it once, when you sign up. Write it down.
-
----
+- Keys and vouchers stay on the customer's device. No server keeps a balance.
+- Vouchers move as gift-wrapped Nostr messages, so relays see no sender,
+  recipient or amount.
+- Cashu blind signatures mean the mint can't link a voucher it issued to the one
+  it later sees redeemed.
+- Card money goes straight to the shop's own Stripe account. Imani never holds
+  the float.
 
 ## For developers
 
-This is a single-page web app (React 19 + TypeScript + Vite), packaged for
-Android with Capacitor. It talks to the Imani gateway backend for identity,
-Nostr message relay, and the Cashu mint that issues and signs coupons.
-
-### Run it
+React 19 + TypeScript + Vite, packaged for Android with Capacitor.
 
 ```bash
 npm install
-npm run dev        # dev server on :5173, proxies /api to the local gateway
-```
-
-The dev server also stands in for the production edge proxy (auth validation and
-header injection), so a local gateway stack must be running for login and coupon
-flows to work. See `deploy/` for the compose override and nginx config.
-
-Card payments run against `stripe-mock` by default, so Settings → Payments works
-with no Stripe account and no key. See
-running the card flows locally (`imani-docs/wallet/card-payments-locally.md`) for where the
-mock stops and how to switch to a real test key.
-
-### Common tasks
-
-```bash
+./deploy/up.sh     # local stack: relays, gateway, mint, vault, Postgres, stripe-mock
+npm run dev        # wallet on :5173, proxies /api to the local gateway
+npm run test       # vitest
 npm run build      # type-check + production bundle
-npm run preview    # serve the built bundle on :4173
-npm run test       # vitest, once
-npm run test:watch # vitest, watch mode
-npm run lint       # eslint
 npm run android    # build + sync the Capacitor Android project
 ```
 
-### Layout
-
 | Path | What's there |
 | --- | --- |
-| `src/pages/` | One file per screen (login, home, pay, receive, sell, redeem, settings) |
-| `src/lib/` | The logic: wallet storage, receiving, paying, identity, profiles |
-| `src/components/` | Shared UI, including the coupon **pass** rendering |
-| `packages/` | Vendored `@imani/*` packages (wallet storage, dm-poll, vouchers, money) |
-| `shared/` | Classic-script modules bridged from the original app (redemption, formatting) |
-| `deploy/` | Docker compose override, nginx edge config, relay config |
-| `services/` | Standalone services built from this tree (the public audit API) |
-| `scripts/` | Seeding and verification helpers for a local stack |
+| `src/` | Screens, components and wallet logic |
+| `packages/` | `@imani/*` libraries: wallet core and storage, vouchers, redemption, money, payment requests |
+| `services/` | wallet-api, purchase-issuer, audit-api, mailer, subscription |
+| `deploy/` | Compose override, nginx edge and relay config for the local stack |
+| `e2e/`, `loadtest/` | Playwright and k6 suites |
 
-### Deeper design notes
+## Related repositories
 
-The guides, explanations, specs and design notes live in **imani-docs** under
-`wallet/`. The architecture decision records ([docs/adr](docs/adr)) and research
-notes ([docs/research](docs/research)) stay here, beside the code. See
-[docs/README.md](docs/README.md).
-
-Start with `imani-docs/wallet/how-it-works.md` for the concepts, and
-`imani-docs/wallet/decentralised-posture.md` for why the
-architecture is shaped the way it is.
-
-For the public redemption ledger — kind-7377 attestations, the pseudonymous
-ledger key, Pedersen commitments, and the hosted audit API in `services/` —
-see `imani-docs/wallet/redemption-ledger-technical-guide.md`.
-
-For how a terminal is put into service end to end (enrolment, delivery, login,
-revocation, and the work still to build), see
-`imani-docs/wallet/spec-terminals-in-service.md`.
-
-For claiming cashback and gifts by link or QR, including a recipient with no account (accepted
-2026-10-11, owner decisions in section 9), see `imani-docs/wallet/spec-claim-links.md`.
-
-The original design record was retired once the code became the authority. It is
-still in git history (`docs/superpowers/specs/2026-08-11-farmer-coupon-wallet-design.md`,
-last present at `e38ba27`) if the reasoning behind a specific decision is needed.
+`cashu-lib`, `cashu-mint`, `cashu-vault` and `cashu-voucher` (the Java Cashu
+stack). The full list is in [docs/architecture.md](docs/architecture.md).
 
 ## License
 
-MIT. Imani Wallet is open source.
+MIT
