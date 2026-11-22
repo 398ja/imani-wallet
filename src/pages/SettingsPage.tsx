@@ -1,11 +1,18 @@
 import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info, LifeBuoy, HeartPulse } from 'lucide-react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info, LifeBuoy, HeartPulse, Globe, Lock } from 'lucide-react'
 
 import { fleetConfig, supportSnapshotConfig } from '../lib/config'
+import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
+import { CARD_PAYMENTS_PLAN_NAME, cardPaymentsPlan, type CardPaymentsPlan } from '../lib/cardPaymentsAccess'
+import { ONLINE_SHOP_PLAN_NAME, connectedShop, onlineShopAccess, type OnlineShopAccess } from '../lib/onlineShopAccess'
+import { shopHost } from '../lib/shopEnrol'
+import { allTerminals } from '../lib/terminalRoster'
 import type { LucideIcon } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
+import { YourKeyBackup } from '../components/KeyBackup'
+import { isTerminalDevice } from '../lib/terminalEnrol'
 
 /**
  * Settings.
@@ -21,12 +28,18 @@ import { Screen, BackLink, PageHeader, ListSection } from '../components/ui'
  */
 export function SettingsPage({
   merchant,
+  stallPubkey,
+  status,
 }: {
   /**
    * Whether this is a merchant account: it has a stall record, open or closed.
    * False for a customer, and the Merchant section is then absent entirely.
    */
   merchant: boolean
+  /** The account's key, which is the stall's when `merchant`. Absent in older callers and tests. */
+  stallPubkey?: string
+  /** Injected by tests. The licence check otherwise. */
+  status?: (pubkey: string) => Promise<LicenceStatus>
 }) {
   return (
     <Screen>
@@ -57,6 +70,14 @@ export function SettingsPage({
         />
       </ListSection>
 
+      {/* #348: where this key is backed up, across every device of the account. Not on a
+          terminal, whose key is a disposable credential with no backup. */}
+      {stallPubkey && !isTerminalDevice() && (
+        <div className="mt-6">
+          <YourKeyBackup pubkey={stallPubkey} />
+        </div>
+      )}
+
       {/* Merchant accounts only. A customer has no stall to configure, and
           offering them one here was offering a screen whose every field —
           issuance currency, coupon validity, categories — describes a business
@@ -85,18 +106,24 @@ export function SettingsPage({
             />
             {/* Listed whether or not a stall has connected. The screen behind
                 it is where a merchant learns card payments exist at all, and
-                hiding it until they are connected is a chicken and egg. */}
-            <SettingRow
-              to="/settings/payments"
-              icon={CreditCard}
-              label="Card payments"
-              hint="Take card payments for your vouchers"
-            />
+                hiding it until they are connected is a chicken and egg. Locked
+                on Starter, like Online shop below Pro. */}
+            {stallPubkey ? (
+              <CardPaymentsRow stallPubkey={stallPubkey} status={status} />
+            ) : (
+              <SettingRow
+                to="/settings/payments"
+                icon={CreditCard}
+                label="Card payments"
+                hint="Take card payments for your vouchers"
+              />
+            )}
+            {stallPubkey ? <OnlineShopRow stallPubkey={stallPubkey} status={status} /> : null}
             <SettingRow
               to="/settings/terminals"
               icon={Tablet}
               label="Terminals"
-              hint="Devices trading for your stall, and revoking one"
+              hint="Devices trading for your stall, on Essentials and above"
             />
             {/* Listed rather than hidden. The screen behind it is gated by the
                 real licence check and shows its own refusal, so a merchant
@@ -122,6 +149,87 @@ export function SettingsPage({
         </ListSection>
       </div>
     </Screen>
+  )
+}
+
+/** Stable, so the row's effect runs once per stall and not on every render. */
+const ownerLicenceStatus = (pubkey: string) => licenceStatus({ pubkey })
+
+/**
+ * Settings › Merchant › Card payments: Essentials and above. Locked on Starter, and the screen
+ * behind it says why. Until the plan check answers, or if it fails, the neutral hint and no lock.
+ */
+function CardPaymentsRow({
+  stallPubkey,
+  status = ownerLicenceStatus,
+}: {
+  stallPubkey: string
+  status?: (pubkey: string) => Promise<LicenceStatus>
+}) {
+  const [plan, setPlan] = useState<CardPaymentsPlan>('unknown')
+  useEffect(() => {
+    let live = true
+    status(stallPubkey).then(
+      (s) => live && setPlan(cardPaymentsPlan(s)),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [stallPubkey, status])
+  const locked = plan === 'not-included'
+  return (
+    <SettingRow
+      to="/settings/payments"
+      icon={CreditCard}
+      label="Card payments"
+      hint={locked ? `Available on ${CARD_PAYMENTS_PLAN_NAME}` : 'Take card payments for your vouchers'}
+      locked={locked}
+    />
+  )
+}
+
+/**
+ * Settings › Merchant › Online shop (#402). LISTED for every merchant, locked below the plan that
+ * includes `ecommerce`: hidden, the Subscription page would be the only place a merchant learns
+ * online shops exist. Shows the connected shop when there is one, whatever the plan, so a lapsed
+ * merchant can still reach it to disconnect.
+ *
+ * The plan check is async; until it answers the row shows the neutral hint, never a lock that
+ * might be wrong.
+ */
+function OnlineShopRow({
+  stallPubkey,
+  status = ownerLicenceStatus,
+}: {
+  stallPubkey: string
+  status?: (pubkey: string) => Promise<LicenceStatus>
+}) {
+  const [access, setAccess] = useState<OnlineShopAccess | null>(null)
+  const shop = connectedShop(allTerminals(stallPubkey))
+  useEffect(() => {
+    let live = true
+    status(stallPubkey).then(
+      (s) => live && setAccess(onlineShopAccess(s, allTerminals(stallPubkey))),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [stallPubkey, status])
+  const hint = shop?.shop
+    ? `Connected: ${shopHost(shop.shop.url)}`
+    : access === 'locked'
+      ? `Available on ${ONLINE_SHOP_PLAN_NAME}`
+      : 'Let customers pay with your coupons on your website'
+  return (
+    <SettingRow
+      to="/settings/online-shop"
+      icon={Globe}
+      label="Online shop"
+      hint={hint}
+      locked={access === 'locked' && !shop}
+    />
   )
 }
 
@@ -175,11 +283,14 @@ function SettingRow({
   icon: Icon,
   label,
   hint,
+  locked = false,
 }: {
   to: string
   icon: LucideIcon
   label: string
   hint: string
+  /** Shows a lock: the screen behind it explains the plan that unlocks it. Still tappable. */
+  locked?: boolean
 }) {
   return (
     <Link
@@ -191,6 +302,7 @@ function SettingRow({
         <p className="font-medium text-mono-900 dark:text-mono-50">{label}</p>
         <p className="text-sm text-mono-500">{hint}</p>
       </div>
+      {locked ? <Lock className="h-4 w-4 shrink-0 text-mono-400" aria-label="Locked" data-testid="setting-locked" /> : null}
       <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
     </Link>
   )

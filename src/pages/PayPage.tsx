@@ -7,8 +7,10 @@ import { listVouchers } from '../lib/wallet'
 import { holdingForUnit, issuerKey, toMerchants, type Merchant } from '../lib/merchants'
 import { formatFace } from '../lib/format'
 import { roundingShortfallNote } from '../lib/couponTotals'
+import { debitNote } from '../lib/sendFace'
 import { identityLabel, useIdentity } from '../lib/identity'
 import {
+  debitFor,
   passedOver,
   payRequest,
   SendOutcomeUnknownError,
@@ -155,6 +157,10 @@ export function PayPage({ pubkey }: { pubkey: string }) {
   // what is payable — a coupon divisible on one and not the other would let the
   // user tap Pay only to be refused.
   const obstacle = group ? splitObstacle(group.vouchers, request.amount) : null
+  // What really leaves: up to a sat more than asked where a sat is worth more than a minor unit
+  // (NGN). Same coupon choice as `payRequest`.
+  const debit = group ? debitFor(group.vouchers, request.amount) : request.amount
+  const overNote = debitNote(request.amount, debit, (minor) => formatFace(minor, denom))
   // #157: name a sooner-expiring voucher this payment leaves, and why, so the
   // soonest-first rule does not look ignored. Whole holding, not just `group`.
   const allVouchers = merchants.flatMap((m) => m.groups.flatMap((g) => g.vouchers))
@@ -174,6 +180,8 @@ export function PayPage({ pubkey }: { pubkey: string }) {
     // reports: showing the asking price would send the customer away believing
     // the sale is settled when the merchant is still short.
     const partial = status.result.delivered < status.result.requested
+    // #635: what really left (see SendPage). Never read as partial.
+    const paidFace = Math.max(status.result.sent ?? status.result.delivered, status.result.delivered)
     // See SendPage: an unconfirmed part may already have arrived, so it is never offered again (#125).
     const inFlight = status.result.inFlight ?? 0
     // The parts after an unconfirmed one were never tried: that money did not move.
@@ -186,10 +194,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           <CheckCircle2 className="h-12 w-12 text-green-600" />
         )}
         <h1 className="text-xl font-semibold text-mono-900 dark:text-mono-50">
-          {inFlight > 0 ? 'Still going through' : partial ? 'Partly paid' : 'Paid'}
+          {inFlight > 0 ? 'Still sending' : partial ? 'Not all paid' : 'Paid'}
         </h1>
         <p className="text-sm text-mono-500">
-          {formatFace(status.result.delivered, denom)}
+          {formatFace(paidFace, denom)}
+          {!partial && paidFace > status.result.requested ? ` (asked ${formatFace(status.result.requested, denom)})` : ''}
           {partial ? ` of ${formatFace(status.result.requested, denom)}` : ''} to {issuerLabel}
           {/* In the sentence, not a second line: see SendPage (#94). */}
           {!partial && usedVouchers(status.result) > 1 ? ` as ${usedVouchers(status.result)} vouchers` : ''}
@@ -248,9 +257,11 @@ export function PayPage({ pubkey }: { pubkey: string }) {
       </div>
 
       <Panel className="mb-6 p-5">
+        {/* #635: the headline is what really leaves; the asked amount, when it differs, under it. */}
         <p className="text-amount text-mono-900 dark:text-mono-50">
-          {formatFace(request.amount, denom)}
+          {formatFace(overNote ? debit : request.amount, denom)}
         </p>
+        {overNote && <p className="mt-1 text-xs text-mono-500">Asked: {formatFace(request.amount, denom)}.</p>}
         {request.description && (
           <p className="mt-2 text-sm text-mono-500">{request.description}</p>
         )}
@@ -258,6 +269,7 @@ export function PayPage({ pubkey }: { pubkey: string }) {
           <Row label="Your balance" value={formatFace(available, denom)} />
           <Row label="Vouchers held" value={String(group?.voucherCount ?? 0)} />
         </dl>
+        {overNote && <p className="mt-3 text-xs text-mono-500">{overNote}</p>}
       </Panel>
 
       {expired && <Alert>This payment request has expired.</Alert>}
@@ -312,6 +324,14 @@ export function PayPage({ pubkey }: { pubkey: string }) {
             if (e instanceof RequestAlreadyPaidError) {
               setStatus({ step: 'alreadyPaid', message: e.message })
               return
+            }
+            // #651: the wallet keeps checking; the screen follows when the answer comes.
+            if (e instanceof SendOutcomeUnknownError) {
+              void e.settled?.then((out) => {
+                if (!out) return
+                if (out instanceof Error) setStatus({ step: 'failed', message: userMessage(out, 'Payment failed.') })
+                else setStatus({ step: 'done', result: out })
+              })
             }
             setStatus({
               step: e instanceof SendOutcomeUnknownError ? 'unconfirmed' : 'failed',

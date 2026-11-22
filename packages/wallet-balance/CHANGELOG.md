@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `SelectionOptimizer`, its selection types (`SelectionRequest`, `SelectionResult`, `SelectableVoucher`, `SelectionStrategy`, `ConsolidationCheck`, `EMPTY_SELECTION_RESULT`) and `BalanceManager.selectVouchersForAmount` / `getAvailableForCurrency` (imani-wallet#435). Nothing in the app used them; the wallet spends through `chooseSpend` in `@imani/wallet-core`, the one selector.
+
 ## [0.1.3] - 2026-03-12
 
 ### Added

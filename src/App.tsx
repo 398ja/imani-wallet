@@ -25,10 +25,12 @@ import { sweepInterruptedReceives } from './lib/receiveSweep'
 import { saveRecoveredSwapBack } from './lib/swapBack'
 import { restoreIssued } from './lib/issuedRecords'
 import { restoreTx, backfillTx } from './lib/txRecords'
-import { collectTillSalesForOwner } from './lib/tillSalesNet'
+import { collectTillSalesForOwner, pullCardSalesForOwner } from './lib/tillSalesNet'
 import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
+import { syncKeyBackups } from './lib/keyBackups'
 import { startOnlineShopSync } from './lib/onlineShopPublisher'
-import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
+import { restoreVouchers, backfillVouchers, pruneMintSpent } from './lib/voucherRecords'
+import { reconcileOnResume } from './lib/walletReconcile'
 import { restoreCashbackStash } from './lib/cashbackStash'
 import { restoreCheckoutCodes, startCheckoutCodeBackup } from './lib/checkoutCodeBackup'
 import { useLogout } from './lib/useLogout'
@@ -64,6 +66,7 @@ import {
   MerchantTransactionsPage,
   IssuedCouponsPage,
   IssuedCouponPage,
+  VoucherClaimsPage,
   ExpiringVouchersPage,
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
@@ -109,6 +112,7 @@ import { LedgerPage } from './pages/LedgerPage'
 import { SubscriptionPage } from './pages/SubscriptionPage'
 import { TerminalsPage } from './pages/TerminalsPage'
 import { TerminalEnrolPage } from './pages/TerminalEnrolPage'
+import { OnlineShopPage } from './pages/OnlineShopPage'
 import { useTerminalIdentity } from './lib/useTerminalIdentity'
 import { ProfileEditPage } from './pages/ProfileEditPage'
 import { SecurityPage } from './pages/SecurityPage'
@@ -179,6 +183,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
 
   useEffect(() => {
     let live = true
+    let stopResumeReconcile: (() => void) | undefined
     ;(openAttempt === 0 ? openWallet : retryOpenWallet)(pubkey).then(
       () => {
         if (!live) return
@@ -186,6 +191,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // Receiving coupons is imani-apps' pipeline verbatim: DmPollService
         // reading gift wraps through the gateway's nostrdb, never the relay.
         startDmPoll(pubkey)
+        // Cross-device convergence on every return to the foreground.
+        stopResumeReconcile?.()
+        stopResumeReconcile = reconcileOnResume(pubkey)
 
         // Advance notice of an incoming payment, imani-apps' Artemis pattern.
         // Settlement through dm-poll can lag seconds to minutes behind the
@@ -249,6 +257,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // Every change to the terminal list is published, debounced, to the owner's other
         // devices (#160 phase 6). Stopped on logout.
         startRosterSync(pubkey)
+        // #348: every device's key backup locations, merged in, and this device's published.
+        void syncKeyBackups(pubkey)
         // And the stall's profile follows it: a shop turning In service is advertised from any
         // screen, not only while Terminals is open (#402).
         startOnlineShopSync(pubkey)
@@ -315,7 +325,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // After the restore, so a coupon that came back from the relay is
             // swept too. Catches any redemption whose burn failed at the time —
             // until it runs, a coupon this merchant issued is spendable again.
-            return sweepBurnable(pubkey)
+            // Then the mint, not the local list, decides what is still money:
+            // a spend made on another device whose tombstone never arrived.
+            return pruneMintSpent(pubkey).then(() => sweepBurnable(pubkey))
           })
           .then((burnt) => {
             if (burnt > 0) console.info(`[app] burnt ${burnt} redeemed coupon(s)`)
@@ -345,6 +357,13 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           .then(() => collectTillSalesForOwner(pubkey))
           .then((tillSales) => {
             if (tillSales > 0) console.info(`[app] filed ${tillSales} till sale(s)`)
+          })
+          // Card sales whose sale record never reached this device (#275 item 3): listed from
+          // payment-adapter, re-sent by the purchase issuer, filed through the same checks. After
+          // the till sales, so a record that did arrive is already a row. Never throws.
+          .then(() => pullCardSalesForOwner(pubkey))
+          .then((cardSales) => {
+            if (cardSales > 0) console.info(`[app] filed ${cardSales} missed card sale(s)`)
           })
           // Last, once both the coupons and the history are back: re-files
           // redemptions written without their claim (pre-#90 rows) against
@@ -426,6 +445,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
     // the coupon dropped mid-processing. Stopped on logout instead.
     return () => {
       live = false
+      stopResumeReconcile?.()
       // Unlike the pollers above, this one IS safe to stop here: it holds no
       // in-flight work, only an event listener bound to this account's pubkey.
       // Leaving it attached across a logout would record the next account's
@@ -688,6 +708,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
                   path="/merchant/coupon/:voucherId"
                   element={<IssuedCouponPage pubkey={pubkey} />}
                 />
+                {/* Every claim against that voucher, paged (?page=N). Same stall key, same reason. */}
+                <Route
+                  path="/merchant/coupon/:voucherId/claims"
+                  element={<VoucherClaimsPage pubkey={pubkey} />}
+                />
                 <Route
                   path="/merchant/dashboard"
                   element={<MerchantDashboardPage pubkey={pubkey} merchant={merchant} />}
@@ -774,7 +799,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             also what hides the Merchant section from customers entirely — they
             have no stall record, and selling is chosen at registration. Only the
             trading SCREENS are gated on `active` (see `canTrade`). */}
-        <Route path="/settings" element={<SettingsPage merchant={merchant !== null} />} />
+        <Route path="/settings" element={<SettingsPage merchant={merchant !== null} stallPubkey={pubkey} />} />
         {/* Every role: what is running, the legal pages, support (no predicate). */}
         <Route path="/settings/about" element={<AboutPage />} />
         {/* #589: only reachable with a support snapshot code; the page hides itself when unconfigured. */}
@@ -873,6 +898,18 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // subscriptions ticket 07's first criterion.
             merchant !== null ? (
               <TerminalEnrolPage stallPubkey={pubkey} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
+        />
+        <Route
+          path="/settings/online-shop"
+          element={
+            // Merchant-only, and NOT plan-gated here: the screen shows its own lock below Pro, and a
+            // merchant whose plan lapsed must still reach their connected shop to disconnect it.
+            merchant !== null ? (
+              <OnlineShopPage stallPubkey={pubkey} />
             ) : (
               <Navigate to="/settings" replace />
             )

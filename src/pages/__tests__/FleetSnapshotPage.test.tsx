@@ -49,7 +49,7 @@ describe('Help improve Imani', () => {
     draw(c)
     fireEvent.click(await screen.findByTestId('fleet-toggle'))
     const consent = await screen.findByTestId('fleet-consent')
-    expect(consent.textContent).toBe(FLEET_CONSENT_TEXT)
+    expect(consent.textContent).toBe(FLEET_CONSENT_TEXT.replaceAll('\n', ''))
     expect(consent.textContent).not.toContain(CONSENT_TEXT.slice(0, 60))
     expect(c.optIn).not.toHaveBeenCalled()
     fireEvent.click(screen.getByTestId('fleet-agree'))
@@ -107,12 +107,14 @@ describe('Support snapshot page history', () => {
 })
 
 describe('fleet consent text (review round 1)', () => {
-  it('is fleet-specific and accurate', async () => {
+  it('is fleet-specific, accurate and short', async () => {
     const c = fake()
     draw(c)
     fireEvent.click(await screen.findByTestId('fleet-toggle'))
     const t = (await screen.findByTestId('fleet-consent')).textContent!
-    for (const s of ['14 days', 'at most twice a month', 'Wi-Fi', 'within 7 days', 'Anthropic', 'OpenAI', 'memos', 'separate key', 'snapshot history', 'forgets this device', 'takings and terminals', 'Nobody can spend']) expect(t, s).toContain(s)
+    for (const s of ['14 days', 'At most twice a month', 'Wi-Fi', 'Anthropic', 'OpenAI', 'memos', 'app logs', 'forgets this device', 'Nobody can spend']) expect(t, s).toContain(s)
     for (const s of ['ticket', 'memos are shown', '30 days after', 'not linked', 'a few times a month']) expect(t.toLowerCase(), s).not.toContain(s.toLowerCase())
+    // Owner review: the previous single paragraph was too long to read before agreeing.
+    expect(FLEET_CONSENT_TEXT.split(/\s+/).length).toBeLessThanOrEqual(90)
   })
 })

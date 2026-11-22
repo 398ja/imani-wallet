@@ -1,5 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 
+import { isKeysetInactive } from './mintRefusal'
 import { isVoucherSecret, referencedDocuments } from './voucherToken'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
 
@@ -15,6 +16,7 @@ import {
   unblindOutputs,
   unblindRestored,
   type BlindSignatureResponse,
+  type BlindedOutput,
   type UnblindedProof,
 } from './walletSwap'
 
@@ -236,34 +238,30 @@ export async function receiveByOwnSwap(
 
   // The line the design turns on. After this the wallet can always finish.
   rememberSwapIntent(pubkey, {
-    swapId,
-    mintUrl,
-    keysetId,
-    // The witness is carried too. A NUT-19 replay must be byte-identical, and a
-    // locked input without its witness is both a different request and one the
-    // mint would refuse, so dropping it would leave replay silently unavailable
-    // for exactly the customer-to-customer transfer case.
-    // And the voucher document of a by-reference input (cashu-voucher#64): the replayed request
-    // carries it in `vouchers`, so without it the replay would differ or be refused.
-    inputs: proofs.map(({ amount, id, secret, C, witness, document }) => ({
-      amount,
-      id,
-      secret,
-      C,
-      ...(witness === undefined ? {} : { witness }),
-      ...(document === undefined ? {} : { document }),
-    })),
+    ...intentFor(request, swapId, keysetId),
+    // The witness and the voucher document are carried in the inputs (see `intentFor`). A
+    // NUT-19 replay must be byte-identical, and a locked input without its witness is both a
+    // different request and one the mint would refuse. Likewise the document of a
+    // by-reference input (cashu-voucher#64), which the replay carries in `vouchers`.
     outputs,
-    at: Date.now(),
   })
 
   try {
-    const { signatures } = await transport.swap(mintUrl, {
-      inputs: proofs,
-      outputs: asMintOutputs(outputs),
-    })
+    let swapped: { signatures: BlindSignatureResponse[] }
+    try {
+      swapped = await transport.swap(mintUrl, {
+        inputs: proofs,
+        outputs: asMintOutputs(outputs),
+      })
+    } catch (failure) {
+      // Only a refusal of the SWAP ITSELF with 12002 qualifies, and a thrown swap carries no
+      // signatures. A failure after any signature came back (unblinding, the keys) is outside
+      // this catch, so it can never lead to re-blinding over outputs the mint may have signed.
+      if (!isKeysetInactive(failure)) throw failure
+      return await reblindAfterRotation(request, transport, swapId, keysetId, outputs)
+    }
     const keys = await transport.keysetKeys(mintUrl, keysetId)
-    const unblinded = unblindOutputs(outputs, signatures, keys)
+    const unblinded = unblindOutputs(outputs, swapped.signatures, keys)
     return { swapId, proofs: unblinded }
   } catch (failure) {
     // The intent STAYS. From here the swap may have succeeded, so this record is
@@ -274,6 +272,84 @@ export async function receiveByOwnSwap(
       { swapId, mintUrl, reason: failure instanceof Error ? failure.message : String(failure) },
     )
     throw failure
+  }
+}
+
+/**
+ * Retries a receive whose outputs the mint refused as being on a retired keyset (#248).
+ *
+ * A receive resumed across a keyset rotation replays its stored outputs, as it must for a
+ * NUT-19 byte-identical replay, and the mint then refuses them with `12002 keyset_inactive`
+ * on every attempt. That refusal happens at validation, before any input is spent and with
+ * no signature issued, so the stored blinding factors cannot be needed for anything: no
+ * signature exists for them. They are dropped, the active keyset is read fresh, and the
+ * receive is made again with new outputs.
+ *
+ * The swap id is kept. It is derived from the inputs, which have not changed, and callers
+ * (swap back) tag their own record with it before the swap so the recovery sweep can match
+ * the result. The new intent overwrites the old one under that id, which is the point: the
+ * old outputs were never signed and must not be restored against.
+ *
+ * Done once. A second 12002 against the keyset the mint has just called active is not a
+ * rotation, so it is thrown like any other refusal, keeping the (new) intent.
+ */
+async function reblindAfterRotation(
+  request: ReceiveRequest,
+  transport: MintTransport,
+  swapId: string,
+  staleKeysetId: string,
+  staleOutputs: BlindedOutput[],
+): Promise<ReceiveResult> {
+  const { pubkey, mintUrl, proofs } = request
+  // A 12002 does NOT prove the old outputs were never signed. The mint answers a replay from its
+  // NUT-19 cache only within the cache ttl, and its validation refuses an archived output keyset
+  // BEFORE it checks spent inputs or already-signed outputs. So a first attempt that succeeded
+  // before the rotation, replayed after the cache expired, also comes back 12002. Overwriting
+  // its intent would discard the only blinding factors for signed outputs and lose the money.
+  // Ask the mint first (NUT-09). A throw here keeps the old intent, like any other failure.
+  const restored = await transport.restore(mintUrl, asMintOutputs(staleOutputs))
+  if (restored.signatures.length > 0) {
+    const keys = await transport.keysetKeys(mintUrl, staleKeysetId)
+    const { proofs: recovered } = unblindRestored(staleOutputs, restored, keys)
+    console.info('[receiveSwap] recovered an interrupted receive', {
+      swapId,
+      amount: recovered.reduce((sum, proof) => sum + proof.amount, 0),
+    })
+    return { swapId, proofs: recovered }
+  }
+  const keysetId = await transport.activeKeysetId(mintUrl)
+  console.info('[receiveSwap] the mint retired this receive’s keyset, re-blinding against the active one', {
+    swapId,
+    from: staleKeysetId,
+    to: keysetId,
+  })
+  if (keysetId === staleKeysetId) {
+    throw new Error(`the mint refused keyset ${keysetId} as inactive but still lists it as active`)
+  }
+  const total = proofs.reduce((sum, proof) => sum + proof.amount, 0)
+  const outputs = blindOutputs(splitIntoDenominations(total), keysetId)
+  rememberSwapIntent(pubkey, { ...intentFor(request, swapId, keysetId), outputs })
+
+  const { signatures } = await transport.swap(mintUrl, { inputs: proofs, outputs: asMintOutputs(outputs) })
+  const keys = await transport.keysetKeys(mintUrl, keysetId)
+  return { swapId, proofs: unblindOutputs(outputs, signatures, keys) }
+}
+
+/** The parts of an intent that do not depend on the outputs. */
+function intentFor(request: ReceiveRequest, swapId: string, keysetId: string) {
+  return {
+    swapId,
+    mintUrl: request.mintUrl,
+    keysetId,
+    inputs: request.proofs.map(({ amount, id, secret, C, witness, document }) => ({
+      amount,
+      id,
+      secret,
+      C,
+      ...(witness === undefined ? {} : { witness }),
+      ...(document === undefined ? {} : { document }),
+    })),
+    at: Date.now(),
   }
 }
 

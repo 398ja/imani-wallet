@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { CreditCard, ExternalLink, TriangleAlert } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { CreditCard, ExternalLink, Lock, TriangleAlert } from 'lucide-react'
 
 import { Button, Screen, BackLink, PageHeader, Centered } from '../components/ui'
 import {
@@ -12,6 +12,8 @@ import {
   type StripeResult,
 } from '../lib/stripeAccount'
 import { reconcileCardOffer } from '../lib/cardOffer'
+import { CARD_PAYMENTS_PLAN_NAME, cardPaymentsPlan, type CardPaymentsPlan } from '../lib/cardPaymentsAccess'
+import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { CardSalesSection, type CardSalesDeps } from '../components/CardSalesSection'
 import { GiftingPageSection } from '../components/GiftingPageSection'
 import { buildMerchantEvent, saveMerchant, type MerchantProfile } from '../lib/merchant'
@@ -43,16 +45,27 @@ import { publish } from '../lib/relay'
  * and Stripe commonly holds a rolling reserve against stored value. "Get paid
  * upfront" is the whole pitch and a reserve claws part of it back, so a
  * merchant learns that here rather than from their first payout.
+ *
+ * ## Essentials and above
+ *
+ * Card payments are not on Starter. The plan is read on mount alongside Stripe
+ * and goes into the same reconcile, so a Starter stall (or one whose plan
+ * ended) that still publishes "I take cards" has the offer withdrawn here, and
+ * one that never connected is shown the plan instead of Connect Stripe. A plan
+ * that could not be checked changes nothing, as an unreachable Stripe does not.
  */
 export function PaymentsSettingsPage({
   merchant,
   onSaved,
   cardSales,
+  status: planStatus = ownerLicenceStatus,
 }: {
   merchant: MerchantProfile
   onSaved: (next: MerchantProfile) => void
   /** Test seam for the card-sales step (#298). */
   cardSales?: CardSalesDeps
+  /** Injected by tests. The licence check otherwise. */
+  status?: (pubkey: string) => Promise<LicenceStatus>
 }) {
   const [params, setParams] = useSearchParams()
   const [status, setStatus] = useState<StripeAccountStatus | null>(null)
@@ -60,6 +73,21 @@ export function PaymentsSettingsPage({
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
+  const [plan, setPlan] = useState<CardPaymentsPlan>('unknown')
+  /** The plan as last read, for `apply` without making it a new function per read. */
+  const planRef = useRef<CardPaymentsPlan>('unknown')
+
+  /**
+   * Read the plan again. On mount and on EVERY action, so a merchant who upgrades in the
+   * subscription site and comes back is unlocked by Check again, not by a reload. Bounded: a
+   * licence check that never settles (an IndexedDB blocked by another tab) must not hold the page
+   * on Loading, so after `PLAN_CHECK_TIMEOUT_MS` it is `unknown`, which changes nothing.
+   */
+  const readPlan = useCallback(async () => {
+    const licence = await withTimeout(planStatus(merchant.pubkey).catch(() => null), PLAN_CHECK_TIMEOUT_MS)
+    planRef.current = cardPaymentsPlan(licence)
+    setPlan(planRef.current)
+  }, [planStatus, merchant.pubkey])
 
   /**
    * The current record, readable without re-running anything.
@@ -99,10 +127,14 @@ export function PaymentsSettingsPage({
       setError(null)
       setStatus(result.status)
 
-      const change = reconcileCardOffer(current.current, {
-        chargesEnabled: result.status.chargesEnabled,
-        defaultCurrency: result.status.defaultCurrency,
-      })
+      const change = reconcileCardOffer(
+        current.current,
+        {
+          chargesEnabled: result.status.chargesEnabled,
+          defaultCurrency: result.status.defaultCurrency,
+        },
+        planRef.current,
+      )
 
       if (change.kind === 'unchanged') return
 
@@ -146,7 +178,10 @@ export function PaymentsSettingsPage({
     // than a mirror that has not caught up.
     const returning = params.get('stripe') !== null
     const load = async () => {
-      await apply(returning ? await refreshStripe() : await fetchStripeStatus())
+      // The plan and Stripe together, so the first reconcile already knows both. A failed plan
+      // check is `unknown`, which changes nothing.
+      const [stripe] = await Promise.all([returning ? refreshStripe() : fetchStripeStatus(), readPlan()])
+      await apply(stripe)
       if (returning) {
         // Drop the marker so a refresh of this page is an ordinary visit.
         params.delete('stripe')
@@ -164,7 +199,7 @@ export function PaymentsSettingsPage({
     setBusy(true)
     setNote(null)
     try {
-      const result = await fn()
+      const [result] = await Promise.all([fn(), readPlan()])
       await apply(result)
 
       if (redirect && result.kind === 'ok') {
@@ -224,10 +259,41 @@ export function PaymentsSettingsPage({
 
   const connected = status !== null && status.status !== 'not_connected'
   const live = status?.chargesEnabled === true
+  const notInPlan = plan === 'not-included'
+  /**
+   * Whether shoppers can actually buy by card: Stripe live AND the offer is (or will be) published.
+   * An unknown plan publishes nothing new, so it is offering only if the record already says so.
+   */
+  const offering = live && (plan === 'included' || (plan === 'unknown' && merchant.acceptsCards === true))
+  const planUnchecked = live && plan === 'unknown' && !offering
   const currencyMismatch =
     live &&
     status?.defaultCurrency !== undefined &&
     status.defaultCurrency.toLowerCase() !== merchant.issuanceCurrency.toLowerCase()
+
+  // Only once Stripe has ANSWERED not connected. A failed Stripe read (status null) shows its error
+  // on the ordinary screen rather than an upgrade prompt over a stall that may be connected.
+  if (notInPlan && status !== null && !connected) {
+    return (
+      <Screen>
+        <BackLink to="/settings" label="Settings" />
+        <PageHeader title="Card payments" />
+        {/* Kept on the locked screen: a Starter stall that just disconnected lands here, and must
+            still be told whether its withdrawal reached the relays. */}
+        {error && (
+          <p className="expand-row mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
+            {error}
+          </p>
+        )}
+        {note && (
+          <p data-testid="card-payments-note" className="expand-row mb-4 rounded-xl bg-mono-100 px-4 py-3 text-sm dark:bg-mono-900">
+            {note}
+          </p>
+        )}
+        <LockedCardPayments busy={busy} onCheckAgain={() => act(fetchStripeStatus, false)} />
+      </Screen>
+    )
+  }
 
   return (
     <Screen>
@@ -250,18 +316,57 @@ export function PaymentsSettingsPage({
         </p>
       )}
 
+      {/* Connected on a plan that does not include cards: Starter, or a plan that ended. The offer
+          is withdrawn by the reconcile; this says why, and leaves Disconnect where it was. */}
+      {notInPlan && (
+        <div data-testid="card-payments-not-in-plan" className="mb-6 flex gap-2 rounded-xl bg-amber-50 p-3 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <p className="text-sm leading-relaxed">
+            Card payments are part of {CARD_PAYMENTS_PLAN_NAME} and above, so shoppers cannot buy your
+            vouchers by card on your current plan. Vouchers you have already sold are not affected.{' '}
+            <Link to="/settings/subscription" className="font-medium underline">
+              See plans
+            </Link>
+          </p>
+        </div>
+      )}
+
+      {/* Stripe is live but the plan could not be checked, and no offer is published yet. Said,
+          because otherwise the screen looks ready while shoppers see no Buy button. */}
+      {planUnchecked && (
+        <div data-testid="card-payments-plan-unchecked" className="mb-6 flex gap-2 rounded-xl bg-amber-50 p-3 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <p className="text-sm leading-relaxed">
+            We could not check your plan, so shoppers cannot buy by card yet. Tap Check again when
+            you are online.
+          </p>
+        </div>
+      )}
+
       {/* The status card carries the answer to "where do I stand", so it leads
           with a sentence rather than a label and a value. Tracking is tightened
           on the heading because it is the largest text on the screen and reads
           loose at that size. */}
       <div className="mb-6 rounded-2xl border border-mono-200 p-4 dark:border-mono-800">
         <p className="text-[17px] font-semibold tracking-[-0.01em]">
-          {live ? 'Taking card payments' : connected ? 'Not finished yet' : 'Not connected'}
+          {offering
+            ? 'Taking card payments'
+            : live && notInPlan
+              ? 'Stripe connected'
+              : live
+                ? 'Not offered yet'
+                : connected
+                  ? 'Not finished yet'
+                  : 'Not connected'}
         </p>
         <p className="mt-1 text-[15px] leading-relaxed text-mono-500">
-          {live
+          {offering
             ? `Paid in ${status?.defaultCurrency?.toUpperCase() ?? 'your account currency'}.`
-            : connected
+            : live && notInPlan
+              ? 'Card payments are off on your current plan.'
+              : live
+                ? 'Waiting for your plan to be checked.'
+                : connected
               ? 'Stripe still needs something from you before you can be paid.'
               : 'Connect a Stripe account to start.'}
         </p>
@@ -301,19 +406,19 @@ export function PaymentsSettingsPage({
       {/* #298: Stripe pays the stall; this lets Imani issue the voucher that was paid for. Shown
           once Stripe can charge, because before that there is nothing to issue. Beside Connect
           Stripe, so the two halves of "selling by card" read as one setup. */}
-      {live && !currencyMismatch && <CardSalesSection deps={cardSales} />}
+      {offering && !currencyMismatch && <CardSalesSection deps={cardSales} />}
 
       {/* #410: once shoppers can pay by card, the stall's own gifting page and its indexing opt-in. */}
-      {live && !currencyMismatch && <GiftingPageSection merchant={merchant} onToggleIndexing={toggleIndexing} />}
+      {offering && !currencyMismatch && <GiftingPageSection merchant={merchant} onToggleIndexing={toggleIndexing} />}
 
       <div className="grid gap-3">
-        {!connected && (
+        {!connected && !notInPlan && (
           <Button size="lg" disabled={busy} onClick={() => act(connectStripe, true)}>
             <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Connect Stripe
           </Button>
         )}
 
-        {connected && !live && (
+        {connected && !live && !notInPlan && (
           <Button size="lg" disabled={busy} onClick={() => act(connectStripe, true)}>
             <ExternalLink className="mr-2 h-5 w-5" aria-hidden /> Finish setting up
           </Button>
@@ -390,5 +495,54 @@ export function PaymentsSettingsPage({
         </p>
       </div>
     </Screen>
+  )
+}
+
+/** Stable, so the mount effect's plan read is the same function on every render. */
+const ownerLicenceStatus = (pubkey: string) => licenceStatus({ pubkey })
+
+/** How long the plan check may take before the page goes on without it (as `unknown`). */
+export const PLAN_CHECK_TIMEOUT_MS = 5_000
+
+function withTimeout<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        clearTimeout(timer)
+        resolve(null)
+      },
+    )
+  })
+}
+
+/**
+ * Starter, never connected: what card payments are and which plan has them, instead of Connect.
+ * Check again re-reads the plan, so a merchant back from upgrading is unlocked without a reload.
+ */
+function LockedCardPayments({ busy, onCheckAgain }: { busy: boolean; onCheckAgain: () => void }) {
+  return (
+    <div data-testid="card-payments-locked" className="flex flex-col items-center px-2 pt-6 text-center">
+      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-mono-100 dark:bg-mono-900">
+        <Lock className="h-8 w-8 text-mono-500" aria-hidden />
+      </div>
+      <p className="text-lg font-semibold text-mono-900 dark:text-mono-50">Sell your vouchers by card</p>
+      <p className="mt-2 text-sm leading-relaxed text-mono-500">
+        Shoppers buy your vouchers by card and you are paid directly by Stripe, into your own account.
+      </p>
+      <p className="mt-3 text-sm leading-relaxed text-mono-500">
+        Card payments are part of {CARD_PAYMENTS_PLAN_NAME} and above. Upgrade to connect Stripe.
+      </p>
+      <Link to="/settings/subscription" className="mt-6 block w-full">
+        <Button className="w-full">See plans</Button>
+      </Link>
+      <Button className="mt-3 w-full" variant="outline" disabled={busy} onClick={onCheckAgain}>
+        Check again
+      </Button>
+    </div>
   )
 }

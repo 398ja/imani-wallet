@@ -226,6 +226,16 @@ describe('signed-in buyer through dm-poll', () => {
 })
 
 describe('guest return page', () => {
+  it('#532: a copy handed over as several part wraps of one voucher is read as one token', async () => {
+    const one = (nonce: string) => w.mint.issue(signLocked(linkLockProposal({ giftSecret: bearerSecret(), linkPub: xOnlyPub(FORGER), refundPub: xOnlyPub(BUYER), x: X, maxSats: 64, nonce })), 64)
+    const [a, b] = [one('p1'), one('p2')]
+    app.giftReturnSeam.wraps = async () => [wrapTo(ISSUER, BUYER, sent(tokenOf([a]))) as never, wrapTo(ISSUER, BUYER, sent(tokenOf([b]))) as never]
+    app.giftReturnSeam.states = async (t) => w.mint.states('http://mint.test', (await import('../voucherToken')).tokenProofs(t).map((p) => p.secret))
+    const read = await app.readGiftReturn(BUYER, undefined, NOW * 1000)
+    expect(read.kind).toBe('ok')
+    const { tokenProofs } = await import('../voucherToken')
+    expect(read.kind === 'ok' && tokenProofs(read.view.token).map((p) => p.secret).sort()).toEqual([a.secret, b.secret].sort())
+  })
   it('finds the gift via the wrap to getPublicKey(R), shows waiting, then takes it back after x', async () => {
     h.privkey = bytesToHex(ME)
     const token = minted(FORGER, BUYER)

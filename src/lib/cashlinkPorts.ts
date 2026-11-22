@@ -6,20 +6,23 @@
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { httpCashlinkGateway, httpCashlinkMint, wrapForLink, type CashlinkPorts, type KeptCoupon } from './cashlinkFlow'
-import { fetchGiftWraps, giftTokensFrom } from './giftLink'
 import { mirrorToGateway } from './transferSignature'
-import { publish } from './relay'
+import { deliverToRelay } from './relayDelivery'
 import { getSigner } from './nap'
 import { parseVoucherToken, creditableFaceValue } from './voucherToken'
 import { SWAPPED_TO_SATS_STATUS } from './swapBack'
 import { getWallet, notifyWalletChanged } from './wallet'
 import { tokenIdFrom } from '../../packages/wallet-storage/src/tokenId'
 import { cashlinkMovingKey } from './inFlightMoney'
-import { buildReceivedTransaction } from './transactions'
+import { buildReceivedTransaction, CASHLINK_TAKEN_BACK_MEMO } from './transactions'
 import { cashbackValidation } from './cashbackValidation'
 
-/** Put the locked gift on its link, then read it back: delivered only once a copy is found there. */
-async function deliver(linkSecret: Uint8Array, token: string): Promise<boolean> {
+/**
+ * Put the locked gift on its link. Delivered only once the RELAY holds it: publish OK and a read by
+ * id from the relay itself (#532). The gateway mirror is a cache warm-up and never counts: it keeps
+ * what strfry refused, so a 66 KB wrap read back from it looked delivered while no relay held it.
+ */
+export async function deliver(linkSecret: Uint8Array, token: string): Promise<boolean> {
   let me: string | undefined
   try {
     me = getSigner().pubkey?.toLowerCase()
@@ -27,21 +30,9 @@ async function deliver(linkSecret: Uint8Array, token: string): Promise<boolean> 
     me = undefined
   }
   const wrap = wrapForLink(linkSecret, token, me)
-  const [relayed, mirrored] = await Promise.all([
-    publish(wrap).then((r) => r.ok > 0, () => false),
-    mirrorToGateway(wrap),
-  ])
-  if (!relayed && !mirrored) return false
-  for (let attempt = 0; attempt < 4; attempt++) {
-    try {
-      const found = await giftTokensFrom(linkSecret, await fetchGiftWraps(linkSecret))
-      if (found.some((t) => t.token === token)) return true
-    } catch {
-      // Read again.
-    }
-    await new Promise((r) => setTimeout(r, 1200))
-  }
-  return false
+  const [relayed] = await Promise.all([deliverToRelay(wrap), mirrorToGateway(wrap).catch(() => false)])
+  if (!relayed.delivered && relayed.why === 'too_large') console.error('[cashlink] the relay refused a link wrap as too large (#532)')
+  return relayed.delivered
 }
 
 /**
@@ -80,7 +71,7 @@ async function keep(coupon: KeptCoupon): Promise<void> {
   // History, and the owner saw no record of it). A failed row write never undoes the kept coupon.
   if (coupon.why === 'claimed' || coupon.takenBack) {
     try {
-      await wallet.addTransaction(coupon.why === 'claimed' ? claimedRow(row, coupon.token, Date.now(), coupon.bundleId) : takenBackRow(row, coupon.token, Date.now(), coupon.bundleId))
+      await wallet.addTransaction(coupon.why === 'claimed' ? claimedRow(row, coupon.token, Date.now(), coupon.bundleId) : takenBackRow(row, coupon.token, Date.now(), coupon.bundleId, coupon.returnOf, coupon.returnMemo))
     } catch (error) {
       console.warn('[cashlink] coupon kept but its History row was not written', error instanceof Error ? error.message : 'unknown')
     }
@@ -108,10 +99,10 @@ export function claimedRow(row: VoucherRow, token: string, at = Date.now(), bund
  * The History row for a Cashlink coupon back with its issuer. Its own id (`returned:`), so it never
  * merges over the claim row of the same coupon on a wallet that both sent and claimed it.
  */
-export function takenBackRow(row: VoucherRow, token: string, at = Date.now(), bundleId?: string) {
+export function takenBackRow(row: VoucherRow, token: string, at = Date.now(), bundleId?: string, returnOf?: string, memo = CASHLINK_TAKEN_BACK_MEMO) {
   const received = claimedRow(row, token, at, bundleId) as unknown as Record<string, unknown>
   const id = `returned:${String((row as unknown as Record<string, unknown>).token_id)}`
-  return { ...received, id, txId: id, memo: 'Taken back from Cashlink' } as unknown as ReturnType<typeof claimedRow>
+  return { ...received, id, txId: id, memo, ...(returnOf ? { returnOf } : {}) } as unknown as ReturnType<typeof claimedRow>
 }
 
 export function appCashlinkPorts(): CashlinkPorts {

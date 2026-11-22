@@ -101,7 +101,8 @@ describe('checkSplittable', () => {
   })
 
   it('refuses to split a voucher backed by a single sat', () => {
-    const check = checkSplittable(xaf({ token_amount: 1 }), 25)
+    // Ratio 5000 so the one sat really is worth the face (#638: value is what the sats credit).
+    const check = checkSplittable(xaf({ token_amount: 1, issuance_ratio: 5000 }), 25)
     expect(check.ok).toBe(false)
     expect(check.ok === false && check.reason).toContain('single sat')
   })
@@ -127,7 +128,7 @@ describe('checkSplittable', () => {
 describe('selectVouchers and splitObstacle', () => {
   it('offers only vouchers that can actually produce the amount', () => {
     const divisible = xaf()
-    const indivisible = xaf({ voucher_id: 'v-1sat', token_amount: 1 })
+    const indivisible = xaf({ voucher_id: 'v-1sat', token_amount: 1, issuance_ratio: 5000 })
 
     const chosen = selectVouchers([indivisible, divisible], 25)
 
@@ -448,13 +449,14 @@ describe('passedOver (#157)', () => {
     expect(notes.map((n) => [n.voucher.voucher_id, n.reason])).toEqual([['one-sat', 'split']])
   })
 
-  it('calls a sooner coupon worth less than the amount too small, not indivisible', () => {
+  // Owner report 2026-11-17: this used to be the expected answer, and it was the bug. A sooner
+  // coupon worth less than the amount is now spent first in a bundle, so nothing is passed over.
+  it('spends a sooner coupon worth less than the amount, rather than passing it over', () => {
     const vouchers = [
       coupon({ voucher_id: 'big', issuer_id: merchant, expires_at: later }),
       coupon({ voucher_id: 'small', issuer_id: merchant, expires_at: soon, face_value: 200 }),
     ]
-    const notes = passedOver(vouchers, 400, { issuer: merchant, unit: 'EUR' })
-    expect(notes.map((n) => [n.voucher.voucher_id, n.reason])).toEqual([['small', 'small']])
+    expect(passedOver(vouchers, 400, { issuer: merchant, unit: 'EUR' })).toEqual([])
   })
 
   it('says nothing when the soonest usable coupon is the one spent', () => {

@@ -296,7 +296,17 @@ export function pickLive(entries: { id: string; at: number; record: TokenRecord 
   return [...newest.entries()].filter(([id]) => !spent.has(id)).map(([, v]) => v.row)
 }
 
-async function liveRecords(events: Event[], pubkey: string): Promise<VoucherRow[]> {
+/** Every coupon id a tombstone says is spent, with its newest tombstone's `created_at` (seconds). */
+export function tombstonedIds(entries: { id: string; at: number; record: TokenRecord }[]): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const e of entries) if (e.record.spent) out.set(e.id, Math.max(out.get(e.id) ?? 0, e.at))
+  return out
+}
+
+async function recordEntries(
+  events: Event[],
+  pubkey: string,
+): Promise<{ id: string; at: number; record: TokenRecord }[]> {
   const entries: { id: string; at: number; record: TokenRecord }[] = []
 
   // Chunked records (#203): reassembled, hash-checked and decompressed first.
@@ -344,8 +354,141 @@ async function liveRecords(events: Event[], pubkey: string): Promise<VoucherRow[
     const parsed = parseRecord(event)
     if (parsed) entries.push({ id: parsed.id, at: event.created_at, record: parsed.record })
   }
-  return pickLive(entries)
+  return entries
 }
+
+/**
+ * Rows the cross-device passes may mark: plain held money only. Anything else is either settled
+ * (spent, redeemed, swapped) or mid-flight (a send, lock, split, return), whose own saga owns the
+ * row and will settle it; marking it under that saga could hide its change or its return.
+ */
+function markable(row: VoucherRow): boolean {
+  const status = (row.status ?? '').toLowerCase()
+  return status === '' || status === 'active'
+}
+
+/**
+ * The token ids an in-flight ledger still holds (pending send, bundle, checkout code, Cashlink
+ * intent). Read through pay.ts's `withoutInFlight`, imported lazily: pay.ts imports wallet.ts,
+ * which imports this file. `null` when it cannot be read, so the caller marks nothing.
+ */
+async function inFlightIds(pubkey: string | undefined, rows: VoucherRow[]): Promise<Set<string> | null> {
+  try {
+    const owner = pubkey ?? getSigner().pubkey
+    const { withoutInFlight } = await import('./pay')
+    const free = new Set(withoutInFlight(rows, owner).map((r) => r.token_id))
+    return new Set(rows.filter((r) => r.token_id && !free.has(r.token_id)).map((r) => r.token_id!))
+  } catch (error) {
+    console.warn('[voucherRecords] in-flight ledgers unreadable, nothing marked', error)
+    return null
+  }
+}
+
+/** The row's last local write (receive, restore, return), in seconds. 0 when unknown. */
+function lastWriteSec(row: VoucherRow): number {
+  const ms = Math.max(Date.parse(row.updated_at ?? '') || 0, Date.parse(row.created_at ?? '') || 0)
+  return Math.floor(ms / 1000)
+}
+
+/**
+ * Mark held coupons a tombstone names as spent. Returns how many changed.
+ * Written through `addRestoredVoucher`, so it does not republish anything.
+ *
+ * Only a tombstone NEWER than the row's last local write counts: the same token_id can come back
+ * after its tombstone (a Cashlink taken back, an aborted or returned send, a restore), and that
+ * copy is money again. An older tombstone is left to the mint check.
+ */
+async function applyTombstones(spentAt: Map<string, number>, pubkey?: string): Promise<number> {
+  return (await markTombstoned(spentAt, pubkey)).size
+}
+
+/**
+ * `applyTombstones`, answering WHICH token ids it marked spent. Same gates: `markable`, the
+ * tombstone newer than the row's last local write, not held by an in-flight ledger. A row it
+ * leaves alone is still money as far as the caller knows (logout's backup check relies on this).
+ */
+async function markTombstoned(spentAt: Map<string, number>, pubkey?: string): Promise<Set<string>> {
+  const marked = new Set<string>()
+  if (spentAt.size === 0) return marked
+  const rows = (await getWallet().getAllVouchers()).filter(
+    (row) => row.token_id && markable(row) && (spentAt.get(row.token_id) ?? -1) > lastWriteSec(row),
+  )
+  if (rows.length === 0) return marked
+  const held = await inFlightIds(pubkey, rows)
+  if (!held) return marked
+  for (const row of rows) {
+    if (held.has(row.token_id!)) continue
+    await addRestoredVoucher({ ...row, status: 'spent' } as VoucherRow)
+    noteSpent(row.token_id!)
+    marked.add(row.token_id!)
+  }
+  return marked
+}
+
+function noteSpent(tokenId: string): void {
+  try {
+    noteSpentLocally(getSigner().pubkey, tokenId)
+  } catch {
+    // No signer: nothing cached for it either.
+  }
+}
+
+/**
+ * NUT-07 pass over the coupons this device counts as money (#cross-device).
+ *
+ * The local store is not the authority on balance: a spend made on another
+ * device whose tombstone never reached this one (lost publish, closed tab,
+ * relay gap) leaves a row here that the mint has already burnt. Only a
+ * definite SPENT answer marks a row; anything inconclusive keeps it.
+ * Rows are marked `spent` (never deleted), so a wrong answer is visible and
+ * recoverable. Never throws. Returns how many rows it marked.
+ */
+export async function pruneMintSpent(pubkey?: string): Promise<number> {
+  try {
+    const all = (await getWallet().getAllVouchers()).filter((row) => row.token && row.token_id && markable(row))
+    if (all.length === 0) return 0
+    const held = await inFlightIds(pubkey, all)
+    if (!held) return 0
+    const rows = all.filter((row) => !held.has(row.token_id!))
+    // The gateway's validate endpoint takes one token, so no batch: a bounded pool instead, and
+    // the first network error stops the pass, so a mint that is down costs one timeout, not N.
+    const api = (await legacyApi()) as unknown as {
+      validateToken(token: string): Promise<{ valid?: boolean; state?: string } | null>
+    }
+    const spent: VoucherRow[] = []
+    let next = 0
+    let down = false
+    const worker = async () => {
+      while (!down && next < rows.length) {
+        const row = rows[next++]
+        try {
+          if (((await api.validateToken(row.token))?.state ?? '').toUpperCase() === 'SPENT') spent.push(row)
+        } catch (error) {
+          if (!down) console.warn('[voucherRecords] mint unreachable, state check stopped', error)
+          down = true
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PRUNE_CONCURRENCY, rows.length) }, worker))
+    let changed = 0
+    for (const row of spent) {
+      await addRestoredVoucher({ ...row, status: 'spent' } as VoucherRow)
+      noteSpent(row.token_id!)
+      changed += 1
+    }
+    if (changed > 0) {
+      console.info(`[voucherRecords] ${changed} coupon(s) spent at the mint marked spent`)
+      notifyWalletChanged()
+    }
+    return changed
+  } catch (error) {
+    console.warn('[voucherRecords] mint state check skipped', error)
+    return 0
+  }
+}
+
+/** NUT-07 calls in flight at once during `pruneMintSpent`. */
+export const PRUNE_CONCURRENCY = 4
 
 /**
  * Is this coupon still spendable, according to the mint?
@@ -354,6 +497,10 @@ async function liveRecords(events: Event[], pubkey: string): Promise<VoucherRow[
  * cost the user a live coupon — a phantom coupon fails visibly at spend time,
  * while a dropped one is silently gone. Only a definite SPENT verdict discards.
  */
+// #261 review: kept as a single read. The relay record is not deleted on SPENT: the row is written
+// as `spent` with RESTORE_FLAG_MINT_SPENT and the relay copy stays, so nothing is lost for good, and
+// support can find it by that flag. Not re-read automatically, on purpose: a flagged row is skipped on
+// later restores (see `flagged`) so a coupon the mint refuses is never turned back into a balance.
 async function isStillLive(token: string): Promise<boolean> {
   try {
     const api = (await legacyApi()) as unknown as {
@@ -385,11 +532,16 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
     // Relay AND gateway (#2026-10-18 incident). Relay-only, a browser that
     // could not open a socket to strfry read as "no coupons" and restored a
     // zero balance over a coupon whose record was sitting on the relay.
-    const candidates = await liveRecords(
-      await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND),
-      pubkey,
-    )
-    if (candidates.length === 0) return 0
+    const entries = await recordEntries(await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND), pubkey)
+    const candidates = pickLive(entries)
+    // Cross-device spends: a tombstone published by ANOTHER device for a
+    // coupon THIS device holds. `pickLive` only answers "what is live", so the
+    // held copy used to stay `active` forever and kept counting as balance.
+    const applied = await applyTombstones(tombstonedIds(entries), pubkey)
+    if (candidates.length === 0) {
+      if (applied > 0) notifyWalletChanged()
+      return 0
+    }
 
     // What this device already has, read once.
     //
@@ -469,7 +621,7 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
 
     // Any write at all, not only a recovery: a screen showing a stale copy of
     // a coupon this device already had is still showing the wrong thing.
-    if (restored + written > 0) notifyWalletChanged()
+    if (restored + written + applied > 0) notifyWalletChanged()
     return restored
   } catch (error) {
     console.error('[voucherRecords] could not restore coupons from the relay', error)
@@ -612,9 +764,26 @@ export interface ConfirmOptions {
   deadlineMs?: number
   /** Let a fresh publish reach the gateway's cache before reading back. Default 1.5 s. */
   settleMs?: number
+  /** Converge with the account's other devices before counting. Injected for tests. Never throws. */
+  reconcile?: (pubkey: string) => Promise<void>
 }
 
-const CONFIRM_DEFAULTS: Required<ConfirmOptions> = { rounds: 2, deadlineMs: 45_000, settleMs: 1_500 }
+/** At most this much of the deadline goes to reconciling before the check. */
+export const RECONCILE_BUDGET_MS = 15_000
+
+/**
+ * Not `restoreVouchers`: it overwrites held rows with their relay copies, which would make a
+ * stale backup look like a match. Only a definite mint SPENT changes a row here.
+ */
+async function defaultReconcile(): Promise<void> {
+  try {
+    await pruneMintSpent()
+  } catch {
+    // Unreconciled rows are checked as they are: the check can only refuse more, never less.
+  }
+}
+
+const CONFIRM_DEFAULTS: Required<Omit<ConfirmOptions, 'reconcile'>> = { rounds: 2, deadlineMs: 45_000, settleMs: 1_500 }
 
 /** The held set's identity: token_id, token hash and status per row, sorted. */
 export function heldFingerprint(rows: VoucherRow[]): string {
@@ -659,13 +828,15 @@ function describeCoupon(row: VoucherRow): UnconfirmedCoupon {
  * between a delete and the money, so it does not lean on the relay library
  * having verified what it handed over.
  */
-async function readBackRecords(pubkey: string): Promise<VoucherRow[]> {
+async function readBackRecords(pubkey: string): Promise<{ live: VoucherRow[]; spent: Map<string, number> }> {
   const events = (await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND)).filter((event) => {
     if (event.pubkey !== pubkey || event.kind !== NIP60_TOKEN_KIND) return false
     const { id, created_at, kind, tags, content, sig } = event
     return verifyEvent({ id, pubkey, created_at, kind, tags, content, sig })
   })
-  return liveRecords(events, pubkey)
+  const entries = await recordEntries(events, pubkey)
+  // Tombstones too: a coupon this user's own signed tombstone names was spent on another device.
+  return { live: pickLive(entries), spent: tombstonedIds(entries) }
 }
 
 /** The held rows with no read-back record of the same value. */
@@ -742,7 +913,7 @@ export async function confirmBackups(pubkey: string, options: ConfirmOptions = {
     console.error('[voucherRecords] could not read the coupons to confirm their backup', errorName(error))
     return { ok: false, reason: 'store-unreadable', unconfirmed: [], fingerprint: '' }
   }
-  const fingerprint = heldFingerprint(held)
+  let fingerprint = heldFingerprint(held)
   if (held.length === 0) return { ok: true, confirmed: 0, fingerprint }
 
   // Reading back needs the key (NIP-44), and so does re-publishing.
@@ -757,6 +928,20 @@ export async function confirmBackups(pubkey: string, options: ConfirmOptions = {
   }
   if (!unlocked) return { ok: false, reason: 'locked', unconfirmed: held.map(describeCoupon), fingerprint }
 
+  // Android logout block (staging, 2026-11): a coupon spent on ANOTHER device of this account
+  // stays `active` here until reconciled, and its record is a tombstone, so it can never be "read
+  // back" and logout stayed refused for good. Ask the mint first (#667's NUT-07 prune, a definite
+  // SPENT only), bounded; tombstones are applied by the read-back below. Never throws.
+  await within((options.reconcile ?? defaultReconcile)(pubkey), Math.min(RECONCILE_BUDGET_MS, left()), undefined)
+  try {
+    held = rowsNeedingBackup(await (await openWallet(pubkey)).getAllVouchers())
+    fingerprint = heldFingerprint(held)
+    if (held.length === 0) return { ok: true, confirmed: 0, fingerprint }
+  } catch (error) {
+    console.error('[voucherRecords] could not re-read the coupons after reconciling', errorName(error))
+    return { ok: false, reason: 'store-unreadable', unconfirmed: [], fingerprint: '' }
+  }
+
   let missing = held
   for (let round = 0; round <= rounds && left() > 0; round++) {
     if (round > 0) {
@@ -769,7 +954,27 @@ export async function confirmBackups(pubkey: string, options: ConfirmOptions = {
     }
     const backed = await within(readBackRecords(pubkey), left(), null)
     if (backed === null) continue
-    missing = gapsIn(held, backed)
+    // A held row its own verified tombstone names, where that tombstone is NEWER than the row's
+    // last local write, is not unbacked value: another device spent it. Mark it spent here (the
+    // same gates as #667's restore: markable, time gate, not in flight) and drop exactly the rows
+    // that were marked. Never re-publish them: a fresh live record of a spent coupon is what a
+    // later restore must not see. A row re-acquired after an old tombstone (a Cashlink taken
+    // back, a returned send) fails the time gate, stays held and must still read back.
+    let spentElsewhere = new Set<string>()
+    if (held.some((row) => row.token_id && backed.spent.has(row.token_id))) {
+      try {
+        spentElsewhere = await markTombstoned(backed.spent, pubkey)
+      } catch {
+        spentElsewhere = new Set() // Nothing marked: nothing exempted.
+      }
+    }
+    if (spentElsewhere.size > 0) {
+      notifyWalletChanged()
+      held = held.filter((row) => !(row.token_id && spentElsewhere.has(row.token_id)))
+      fingerprint = heldFingerprint(held)
+      if (held.length === 0) return { ok: true, confirmed: 0, fingerprint }
+    }
+    missing = gapsIn(held, backed.live)
     if (missing.length === 0) return { ok: true, confirmed: held.length, fingerprint }
   }
   console.warn('[voucherRecords] coupon backups not confirmed', { count: missing.length })

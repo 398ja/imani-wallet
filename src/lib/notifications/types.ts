@@ -101,6 +101,9 @@ export const NOTIFICATION_TYPES = [
   // imani-gateway-portal#59: a cashback this stall issued was claimed. Sent by
   // the portal through gateway-core, not by `PushNotificationService.notify*`.
   'cashback_claimed',
+  // imani-gateway-core#220: an operator resumed delivery of a payment you sent that was stuck.
+  // Sent to the SENDER once per resume. Plain words only: no key, no amount split, no operator.
+  'send_retrying',
 ] as const
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
@@ -197,6 +200,8 @@ export const PREFERENCE_FOR_TYPE: Record<NotificationType, keyof NotificationPre
   // IS a coupon this stall handed out. A separate flag would need a server-side
   // preference too, for an event the merchant has no reason to want apart.
   cashback_claimed: 'couponClaimed',
+  // About a payment you sent, like a claim, so the same switch.
+  send_retrying: 'couponClaimed',
 }
 
 /**

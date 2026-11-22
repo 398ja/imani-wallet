@@ -303,3 +303,10 @@ export function formatDate(value: number | string | undefined | null): string {
     minute: '2-digit',
   }).format(new Date(ms))
 }
+
+/** A calendar day, "5 Oct 2026": for "since" and "until" where a time of day is noise. */
+export function formatDay(value: number | string | undefined | null): string {
+  const ms = toEpochMs(value)
+  if (ms === undefined) return ''
+  return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(ms))
+}

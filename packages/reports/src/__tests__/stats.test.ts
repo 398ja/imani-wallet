@@ -83,6 +83,21 @@ describe('merchantStats', () => {
     expect(stats.otherCurrencyCount).toBe(1)
   })
 
+  it('totals the value of EVERY voucher issued, whatever the range, in the issuance currency', () => {
+    // The dashboard's overall total: not a question about a window, and never mixing currencies.
+    const stats = merchantStats(
+      [
+        issued({ id: 'old', at: NOW - 400 * DAY, amount: 1000 }),
+        issued({ id: 'new', amount: 250 }),
+        issued({ id: 'xaf', unit: 'XAF', decimals: 0, amount: 9000 }),
+        returned({ id: 'back', amount: 250 }),
+      ],
+      opts,
+    )
+    expect(stats.issuedValue).toBe(250)
+    expect(stats.totalIssuedValue).toBe(1250)
+  })
+
   it('ignores rows outside the range', () => {
     const stats = merchantStats([issued({ id: 'old', at: NOW - 60 * DAY }), issued({ id: 'new' })], opts)
     expect(stats.issuedCount).toBe(1)

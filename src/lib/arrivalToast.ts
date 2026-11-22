@@ -294,6 +294,10 @@ function renderBundle(
   const queued = queuedInBundle(view.bundleId)
   const words = describeBundle(view, { queued })
   const open = view.state === 'in_flight'
+  // #552: parts still missing when the window closes are late, never stopped (the gateway only
+  // publishes after deciding to deliver every part), so this is not a warning about a gap.
+  const late = view.state === 'incomplete' && !words.settled
+  const shortfall = view.state === 'incomplete' && !late
 
   if (open) live.set(view.bundleId, { view, recipient: recipientPubkey, memo })
   else live.delete(view.bundleId)
@@ -307,7 +311,9 @@ function renderBundle(
       ? view.receivedCount === 0
         ? 'Nothing has arrived yet — your coupon is safe.'
         : 'What has arrived is in your balance.'
-      : view.state === 'incomplete'
+      : late
+        ? 'The rest is on its way.'
+        : shortfall
         ? 'What arrived is in your balance.'
         : undefined,
   })
@@ -319,14 +325,14 @@ function renderBundle(
     // queuedToast gives: a status that vanishes leaves the guessing it was
     // raised to end. Otherwise it times out like any arrival. A shortfall is
     // held until dismissed: it is the one outcome the recipient has to act on.
-    duration: view.state === 'incomplete' ? Infinity : open && queued > 0 ? Infinity : 6000,
+    duration: shortfall ? Infinity : open && queued > 0 ? Infinity : 6000,
   }
   if (opts.toast !== false) {
     // A shortfall is a WARNING (product decision on #94): money the sender
     // said was coming has not arrived, and the recipient may need to ask
     // them. What did arrive is safe, which the sub-line says; the warning is
     // about the gap, not about the balance.
-    if (view.state === 'incomplete') toast.warning(message, options)
+    if (shortfall) toast.warning(message, options)
     else toast.success(message, options)
   }
 
@@ -336,7 +342,7 @@ function renderBundle(
       {
         id: 'arrival:bundle:' + view.bundleId,
         type: 'voucher_received',
-        title: view.state === 'incomplete' ? 'Payment partly received' : 'Payment received',
+        title: late ? 'Payment on its way' : shortfall ? 'Payment partly received' : 'Payment received',
         body: memo ? `${words.body} — ${memo}` : words.body,
         url: '/receive',
       },

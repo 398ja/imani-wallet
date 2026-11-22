@@ -168,9 +168,20 @@ export function lockedGiftRow(rec: LockedGiftRecord, nowMs: number): Record<stri
 
 // --- Acting ------------------------------------------------------------------
 
+/** #643: the memo on the coupon's own row when an unclaimed gift comes back. */
+export const LOCKED_GIFT_RETURNED_MEMO = 'Gift not claimed, returned'
+
 /** Take an unclaimed gift back with the refund key (no link key, no relay). Never throws. */
-export function takeBackLockedGift(ports: CashlinkPorts, refundSecret: Uint8Array, token: string, onReturning: () => Promise<void> = async () => {}): Promise<ReturnOutcome> {
-  return settleLockedGift({ ports, refundSecret, lockedToken: token, noRelay: true, onReturning })
+export function takeBackLockedGift(
+  ports: CashlinkPorts,
+  refundSecret: Uint8Array,
+  token: string,
+  onReturning: () => Promise<void> = async () => {},
+  /** #643: the buyer's wallet holds the gift's `out` row, so the coupon back gets a row linked to it. */
+  linkToOutRow = false,
+): Promise<ReturnOutcome> {
+  const credit = linkToOutRow ? { returnOf: lockedGiftRowId('out', token), returnMemo: LOCKED_GIFT_RETURNED_MEMO } : {}
+  return settleLockedGift({ ports, refundSecret, lockedToken: token, noRelay: true, ...credit, onReturning })
 }
 
 export type IncomingOutcome = 'claimed' | 'waiting' | 'gone'

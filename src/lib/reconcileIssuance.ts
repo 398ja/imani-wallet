@@ -28,7 +28,7 @@
  */
 import { parseCashAttestation, verifyCashAttestation } from './cashAttestation'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
-import { isVoucherIssuance, type WalletTransaction } from './transactions'
+import { isVoucherIssuance, warrantIssuedAt, type WalletTransaction } from './transactions'
 
 // `isVoucherIssuance`: a Sell coupon and a cashback code both take money at a
 // counter and both are the merchant's own liability, so both belong in a
@@ -131,12 +131,14 @@ export function reconcileIssuances(
     //
     // A delegated warrant is judged at the moment the row was recorded, not
     // today, so a past card sale does not turn "failed" the day its delegation
-    // lapses (#176 review).
+    // lapses (#176 review). A card row re-dated to its payment is judged at its
+    // mint time (#648).
+    const issuedAt = warrantIssuedAt(row)
     const verdict = verifyIssuanceWarrant(
       warrant,
       stallPubkey,
       { faceValueMinor: row.amount, unit: row.unit, faceDecimals: row.decimals },
-      row.at > 0 ? { issuedAt: row.at } : {},
+      issuedAt !== undefined ? { issuedAt } : {},
     )
 
     // Checked against the SALE the warrant describes, not against the row,

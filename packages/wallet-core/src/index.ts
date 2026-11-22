@@ -12,8 +12,10 @@
 
 export {
   minSplitStep,
+  couponValue,
   checkSplittable,
   selectVouchers,
+  chooseSpend,
   planParts,
   splitObstacle,
   passedOver,
@@ -23,6 +25,7 @@ export {
   type SplitCheck,
   type SendPart,
   type SendPlan,
+  type SpendChoice,
 } from './spend'
 
 export {

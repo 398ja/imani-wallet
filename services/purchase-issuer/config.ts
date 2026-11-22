@@ -73,12 +73,22 @@ export interface IssuerConfig {
     anchorsPath: string
     /** G15: durable tracked gifts for claimed/expired notices. */
     trackerPath: string
+    /** §6c reminder offsets in ms before claimBy (`PURCHASE_GIFT_REMINDER_OFFSETS_HOURS`, default 168,24). */
+    reminderOffsetsMs: number[]
+    /** The From address the mailer sends gifts as, named in reminders (`PURCHASE_GIFT_MAIL_FROM`). */
+    mailFrom: string
     /** Optional origin replacing the coupon's mint URL for NUT-07 (local stacks). */
     mintTransportUrl: string | null
     /** Per-gift re-check interval, or null for the default. */
     sweepEveryMs: number | null
     /** TEST MODE ONLY: the claim window in seconds instead of the draft's days. */
     testWindowSeconds: number | null
+    /**
+     * #532: the relay (strfry) gift wraps are published to and read back from by id
+     * (`PURCHASE_RELAY_URL`). Null publishes to the gateway's cache only, as before, which a relay
+     * reader never sees: deployments set it.
+     */
+    relayUrl: string | null
     /**
      * #410 code gifts: imani-checkout-codes, or null when `PURCHASE_CODE_GIFTS` is not `true` (the
      * default). Off, every code gift is parked before minting.
@@ -192,7 +202,28 @@ export function readConfig(env: NodeJS.ProcessEnv): IssuerConfig {
       checkoutCodesUrl = origin(raw) === null ? null : raw.replace(/\/+$/, '')
       if (checkoutCodesUrl === null) missing.push('PURCHASE_CHECKOUT_CODES_URL: imani-checkout-codes base URL (required with PURCHASE_CODE_GIFTS=true)')
     }
-    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, mintTransportUrl, sweepEveryMs, testWindowSeconds, checkoutCodesUrl }
+    // §6c: hours before claimBy, comma-separated; empty string ("none") turns reminders off.
+    const rawOffsets = (env.PURCHASE_GIFT_REMINDER_OFFSETS_HOURS ?? '168,24').trim()
+    const reminderOffsetsMs: number[] = []
+    if (rawOffsets !== '' && rawOffsets !== 'none') {
+      for (const part of rawOffsets.split(',')) {
+        const h = Number(part.trim())
+        if (!Number.isInteger(h) || h < 1 || h > 24 * 60) {
+          missing.push('PURCHASE_GIFT_REMINDER_OFFSETS_HOURS: comma-separated whole hours, 1 to 1440, or "none"')
+          break
+        }
+        reminderOffsetsMs.push(h * 3_600_000)
+      }
+    }
+    const rawRelay = (env.PURCHASE_RELAY_URL ?? '').trim()
+    let relayUrl: string | null = null
+    if (rawRelay !== '') {
+      if (!/^wss?:\/\/[^\s/]+/.test(rawRelay)) missing.push('PURCHASE_RELAY_URL: a ws:// or wss:// relay URL')
+      else relayUrl = rawRelay
+    }
+    const mailFrom = (env.PURCHASE_GIFT_MAIL_FROM ?? 'gifts@imani.casa').trim()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mailFrom)) missing.push('PURCHASE_GIFT_MAIL_FROM: the From address imani-mailer sends gifts as')
+    gifts = { sealKeyHex, walletOrigin: walletOrigin ?? '', mailerUrl, mailerToken, anchorsPath, trackerPath, reminderOffsetsMs, mailFrom, mintTransportUrl, sweepEveryMs, testWindowSeconds, checkoutCodesUrl, relayUrl }
   }
 
   if (missing.length > 0) throw new ConfigError(missing)

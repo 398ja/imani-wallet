@@ -75,6 +75,22 @@ export function validValidityDays(value: unknown): number | null {
 }
 
 /**
+ * The currency a merchant record says the stall issues in (`issuanceCurrency`), upper-cased, or
+ * null when it names none or names something that is not a three-letter code. Null rather than the
+ * wallet's display default: a caller deciding whether a sale can be issued must not guess a unit.
+ */
+export function currencyFromRecord(content: string): string | null {
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown> | null
+    if (parsed === null || typeof parsed !== 'object' || typeof parsed.issuanceCurrency !== 'string') return null
+    const unit = parsed.issuanceCurrency.trim().toUpperCase()
+    return /^[A-Z]{3}$/.test(unit) ? unit : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * The validity a merchant record's `content` gives its coupons, read exactly as the wallet's Sell
  * screen reads it: a valid `voucherValidityDays` wins, and anything else (absent, malformed,
  * out of range, unparseable JSON) is the stall's default, `DEFAULT_VALIDITY_DAYS`.

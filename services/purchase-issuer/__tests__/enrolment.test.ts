@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FileCredentialStore } from '../adapters'
 import { CredentialConfirmer } from '../confirmation'
-import { BEGIN_PATH, ENROL_PATH, EnrolmentService, READY_PREFIX } from '../enrolment'
+import { BEGIN_COOLDOWN_MS, BEGIN_PATH, ENROL_PATH, EnrolmentService, MAX_PENDING, READY_PREFIX, RESEND_PATH } from '../enrolment'
 import { attemptCount, renderMetrics, resetMetricsForTest } from '../metrics'
 import type { OwedPurchase, PurchasesApi } from '../purchasesApi'
 import { portsFor } from '../server'
@@ -24,6 +24,7 @@ import { CredentialVault } from '../vault'
 import { runPass, type WorkerDeps } from '../worker'
 import { delegationJson, ninetyDayTerm, STALL, STALL_SK } from './stallFixture'
 import type { StallValidity } from '../stallValidity'
+import type { SalesPosition } from '../salesAllowance'
 
 const ORIGIN = 'https://wallet.test'
 const GATEWAY = 'http://gateway:8082'
@@ -248,6 +249,24 @@ describe('enrolment', () => {
     expect(await vault.get(STALL)).toBeNull()
   })
 
+  // #306: after a 502 the phone sends the SAME credential again, and it is sealed. The status the
+  // stall reads names the credential (so the phone can tell a lost answer from a failure); the
+  // public `/ready` never does.
+  it('seals the same credential when the phone retries a 502', async () => {
+    const { call, vault, gw } = await setup()
+    gw.confirmStatus = 503
+    const begun = await call('POST', BEGIN_PATH)
+    const body = JSON.stringify({ credentialId: 'cred-0001', delegation: delegationJson({ delegate: begun.body.lockPubkey as string }) })
+    expect((await call('POST', ENROL_PATH, body)).status).toBe(502)
+    gw.confirmStatus = 204
+    const retried = await call('POST', ENROL_PATH, body)
+    expect(retried.status).toBe(200)
+    expect(retried.body.credentialId).toBe('cred-0001')
+    expect((await vault.get(STALL))?.credentialId).toBe('cred-0001')
+    const ready = await call('GET', `${READY_PREFIX}${STALL}`)
+    expect(JSON.stringify(ready.body)).not.toContain('cred-0001')
+  })
+
   // Re-enrolling REPLACES the stall's one record with the new credential and key, safely.
   it('replaces the record on re-enrolment', async () => {
     const { call, vault, path } = await setup()
@@ -260,6 +279,43 @@ describe('enrolment', () => {
     expect(held?.lockKeyHex).not.toBe(firstKey)
     expect(JSON.parse(await readFile(path, 'utf8'))).toHaveLength(1)
   })
+})
+
+describe('#306: the begin map cannot be filled to lock stalls out', () => {
+  afterEach(() => vi.useRealTimers())
+
+  // A stall that begins again within the cooldown gets the SAME lock key: its minted credential
+  // stays enrollable, and a loop of begins cannot churn keys.
+  it('answers the same lock key within the cooldown, a fresh one after', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const { call } = await setup()
+    const first = await call('POST', BEGIN_PATH)
+    vi.setSystemTime(Date.now() + BEGIN_COOLDOWN_MS - 1000)
+    const again = await call('POST', BEGIN_PATH)
+    expect(again.status).toBe(200)
+    expect(again.body.lockPubkey).toBe(first.body.lockPubkey)
+    expect(again.body.expiresAt).toBe(first.body.expiresAt)
+    vi.setSystemTime(Date.now() + 2000)
+    const later = await call('POST', BEGIN_PATH)
+    expect(later.body.lockPubkey).not.toBe(first.body.lockPubkey)
+  })
+
+  // A thousand throwaway keys begin; a real stall still can, and it is the oldest that goes.
+  it('evicts the oldest begun enrolment instead of refusing a new one', async () => {
+    const { call } = await setup()
+    const firstIntruder = bytesToHex(generateSecretKey())
+    expect((await call('POST', BEGIN_PATH, '', signed('POST', BEGIN_PATH, '', firstIntruder))).status).toBe(200)
+    for (let i = 1; i < MAX_PENDING; i++) {
+      expect((await call('POST', BEGIN_PATH, '', signed('POST', BEGIN_PATH, '', bytesToHex(generateSecretKey())))).status).toBe(200)
+    }
+    // Full. The real stall still begins, and enrols.
+    const { enrolled } = await enrolAs(call, 'cred-0001')
+    expect(enrolled.status).toBe(200)
+    // The oldest was the one dropped: its enrol now finds nothing in progress.
+    const body = JSON.stringify({ credentialId: 'cred-0002', delegation: delegationJson() })
+    const evicted = await call('POST', ENROL_PATH, body, signed('POST', ENROL_PATH, body, firstIntruder))
+    expect(evicted.status).toBe(409)
+  }, 60_000)
 })
 
 describe('status', () => {
@@ -381,5 +437,241 @@ describe('#312: readiness follows the stall\u2019s voucher validity', () => {
     const soon = Math.floor(Date.now() / 1000) + 400 * 86_400
     const refused = await enrolAs(callLong, 'cred-0002', (lock) => delegationJson({ delegate: lock, expiresAt: soon }))
     expect(refused.enrolled.status).toBe(422)
+  })
+})
+
+describe('gc#317: readiness follows the stall\u2019s Free plan sales allowance', () => {
+  const TOKEN = 'pa-shared-token'
+  const gbp = async (): Promise<StallValidity> => ({ kind: 'days', days: 90, source: 'record', currency: 'GBP' })
+
+  /** An enrolled stall, with readiness asked through `allowanceFor`. */
+  async function enrolledWithAllowance(position: SalesPosition, validityFor: () => Promise<StallValidity> = gbp) {
+    const { call, vault, confirmer } = await setup()
+    expect((await enrolAs(call)).enrolled.status).toBe(200)
+    const asked: Array<{ stall: string; unit: string }> = []
+    const service = new EnrolmentService({
+      vault,
+      confirmer,
+      publicOrigin: ORIGIN,
+      validityFor,
+      internalToken: TOKEN,
+      allowanceFor: async (credential, unit) => {
+        asked.push({ stall: credential.stallPubkey, unit })
+        return position
+      },
+    })
+    const ready = async (query = '', authorization?: string) =>
+      (await service.handle({ method: 'GET', path: `${READY_PREFIX}${STALL}${query}`, body: '', authorization })).body
+    return { ready, asked }
+  }
+
+  // jan's case: a Free stall at its allowance is NOT ready, so Buy is off and nobody pays.
+  it('answers not ready, sales_limit_reached, for a stall at its allowance', async () => {
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 0 })
+    expect(await ready()).toEqual({ ready: false, reason: 'sales_limit_reached' })
+    // Asked in the currency the stall's own signed record names.
+    expect(asked).toEqual([{ stall: STALL, unit: 'GBP' }])
+  })
+
+  // A paid plan, or allowance left: ready, as before.
+  it.each<SalesPosition>([{ kind: 'unlimited' }, { kind: 'limited', unit: 'GBP', remainingMinor: 1 }])(
+    'answers ready for %o',
+    async (position) => {
+      const { ready } = await enrolledWithAllowance(position)
+      expect(await ready()).toEqual({ ready: true })
+    },
+  )
+
+  // Card payments are Essentials and above: no paid plan, no card sale, allowance or not.
+  it.each<SalesPosition>([
+    { kind: 'unlimited', paidPlan: false },
+    { kind: 'limited', unit: 'GBP', remainingMinor: 10_000, paidPlan: false },
+  ])('answers not ready, card_payments_not_in_plan, for a Starter stall (%o)', async (position) => {
+    const { ready } = await enrolledWithAllowance(position)
+    expect(await ready()).toEqual({ ready: false, reason: 'card_payments_not_in_plan' })
+  })
+
+  // The checkout's own question (payment-adapter, with the token and an amount) is refused too.
+  it('refuses the checkout for a Starter stall, before any amount is judged', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 10_000, paidPlan: false })
+    expect(await ready('?unit=GBP&amount=500', `Bearer ${TOKEN}`)).toEqual({ ready: false, reason: 'card_payments_not_in_plan' })
+  })
+
+  // A paid plan sells; a gateway that said nothing about the plan (older, or its store down) refuses nothing.
+  it.each<SalesPosition>([
+    { kind: 'unlimited', paidPlan: true },
+    { kind: 'unlimited' },
+  ])('stays ready for %o', async (position) => {
+    const { ready } = await enrolledWithAllowance(position)
+    expect(await ready()).toEqual({ ready: true })
+  })
+
+  // Advice only: a gateway that cannot answer must not take every stall off sale. The mint re-checks.
+  it('stays ready when the allowance cannot be read', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'unknown', reason: 'down' })
+    expect(await ready()).toEqual({ ready: true })
+  })
+
+  // `unit=` (payment-adapter sends the Stripe currency) wins over the record's, for the internal caller.
+  it('asks in the unit the internal caller names', async () => {
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'unlimited' })
+    await ready('?unit=eur', `Bearer ${TOKEN}`)
+    expect(asked[0].unit).toBe('EUR')
+  })
+
+  // From anyone else it is ignored: an invented unit must not cost a gateway read, or read as reached.
+  it('ignores a unit from a public caller', async () => {
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'unlimited' })
+    await ready('?unit=xyz')
+    expect(asked[0].unit).toBe('GBP')
+  })
+
+  // No unit anywhere (no record currency, none asked): no allowance to judge, but the PLAN is still
+  // asked (review: a Starter stall with no record currency used to pass), in USD, plan only.
+  it('asks only for the plan without a unit, and judges no allowance', async () => {
+    const none = async (): Promise<StallValidity> => ({ kind: 'days', days: 90, source: 'default' })
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'limited', unit: 'USD', remainingMinor: 0 }, none)
+    expect(await ready()).toEqual({ ready: true })
+    expect(asked).toEqual([{ stall: STALL, unit: 'USD' }])
+  })
+
+  // Review regression: a Starter stall with no record currency is refused all the same.
+  it('refuses a Starter stall with no unit to ask in', async () => {
+    const none = async (): Promise<StallValidity> => ({ kind: 'days', days: 90, source: 'default' })
+    const { ready } = await enrolledWithAllowance({ kind: 'unlimited', paidPlan: false }, none)
+    expect(await ready()).toEqual({ ready: false, reason: 'card_payments_not_in_plan' })
+  })
+
+  // Review regression: the gateway's counter is down (503) but it still named the plan.
+  it('refuses a Starter stall when only the allowance is unknown', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'unknown', reason: 'sales allowance answered 503', paidPlan: false })
+    expect(await ready()).toEqual({ ready: false, reason: 'card_payments_not_in_plan' })
+  })
+
+  // Review regression: nothing after the charge checks the plan, so the checkout never sells on a
+  // plan nobody could check. 503, which payment-adapter refuses as "try again" before Stripe.
+  it('answers 503 to the checkout when the plan could not be checked', async () => {
+    const { call, vault, confirmer } = await setup()
+    await enrolAs(call)
+    const service = new EnrolmentService({
+      vault,
+      confirmer,
+      publicOrigin: ORIGIN,
+      validityFor: gbp,
+      internalToken: TOKEN,
+      allowanceFor: async () => ({ kind: 'unknown', reason: 'unreachable' }),
+    })
+    const answer = await service.handle({
+      method: 'GET',
+      path: `${READY_PREFIX}${STALL}?unit=GBP&amount=500`,
+      body: '',
+      authorization: `Bearer ${TOKEN}`,
+    })
+    expect(answer.status).toBe(503)
+  })
+
+  // The allowance alone unknown, the plan known paid: the checkout still sells.
+  it('sells at checkout when only the allowance is unknown on a paid plan', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'unknown', reason: 'counter', paidPlan: true })
+    expect(await ready('?unit=GBP&amount=500', `Bearer ${TOKEN}`)).toEqual({ ready: true })
+  })
+
+  // With the shared token, the amount counts: more than is left is refused for this sale only.
+  it('refuses an amount over what is left, for the internal caller', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 7000 })
+    const auth = `Bearer ${TOKEN}`
+    expect(await ready('?unit=GBP&amount=7001', auth)).toEqual({ ready: false, reason: 'sales_limit_exceeded' })
+    expect(await ready('?unit=GBP&amount=7000', auth)).toEqual({ ready: true })
+  })
+
+  // Without it the amount is ignored: told to anyone, it would let a stranger bisect a stall's sales.
+  it.each([undefined, 'Bearer wrong', `Nostr ${TOKEN}`, 'Bearer '])('ignores the amount for %s', async (auth) => {
+    const { ready } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 7000 })
+    expect(await ready('?unit=GBP&amount=999999', auth)).toEqual({ ready: true })
+  })
+
+  // An empty configured token trusts nobody, even a caller presenting an empty bearer.
+  it('trusts nobody when no token is configured', async () => {
+    const { call, vault, confirmer } = await setup()
+    await enrolAs(call)
+    const service = new EnrolmentService({
+      vault,
+      confirmer,
+      publicOrigin: ORIGIN,
+      validityFor: gbp,
+      internalToken: '',
+      allowanceFor: async () => ({ kind: 'limited', unit: 'GBP', remainingMinor: 10 }),
+    })
+    const answer = await service.handle({
+      method: 'GET',
+      path: `${READY_PREFIX}${STALL}?amount=500`,
+      body: '',
+      authorization: 'Bearer ',
+    })
+    expect(answer.body).toEqual({ ready: true })
+  })
+
+  // A not-ready stall keeps its own reason, and the gateway is not asked for nothing.
+  it('keeps an earlier reason and does not ask', async () => {
+    const never = async (): Promise<StallValidity> => ({ kind: 'days', days: 0, source: 'record', currency: 'GBP' })
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 0 }, never)
+    expect(await ready()).toEqual({ ready: false, reason: 'validity_never_expires' })
+    expect(asked).toEqual([])
+  })
+})
+
+describe('the pull on login: resend (imani-wallet#275)', () => {
+  async function resendService(result: import('../salePull').ResendResult | undefined) {
+    const { vault, confirmer } = await setup()
+    const asked: Array<{ stall: string; ids: readonly string[] }> = []
+    const service = new EnrolmentService({
+      vault,
+      confirmer,
+      publicOrigin: ORIGIN,
+      validityFor: ninetyDayTerm,
+      ...(result ? { resend: async (stall: string, ids: readonly string[]) => (asked.push({ stall, ids }), result) } : {}),
+    })
+    const call = (body: string, authorization?: string) =>
+      service.handle({ method: 'POST', path: RESEND_PATH, body, authorization: authorization ?? signed('POST', RESEND_PATH, body) })
+    return { call, asked }
+  }
+
+  it('re-sends for the SIGNER, with the ids as a filter', async () => {
+    const { call, asked } = await resendService({ kind: 'sent', sent: 1, failed: [], unknown: ['x-100000'] })
+    const answer = await call(JSON.stringify({ voucherIds: ['8027e345', 'x-100000'] }))
+    expect(answer).toEqual({ status: 200, body: { sent: 1, failed: [], unknown: ['x-100000'] } })
+    expect(asked).toEqual([{ stall: STALL, ids: ['8027e345', 'x-100000'] }])
+  })
+
+  it('refuses an unsigned caller, and another key asks only for its own sales', async () => {
+    const { call, asked } = await resendService({ kind: 'sent', sent: 0, failed: [], unknown: [] })
+    expect((await call('{}', 'Nostr e30=')).status).toBe(401)
+    const intruder = bytesToHex(generateSecretKey())
+    await call('{}', signed('POST', RESEND_PATH, '{}', intruder))
+    expect(asked.map((a) => a.stall)).not.toContain(STALL)
+  })
+
+  it('refuses malformed ids and too many of them', async () => {
+    const { call, asked } = await resendService({ kind: 'sent', sent: 0, failed: [], unknown: [] })
+    expect((await call(JSON.stringify({ voucherIds: ['../etc'] }))).status).toBe(400)
+    expect((await call(JSON.stringify({ voucherIds: Array.from({ length: 51 }, (_, i) => `v-${i}000`) }))).status).toBe(400)
+    expect((await call('not json')).status).toBe(400)
+    expect(asked).toEqual([])
+  })
+
+  it('allows one resend per stall per cooldown, and does not burn it on an outage', async () => {
+    const { call, asked } = await resendService({ kind: 'sent', sent: 0, failed: [], unknown: [] })
+    expect((await call('{}')).status).toBe(200)
+    expect((await call('{}')).status).toBe(429)
+    expect(asked).toHaveLength(1)
+    const down = await resendService({ kind: 'unavailable' })
+    expect((await down.call('{}')).status).toBe(503)
+    expect((await down.call('{}')).status).toBe(503)
+  })
+
+  it('answers 404 for an unenrolled stall, 503 when payment-adapter is down or resend is not wired', async () => {
+    expect((await (await resendService({ kind: 'not-enrolled' })).call('{}')).status).toBe(404)
+    expect((await (await resendService({ kind: 'unavailable' })).call('{}')).status).toBe(503)
+    expect((await (await resendService(undefined)).call('{}')).status).toBe(503)
   })
 })

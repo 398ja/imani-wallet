@@ -6,6 +6,8 @@ import type { Profile } from '../lib/profile'
 import { backupFilename, createBackup } from '../lib/backup'
 import { downloadText } from '../lib/download'
 import { recordBackup } from '../lib/backupRecord'
+import { backupFingerprint, recordKeyBackup } from '../lib/keyBackups'
+import { KeyBackupSaved } from '../components/KeyBackup'
 import { handleLabel, handleOf } from '../lib/format'
 import { useDriveBackup } from '../lib/useDriveBackup'
 import { DriveOverwriteWarning } from '../components/DriveOverwriteWarning'
@@ -37,14 +39,19 @@ export function WelcomePage({
   const [revealed, setRevealed] = useState(false)
   const [copied, setCopied] = useState(false)
   const [downloaded, setDownloaded] = useState(false)
+  const [fileName, setFileName] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
   const download = async () => {
     setError(null)
     try {
-      await downloadText(backupFilename(profile), createBackup(profile.pubkey))
+      const name = backupFilename(profile)
+      const json = createBackup(profile.pubkey)
+      await downloadText(name, json)
       recordBackup(profile.pubkey, 'file')
+      recordKeyBackup(profile.pubkey, 'file', { fileName: name, fingerprint: backupFingerprint(json) })
+      setFileName(name)
       setDownloaded(true)
     } catch (e) {
       setError(userMessage(e))
@@ -135,11 +142,8 @@ export function WelcomePage({
           <DriveOverwriteWarning who={handleOf(profile.nip05)} />
         </div>
 
-        {drive.done && (
-          <p className="mt-2 text-xs text-green-700 dark:text-green-500">
-            Saved to your Google Drive.
-          </p>
-        )}
+        {drive.done && <KeyBackupSaved location="drive" />}
+        {downloaded && <KeyBackupSaved location="file" fileName={fileName} />}
         {(error ?? drive.error) && <Alert>{error ?? drive.error}</Alert>}
       </Panel>
 

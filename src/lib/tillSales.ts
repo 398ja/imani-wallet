@@ -2,7 +2,7 @@ import type { Event } from 'nostr-tools'
 import type { TransactionRow } from '@imani/wallet-storage'
 
 import { toContent, toRow, type HistoryContent } from './txRecords'
-import { toTransaction } from './transactions'
+import { toTransaction, warrantIssuedAt } from './transactions'
 import { parseIssuanceWarrant, verifyIssuanceWarrant, type IssuanceWarrant } from './issuanceWarrant'
 import { verifyIssuerDelegation } from './issuerDelegation'
 import { parseCredentialSecret } from './terminalWarrant'
@@ -395,8 +395,10 @@ function delegatedSaleRow(
   const row = toRow(id, rest) as unknown as Record<string, unknown>
   const tx = toTransaction(row as unknown as TransactionRow)
   // Judged at the sale time, as the ledger judges it (#176 review): a lapsed delegation does not
-  // un-authorise a past card sale. A row with no time is judged now.
-  const when = tx.at > 0 ? { issuedAt: tx.at } : Date.now()
+  // un-authorise a past card sale. A row with no time is judged now. A row re-dated to its payment
+  // is judged at its mint time (#648).
+  const issuedAt = warrantIssuedAt(tx)
+  const when = issuedAt !== undefined ? { issuedAt } : Date.now()
   const delegation = verifyIssuerDelegation(warrant.delegation, stall, when)
   if (!delegation.ok) return { reason: 'warrant-failed' }
   if (delegation.delegatePubkey.toLowerCase() !== sealer) return { reason: 'sealer-not-delegate' }
@@ -404,7 +406,7 @@ function delegatedSaleRow(
     warrant,
     stall,
     { faceValueMinor: tx.amount, unit: tx.unit, faceDecimals: tx.decimals },
-    tx.at > 0 ? { issuedAt: tx.at } : {},
+    issuedAt !== undefined ? { issuedAt } : {},
   )
   if (verdict.verdict !== 'verified') return { reason: 'warrant-failed' }
   return { row: { ...row, merchantId: stall, direction: 'out' } as unknown as TransactionRow }

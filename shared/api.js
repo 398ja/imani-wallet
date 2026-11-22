@@ -2395,6 +2395,55 @@ class GatewayAPI {
   }
 
   /**
+   * #552: start an atomic bundle, every part in one request
+   * (POST /api/v1/atomic-send/bundles). Nothing reaches the recipient until every
+   * part is prepared, and then the gateway delivers all of them forward-only.
+   * `body` is the wire body (snake_case, see the gateway contract); each part's
+   * NUT-11 witnesses are added here exactly as `initiateAtomicSend` adds them.
+   */
+  async initiateAtomicSendBundle(body, idempotencyKey = null) {
+    const headers = {};
+    if (idempotencyKey) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+    const parts = (body.parts || []).map((part) => {
+      const out = { ...part };
+      try {
+        const witnesses = globalThis.__imaniWitnessHeaderForToken?.(part.token);
+        if (witnesses) out.witnesses = witnesses;
+      } catch {
+        // As in initiateAtomicSend: the mint names the real problem.
+      }
+      return out;
+    });
+    return this.requestWithHeaders('POST', '/api/v1/atomic-send/bundles', { ...body, parts }, headers);
+  }
+
+  /**
+   * gateway-core#220 (B): bundle parts held for THIS wallet (the NIP-98 signer is the recipient).
+   * The relay DM stays the primary path. This is the second one, for when a relay never delivers.
+   * @param {{since?: number, limit?: number}} [opts] - since in epoch seconds, inclusive
+   * @returns {Promise<{items: Object[], next_since: number|null}>}
+   */
+  async getIncomingAtomicSends({ since = 0, limit = 50 } = {}) {
+    return this.requestWithHeaders('GET', `/api/v1/atomic-send/incoming?since=${Number(since) || 0}&limit=${Number(limit) || 50}`);
+  }
+
+  /**
+   * gateway-core#220 (B): tell the gateway a pulled part was swapped into this wallet, so it stops
+   * retrying the DM and the sender sees Sent. Idempotent. Bookkeeping only: the money is already here.
+   * @param {string} sendId
+   */
+  async ackIncomingAtomicSend(sendId) {
+    return this.requestWithHeaders('POST', `/api/v1/atomic-send/incoming/${encodeURIComponent(sendId)}/ack`);
+  }
+
+  /** #552: the state of a bundle and every part (GET /api/v1/atomic-send/bundles/{id}). */
+  async getAtomicSendBundle(bundleId) {
+    return this.requestWithHeaders('GET', `/api/v1/atomic-send/bundles/${bundleId}`);
+  }
+
+  /**
    * Get the status of an atomic send.
    * @param {string} sendId - Send ID from initiateAtomicSend
    * @returns {Object} - { sendId, status, progress, keepToken, canReclaim, ... }

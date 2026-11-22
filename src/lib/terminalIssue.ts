@@ -127,7 +127,7 @@ export interface EnrolmentContext {
   licence: LicenceStatus
   /**
    * Terminals in service, excluding the owner's own device. Waiting rows are
-   * not counted: they do not use up the free terminal (decision 4 on #160).
+   * not counted: they do not use up the tier's allowance (decision 4 on #160).
    */
   enrolledCount: number
   /**
@@ -293,6 +293,13 @@ export type PreparedCredential = TerminalCredential & {
    * registry row for it. Sent as `X-Imani-Terminal-Renews`; never part of the credential.
    */
   renewsToken?: string
+  /**
+   * A FIRST enrolment of an online shop (the redeem-only terminal a shop plugin generated): sent as
+   * `X-Imani-Online-Shop: 1`, so gateway-customer can refuse it with `422 FEATURE_NOT_IN_PLAN` when
+   * the stall's plan lacks `ecommerce`. Never sent with `renewsToken`: a shop must be able to renew,
+   * so the codes it already holds can finish.
+   */
+  onlineShop?: boolean
 }
 
 /**

@@ -127,7 +127,7 @@ export function money(minor: number, currency: string, fraction = false): string
   }).format(minor / 100)
 }
 
-/** "£8/month", "£70/year": a plan's price for a term, or null when it has none. */
+/** "£10/month", "£100/year": a plan's price for a term, or null when it has none. */
 export function priceLine(plan: Plan, term: Term): string | null {
   const p = plan.prices?.[term]
   if (!p) return null
@@ -144,7 +144,15 @@ export function yearlySaving(plan: Plan): number | null {
 }
 
 export function featureName(f: string): string {
-  return f === 'api' ? 'API access' : f === 'ecommerce' ? 'Online shop checkout codes' : f === 'terminals' ? 'Extra tills' : f
+  return f === 'api'
+    ? 'API access'
+    : f === 'ecommerce'
+      ? 'Online shop checkout codes'
+      : f === 'card_payments'
+        ? 'Card payments for your vouchers'
+        : f === 'terminals'
+          ? 'Extra tills'
+          : f
 }
 
 /** "Up to £100 of vouchers in total", "Unlimited voucher issuance": the plan's sales limit in words. */
@@ -166,6 +174,7 @@ export function tillsLine(limits: LicenceLimits): string {
   const t = limits.terminals
   if (t === null) return 'Unlimited tills'
   if (t === undefined) return ''
+  if (t === 0) return 'Your device only, no extra tills'
   return t === 1 ? 'Your device plus 1 till' : `Your device plus ${t} tills`
 }
 
