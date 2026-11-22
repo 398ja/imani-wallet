@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Cashlink confirm prompt shows the issuing stall's avatar above its name, from the same cached
+  kind-0 lookup (no extra request). Initials or a placeholder when there is no picture, it fails to
+  load or the profile is slow; Add is never blocked. Clearer hierarchy (stall, amount, action),
+  44px touch targets, and announced verification / progress states.
+
 ## [0.74.0] - 2026-11-20
 
 ### Fixed
