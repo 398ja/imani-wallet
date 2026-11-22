@@ -35,4 +35,29 @@ describe('cardPaymentsPlan', () => {
   it('is unknown when the plan could not be checked', () => {
     expect(cardPaymentsPlan(null)).toBe('unknown')
   })
+
+  // Regression (review): licenceStatus resolves a store it could not read as a refusal with a
+  // GRACE reason, not a throw. Read as Starter, an outage withdrew a paying stall's card offer.
+  it('is unknown, not Starter, when the licence store could not be read', () => {
+    for (const reason of ['never-verified', 'grace-elapsed']) {
+      const outage = { checkedAt: NOW, decision: { granted: false, reason, detail: 'the wallet could not be read' }, grants: [] } as unknown as LicenceStatus
+      expect(cardPaymentsPlan(outage)).toBe('unknown')
+    }
+  })
+
+  it('is not included on an ANSWERED refusal: expired, revoked, absent', () => {
+    for (const reason of ['expired', 'revoked-by-seller', 'absent']) {
+      const answered = { checkedAt: NOW, decision: { granted: false, reason, detail: '' }, grants: [] } as unknown as LicenceStatus
+      expect(cardPaymentsPlan(answered)).toBe('not-included')
+    }
+  })
+
+  it('is included under the grace window, which carries the last verified grant', () => {
+    const grace = {
+      checkedAt: NOW,
+      decision: { granted: true, source: 'grace', grant: { tier: 'basic', features: ['terminals'], expiresAt: NOW + 86_400 } },
+      grants: [{ tier: 'basic', features: ['terminals'], expiresAt: NOW + 86_400 }],
+    } as unknown as LicenceStatus
+    expect(cardPaymentsPlan(grace)).toBe('included')
+  })
 })
