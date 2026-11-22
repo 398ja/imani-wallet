@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Coupons spent on another device (e.g. in the browser) no longer stay live on this one (e.g. the Android app). The relay restore now applies other devices' spend tombstones to coupons this device already holds (before, it only skipped them as restore candidates, so a held copy stayed `active` forever), and every coupon still counted as money is checked against the mint (NUT-07) so a spend whose tombstone was lost is pruned too. Runs at login and on every return to the foreground (Capacitor `resume`, `visibilitychange`), throttled to once per 30s.
 
+## [0.76.0] - 2026-11-22
+
+### Changed
+
+- **The claims page is headed by its voucher.** `/merchant/coupon/:id/claims` now opens with the same panel as the voucher screen: the face value, the voucher id, and the claimed bar with claimed and outstanding amounts, so the list is read against the voucher it belongs to. The subtitle keeps only the claim count.
+
 ## [0.75.0] - 2026-11-22
 
 ### Added
