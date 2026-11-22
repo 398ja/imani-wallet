@@ -46,6 +46,42 @@ New to Imani? Start with [How Imani works in 50 seconds](https://www.youtube.com
 **Online checkout:** the demo WooCommerce store at
 <https://shop.staging.398ja.xyz> takes `IMANI-` coupon codes made in the wallet.
 
+**Free test vouchers (the faucet)**
+
+Need vouchers to try spending, splitting or gifting without setting up a shop?
+The faucet at **<https://faucet.staging.398ja.xyz>** issues them from test shops
+straight into your wallet. It is staging only, and its vouchers are as unreal as
+everything else here.
+
+**Sign in with your staging Imani customer account.** The faucet has no accounts
+of its own: you log in with the **nsec** (backup key) of the customer account you
+registered at <https://wallet.staging.398ja.xyz>, and vouchers go to that wallet.
+If you have no staging account yet, register one first (step 1 under *As a
+customer* above).
+
+1. In the staging wallet, signed in as your customer account, open
+   **Settings > Backup**, enter your passphrase and tap **Show my backup key**,
+   then **Copy backup key**. That is your nsec: it starts with `nsec1`.
+2. Open the faucet and paste the nsec under **Sign in**. It is checked in your
+   browser, and only your public key is sent to the faucet.
+3. Pick a shop. The **Starter**, **Essentials** and **Pro** filter shows shops on
+   each plan.
+4. Enter an amount (or tap a suggested one) and tap **Send to my wallet**. The
+   voucher arrives in your wallet as a message within a few seconds, and
+   **Your requests** shows it as delivered.
+
+Limits: up to the shop's maximum per voucher (2,000 minor units by default, so
+20.00 in the shop's currency) and 20 requests per account per day.
+
+Use your **customer** account's nsec, never a shop's. A key that already runs a
+shop is refused, so a shop cannot fund itself. Faucet admins and the super
+admin cannot request vouchers either: they create the test shops under
+**Admin**, and can read the audit log there. Ask on a GitHub issue if you need
+a shop added.
+
+Your nsec controls your account. Paste it only into the faucet and the wallet,
+and only for your staging account: never use a production key here.
+
 Staging is reset from time to time, and feedback is welcome as GitHub issues.
 
 ## Two things to know first
