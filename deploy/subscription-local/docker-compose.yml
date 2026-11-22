@@ -27,7 +27,7 @@ services:
         # The relay the site's header reads profiles from (up.sh sets it per GATEWAY).
         VITE_RELAY_URL: ${VITE_RELAY_URL:-wss://relay.staging.398ja.xyz}
         # The seller whose badge attestations the header reads (up.sh, from the env file).
-        VITE_LICENCE_SELLER_PUBKEY: ${VITE_LICENCE_SELLER_PUBKEY:?VITE_LICENCE_SELLER_PUBKEY: run ./up.sh}
+        VITE_LICENCE_SELLER_PUBKEY: "${VITE_LICENCE_SELLER_PUBKEY:?VITE_LICENCE_SELLER_PUBKEY: run ./up.sh}"
     ports: ["18910:8090"]
     env_file: .env
     environment:
