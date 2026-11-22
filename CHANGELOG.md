@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-11-22
+
 ### Added
 
 - **The merchant dashboard shows the overall total issued.** Under "Outstanding vouchers", "Issued in total" is the face value of every voucher the stall has issued, in its issuance currency, whatever range is picked (the "Value issued" tile stays the range). From `merchantStats`' new `totalIssuedValue` in `@imani/reports`, over the same rows as `issuedValue` with no window.
