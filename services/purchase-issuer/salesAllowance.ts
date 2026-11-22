@@ -32,13 +32,22 @@ export const ALLOWANCE_CACHE_MS = 10_000
 /** How long one read may take. Readiness is on the Buy tap's path. */
 export const ALLOWANCE_TIMEOUT_MS = 3_000
 
+/**
+ * `paidPlan`: whether a paid plan (Essentials and above) is in force, from the gateway's
+ * `paid_plan`. Card payments are not on Starter, so `/ready` refuses a stall whose answer is
+ * `false`. Absent when the gateway did not say (an older gateway, or its licence store could not be
+ * read): no answer, which refuses nothing.
+ */
 export type SalesPosition =
   /** A paid plan, or the allowance is switched off: nothing to refuse. */
-  | { kind: 'unlimited' }
+  | { kind: 'unlimited'; paidPlan?: boolean }
   /** A free stall. `remainingMinor` is in the unit's minor units, never negative. */
-  | { kind: 'limited'; unit: string; remainingMinor: number }
-  /** The gateway could not be asked, refused the credential, or answered nonsense. */
-  | { kind: 'unknown'; reason: string }
+  | { kind: 'limited'; unit: string; remainingMinor: number; paidPlan?: boolean }
+  /**
+   * The gateway could not be asked, refused the credential, or answered nonsense. `paidPlan` is
+   * still carried when the gateway gave it: a 503 for a counter fault names the plan (review).
+   */
+  | { kind: 'unknown'; reason: string; paidPlan?: boolean }
 
 export type AllowanceReader = (credential: StallCredential, unit: string) => Promise<SalesPosition>
 
@@ -68,17 +77,19 @@ export async function readSalesAllowance(
       },
       signal: AbortSignal.timeout(timeoutMs),
     })
-    if (response.status !== 200) return { kind: 'unknown', reason: `sales allowance answered ${response.status}` }
-    const body = (await response.json()) as Record<string, unknown> | null
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null
+    // Only a boolean is an answer; anything else is left out rather than guessed.
+    const plan = body !== null && typeof body === 'object' && typeof body.paid_plan === 'boolean' ? { paidPlan: body.paid_plan } : {}
+    if (response.status !== 200) return { kind: 'unknown', reason: `sales allowance answered ${response.status}`, ...plan }
     if (body === null || typeof body !== 'object') return { kind: 'unknown', reason: 'sales allowance was not an object' }
-    if (body.limited === false) return { kind: 'unlimited' }
+    if (body.limited === false) return { kind: 'unlimited', ...plan }
     const remaining = body.remaining_minor
     if (body.limited !== true || typeof remaining !== 'number' || !Number.isSafeInteger(remaining)) {
-      return { kind: 'unknown', reason: 'sales allowance had no usable position' }
+      return { kind: 'unknown', reason: 'sales allowance had no usable position', ...plan }
     }
     // `reached` is the gateway's own verdict; a remaining of 0 says the same.
     const remainingMinor = body.reached === true ? 0 : Math.max(0, remaining)
-    return { kind: 'limited', unit: normaliseUnit(body.unit) ?? unit, remainingMinor }
+    return { kind: 'limited', unit: normaliseUnit(body.unit) ?? unit, remainingMinor, ...plan }
   } catch (error) {
     return { kind: 'unknown', reason: `sales allowance unreachable: ${error instanceof Error ? error.name : 'error'}` }
   }

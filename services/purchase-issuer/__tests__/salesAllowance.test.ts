@@ -55,6 +55,30 @@ describe('reading a stall\u2019s sales allowance (gc#317)', () => {
     })
   })
 
+  // Card payments: the gateway's `paid_plan` is carried through, on both answers.
+  it('reads paid_plan when the gateway gives it', async () => {
+    const starter = gatewayAnswering(200, { limited: true, unit: 'GBP', remaining_minor: 7000, reached: false, paid_plan: false })
+    expect(await readSalesAllowance('http://gw', CREDENTIAL, 'GBP', starter.fetchImpl)).toMatchObject({ kind: 'limited', paidPlan: false })
+    const essentials = gatewayAnswering(200, { limited: false, paid_plan: true })
+    expect(await readSalesAllowance('http://gw', CREDENTIAL, 'GBP', essentials.fetchImpl)).toEqual({ kind: 'unlimited', paidPlan: true })
+  })
+
+  // Review regression: a 503 for a counter fault still carries the plan; so does an unusable position.
+  it('keeps paid_plan on an unknown answer', async () => {
+    const down = gatewayAnswering(503, { paid_plan: false })
+    expect(await readSalesAllowance('http://gw', CREDENTIAL, 'GBP', down.fetchImpl)).toMatchObject({ kind: 'unknown', paidPlan: false })
+    const odd = gatewayAnswering(200, { limited: true, paid_plan: false })
+    expect(await readSalesAllowance('http://gw', CREDENTIAL, 'GBP', odd.fetchImpl)).toMatchObject({ kind: 'unknown', paidPlan: false })
+    const bare = gatewayAnswering(503, '')
+    expect(await readSalesAllowance('http://gw', CREDENTIAL, 'GBP', bare.fetchImpl)).toEqual({ kind: 'unknown', reason: 'sales allowance answered 503' })
+  })
+
+  // Not a boolean is no answer: left out, never read as false.
+  it.each([undefined, null, 'false', 0])('leaves paid_plan out for %o', async (value) => {
+    const gw = gatewayAnswering(200, { limited: false, paid_plan: value })
+    expect(await readSalesAllowance('http://gw', CREDENTIAL, 'GBP', gw.fetchImpl)).toEqual({ kind: 'unlimited' })
+  })
+
   // The gateway's own `reached` wins, whatever `remaining` says.
   it('reads reached as nothing left', async () => {
     const gw = gatewayAnswering(200, { limited: true, unit: 'GBP', remaining_minor: 5, reached: true })

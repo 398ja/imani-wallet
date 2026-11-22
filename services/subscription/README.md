@@ -16,7 +16,8 @@ react-router and `src/components/ui`.
   stall that retires its record loses access.
 - **Buy** a tier by card through Stripe Checkout, using Billing for renewals and Tax for VAT.
 - **The plans** are the ones www.imani.casa/pricing publishes: Starter (the catalog's `free`
-  tier), Essentials (the `basic` tier) and Pro. `GET /v1/plans` lists Starter and every catalog tier that has a price in
+  tier), Essentials (the `basic` tier) and Pro. Card payments (`card_payments`) are Essentials and
+  above, never Starter (catalog 7). `GET /v1/plans` lists Starter and every catalog tier that has a price in
   `SUBSCRIPTION_PRICES`, with the amount read from Stripe. A tier with no card price (Town / BID
   Partner, "Contact us") is never offered, even if the catalog defines it for hand grants. Every
   price is in **GBP**: a Stripe price in any other currency is neither listed nor sold.

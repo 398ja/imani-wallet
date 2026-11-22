@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The merchant dashboard shows the overall total issued.** Under "Outstanding vouchers", "Issued in total" is the face value of every voucher the stall has issued, in its issuance currency, whatever range is picked (the "Value issued" tile stays the range). From `merchantStats`' new `totalIssuedValue` in `@imani/reports`, over the same rows as `issuedValue` with no window.
+
+### Changed
+
+- **Card payments are Essentials and above, no longer on Starter.** Settings › Card payments shows a Starter stall the plan and a "See plans" link in place of Connect Stripe, and the Settings row is locked with "Available on Essentials and above". A stall already taking cards without a paid plan (Starter, or a plan that ended) has its published `acceptsCards` offer withdrawn the next time it opens the screen, and is told why. Disconnecting Stripe stays available. The gate is "a paid plan is in force", not a new licence feature, so Essentials and Pro licences sold before this keep card payments without being reissued. A plan check that fails changes nothing: it neither starts an offer nor withdraws one. The subscription site's Essentials and Pro plans now list "Card payments for your vouchers".
+- **Subscription service: catalog 7 adds `card_payments` to Essentials (`basic`) and Pro.** `GET /v1/plans` lists it on those two tiers and never on Starter, and licences sold from catalog 7 carry it. The wallet's bundled catalog mirrors it. Redeploy the subscription service to publish catalog 7.
+
+- **Card payments are enforced on the server.** purchase-issuer's `/api/v1/card-sales/ready/<stall>` answers `{ready: false, reason: "card_payments_not_in_plan"}` when gateway-customer's sales-allowance says `paid_plan: false`, before any allowance check, for the public Buy check and for payment-adapter's checkout alike, so a Starter stall cannot sell by card whatever its own record or app says. The plan is asked even when no sale currency is known (in USD, plan only), and still read from a gateway 503 that carries `paid_plan`. For payment-adapter's checkout, a plan nobody could check is a 503, which the checkout refuses as "try again" before Stripe: nothing after the charge checks the plan, so a card sale is never let through on an unchecked one. The public Buy check stays advice. A gateway that answers 200 without `paid_plan` predates it and refuses nothing. Buy reads the new reason and tells the shopper "This merchant doesn't take card payments on their current plan." Deploy gateway-customer (with `paid_plan`) first; until then the refusal is inert.
+
+- **Connecting Stripe is refused on the server for a Starter stall** (merchant-service, 403, before any account is created), and Settings › Card payments reads "Available on Essentials" with the lock, as Online shop reads "Available on Pro". If the app offered Connect because it could not check the plan, the merchant sees the server's refusal.
+
+### Fixed
+
+- Card payments gate (review): a licence store that could not be read is no longer read as Starter. It is an unknown plan, so a paying stall keeps its card offer through a storage outage. The plan check is bounded (5 s) so it cannot hold the screen on Loading, and Check again re-reads it, so a merchant who upgrades is unlocked without a reload. The locked screen keeps its error and publish messages (a Starter stall that disconnects is still told if the withdrawal was not sent), a failed Stripe read shows the error rather than an upgrade prompt, an unchecked plan says shoppers cannot buy by card yet instead of "Taking card payments", and a Starter stall live on Stripe reads "Card payments are off on your current plan" rather than "Paid in GBP".
+
 ## [0.77.0] - 2026-11-22
 
 ### Fixed

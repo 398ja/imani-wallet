@@ -241,3 +241,19 @@ describe('the range filters', () => {
     expect(screen.getByText('Came back')).toBeTruthy()
   })
 })
+
+describe('the overall total issued', () => {
+  // Beside what is outstanding: every voucher issued, whatever range is picked below.
+  it('shows the value of every voucher issued, and does not move with the range', async () => {
+    // Arrange: one voucher yesterday, one forty days ago.
+    const old = { ...issued({ id: 'old', inDays: 30, amount: 2500 }), at: Date.now() - 40 * DAY }
+    show([issued({ id: 'new', inDays: 30, amount: 1000 }), old])
+
+    // Act: the default range, then Today.
+    await waitFor(() => expect(screen.getByTestId('total-issued').textContent).toMatch(/35\.00/))
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }))
+
+    // Assert: still the overall total.
+    await waitFor(() => expect(screen.getByTestId('total-issued').textContent).toMatch(/Issued in total.*35\.00/))
+  })
+})
