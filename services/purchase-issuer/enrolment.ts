@@ -156,6 +156,11 @@ export type ReadinessCode =
   | 'sales_limit_reached'
   /** This amount would take a Free stall past its allowance. Only told to a trusted caller. */
   | 'sales_limit_exceeded'
+  /**
+   * The stall has no paid plan in force: card payments are Essentials and above, never Starter. From
+   * the gateway's `paid_plan: false`; a gateway that did not answer refuses nothing.
+   */
+  | 'card_payments_not_in_plan'
 
 interface Pending {
   lockKeyHex: string
@@ -469,7 +474,9 @@ export class EnrolmentService {
 
   /**
    * Public readiness, for the Buy button. Says nothing a stall's `acceptsCards` does not, except
-   * that a Free stall at its allowance cannot sell (gc#317), which a disabled Buy shows anyway.
+   * that a Free stall at its allowance cannot sell (gc#317), which a disabled Buy shows anyway, and
+   * that a stall with no paid plan cannot sell by card at all (`card_payments_not_in_plan`). That
+   * one is public already: a paid plan earns the stall a verification badge on its own record.
    *
    * `?unit=` (the currency the sale will be in, payment-adapter sends the stall's Stripe currency)
    * and `?amount=` (minor units) are honoured only for the internal caller, see `internalToken`.
@@ -487,7 +494,10 @@ export class EnrolmentService {
     return { status: 200, body: limit === null ? { ready: true } : { ready: false, reason: limit } }
   }
 
-  /** A sales-limit refusal for this stall, or null when the allowance does not stop the sale. */
+  /**
+   * A plan refusal for this stall, or null when its plan does not stop the sale: no paid plan
+   * (`card_payments_not_in_plan`, first, whatever the allowance), else the Free sales allowance.
+   */
   private async salesLimit(stall: string, request: EnrolmentRequest): Promise<ReadinessCode | null> {
     const reader = this.deps.allowanceFor
     if (!reader) return null
@@ -511,6 +521,10 @@ export class EnrolmentService {
       // Kept ready (see `allowanceFor`). Logged, so a gateway that never answers is seen.
       console.warn(JSON.stringify({ event: 'card_sales_allowance_unknown', stall: stall.slice(0, 16), reason: position.reason }))
       return null
+    }
+    if (position.paidPlan === false) {
+      console.info(JSON.stringify({ event: 'card_sales_refused_not_in_plan', stall: stall.slice(0, 16) }))
+      return 'card_payments_not_in_plan'
     }
     const verdict = allowanceVerdict(position, amount)
     if (verdict === 'reached') return 'sales_limit_reached'

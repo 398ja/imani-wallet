@@ -55,6 +55,20 @@ describe('reading a stall\u2019s sales allowance (gc#317)', () => {
     })
   })
 
+  // Card payments: the gateway's `paid_plan` is carried through, on both answers.
+  it('reads paid_plan when the gateway gives it', async () => {
+    const starter = gatewayAnswering(200, { limited: true, unit: 'GBP', remaining_minor: 7000, reached: false, paid_plan: false })
+    expect(await readSalesAllowance('http://gw', CREDENTIAL, 'GBP', starter.fetchImpl)).toMatchObject({ kind: 'limited', paidPlan: false })
+    const essentials = gatewayAnswering(200, { limited: false, paid_plan: true })
+    expect(await readSalesAllowance('http://gw', CREDENTIAL, 'GBP', essentials.fetchImpl)).toEqual({ kind: 'unlimited', paidPlan: true })
+  })
+
+  // Not a boolean is no answer: left out, never read as false.
+  it.each([undefined, null, 'false', 0])('leaves paid_plan out for %o', async (value) => {
+    const gw = gatewayAnswering(200, { limited: false, paid_plan: value })
+    expect(await readSalesAllowance('http://gw', CREDENTIAL, 'GBP', gw.fetchImpl)).toEqual({ kind: 'unlimited' })
+  })
+
   // The gateway's own `reached` wins, whatever `remaining` says.
   it('reads reached as nothing left', async () => {
     const gw = gatewayAnswering(200, { limited: true, unit: 'GBP', remaining_minor: 5, reached: true })

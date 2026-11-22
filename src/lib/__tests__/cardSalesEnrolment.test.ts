@@ -391,4 +391,11 @@ describe('readiness for a shopper (fail safe)', () => {
       expect(await cardSalesReady(STALL, answer(200, { ready: false, reason }))).toBe(false)
     }
   })
+
+  // Card payments are Essentials and above: a Starter stall reads `not-in-plan`, never ready.
+  it('reads card_payments_not_in_plan as not-in-plan', async () => {
+    const answer = (status: number, body: unknown) => (async () => respond(status, body)) as unknown as typeof fetch
+    expect(await cardSalesReadiness(STALL, answer(200, { ready: false, reason: 'card_payments_not_in_plan' }))).toBe('not-in-plan')
+    expect(await cardSalesReady(STALL, answer(200, { ready: false, reason: 'card_payments_not_in_plan' }))).toBe(false)
+  })
 })
