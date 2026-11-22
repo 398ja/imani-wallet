@@ -63,8 +63,8 @@ everything else here.
    voucher arrives in your wallet as a message within a few seconds, and
    **Your requests** shows it as delivered.
 
-Limits: up to the shop's maximum per voucher (2,000 minor units, so £20 or
-€20, by default) and 20 requests per account per day.
+Limits: up to the shop's maximum per voucher (2,000 minor units by default, so
+20.00 in the shop's currency) and 20 requests per account per day.
 
 Use a **customer** account. A key that already runs a shop is refused, so a shop
 cannot fund itself. Faucet admins and the super admin cannot request vouchers
