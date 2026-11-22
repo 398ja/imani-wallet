@@ -964,6 +964,7 @@
   "[voucherRecords] chunked coupon record unreadable; skipped",
   "[voucherRecords] could not back-fill coupons to the relay",
   "[voucherRecords] could not check a coupon against the mint; keeping it",
+  "[voucherRecords] could not re-read the coupons after reconciling",
   "[voucherRecords] could not read the coupons to confirm their backup",
   "[voucherRecords] could not restore coupons from the relay",
   "[voucherRecords] coupon backups not confirmed",
