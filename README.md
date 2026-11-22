@@ -74,9 +74,10 @@ Limits: up to the shop's maximum per voucher (2,000 minor units by default, so
 20.00 in the shop's currency) and 20 requests per account per day.
 
 Use your **customer** account's nsec, never a shop's. A key that already runs a
-shop is refused, so a shop cannot fund itself. Faucet admins and the super admin cannot request vouchers
-either: they create the test shops under **Admin**, and can read the audit log
-there. Ask on a GitHub issue if you need a shop added.
+shop is refused, so a shop cannot fund itself. Faucet admins and the super
+admin cannot request vouchers either: they create the test shops under
+**Admin**, and can read the audit log there. Ask on a GitHub issue if you need
+a shop added.
 
 Your nsec controls your account. Paste it only into the faucet and the wallet,
 and only for your staging account: never use a production key here.
