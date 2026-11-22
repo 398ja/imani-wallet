@@ -79,3 +79,6 @@ deploy/support-snapshot.env
 
 # docs: only top-level pages are published; sub-folders stay local.
 docs/*/
+
+# Local scratch notes and probes.
+.scratch/
