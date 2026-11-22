@@ -7,8 +7,7 @@ spends it back **at that same shop**, in full or in part, at the counter or at t
 shop's online checkout, and the change comes back as a smaller voucher. No card
 reader, no account holding your balance, and no percentage taken on sales.
 
-Watch the 60-second explainer on our [YouTube channel](https://www.youtube.com/@imani.wallet), or visit
-[imani.casa](https://www.imani.casa).
+Watch the 60-second explainer on our [YouTube channel](https://www.youtube.com/@imani.wallet).
 
 ## Two things to know first
 
