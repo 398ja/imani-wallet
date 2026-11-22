@@ -29,7 +29,8 @@ import { collectTillSalesForOwner, pullCardSalesForOwner } from './lib/tillSales
 import { startRosterSync, syncRosterNow } from './lib/terminalRosterSyncNet'
 import { syncKeyBackups } from './lib/keyBackups'
 import { startOnlineShopSync } from './lib/onlineShopPublisher'
-import { restoreVouchers, backfillVouchers } from './lib/voucherRecords'
+import { restoreVouchers, backfillVouchers, pruneMintSpent } from './lib/voucherRecords'
+import { reconcileOnResume } from './lib/walletReconcile'
 import { restoreCashbackStash } from './lib/cashbackStash'
 import { restoreCheckoutCodes, startCheckoutCodeBackup } from './lib/checkoutCodeBackup'
 import { useLogout } from './lib/useLogout'
@@ -182,6 +183,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
 
   useEffect(() => {
     let live = true
+    let stopResumeReconcile: (() => void) | undefined
     ;(openAttempt === 0 ? openWallet : retryOpenWallet)(pubkey).then(
       () => {
         if (!live) return
@@ -189,6 +191,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         // Receiving coupons is imani-apps' pipeline verbatim: DmPollService
         // reading gift wraps through the gateway's nostrdb, never the relay.
         startDmPoll(pubkey)
+        // Cross-device convergence on every return to the foreground.
+        stopResumeReconcile?.()
+        stopResumeReconcile = reconcileOnResume(pubkey)
 
         // Advance notice of an incoming payment, imani-apps' Artemis pattern.
         // Settlement through dm-poll can lag seconds to minutes behind the
@@ -320,7 +325,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // After the restore, so a coupon that came back from the relay is
             // swept too. Catches any redemption whose burn failed at the time —
             // until it runs, a coupon this merchant issued is spendable again.
-            return sweepBurnable(pubkey)
+            // Then the mint, not the local list, decides what is still money:
+            // a spend made on another device whose tombstone never arrived.
+            return pruneMintSpent().then(() => sweepBurnable(pubkey))
           })
           .then((burnt) => {
             if (burnt > 0) console.info(`[app] burnt ${burnt} redeemed coupon(s)`)
@@ -438,6 +445,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
     // the coupon dropped mid-processing. Stopped on logout instead.
     return () => {
       live = false
+      stopResumeReconcile?.()
       // Unlike the pollers above, this one IS safe to stop here: it holds no
       // in-flight work, only an event listener bound to this account's pubkey.
       // Leaving it attached across a logout would record the next account's
