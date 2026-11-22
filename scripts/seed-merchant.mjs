@@ -517,6 +517,11 @@ console.log(`issued ${items.length}, waiting for Lightning settlement…`)
 let delivered = 0
 for (const item of items) {
   const voucher = await waitForToken(item.voucher_id)
+  // `--token-out <file>`: keep the token before delivery, for harnesses that hold it themselves
+  // (a delivery that fails then loses nothing).
+  const tokenOut = arg('--token-out', '')
+  if (tokenOut) writeFileSync(tokenOut, voucher.token + '\n', { flag: 'a', mode: 0o600 })
+  if (arg('--no-deliver', '') === 'true') continue
   const result = await deliver(voucher, merchant, customer.pk)
   delivered += 1
   // Expiry is printed because it has bitten twice: the gateway populates it
