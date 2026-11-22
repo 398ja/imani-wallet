@@ -10,13 +10,13 @@ import { emptyMerchant, type MerchantProfile } from '../../lib/merchant'
 
 /** Settings › Card payments is Essentials and above: Starter sees the plan, not Connect Stripe. */
 
-const stripe = vi.hoisted(() => ({ status: { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } } as unknown }))
+const stripe = vi.hoisted(() => ({ status: { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } } as unknown, connect: undefined as unknown }))
 const published = vi.hoisted(() => ({ events: [] as unknown[], ok: 1 }))
 
 vi.mock('../../lib/stripeAccount', () => ({
   fetchStripeStatus: async () => stripe.status,
   refreshStripe: async () => stripe.status,
-  connectStripe: async () => stripe.status,
+  connectStripe: async () => stripe.connect ?? stripe.status,
   disconnectStripe: async () => stripe.status,
 }))
 vi.mock('../../lib/nap', () => ({ getSigner: () => ({ signEvent: async (e: object) => ({ ...e, created_at: 1 }) }) }))
@@ -57,6 +57,7 @@ beforeEach(() => {
   localStorage.clear()
   published.events = []
   published.ok = 1
+  stripe.connect = undefined
   stripe.status = { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } }
 })
 afterEach(cleanup)
@@ -233,5 +234,23 @@ describe('Card payments review regressions', () => {
     // Assert
     await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
     expect(screen.queryByTestId('card-payments-locked')).toBeNull()
+  })
+
+  // The server refuses Stripe Connect for a Starter stall (merchant-service, 403). When the app could
+  // not tell the plan itself and offered Connect, the merchant reads the server's own words.
+  it('shows the server’s refusal when connecting on a plan without card payments', async () => {
+    // Arrange
+    stripe.connect = {
+      kind: 'refused',
+      reason: 'Card payments are part of Essentials and above. Upgrade your plan to connect Stripe. Nothing was changed.',
+    }
+    renderPage(outage)
+    await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
+
+    // Act
+    fireEvent.click(screen.getByRole('button', { name: /Connect Stripe/ }))
+
+    // Assert
+    await waitFor(() => expect(screen.getByText(/Upgrade your plan to connect Stripe/)).toBeTruthy())
   })
 })
