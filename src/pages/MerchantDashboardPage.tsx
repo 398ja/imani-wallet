@@ -139,6 +139,14 @@ export function MerchantDashboardPage({
       <Panel className="mb-6 p-5">
         <p className="text-sm text-mono-500">Outstanding vouchers</p>
         <p className="text-amount text-mono-900 dark:text-mono-50">{formatFace(owed, issuance)}</p>
+        {/* The overall total, beside what is still owed: every voucher this stall has issued, in its
+            issuance currency, whatever range is picked below ("Value issued" there is the range). */}
+        <div className="mt-3 border-t border-mono-200 pt-3 dark:border-mono-800" data-testid="total-issued">
+          <p className="text-sm text-mono-500">Issued in total</p>
+          <p className="text-xl font-semibold text-mono-900 dark:text-mono-50">
+            {stats === null ? '…' : money(stats.totalIssuedValue)}
+          </p>
+        </div>
       </Panel>
 
       {/*
