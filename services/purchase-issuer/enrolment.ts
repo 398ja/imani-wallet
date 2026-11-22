@@ -156,6 +156,11 @@ export type ReadinessCode =
   | 'sales_limit_reached'
   /** This amount would take a Free stall past its allowance. Only told to a trusted caller. */
   | 'sales_limit_exceeded'
+  /**
+   * The stall has no paid plan in force: card payments are Essentials and above, never Starter. From
+   * the gateway's `paid_plan: false`; a gateway that did not answer refuses nothing.
+   */
+  | 'card_payments_not_in_plan'
 
 interface Pending {
   lockKeyHex: string
@@ -469,7 +474,10 @@ export class EnrolmentService {
 
   /**
    * Public readiness, for the Buy button. Says nothing a stall's `acceptsCards` does not, except
-   * that a Free stall at its allowance cannot sell (gc#317), which a disabled Buy shows anyway.
+   * that a Free stall at its allowance cannot sell (gc#317), which a disabled Buy shows anyway, and
+   * that a stall with no paid plan cannot sell by card at all (`card_payments_not_in_plan`). Told
+   * publicly so Buy can say why; for most stalls it is public anyway through the verification badge
+   * a paid plan earns, though a hand grant without a badge is a paid plan this answer reveals.
    *
    * `?unit=` (the currency the sale will be in, payment-adapter sends the stall's Stripe currency)
    * and `?amount=` (minor units) are honoured only for the internal caller, see `internalToken`.
@@ -484,11 +492,26 @@ export class EnrolmentService {
       return { status: 200, body: { ready: false, ...(status.reasonCode ? { reason: status.reasonCode } : {}) } }
     }
     const limit = await this.salesLimit(stall, request)
+    if (limit === PLAN_UNKNOWN) {
+      // Only ever for payment-adapter's checkout (the trusted caller): it reads a non-200 as unknown
+      // and refuses with "try again", before Stripe. A card sale is never let through on a plan
+      // nobody could check, because nothing after the charge checks it again (review).
+      return { status: 503, body: { error: 'the stall’s plan could not be checked, try again' } }
+    }
     return { status: 200, body: limit === null ? { ready: true } : { ready: false, reason: limit } }
   }
 
-  /** A sales-limit refusal for this stall, or null when the allowance does not stop the sale. */
-  private async salesLimit(stall: string, request: EnrolmentRequest): Promise<ReadinessCode | null> {
+  /**
+   * A plan refusal for this stall, or null when its plan does not stop the sale: no paid plan
+   * (`card_payments_not_in_plan`, first, whatever the allowance), else the Free sales allowance.
+   *
+   * The plan is asked even with no unit to judge an allowance in (review): it is read in
+   * `PLAN_ONLY_UNIT` and only `paid_plan` is used. For the trusted caller (payment-adapter's
+   * checkout, the last moment nothing is charged) a plan nobody could check is `PLAN_UNKNOWN`,
+   * refused as "try again". For the public Buy check it stays advice and ready, since the checkout
+   * asks again. A gateway that answers 200 with no `paid_plan` predates it and refuses nothing.
+   */
+  private async salesLimit(stall: string, request: EnrolmentRequest): Promise<ReadinessCode | typeof PLAN_UNKNOWN | null> {
     const reader = this.deps.allowanceFor
     if (!reader) return null
     const query = new URLSearchParams(request.path.split('?')[1] ?? '')
@@ -501,17 +524,24 @@ export class EnrolmentService {
       const validity = await this.deps.validityFor(stall)
       unit = validity.kind === 'days' ? (validity.currency ?? null) : null
     }
-    // No unit to ask in: nothing to advise. The checkout asks again with the account's currency.
-    if (unit === null) return null
+    // No unit to judge an allowance in: the plan is still asked, in a unit the free tier always prices.
+    const planOnly = unit === null
     const credential = await this.deps.vault.get(stall)
     if (credential === null) return null
     const amount = trusted ? minorAmount(query.get('amount')) : null
-    const position = await reader(credential, unit)
+    const position = await reader(credential, unit ?? PLAN_ONLY_UNIT)
+    if (position.paidPlan === false) {
+      console.info(JSON.stringify({ event: 'card_sales_refused_not_in_plan', stall: stall.slice(0, 16) }))
+      return 'card_payments_not_in_plan'
+    }
     if (position.kind === 'unknown') {
-      // Kept ready (see `allowanceFor`). Logged, so a gateway that never answers is seen.
+      // Logged, so a gateway that never answers is seen.
       console.warn(JSON.stringify({ event: 'card_sales_allowance_unknown', stall: stall.slice(0, 16), reason: position.reason }))
+      if (trusted && position.paidPlan === undefined) return PLAN_UNKNOWN
+      // The allowance alone is advice: kept ready (see `allowanceFor`).
       return null
     }
+    if (planOnly) return null
     const verdict = allowanceVerdict(position, amount)
     if (verdict === 'reached') return 'sales_limit_reached'
     if (verdict === 'exceeded') return 'sales_limit_exceeded'
@@ -533,6 +563,15 @@ export class EnrolmentService {
     }
   }
 }
+
+/** `salesLimit`'s answer when the trusted caller asked and the plan could not be checked. */
+const PLAN_UNKNOWN = 'plan_unknown' as const
+
+/**
+ * The unit the plan is read in when no sale currency is known. Only `paid_plan` is used from that
+ * answer; USD because the free tier prices it in every catalog.
+ */
+const PLAN_ONLY_UNIT = 'USD'
 
 /** A positive whole number of minor units, or null. */
 function minorAmount(raw: string | null): number | null {

@@ -109,3 +109,12 @@ describe('afterLogin', () => {
     expect(takeAfterLogin()).toBeUndefined()
   })
 })
+
+describe('cardSalesReason for a stall whose plan has no card payments', () => {
+  // Card payments are Essentials and above: the shopper is told it is the merchant's plan.
+  it('names the plan, not a setup problem', async () => {
+    const { cardSalesReason, CARD_SALES_NOT_IN_PLAN } = await import('../merchantActions')
+    expect(cardSalesReason('not-in-plan')).toBe(CARD_SALES_NOT_IN_PLAN)
+    expect(CARD_SALES_NOT_IN_PLAN).toMatch(/plan/)
+  })
+})

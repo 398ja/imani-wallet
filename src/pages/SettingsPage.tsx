@@ -4,6 +4,7 @@ import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, T
 
 import { fleetConfig, supportSnapshotConfig } from '../lib/config'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
+import { CARD_PAYMENTS_PLAN_NAME, cardPaymentsPlan, type CardPaymentsPlan } from '../lib/cardPaymentsAccess'
 import { ONLINE_SHOP_PLAN_NAME, connectedShop, onlineShopAccess, type OnlineShopAccess } from '../lib/onlineShopAccess'
 import { shopHost } from '../lib/shopEnrol'
 import { allTerminals } from '../lib/terminalRoster'
@@ -105,13 +106,18 @@ export function SettingsPage({
             />
             {/* Listed whether or not a stall has connected. The screen behind
                 it is where a merchant learns card payments exist at all, and
-                hiding it until they are connected is a chicken and egg. */}
-            <SettingRow
-              to="/settings/payments"
-              icon={CreditCard}
-              label="Card payments"
-              hint="Take card payments for your vouchers"
-            />
+                hiding it until they are connected is a chicken and egg. Locked
+                on Starter, like Online shop below Pro. */}
+            {stallPubkey ? (
+              <CardPaymentsRow stallPubkey={stallPubkey} status={status} />
+            ) : (
+              <SettingRow
+                to="/settings/payments"
+                icon={CreditCard}
+                label="Card payments"
+                hint="Take card payments for your vouchers"
+              />
+            )}
             {stallPubkey ? <OnlineShopRow stallPubkey={stallPubkey} status={status} /> : null}
             <SettingRow
               to="/settings/terminals"
@@ -148,6 +154,40 @@ export function SettingsPage({
 
 /** Stable, so the row's effect runs once per stall and not on every render. */
 const ownerLicenceStatus = (pubkey: string) => licenceStatus({ pubkey })
+
+/**
+ * Settings › Merchant › Card payments: Essentials and above. Locked on Starter, and the screen
+ * behind it says why. Until the plan check answers, or if it fails, the neutral hint and no lock.
+ */
+function CardPaymentsRow({
+  stallPubkey,
+  status = ownerLicenceStatus,
+}: {
+  stallPubkey: string
+  status?: (pubkey: string) => Promise<LicenceStatus>
+}) {
+  const [plan, setPlan] = useState<CardPaymentsPlan>('unknown')
+  useEffect(() => {
+    let live = true
+    status(stallPubkey).then(
+      (s) => live && setPlan(cardPaymentsPlan(s)),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [stallPubkey, status])
+  const locked = plan === 'not-included'
+  return (
+    <SettingRow
+      to="/settings/payments"
+      icon={CreditCard}
+      label="Card payments"
+      hint={locked ? `Available on ${CARD_PAYMENTS_PLAN_NAME}` : 'Take card payments for your vouchers'}
+      locked={locked}
+    />
+  )
+}
 
 /**
  * Settings › Merchant › Online shop (#402). LISTED for every merchant, locked below the plan that
