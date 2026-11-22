@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Card payments are Essentials and above, no longer on Starter.** Settings › Card payments shows a Starter stall the plan and a "See plans" link in place of Connect Stripe, and the Settings row is locked with "Available on Essentials and above". A stall already taking cards without a paid plan (Starter, or a plan that ended) has its published `acceptsCards` offer withdrawn the next time it opens the screen, and is told why. Disconnecting Stripe stays available. The gate is "a paid plan is in force", not a new licence feature, so Essentials and Pro licences sold before this keep card payments without being reissued. A plan check that fails changes nothing: it neither starts an offer nor withdraws one. The subscription site's Essentials and Pro plans now list "Card payments for your vouchers".
+
 ## [0.77.0] - 2026-11-22
 
 ### Fixed
