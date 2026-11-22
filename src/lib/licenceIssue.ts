@@ -37,6 +37,12 @@ export const LICENCE_FEATURES = {
   API: 'api',
   /** Online shop checkout codes (#402, #407 Pro). */
   ECOMMERCE: 'ecommerce',
+  /**
+   * Taking card payments for vouchers (Essentials and above, catalog 7). Listed on the plans and
+   * signed into licences from catalog 7; the wallet gates on any paid plan (`cardPaymentsPlan`),
+   * so a licence signed before this name existed still has card payments.
+   */
+  CARD_PAYMENTS: 'card_payments',
 } as const
 
 export type LicenceFeature = (typeof LICENCE_FEATURES)[keyof typeof LICENCE_FEATURES]

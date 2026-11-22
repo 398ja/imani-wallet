@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "overshoot_pct": 10,
   "tiers": {
     "free": {
@@ -169,7 +169,8 @@
     },
     "basic": {
       "features": [
-        "terminals"
+        "terminals",
+        "card_payments"
       ],
       "limits": {
         "sales": null,
@@ -181,7 +182,8 @@
       "features": [
         "terminals",
         "api",
-        "ecommerce"
+        "ecommerce",
+        "card_payments"
       ],
       "limits": {
         "sales": null,

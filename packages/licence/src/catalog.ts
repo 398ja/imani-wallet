@@ -60,7 +60,9 @@ const USD_DECIMALS = 2
  *
  * Mirrors the published plans (www.imani.casa/pricing): about 100 USD one-off and no tills beyond the
  * owner's own device (Starter, the `free` tier), no sales limit and 3 tills (Essentials, the `basic` tier), no limits plus API and
- * e-commerce (Pro), with a 10 % overshoot.
+ * e-commerce (Pro), with a 10 % overshoot. Card payments are Essentials and above, never Starter
+ * (`card_payments`, catalog 7). The wallet gates them on a paid plan being in force rather than on
+ * this feature, so licences signed before catalog 7 keep them; the feature is what the plans list.
  *
  * The free threshold is hard-coded in every merchant currency (`FREE_TIER_AMOUNTS`, #506), the
  * same table services/subscription/catalog.json publishes. No exchange rate is needed, so a device
@@ -86,12 +88,12 @@ export const BUNDLED_CATALOG: TierCatalog = {
       limits: { sales: { period: 'lifetime', amounts: { ...FREE_TIER_AMOUNTS } }, terminals: 0 },
     },
     basic: {
-      features: ['terminals'],
+      features: ['terminals', 'card_payments'],
       limits: { sales: null, terminals: 3 },
       badge: 'bronze',
     },
     pro: {
-      features: ['terminals', 'api', 'ecommerce'],
+      features: ['terminals', 'api', 'ecommerce', 'card_payments'],
       limits: { sales: null, terminals: null },
       badge: 'silver',
     },

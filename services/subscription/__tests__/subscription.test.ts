@@ -390,7 +390,7 @@ describe('buying a plan', () => {
     expect(gateway.delivered[0]).toMatchObject({ recipient_pubkey: STALL, expires_at: end })
 
     const licence = licenceFromDelivery(gateway.delivered[0], end)!
-    expect(licence).toMatchObject({ tier: 'basic', validFrom: start, grantKind: 'subscription', features: ['terminals'], lockKey: STALL })
+    expect(licence).toMatchObject({ tier: 'basic', validFrom: start, grantKind: 'subscription', features: ['terminals', 'card_payments'], lockKey: STALL })
     const ent = entitlementOf({
       catalog: BUNDLED_CATALOG,
       grants: [{ features: licence.features!, expiresAt: end, pilot: false, tier: licence.tier, validFrom: licence.validFrom }],
@@ -447,7 +447,7 @@ describe('buying a plan', () => {
     const out = await app.handle({ method: 'POST', path: '/v1/stripe/webhook', body, headers: { 'stripe-signature': stripeSignatureHeader(body, WEBHOOK_SECRET) } })
     expect(out.status).toBe(200)
     expect((await ledger.all())[0]).toMatchObject({ stripeSubscriptionId: 'sub_basil', tier: 'pro' })
-    expect(licenceFromDelivery(gateway.delivered[0], 1_831_536_000)).toMatchObject({ tier: 'pro', features: ['terminals', 'api', 'ecommerce'] })
+    expect(licenceFromDelivery(gateway.delivered[0], 1_831_536_000)).toMatchObject({ tier: 'pro', features: ['terminals', 'api', 'ecommerce', 'card_payments'] })
   })
 
   it('refuses a webhook without a valid Stripe signature', async () => {
@@ -708,6 +708,13 @@ describe('the plans offered (www.imani.casa/pricing)', () => {
     expect(plans[0]).toMatchObject({ terms: [], prices: {}, limits: { terminals: 0, sales: { period: 'lifetime', amounts: { GBP: 10000 } } } })
     expect(plans[1].limits).toEqual({ sales: null, terminals: 3 })
     expect(plans[2].limits).toEqual({ sales: null, terminals: null })
+  })
+
+  it('include card payments on Essentials and Pro, never on Starter', async () => {
+    const plans = (await listPlans()) as unknown as { tier: string; features: string[] }[]
+    expect(plans.find((p) => p.tier === 'free')?.features).not.toContain('card_payments')
+    expect(plans.find((p) => p.tier === 'basic')?.features).toContain('card_payments')
+    expect(plans.find((p) => p.tier === 'pro')?.features).toContain('card_payments')
   })
 
   it('show the amount Stripe will charge, in GBP', async () => {

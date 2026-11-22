@@ -106,11 +106,11 @@ export const PLAN_COPY: Record<string, { bestFor: string; includes: string[] }> 
   free: { bestFor: 'Trying Imani', includes: ['Help centre and YouTube video tutorials'] },
   basic: {
     bestFor: 'Independent shops, cafés, salons',
-    includes: ['Card payments for your vouchers', 'Verified business badge', 'Standard listing on the Imani gifting site', 'Setup help from our support team', 'Email support'],
+    includes: ['Verified business badge', 'Standard listing on the Imani gifting site', 'Setup help from our support team', 'Email support'],
   },
   pro: {
     bestFor: 'Busy shops, multi-site and online sellers',
-    includes: ['Card payments for your vouchers', 'Verified business badge', 'Featured placement on the Imani gifting site', 'Setup help from our support team', 'Email support'],
+    includes: ['Verified business badge', 'Featured placement on the Imani gifting site', 'Setup help from our support team', 'Email support'],
   },
 }
 
@@ -144,7 +144,15 @@ export function yearlySaving(plan: Plan): number | null {
 }
 
 export function featureName(f: string): string {
-  return f === 'api' ? 'API access' : f === 'ecommerce' ? 'Online shop checkout codes' : f === 'terminals' ? 'Extra tills' : f
+  return f === 'api'
+    ? 'API access'
+    : f === 'ecommerce'
+      ? 'Online shop checkout codes'
+      : f === 'card_payments'
+        ? 'Card payments for your vouchers'
+        : f === 'terminals'
+          ? 'Extra tills'
+          : f
 }
 
 /** "Up to £100 of vouchers in total", "Unlimited voucher issuance": the plan's sales limit in words. */
