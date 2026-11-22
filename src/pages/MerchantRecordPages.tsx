@@ -479,13 +479,31 @@ export function VoucherClaimsPage({ pubkey }: { pubkey: string }) {
 
   const subtitle =
     voucher && entries.length > 0
-      ? `${money(voucher.claimedMinor)} claimed of ${money(voucher.row.amount)} · ${entries.length} ${entries.length === 1 ? 'claim' : 'claims'}`
+      ? `${entries.length} ${entries.length === 1 ? 'claim' : 'claims'}`
       : undefined
 
   return (
     <Screen>
       <BackLink to={back} label="Voucher" />
       <PageHeader title="Claims" subtitle={subtitle} />
+      {/* The same panel as the voucher screen (face value, claimed against it), plus the id,
+          so the list below is read against the voucher it belongs to. */}
+      {voucher ? (
+        <Panel className="mb-6 p-5">
+          <p className="text-amount text-mono-900 dark:text-mono-50">{money(voucher.row.amount)}</p>
+          <p className="truncate font-mono text-xs text-mono-500">
+            <span className="sr-only">Voucher id </span>
+            {voucher.row.voucherId}
+          </p>
+          <ClaimedBar
+            claimedMinor={voucher.claimedMinor}
+            outstandingMinor={voucher.outstandingMinor}
+            faceMinor={voucher.row.amount}
+            expired={voucher.expired}
+            money={money}
+          />
+        </Panel>
+      ) : null}
       <section aria-label="Claims against this voucher">
         <div
           // Re-keyed per page so the new rows fade in where the old ones were (`expand-row` is
