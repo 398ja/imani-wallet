@@ -96,7 +96,7 @@ describe('the Card payments row', () => {
     renderSettings(async () => ({ checkedAt: Math.floor(Date.now() / 1000), decision: { granted: false, reason: 'absent' }, grants: [] }) as unknown as LicenceStatus)
 
     // Assert
-    await waitFor(() => expect(cardRow().textContent).toMatch(/Available on Essentials and above/))
+    await waitFor(() => expect(cardRow().textContent).toMatch(/Available on Essentials$/))
     expect(cardRow().getAttribute('href')).toBe('/settings/payments')
     expect(cardRow().querySelector('[data-testid="setting-locked"]')).toBeTruthy()
   })

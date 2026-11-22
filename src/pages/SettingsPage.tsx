@@ -183,7 +183,7 @@ function CardPaymentsRow({
       to="/settings/payments"
       icon={CreditCard}
       label="Card payments"
-      hint={locked ? `Available on ${CARD_PAYMENTS_PLAN_NAME} and above` : 'Take card payments for your vouchers'}
+      hint={locked ? `Available on ${CARD_PAYMENTS_PLAN_NAME}` : 'Take card payments for your vouchers'}
       locked={locked}
     />
   )
