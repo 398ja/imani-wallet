@@ -296,9 +296,11 @@ export function pickLive(entries: { id: string; at: number; record: TokenRecord 
   return [...newest.entries()].filter(([id]) => !spent.has(id)).map(([, v]) => v.row)
 }
 
-/** Every coupon id a tombstone says is spent. Final, like in `pickLive`. */
-export function tombstonedIds(entries: { id: string; record: TokenRecord }[]): Set<string> {
-  return new Set(entries.filter((e) => e.record.spent).map((e) => e.id))
+/** Every coupon id a tombstone says is spent, with its newest tombstone's `created_at` (seconds). */
+export function tombstonedIds(entries: { id: string; at: number; record: TokenRecord }[]): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const e of entries) if (e.record.spent) out.set(e.id, Math.max(out.get(e.id) ?? 0, e.at))
+  return out
 }
 
 async function liveRecords(events: Event[], pubkey: string): Promise<VoucherRow[]> {
@@ -359,23 +361,60 @@ async function recordEntries(
   return entries
 }
 
-/** Already not money on this device: nothing to mark. */
-function settled(row: VoucherRow): boolean {
+/**
+ * Rows the cross-device passes may mark: plain held money only. Anything else is either settled
+ * (spent, redeemed, swapped) or mid-flight (a send, lock, split, return), whose own saga owns the
+ * row and will settle it; marking it under that saga could hide its change or its return.
+ */
+function markable(row: VoucherRow): boolean {
   const status = (row.status ?? '').toLowerCase()
-  return status === 'spent' || isRedeemed(row) || isSwappedToSats(row)
+  return status === '' || status === 'active'
 }
 
 /**
- * Mark every held coupon a tombstone names as spent. Returns how many changed.
- * Written through `addRestoredVoucher`, so it does not republish anything.
+ * The token ids an in-flight ledger still holds (pending send, bundle, checkout code, Cashlink
+ * intent). Read through pay.ts's `withoutInFlight`, imported lazily: pay.ts imports wallet.ts,
+ * which imports this file. `null` when it cannot be read, so the caller marks nothing.
  */
-async function applyTombstones(spent: Set<string>): Promise<number> {
-  if (spent.size === 0) return 0
+async function inFlightIds(pubkey: string | undefined, rows: VoucherRow[]): Promise<Set<string> | null> {
+  try {
+    const owner = pubkey ?? getSigner().pubkey
+    const { withoutInFlight } = await import('./pay')
+    const free = new Set(withoutInFlight(rows, owner).map((r) => r.token_id))
+    return new Set(rows.filter((r) => r.token_id && !free.has(r.token_id)).map((r) => r.token_id!))
+  } catch (error) {
+    console.warn('[voucherRecords] in-flight ledgers unreadable, nothing marked', error)
+    return null
+  }
+}
+
+/** The row's last local write (receive, restore, return), in seconds. 0 when unknown. */
+function lastWriteSec(row: VoucherRow): number {
+  const ms = Math.max(Date.parse(row.updated_at ?? '') || 0, Date.parse(row.created_at ?? '') || 0)
+  return Math.floor(ms / 1000)
+}
+
+/**
+ * Mark held coupons a tombstone names as spent. Returns how many changed.
+ * Written through `addRestoredVoucher`, so it does not republish anything.
+ *
+ * Only a tombstone NEWER than the row's last local write counts: the same token_id can come back
+ * after its tombstone (a Cashlink taken back, an aborted or returned send, a restore), and that
+ * copy is money again. An older tombstone is left to the mint check.
+ */
+async function applyTombstones(spentAt: Map<string, number>, pubkey?: string): Promise<number> {
+  if (spentAt.size === 0) return 0
+  const rows = (await getWallet().getAllVouchers()).filter(
+    (row) => row.token_id && markable(row) && (spentAt.get(row.token_id) ?? -1) > lastWriteSec(row),
+  )
+  if (rows.length === 0) return 0
+  const held = await inFlightIds(pubkey, rows)
+  if (!held) return 0
   let changed = 0
-  for (const row of await getWallet().getAllVouchers()) {
-    if (!row.token_id || !spent.has(row.token_id) || settled(row)) continue
+  for (const row of rows) {
+    if (held.has(row.token_id!)) continue
     await addRestoredVoucher({ ...row, status: 'spent' } as VoucherRow)
-    noteSpent(row.token_id)
+    noteSpent(row.token_id!)
     changed += 1
   }
   return changed
@@ -399,16 +438,38 @@ function noteSpent(tokenId: string): void {
  * Rows are marked `spent` (never deleted), so a wrong answer is visible and
  * recoverable. Never throws. Returns how many rows it marked.
  */
-export async function pruneMintSpent(): Promise<number> {
+export async function pruneMintSpent(pubkey?: string): Promise<number> {
   try {
-    const rows = (await getWallet().getAllVouchers()).filter((row) => row.token && !settled(row))
-    let changed = 0
-    for (const row of rows) {
-      if (await mintSaysSpent(row.token)) {
-        await addRestoredVoucher({ ...row, status: 'spent' } as VoucherRow)
-        if (row.token_id) noteSpent(row.token_id)
-        changed += 1
+    const all = (await getWallet().getAllVouchers()).filter((row) => row.token && row.token_id && markable(row))
+    if (all.length === 0) return 0
+    const held = await inFlightIds(pubkey, all)
+    if (!held) return 0
+    const rows = all.filter((row) => !held.has(row.token_id!))
+    // The gateway's validate endpoint takes one token, so no batch: a bounded pool instead, and
+    // the first network error stops the pass, so a mint that is down costs one timeout, not N.
+    const api = (await legacyApi()) as unknown as {
+      validateToken(token: string): Promise<{ valid?: boolean; state?: string } | null>
+    }
+    const spent: VoucherRow[] = []
+    let next = 0
+    let down = false
+    const worker = async () => {
+      while (!down && next < rows.length) {
+        const row = rows[next++]
+        try {
+          if (((await api.validateToken(row.token))?.state ?? '').toUpperCase() === 'SPENT') spent.push(row)
+        } catch (error) {
+          if (!down) console.warn('[voucherRecords] mint unreachable, state check stopped', error)
+          down = true
+        }
       }
+    }
+    await Promise.all(Array.from({ length: Math.min(PRUNE_CONCURRENCY, rows.length) }, worker))
+    let changed = 0
+    for (const row of spent) {
+      await addRestoredVoucher({ ...row, status: 'spent' } as VoucherRow)
+      noteSpent(row.token_id!)
+      changed += 1
     }
     if (changed > 0) {
       console.info(`[voucherRecords] ${changed} coupon(s) spent at the mint marked spent`)
@@ -421,16 +482,8 @@ export async function pruneMintSpent(): Promise<number> {
   }
 }
 
-async function mintSaysSpent(token: string): Promise<boolean> {
-  try {
-    const api = (await legacyApi()) as unknown as {
-      validateToken(token: string): Promise<{ valid?: boolean; state?: string } | null>
-    }
-    return ((await api.validateToken(token))?.state ?? '').toUpperCase() === 'SPENT'
-  } catch {
-    return false
-  }
-}
+/** NUT-07 calls in flight at once during `pruneMintSpent`. */
+export const PRUNE_CONCURRENCY = 4
 
 /**
  * Is this coupon still spendable, according to the mint?
@@ -479,7 +532,7 @@ export async function restoreVouchers(pubkey: string): Promise<number> {
     // Cross-device spends: a tombstone published by ANOTHER device for a
     // coupon THIS device holds. `pickLive` only answers "what is live", so the
     // held copy used to stay `active` forever and kept counting as balance.
-    const applied = await applyTombstones(tombstonedIds(entries))
+    const applied = await applyTombstones(tombstonedIds(entries), pubkey)
     if (candidates.length === 0) {
       if (applied > 0) notifyWalletChanged()
       return 0
