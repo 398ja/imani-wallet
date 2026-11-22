@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const calls = vi.hoisted(() => ({ restore: 0, prune: 0, resume: undefined as undefined | (() => void) }))
+const calls = vi.hoisted(() => ({ restore: 0, prune: 0, resume: undefined as undefined | (() => void), gate: undefined as undefined | Promise<void> }))
 
 vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => true } }))
 vi.mock('@capacitor/app', () => ({
@@ -13,7 +13,7 @@ vi.mock('@capacitor/app', () => ({
   },
 }))
 vi.mock('../voucherRecords', () => ({
-  restoreVouchers: async () => { calls.restore++; return 0 },
+  restoreVouchers: async () => { calls.restore++; await calls.gate; return 0 },
   pruneMintSpent: async () => { calls.prune++; return 0 },
 }))
 
@@ -53,5 +53,23 @@ describe('walletReconcile', () => {
     document.dispatchEvent(new Event('visibilitychange'))
     await Promise.resolve()
     expect(calls.restore).toBe(2)
+  })
+
+  it('dedupes Capacitor resume and visibilitychange firing together on Android', async () => {
+    let release!: () => void
+    calls.gate = new Promise<void>((r) => (release = r))
+    const stop = reconcileOnResume('pk')
+    await vi.waitFor(() => expect(calls.resume).toBeDefined())
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    calls.resume?.()
+    document.dispatchEvent(new Event('visibilitychange')) // in flight: joins the same pass
+    release()
+    await vi.waitFor(() => expect(calls.prune).toBe(1))
+    calls.resume?.()
+    document.dispatchEvent(new Event('visibilitychange')) // inside 30 s: skipped
+    await new Promise((r) => setTimeout(r, 0))
+    expect([calls.restore, calls.prune]).toEqual([1, 1])
+    stop()
+    calls.gate = undefined
   })
 })

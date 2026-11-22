@@ -327,7 +327,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             // until it runs, a coupon this merchant issued is spendable again.
             // Then the mint, not the local list, decides what is still money:
             // a spend made on another device whose tombstone never arrived.
-            return pruneMintSpent().then(() => sweepBurnable(pubkey))
+            return pruneMintSpent(pubkey).then(() => sweepBurnable(pubkey))
           })
           .then((burnt) => {
             if (burnt > 0) console.info(`[app] burnt ${burnt} redeemed coupon(s)`)
