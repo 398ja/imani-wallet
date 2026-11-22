@@ -526,12 +526,54 @@ describe('gc#317: readiness follows the stall\u2019s Free plan sales allowance',
     expect(asked[0].unit).toBe('GBP')
   })
 
-  // No unit anywhere (no record currency, none asked): nothing to advise, nothing asked.
-  it('does not ask without a unit', async () => {
+  // No unit anywhere (no record currency, none asked): no allowance to judge, but the PLAN is still
+  // asked (review: a Starter stall with no record currency used to pass), in USD, plan only.
+  it('asks only for the plan without a unit, and judges no allowance', async () => {
     const none = async (): Promise<StallValidity> => ({ kind: 'days', days: 90, source: 'default' })
-    const { ready, asked } = await enrolledWithAllowance({ kind: 'limited', unit: 'GBP', remainingMinor: 0 }, none)
+    const { ready, asked } = await enrolledWithAllowance({ kind: 'limited', unit: 'USD', remainingMinor: 0 }, none)
     expect(await ready()).toEqual({ ready: true })
-    expect(asked).toEqual([])
+    expect(asked).toEqual([{ stall: STALL, unit: 'USD' }])
+  })
+
+  // Review regression: a Starter stall with no record currency is refused all the same.
+  it('refuses a Starter stall with no unit to ask in', async () => {
+    const none = async (): Promise<StallValidity> => ({ kind: 'days', days: 90, source: 'default' })
+    const { ready } = await enrolledWithAllowance({ kind: 'unlimited', paidPlan: false }, none)
+    expect(await ready()).toEqual({ ready: false, reason: 'card_payments_not_in_plan' })
+  })
+
+  // Review regression: the gateway's counter is down (503) but it still named the plan.
+  it('refuses a Starter stall when only the allowance is unknown', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'unknown', reason: 'sales allowance answered 503', paidPlan: false })
+    expect(await ready()).toEqual({ ready: false, reason: 'card_payments_not_in_plan' })
+  })
+
+  // Review regression: nothing after the charge checks the plan, so the checkout never sells on a
+  // plan nobody could check. 503, which payment-adapter refuses as "try again" before Stripe.
+  it('answers 503 to the checkout when the plan could not be checked', async () => {
+    const { call, vault, confirmer } = await setup()
+    await enrolAs(call)
+    const service = new EnrolmentService({
+      vault,
+      confirmer,
+      publicOrigin: ORIGIN,
+      validityFor: gbp,
+      internalToken: TOKEN,
+      allowanceFor: async () => ({ kind: 'unknown', reason: 'unreachable' }),
+    })
+    const answer = await service.handle({
+      method: 'GET',
+      path: `${READY_PREFIX}${STALL}?unit=GBP&amount=500`,
+      body: '',
+      authorization: `Bearer ${TOKEN}`,
+    })
+    expect(answer.status).toBe(503)
+  })
+
+  // The allowance alone unknown, the plan known paid: the checkout still sells.
+  it('sells at checkout when only the allowance is unknown on a paid plan', async () => {
+    const { ready } = await enrolledWithAllowance({ kind: 'unknown', reason: 'counter', paidPlan: true })
+    expect(await ready('?unit=GBP&amount=500', `Bearer ${TOKEN}`)).toEqual({ ready: true })
   })
 
   // With the shared token, the amount counts: more than is left is refused for this sale only.
