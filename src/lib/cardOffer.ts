@@ -35,6 +35,7 @@
  * has just told us rather than what we hope is true.
  */
 
+import { CARD_PAYMENTS_NOT_IN_PLAN_REASON, type CardPaymentsPlan } from './cardPaymentsAccess'
 import type { MerchantProfile } from './merchant'
 
 /** What the merchant service says about a stall's Stripe account. */
@@ -56,10 +57,18 @@ export type CardOfferChange =
  *
  * Returns a decision rather than performing one, so the caller owns the signing
  * and the network, and so this can be reasoned about without either.
+ *
+ * `plan` is whether the stall's plan includes card payments (Essentials and
+ * above, never Starter). `not-included` withdraws an offer whatever Stripe
+ * says. `unknown` (the licence could not be checked) never starts an offer and
+ * never withdraws one on the plan's account: a stall that may be on Starter
+ * must not begin offering cards, and a paying stall must not lose its offer
+ * because the check failed for a moment.
  */
 export function reconcileCardOffer(
   merchant: MerchantProfile,
   status: StripeStatus | null,
+  plan: CardPaymentsPlan,
 ): CardOfferChange {
   // Null means we could not ask. NOT the same as "cards are off": withdrawing
   // a working stall's offer because the merchant service was briefly down
@@ -69,11 +78,26 @@ export function reconcileCardOffer(
     return { kind: 'unchanged' }
   }
 
-  const shouldOffer = status.chargesEnabled && currencyIsUsable(merchant, status)
+  const stripeAllows = status.chargesEnabled && currencyIsUsable(merchant, status)
   const alreadyOffers = merchant.acceptsCards === true
+
+  // Stripe is ready but the plan is unknown: leave the offer exactly as it is.
+  if (stripeAllows && plan === 'unknown') {
+    return { kind: 'unchanged' }
+  }
+
+  const shouldOffer = stripeAllows && plan === 'included'
 
   if (shouldOffer === alreadyOffers) {
     return { kind: 'unchanged' }
+  }
+
+  if (!shouldOffer && stripeAllows) {
+    return {
+      kind: 'republish',
+      merchant: { ...merchant, acceptsCards: false },
+      reason: CARD_PAYMENTS_NOT_IN_PLAN_REASON,
+    }
   }
 
   return {

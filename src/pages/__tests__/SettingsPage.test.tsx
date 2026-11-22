@@ -87,3 +87,27 @@ describe('the Online shop row', () => {
     expect(screen.queryByRole('link', { name: /Online shop/ })).toBeNull()
   })
 })
+
+describe('the Card payments row', () => {
+  const cardRow = () => screen.getByRole('link', { name: /Card payments/ })
+
+  it('is locked on Starter and names the plan that unlocks it', async () => {
+    // Arrange / Act
+    renderSettings(async () => ({ checkedAt: Math.floor(Date.now() / 1000), decision: { granted: false, reason: 'absent' }, grants: [] }) as unknown as LicenceStatus)
+
+    // Assert
+    await waitFor(() => expect(cardRow().textContent).toMatch(/Available on Essentials and above/))
+    expect(cardRow().getAttribute('href')).toBe('/settings/payments')
+    expect(cardRow().querySelector('[data-testid="setting-locked"]')).toBeTruthy()
+  })
+
+  it('is unlocked on Essentials', async () => {
+    // Arrange / Act
+    renderSettings(withFeatures(['terminals']))
+
+    // Assert
+    await waitFor(() => expect(row().textContent).toMatch(/Available on Pro/))
+    expect(cardRow().textContent).toMatch(/Take card payments/)
+    expect(cardRow().querySelector('[data-testid="setting-locked"]')).toBeNull()
+  })
+})

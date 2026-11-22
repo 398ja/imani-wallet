@@ -106,11 +106,11 @@ export const PLAN_COPY: Record<string, { bestFor: string; includes: string[] }> 
   free: { bestFor: 'Trying Imani', includes: ['Help centre and YouTube video tutorials'] },
   basic: {
     bestFor: 'Independent shops, cafés, salons',
-    includes: ['Verified business badge', 'Standard listing on the Imani gifting site', 'Setup help from our support team', 'Email support'],
+    includes: ['Card payments for your vouchers', 'Verified business badge', 'Standard listing on the Imani gifting site', 'Setup help from our support team', 'Email support'],
   },
   pro: {
     bestFor: 'Busy shops, multi-site and online sellers',
-    includes: ['Verified business badge', 'Featured placement on the Imani gifting site', 'Setup help from our support team', 'Email support'],
+    includes: ['Card payments for your vouchers', 'Verified business badge', 'Featured placement on the Imani gifting site', 'Setup help from our support team', 'Email support'],
   },
 }
 
