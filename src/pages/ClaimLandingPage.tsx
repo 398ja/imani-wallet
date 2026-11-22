@@ -12,6 +12,7 @@ import { isTerminalDevice } from '../lib/terminalEnrol'
 import { MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN } from '../lib/merchantVouchers'
 import { useForeignVoucherRole } from '../lib/useForeignVoucherRole'
 import { Button } from '../components/ui'
+import { Avatar } from '../components/ui/Avatar'
 import { Centered } from '../components/ui/layout'
 
 /**
@@ -278,7 +279,7 @@ function ConfirmPrompt({
   }, [arrival.ref, onDone])
 
   if (state.step === 'loading') return <Centered>Checking your voucher…</Centered>
-  if (state.step === 'redeeming') return <Centered>Adding your voucher…</Centered>
+  if (state.step === 'redeeming') return <Centered><span role="status" aria-live="polite">Adding your voucher…</span></Centered>
 
   if (state.step === 'done') {
     const { result } = state
@@ -377,17 +378,34 @@ function ConfirmPrompt({
   return (
     <Centered>
       <div className="materialize w-full max-w-sm px-6 text-center" data-testid="claim-prompt">
-        <p className="text-[15px] font-medium text-mono-900 dark:text-mono-50">{stall}</p>
-        {stallLoading && !stallName ? (
-          <p className="text-sm text-mono-400">Checking who issued this voucher…</p>
-        ) : (
-          <p className={verified ? 'text-sm text-emerald-600' : 'text-sm text-amber-600'}>
-            {verified ? '✓ verified stall' : 'We could not verify this voucher'}
-          </p>
-        )}
+        {/* Who issued it, as a face and a name (the same cached kind-0 lookup that names the stall:
+            no second request). The avatar box is fixed-size whatever state it is in (pulse while
+            the profile loads, picture, or initials / glyph when there is none or it fails to load),
+            so nothing below it moves when the profile lands. It never gates Add. */}
+        <div className="flex flex-col items-center" data-testid="claim-merchant">
+          <Avatar
+            src={stallLoading && !stallName ? undefined : identity?.picture}
+            name={stall}
+            pubkey={issuerWellFormed ? issuerKey : undefined}
+            loading={stallLoading && !stallName}
+            size="xl"
+            className="shrink-0"
+          />
+          <p className="mt-3 text-lg font-semibold tracking-tight text-mono-900 dark:text-mono-50">{stall}</p>
+          {/* Announced once when it settles, so a screen reader hears "verified" or the warning. */}
+          <div role="status" aria-live="polite" className="mt-0.5 min-h-5">
+            {stallLoading && !stallName ? (
+              <p className="text-sm text-mono-400">Checking who issued this voucher…</p>
+            ) : (
+              <p className={verified ? 'text-sm text-emerald-600' : 'text-sm text-amber-600'}>
+                {verified ? '✓ verified stall' : 'We could not verify this voucher'}
+              </p>
+            )}
+          </div>
+        </div>
         {/* No key fragment under an unnamed stall (#324): "Unknown stall" and the
             unverified warning above already say what the reader needs to know. */}
-        {face && <p className="mt-4 text-amount text-mono-900 dark:text-mono-50">{face}</p>}
+        {face && <p className="mt-6 text-amount tabular-nums text-mono-900 dark:text-mono-50">{face}</p>}
         <p className="mt-1 text-sm text-mono-500">Cashlink from {stall}</p>
         {summary.memo && <p className="mt-1 text-sm text-mono-500">{summary.memo}</p>}
         {summary.expiresAt && <p className="mt-1 text-sm text-mono-500">Claim by {formatDate(summary.expiresAt)}</p>}
@@ -399,7 +417,7 @@ function ConfirmPrompt({
             Not you?{' '}
             <button
               type="button"
-              className="pressable underline hover:text-mono-900 dark:hover:text-mono-50"
+              className="pressable inline-flex min-h-11 items-center underline hover:text-mono-900 dark:hover:text-mono-50"
               onClick={() => {
                 // Keeps this claim parked (logout carries parked claims across): it resumes after
                 // the next login, on whichever account that is (spec 4.3, CL-SWITCH).
@@ -412,14 +430,14 @@ function ConfirmPrompt({
           </p>
         )}
         {!summary.mintTrusted && (
-          <p className="mt-3 text-sm text-amber-600">
+          <p role="alert" className="mt-3 text-sm text-amber-600">
             This wallet has no trusted mint yet, so it cannot add vouchers. Your voucher is still waiting.
           </p>
         )}
-        <Button size="lg" className="mt-6 w-full" disabled={!canAdd} onClick={accept}>
+        <Button size="lg" className="mt-8 min-h-11 w-full" disabled={!canAdd} onClick={accept}>
           Add to my wallet
         </Button>
-        <Button size="lg" variant="ghost" className="mt-2 w-full" onClick={decline}>
+        <Button size="lg" variant="ghost" className="mt-2 min-h-11 w-full" onClick={decline}>
           Decline
         </Button>
       </div>
