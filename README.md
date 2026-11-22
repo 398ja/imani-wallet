@@ -9,6 +9,32 @@ reader, no account holding your balance, and no percentage taken on sales.
 
 Watch the 60-second explainer on our [YouTube channel](https://www.youtube.com/@imani.wallet).
 
+## Try it on staging
+
+The staging environment is open to everyone: **<https://wallet.staging.398ja.xyz>**.
+Nothing there is real money. Card payments run on Stripe test mode, so use the
+test card `4242 4242 4242 4242` with any future expiry and any CVC.
+
+**As a customer**
+
+1. Open the wallet, tap **Register**, pick a handle and a passphrase.
+2. Write down your backup key when it is shown.
+3. Tap **Receive** and show your code to a shop, or buy a voucher by card.
+4. Spend it back at that shop with **Scan**, in full or in part, and watch the
+   change come back as a smaller voucher.
+
+**As a merchant**
+
+1. Register a second account (another browser or a private window works) and
+   choose to sell.
+2. Use **Sell** to issue a voucher to your customer account's code.
+3. Use **Redeem** to take it back at the till.
+
+**Online checkout:** the demo WooCommerce store at
+<https://shop.staging.398ja.xyz> takes `IMANI-` coupon codes made in the wallet.
+
+Staging is reset from time to time, and feedback is welcome as GitHub issues.
+
 ## Two things to know first
 
 1. **Redemption happens at the shop, not at the mint.** Imani vouchers follow
