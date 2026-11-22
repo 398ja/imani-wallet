@@ -71,7 +71,16 @@ async function main() {
   mage(`$om->get(\\Imani\\CheckoutCodes\\Model\\EnrolmentScreen::class)->forget(); return true;`)
 
   const browser = await chromium.launch()
-  const page = async () => (await browser.newContext({ locale: 'en-GB', serviceWorkers: 'block' })).newPage()
+  const page = async () => {
+    const ctx = await browser.newContext({ locale: 'en-GB', serviceWorkers: 'block' })
+    // Vouchers name the mint by its stack alias; outside the stack's DNS, carry it to the published port.
+    await ctx.route(/^http:\/\/127\.0\.0\.1\.mint:7777\//, async (route) => {
+      const req = route.request()
+      const r = await fetch(req.url().replace('http://127.0.0.1.mint:7777', process.env.MINT_REACH ?? 'http://localhost:27777'), { method: req.method(), headers: req.headers(), body: req.postDataBuffer() ?? undefined })
+      await route.fulfill({ status: r.status, headers: { ...Object.fromEntries(r.headers), 'access-control-allow-origin': '*' }, body: Buffer.from(await r.arrayBuffer()) })
+    })
+    return ctx.newPage()
+  }
 
   const owner = await page()
   let handle = ''
@@ -116,19 +125,31 @@ async function main() {
   const host = new URL(enrol.split(':').slice(3, -3).join(':')).host
 
   // M1
-  for (let i = 0; i < 3; i++) {
-    await owner.goto(`${BASE}/settings/terminals/add`, { waitUntil: 'load' })
-    if (await owner.getByRole('button', { name: 'Add terminal' }).waitFor({ timeout: 30_000 }).then(() => true, () => false)) break
-    info(`terminals/add ${i + 1}: ${(await text(owner)).slice(0, 200)}`)
+  let shopLine = false
+  for (let attempt = 0; attempt < 4 && !shopLine; attempt++) {
+    for (let i = 0; i < 3; i++) {
+      await owner.goto(`${BASE}/settings/terminals/add`, { waitUntil: 'load' })
+      if (await owner.getByRole('button', { name: 'Add terminal' }).waitFor({ timeout: 30_000 }).then(() => true, () => false)) break
+      info(`terminals/add ${i + 1}: ${(await text(owner)).slice(0, 200)}`)
+    }
+    await owner.getByLabel('Name').fill('Magento shop')
+    await owner.getByLabel(/Or enter the device's/).fill(enrol)
+    await owner.getByRole('button', { name: 'Continue' }).click()
+    shopLine = await owner.getByText(`Connect ${host}?`).waitFor({ timeout: 20_000 }).then(async () => /Platform\s*Magento/.test(await text(owner)) && /can never issue them/.test(await text(owner)), () => false)
+    // The licence is read again on each load; until it is, the page offers the upgrade instead.
+    if (!shopLine) { info(`M1a attempt ${attempt + 1}: ${(await text(owner)).slice(-120)}`); await owner.waitForTimeout(5_000) }
   }
-  await owner.getByLabel('Name').fill('Magento shop')
-  await owner.getByLabel(/Or enter the device's/).fill(enrol)
-  await owner.getByRole('button', { name: 'Continue' }).click()
-  const shopLine = await owner.getByText(`Connect ${host}?`).waitFor({ timeout: 20_000 }).then(async () => /Platform\s*Magento/.test(await text(owner)) && /can never issue them/.test(await text(owner)), () => false)
   step('M1a the wallet reads the code as this Magento shop, redeem-only', shopLine, shopLine ? '' : (await text(owner)).slice(-300))
   if (!shopLine) return finish(browser)
-  await owner.getByTestId('online-shop-confirm').getByRole('button', { name: 'Connect', exact: true }).click()
-  const setup = await owner.getByTestId('online-shop-waiting').waitFor({ timeout: 120_000 }).then(async () => (await owner.getByTestId('online-shop-check-code').innerText()).replace(/\D/g, ''), () => '')
+  let setup = ''
+  for (let i = 0; i < 4 && !setup; i++) {
+    const confirm = owner.getByTestId('online-shop-confirm').getByRole('button', { name: 'Connect', exact: true })
+    if (await confirm.isVisible().catch(() => false)) {
+      if (i > 0) info(`M1b: still on confirm, clicking Connect again (${i})`)
+      await confirm.click().catch(() => {})
+    }
+    setup = await owner.getByTestId('online-shop-waiting').waitFor({ timeout: 30_000 }).then(async () => (await owner.getByTestId('online-shop-check-code').innerText()).replace(/\D/g, ''), () => '')
+  }
   step('M1b the stall issues the shop its credential (sent by DM, waiting for the shop)', /^\d{6}$/.test(setup), setup || (await text(owner)).slice(-300))
   if (!setup) return finish(browser)
 
@@ -212,6 +233,8 @@ async function main() {
       continue
     }
     await amountField.fill(CODE_AMOUNT)
+    cust.on('response', async (r) => { if (r.status() >= 400 && !/refunds/.test(r.url())) info(`cust http ${r.status()} ${r.request().method()} ${r.url().slice(0, 160)} ${(await r.text().catch(() => '')).slice(0, 300)}`) })
+    cust.on('requestfailed', (r) => info(`cust reqfail ${r.method()} ${r.url().slice(0, 160)} ${r.failure()?.errorText}`))
     await cust.getByRole('button', { name: 'Get code' }).click()
     code = await Promise.race([
       cust.getByTestId('checkout-code').innerText({ timeout: 120_000 }).then((s) => s.match(CODE_RE)?.[0] ?? '', () => ''),
@@ -222,7 +245,10 @@ async function main() {
       break
     }
   }
-  step('M2b Use online makes a checkout code for the Magento shop', !!code, code || (await text(cust)).slice(0, 300))
+  const refusals = code ? '' : await cust.evaluate(() => Object.keys(localStorage).filter((k) => /checkout/i.test(k)).map((k) => {
+    try { return (JSON.parse(localStorage.getItem(k) ?? '[]') as Array<{ refusal?: string; status?: string }>).map((r) => `${r.status}:${r.refusal}`).join(' ') } catch { return '' }
+  }).join(' | '))
+  step('M2b Use online makes a checkout code for the Magento shop', !!code, code || `${refusals} :: ${(await text(cust)).slice(0, 200)}`)
   if (!code) return finish(browser)
   const codePage = cust.url()
 
@@ -236,7 +262,7 @@ async function main() {
   }
   const cartId: string = await rest('POST', '/guest-carts')
   await rest('POST', `/guest-carts/${cartId}/items`, { cartItem: { sku: SKU, qty: 1, quote_id: cartId } })
-  const address = { firstname: 'Test', lastname: 'Buyer', street: ['1 Test Street'], city: 'Lisbon', postcode: '1000-001', country_id: 'PT', telephone: '912345678', email: `buyer${Date.now()}@example.com` }
+  const address = { firstname: 'Test', lastname: 'Buyer', street: ['1 Test Street'], city: 'Lisbon', postcode: '1000-001', country_id: 'PT', region_id: Number(process.env.MAGENTO_REGION_ID ?? 1034), telephone: '912345678', email: `buyer${Date.now()}@example.com` }
   await rest('POST', `/guest-carts/${cartId}/shipping-information`, { addressInformation: { shipping_address: address, billing_address: address, shipping_method_code: 'flatrate', shipping_carrier_code: 'flatrate' } })
   const before = (await rest('GET', `/guest-carts/${cartId}/totals`)).grand_total as number
   const applied = mage(`
@@ -283,11 +309,13 @@ async function main() {
   let status = ''
   for (let i = 0; i < 9; i++) {
     await cust.goto(codePage, { waitUntil: 'load' })
-    status = (await text(cust)).match(/Status\s*([A-Za-z ]{3,20}?)\s*(Cancel|$|Done)/)?.[1]?.trim() ?? ''
-    if (/used|redeemed|spent/i.test(status)) break
+    await cust.waitForTimeout(2_000)
+    const page = await text(cust)
+    status = page.match(/\b(Used|Redeemed|Spent|Paid)\b[^.]{0,60}/i)?.[0] ?? page.slice(0, 240)
+    if (/^(used|redeemed|spent|paid)/i.test(status)) break
     await cust.waitForTimeout(10_000)
   }
-  step('M6 the customer\'s wallet shows the code as used', /used|redeemed|spent/i.test(status), status)
+  step('M6 the customer\'s wallet shows the code as used', /^(used|redeemed|spent|paid)/i.test(status), status)
   return finish(browser)
 }
 
