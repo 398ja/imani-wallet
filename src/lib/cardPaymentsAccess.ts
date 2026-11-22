@@ -1,4 +1,4 @@
-import { FREE_TIER } from '@imani/licence'
+import { FREE_TIER, GRACE_REASONS } from '@imani/licence'
 
 import { entitlementFor } from './entitlement'
 import type { LicenceStatus } from './licenceStatus'
@@ -16,12 +16,26 @@ import type { LicenceStatus } from './licenceStatus'
  * - `not-included`: the stall is on Starter, or its plan ended.
  * - `unknown`: the plan could not be checked. The caller changes nothing on this: it neither starts
  *   an offer nor withdraws one, as an unreachable merchant service does for Stripe.
+ *
+ * An outage does not always arrive as a thrown error. `licenceStatus` resolves a wallet store it
+ * could not read as a refusal with a GRACE reason (`never-verified`, `grace-elapsed`): no grant,
+ * and no answer either. Read as Starter, that would withdraw a paying stall's offer over a storage
+ * fault, so it is `unknown`. Only an answered refusal (absent, expired, revoked...) is Starter.
  */
 export type CardPaymentsPlan = 'included' | 'not-included' | 'unknown'
 
 export function cardPaymentsPlan(status: LicenceStatus | null): CardPaymentsPlan {
   if (status === null) return 'unknown'
-  return entitlementFor(status, 'USD').tier !== FREE_TIER ? 'included' : 'not-included'
+  if (entitlementFor(status, 'USD').tier !== FREE_TIER) return 'included'
+  const decision = status.decision
+  if (!decision.granted && isGraceReason(decision.reason)) return 'unknown'
+  return 'not-included'
+}
+
+const OUTAGE_REASONS: readonly string[] = Object.values(GRACE_REASONS)
+
+function isGraceReason(reason: string): boolean {
+  return OUTAGE_REASONS.includes(reason)
 }
 
 /** The lowest plan that includes card payments, as it is sold. The tier is `basic` in the catalog. */

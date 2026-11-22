@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 import type { LicenceStatus } from '../../lib/licenceStatus'
@@ -11,7 +11,7 @@ import { emptyMerchant, type MerchantProfile } from '../../lib/merchant'
 /** Settings › Card payments is Essentials and above: Starter sees the plan, not Connect Stripe. */
 
 const stripe = vi.hoisted(() => ({ status: { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } } as unknown }))
-const published = vi.hoisted(() => ({ events: [] as unknown[] }))
+const published = vi.hoisted(() => ({ events: [] as unknown[], ok: 1 }))
 
 vi.mock('../../lib/stripeAccount', () => ({
   fetchStripeStatus: async () => stripe.status,
@@ -23,7 +23,7 @@ vi.mock('../../lib/nap', () => ({ getSigner: () => ({ signEvent: async (e: objec
 vi.mock('../../lib/relay', () => ({
   publish: async (e: unknown) => {
     published.events.push(e)
-    return { ok: 1 }
+    return { ok: published.ok }
   },
 }))
 vi.mock('../../components/CardSalesSection', () => ({ CardSalesSection: () => <div data-testid="card-sales" /> }))
@@ -56,6 +56,7 @@ function renderPage(status: () => Promise<LicenceStatus>, merchant: Partial<Merc
 beforeEach(() => {
   localStorage.clear()
   published.events = []
+  published.ok = 1
   stripe.status = { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } }
 })
 afterEach(cleanup)
@@ -120,5 +121,117 @@ describe('Card payments by plan', () => {
     await waitFor(() => expect(screen.getByText('Taking card payments')).toBeTruthy())
     expect(onSaved).not.toHaveBeenCalled()
     expect(screen.queryByTestId('card-payments-not-in-plan')).toBeNull()
+  })
+
+  it('says Card payments are off, not Paid in GBP, for a Starter stall live on Stripe', async () => {
+    // Arrange
+    stripe.status = liveStripe
+
+    // Act
+    renderPage(starter)
+
+    // Assert
+    await waitFor(() => expect(screen.getByText('Stripe connected')).toBeTruthy())
+    expect(screen.getByText('Card payments are off on your current plan.')).toBeTruthy()
+    expect(screen.queryByText(/Paid in GBP/)).toBeNull()
+  })
+})
+
+describe('Card payments review regressions', () => {
+  const outage = async () =>
+    ({ checkedAt: nowS(), decision: { granted: false, reason: 'never-verified', detail: 'the wallet could not be read' }, grants: [] }) as unknown as LicenceStatus
+
+  it('keeps a paying stall’s offer when the licence store cannot be read', async () => {
+    // Arrange
+    stripe.status = liveStripe
+
+    // Act
+    const onSaved = renderPage(outage, { acceptsCards: true })
+
+    // Assert
+    await waitFor(() => expect(screen.getByText('Taking card payments')).toBeTruthy())
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(published.events).toHaveLength(0)
+    expect(screen.queryByTestId('card-payments-not-in-plan')).toBeNull()
+  })
+
+  it('tells a Starter stall that its disconnect was not sent, on the locked screen', async () => {
+    // Arrange: offering cards; the plan reads as Starter by the time the stall disconnects, and
+    // the relays refuse the withdrawal.
+    stripe.status = liveStripe
+    published.ok = 0
+    let plan: () => Promise<LicenceStatus> = outage
+    renderPage(() => plan(), { acceptsCards: true })
+    await waitFor(() => expect(screen.getByRole('button', { name: /Stop taking card payments/ })).toBeTruthy())
+    plan = starter
+    stripe.status = { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } }
+
+    // Act
+    fireEvent.click(screen.getByRole('button', { name: /Stop taking card payments/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/ }))
+
+    // Assert
+    await waitFor(() => expect(screen.getByTestId('card-payments-locked')).toBeTruthy())
+    expect(screen.getByTestId('card-payments-note').textContent).toMatch(/not sent yet/)
+  })
+
+  it('shows a failed Stripe read as an error, not an upgrade prompt, on Starter', async () => {
+    // Arrange
+    stripe.status = { kind: 'error', reason: 'The merchant service is unreachable.' }
+
+    // Act
+    renderPage(starter)
+
+    // Assert
+    await waitFor(() => expect(screen.getByText('The merchant service is unreachable.')).toBeTruthy())
+    expect(screen.queryByTestId('card-payments-locked')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Connect Stripe/ })).toBeNull()
+  })
+
+  it('does not claim to take cards while the plan is unchecked and nothing is published', async () => {
+    // Arrange
+    stripe.status = liveStripe
+
+    // Act
+    const onSaved = renderPage(outage)
+
+    // Assert
+    await waitFor(() => expect(screen.getByTestId('card-payments-plan-unchecked')).toBeTruthy())
+    expect(screen.queryByText('Taking card payments')).toBeNull()
+    expect(screen.queryByTestId('card-sales')).toBeNull()
+    expect(onSaved).not.toHaveBeenCalled()
+  })
+
+  it('does not hang on Loading when the licence check never settles', async () => {
+    // Arrange
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      renderPage(() => new Promise<LicenceStatus>(() => {}))
+
+      // Act
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+
+      // Assert
+      await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('unlocks with Check again after the merchant upgrades, without a reload', async () => {
+    // Arrange
+    let plan = starter
+    renderPage(() => plan())
+    await waitFor(() => expect(screen.getByTestId('card-payments-locked')).toBeTruthy())
+    plan = essentials
+
+    // Act
+    fireEvent.click(screen.getByRole('button', { name: /Check again/ }))
+
+    // Assert
+    await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
+    expect(screen.queryByTestId('card-payments-locked')).toBeNull()
   })
 })
