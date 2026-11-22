@@ -20,7 +20,14 @@ import type { ReportTransaction as WalletTransaction } from './types.js'
 /** What a merchant's own records can say. */
 export interface MerchantStats {
   issuedCount: number
+  /** Face value issued inside the range. */
   issuedValue: number
+  /**
+   * Face value of EVERY voucher this merchant has issued, in its issuance currency, whatever the
+   * range: the overall total the dashboard shows beside what is outstanding. Same rows as
+   * `issuedValue` (`issued`, this unit), with no window.
+   */
+  totalIssuedValue: number
   /** Coupons THIS merchant issued that have come back as payment. */
   redeemedCount: number
   redeemedValue: number
@@ -137,6 +144,7 @@ export function merchantStats(
   return {
     issuedCount: issued.length,
     issuedValue,
+    totalIssuedValue: sum(allIssued),
     redeemedCount: redeemed.length,
     redeemedValue,
     redemptionRate: issuedValue === 0 ? 0 : redeemedValue / issuedValue,
