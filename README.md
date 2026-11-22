@@ -15,20 +15,33 @@ The staging environment is open to everyone: **<https://wallet.staging.398ja.xyz
 Nothing there is real money. Card payments run on Stripe test mode, so use the
 test card `4242 4242 4242 4242` with any future expiry and any CVC.
 
+New to Imani? Start with [How Imani works in 50 seconds](https://www.youtube.com/shorts/5X_hBQ4ke7E).
+
 **As a customer**
 
-1. Open the wallet, tap **Register**, pick a handle and a passphrase.
-2. Write down your backup key when it is shown.
-3. Tap **Receive** and show your code to a shop, or buy a voucher by card.
-4. Spend it back at that shop with **Scan**, in full or in part, and watch the
+1. Open the wallet, tap **Register**, pick a handle and a passphrase, and write
+   down your backup key when it is shown.
+   Video: [How to set up your Imani wallet](https://www.youtube.com/shorts/VoG05jwDn-w)
+2. Tap **Receive** and show your code to a shop, or buy a voucher by card.
+3. Spend it back at that shop with **Scan**, in full or in part, and watch the
    change come back as a smaller voucher.
+4. Give some away. Videos: [Send a voucher to a friend](https://www.youtube.com/shorts/PkT1ouKFofk),
+   [Send a voucher as a link (Cashlink)](https://www.youtube.com/shorts/2OpN8y_NR6M)
 
 **As a merchant**
 
 1. Register a second account (another browser or a private window works) and
-   choose to sell.
-2. Use **Sell** to issue a voucher to your customer account's code.
-3. Use **Redeem** to take it back at the till.
+   set up your shop.
+   Video: [How to set up your shop on Imani](https://www.youtube.com/shorts/9pSnOkwOmeE)
+2. Use **Sell** to issue a voucher to your customer account's code, and
+   **Redeem** to take it back at the till.
+   Video: [Sell a voucher and get paid: Redeem vs Pay](https://www.youtube.com/shorts/O3CjYDqJCzA)
+3. Let customers buy by card (Stripe test mode on staging).
+   Video: [Stripe setup](https://www.youtube.com/shorts/zGAFJiVr7oQ)
+4. Add a second device for staff.
+   Video: [Terminals](https://www.youtube.com/shorts/oH3RL5uwrvI)
+5. Check your records.
+   Video: [Dashboard, Vouchers and Transactions](https://www.youtube.com/shorts/zTAHj3bUsgo)
 
 **Online checkout:** the demo WooCommerce store at
 <https://shop.staging.398ja.xyz> takes `IMANI-` coupon codes made in the wallet.
