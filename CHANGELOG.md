@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A voucher's claims are grouped by bundle and paged on their own screen.** The merchant's
+  voucher screen folds claims sharing a bundle id into one line, exactly as History does (same
+  `groupHistory`, same per-part voucher count from #661), and shows only the newest three records,
+  with "See all claims" when there are more. The new `/merchant/coupon/:id/claims` lists every
+  claim newest first, 21 records per page (a record is one displayed row: a single claim or one
+  folded bundle), with the page in `?page=N` and empty, loading, error and past-the-end states.
+  Built from the one local read the voucher screen already does: nothing is fetched per row.
+
 ## [0.74.0] - 2026-11-20
 
 ### Fixed
