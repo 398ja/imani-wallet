@@ -65,6 +65,7 @@ import {
   MerchantTransactionsPage,
   IssuedCouponsPage,
   IssuedCouponPage,
+  VoucherClaimsPage,
   ExpiringVouchersPage,
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
@@ -698,6 +699,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
                 <Route
                   path="/merchant/coupon/:voucherId"
                   element={<IssuedCouponPage pubkey={pubkey} />}
+                />
+                {/* Every claim against that voucher, paged (?page=N). Same stall key, same reason. */}
+                <Route
+                  path="/merchant/coupon/:voucherId/claims"
+                  element={<VoucherClaimsPage pubkey={pubkey} />}
                 />
                 <Route
                   path="/merchant/dashboard"
