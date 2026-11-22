@@ -101,9 +101,9 @@ function mintRow(t: LicenceTerms, expiresAt: number) {
   return { row, issuerPublicKey: built.voucher.issuerPublicKey }
 }
 
-function renderPage() {
+function renderPage(entry = '/settings/subscription') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}>
       <SubscriptionPage pubkey={CUSTOMER} />
     </MemoryRouter>,
   )
@@ -129,6 +129,23 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
+})
+
+describe('arriving from Sell with the Free plan used up (review of gc#317)', () => {
+  it('explains why it opened and invites an upgrade', async () => {
+    renderPage('/settings/subscription?reason=sales-limit')
+    await screen.findByText('Not active')
+    const banner = screen.getByTestId('sales-limit-upgrade-banner')
+    expect(banner.textContent).toMatch(/used your Free plan’s voucher allowance/)
+    expect(banner.textContent).toMatch(/Upgrade your plan/)
+    expect(banner.textContent).toMatch(/nothing was issued or charged/)
+  })
+
+  it('shows no banner when opened from Settings', async () => {
+    renderPage()
+    await screen.findByText('Not active')
+    expect(screen.queryByTestId('sales-limit-upgrade-banner')).toBeNull()
+  })
 })
 
 describe('reaching the screen without a subscription', () => {
@@ -414,6 +431,6 @@ describe('the plan (#407)', () => {
     expect(await screen.findByText('Starter')).toBeTruthy()
     expect(screen.getByText(/82\.00 of .*100\.00/)).toBeTruthy()
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('82')
-    expect(screen.getByText('1 besides this device')).toBeTruthy()
+    expect(screen.getByText('This device only')).toBeTruthy()
   })
 })

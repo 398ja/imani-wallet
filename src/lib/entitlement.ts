@@ -213,7 +213,7 @@ export class SalesLimitError extends Error {
 
 /** What the gateway's `422 SALES_LIMIT_REACHED` reads as, so both refusals say the same thing. */
 export const SALES_LIMIT_MESSAGE =
-  'You have reached the sales limit for your plan. Upgrade to keep selling. Redeeming coupons still works.'
+  'This sale would take you past the Free plan’s issuance allowance, so nothing was issued and nothing was charged. Upgrade your plan to keep selling. Redeeming coupons still works.'
 
 /**
  * Whether sales limits are enforced in this build (`VITE_TIER_LIMITS=on`).

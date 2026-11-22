@@ -469,48 +469,6 @@ describe('BalanceManager', () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // Selection
-  // ──────────────────────────────────────────────────────────────────────
-
-  describe('selectVouchersForAmount', () => {
-    it('should select vouchers covering the requested amount', async () => {
-      await manager.init();
-      const result = await manager.selectVouchersForAmount({
-        amount: 1500,
-        currency: 'EUR',
-      });
-
-      expect(result.sufficient).toBe(true);
-      expect(result.totalAmount).toBeGreaterThanOrEqual(1500);
-    });
-
-    it('should return insufficient when not enough balance', async () => {
-      await manager.init();
-      const result = await manager.selectVouchersForAmount({
-        amount: 999999,
-        currency: 'EUR',
-      });
-
-      expect(result.sufficient).toBe(false);
-      expect(result.shortfall).toBeGreaterThan(0);
-    });
-  });
-
-  describe('getAvailableForCurrency', () => {
-    it('should return total available for EUR', async () => {
-      await manager.init();
-      const available = await manager.getAvailableForCurrency('EUR');
-      expect(available).toBe(3000);
-    });
-
-    it('should return 0 for currency with no vouchers', async () => {
-      await manager.init();
-      const available = await manager.getAvailableForCurrency('GBP');
-      expect(available).toBe(0);
-    });
-  });
-
-  // ──────────────────────────────────────────────────────────────────────
   // Refresh
   // ──────────────────────────────────────────────────────────────────────
 

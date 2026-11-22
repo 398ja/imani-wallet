@@ -33,7 +33,7 @@ import { sendVouchers, type SendResult } from './pay'
 import { publishTx } from './txRecords'
 import { cashbackValidation } from './cashbackValidation'
 import { checkTokenBacking, loadTrustedMints } from './trustedMint'
-import { asGiftLinkRecord, buildSentTransaction, type GiftLinkRecord, type GiftLinkStatus } from './transactions'
+import { asGiftLinkRecord, buildSentTransaction, CASHLINK_TAKEN_BACK_MEMO, type GiftLinkRecord, type GiftLinkStatus } from './transactions'
 import { creditableFaceValue, parseVoucherToken, tokenProofs, voucherOfSecret } from './voucherToken'
 import { getWallet, notifyWalletChanged } from './wallet'
 import type { Merchant } from './merchants'
@@ -56,7 +56,7 @@ import {
   type CashlinkPorts,
   type ReturnOutcome,
 } from './cashlinkFlow'
-import { isUnverifiedClaim, unconfirmedClaimLinks, type GiftLinkArm } from './transactions'
+import { CLAIM_RECHECK_AFTER_MS, isSingleReadClaim, isUnverifiedClaim, unconfirmedClaimLinks, type GiftLinkArm } from './transactions'
 import { pendingSendsKey } from './inFlightMoney'
 import { cashlinkIntentLinkKeys, movingCashlinkLinkKeys } from './cashlinkIntents'
 
@@ -443,9 +443,73 @@ function serialised<T>(run: () => Promise<T>): Promise<T> {
 
 function setLinkStatus(rows: LinkRow[], status: GiftLinkStatus, at = Date.now(), extra: Partial<GiftLinkRecord> = {}): Promise<void> {
   // #379: every "claimed" this module writes has been decided by the mint (the gift is spent, and
-  // not into this wallet's own outputs), so it is recorded as confirmed.
-  const confirmed = status === 'claimed' ? { verifiedAt: at, ...extra } : extra
+  // not into this wallet's own outputs), so it is recorded as confirmed. #261: except one resting on
+  // a single SPENT checkstate, which says so (`claimReason`) and is read again on a later pass.
+  const confirmed = status === 'claimed' && extra.claimReason === undefined ? { verifiedAt: at, ...extra } : extra
   return serialised(() => writeLinkStatus(rows, status, at, confirmed))
+}
+
+/** #261: a claim decided by one SPENT checkstate: why and when, so a later read can undo it. */
+function spentReadClaim(at: number): Partial<GiftLinkRecord> {
+  return { claimReason: 'mint-spent', spentSeenAt: at }
+}
+
+/**
+ * #261: the second read of a claim that rested on one SPENT checkstate. Every bearer gift still
+ * SPENT confirms it (`verifiedAt`); every one UNSPENT opens the link again, so the take-back it
+ * stopped can run; anything else (the mint unreachable, PENDING, a mix) leaves it for the next pass.
+ */
+async function recheckSpentRead(rows: LinkRow[], tokens: GiftToken[], state: (token: string) => Promise<ProofState>, nowMs: number): Promise<'open' | 'left'> {
+  const link = rows.map((r) => r.link).find(isSingleReadClaim)
+  if (!link || nowMs - (link.spentSeenAt ?? 0) < CLAIM_RECHECK_AFTER_MS) return 'left'
+  const gifts = giftCandidates(tokens)
+  if (gifts.length === 0) return 'left'
+  const states = await Promise.all(gifts.map((t) => state(t.token)))
+  if (states.every((s) => s === 'SPENT')) {
+    await confirmSpentRead(rows, nowMs)
+    return 'left'
+  }
+  if (states.every((s) => s === 'UNSPENT')) {
+    await reopenSpentRead(rows)
+    return 'open'
+  }
+  return 'left'
+}
+
+/** #261: the second SPENT read agrees: the claim stands, confirmed. */
+function confirmSpentRead(rows: LinkRow[], at: number): Promise<void> {
+  return serialised(async () => {
+    const wallet = getWallet()
+    const fresh = await currentLinks()
+    for (const r of rows) {
+      const now = fresh.get(r.id) ?? r.link
+      if (!isSingleReadClaim(now)) continue
+      const merged = await wallet.updateTransaction(r.id, { link: { ...now, verifiedAt: at } } as unknown as Partial<TransactionRow>)
+      if (merged) void publishTx(merged)
+    }
+    notifyWalletChanged()
+  })
+}
+
+/** #261: the mint now says UNSPENT: the claim is undone and the link is outstanding again. */
+function reopenSpentRead(rows: LinkRow[]): Promise<void> {
+  return serialised(async () => {
+    const wallet = getWallet()
+    const fresh = await currentLinks()
+    for (const r of rows) {
+      const now = fresh.get(r.id) ?? r.link
+      if (!isSingleReadClaim(now)) continue
+      const { closedAt: _c, claimReason: _r, spentSeenAt: _s, ...rest } = now
+      void _c
+      void _r
+      void _s
+      const link: GiftLinkRecord = { ...rest, status: 'outstanding' }
+      const merged = await wallet.updateTransaction(r.id, { link } as unknown as Partial<TransactionRow>)
+      if (merged) void publishTx(merged)
+    }
+    console.warn('[gift] a Cashlink closed as claimed on one SPENT read is UNSPENT now; opened again')
+    notifyWalletChanged()
+  })
 }
 
 /**
@@ -956,6 +1020,8 @@ export async function redeemGiftTokens(
   source: 'gift_link' | 'gift_link_reclaim',
   /** The link's key, text form. Needed for a gift locked to its link (#295 phase 4). */
   key?: string,
+  /** A take-back: the id of the `sent` row that made the Cashlink, linked from the return's row. */
+  returnOf?: string,
 ): Promise<GiftRedeemOutcome> {
   await loadTrustedMints()
   for (const { token } of tokens) {
@@ -996,9 +1062,9 @@ export async function redeemGiftTokens(
       if (outcome.kind !== 'ok') return outcome
       tellIssuerClaimed(locked, account)
       const rest = tokens.filter((t) => !locked.includes(t))
-      return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption, cashlinkBundleId(linkPubOf(linkSecret)))
+      return rest.length === 0 ? outcome : await swapGiftTokens(rest, source, redemption, cashlinkBundleId(linkPubOf(linkSecret)), returnOf)
     }
-    return await swapGiftTokens(tokens, source, redemption, linkSecret ? cashlinkBundleId(linkPubOf(linkSecret)) : undefined)
+    return await swapGiftTokens(tokens, source, redemption, linkSecret ? cashlinkBundleId(linkPubOf(linkSecret)) : undefined, returnOf)
   } finally {
     endReceive()
   }
@@ -1069,6 +1135,8 @@ async function swapGiftTokens(
   redemption: NonNullable<Window['TokenRedemption']>,
   /** One id for every coupon off this link, so History folds a several-coupon claim into one entry. */
   bundleId?: string,
+  /** A take-back's `sent` row id (see `redeemGiftTokens`). */
+  returnOf?: string,
 ): Promise<GiftRedeemOutcome> {
   let added = 0
   let spent = 0
@@ -1078,7 +1146,10 @@ async function swapGiftTokens(
     const { token } = gift
     try {
       const validation = cashbackValidation(token)
-      await withCorrelation({ ...(validation ? { validation: { ...validation } } : {}), ...(bundleId ? { bundleId } : {}) }, (correlationId) =>
+      // A take-back is the sender's own coupon coming home: its row says so, in the link's bundle,
+      // as the locked path's does (`takenBackRow`). Without the memo the row read "Received via DM".
+      const takenBack = source === 'gift_link_reclaim' ? { memo: CASHLINK_TAKEN_BACK_MEMO, ...(returnOf ? { returnOf } : {}) } : {}
+      await withCorrelation({ ...(validation ? { validation: { ...validation } } : {}), ...(bundleId ? { bundleId } : {}), ...takenBack }, (correlationId) =>
         redemption.redeem(token, { source, metadata: { correlation_id: correlationId } }),
       )
       added += 1
@@ -1240,11 +1311,13 @@ export async function takeBack(k: string): Promise<TakeBackOutcome> {
       }
       return { kind: 'failed', message: 'Could not take it back just now. Try again.' }
     }
-    await setLinkStatus(rows, 'claimed', Date.now(), told)
+    const at = Date.now()
+    await setLinkStatus(rows, 'claimed', at, { ...told, ...spentReadClaim(at) })
     return { kind: 'claimed' }
   }
   const unspent = tokens.filter((_, n) => states[n] !== 'SPENT')
-  const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim')
+  // The link key: its bundle id goes on the take-back's History row.
+  const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim', k, rows[0] ? creationRowId(rows) : undefined)
   if (outcome.kind === 'ok') await setLinkStatus(rows, 'reclaimed', Date.now(), told)
   else if (outcome.kind === 'claimed') await setLinkStatus(rows, 'claimed', Date.now(), told)
   return outcome
@@ -1288,6 +1361,7 @@ async function settleLocked(rows: LinkRow[], linkSecret: Uint8Array, lockedToken
       // finished on every later run too. Without this, the next run read the proofs still on the link
       // as "waiting for x", and a gift taken back part way stayed part way until its expiry.
       takeBackNow: takeBackNow || link.arm?.s === 'returning',
+      returnOf: creationRowId(rows),
       onReturning: async () => {
         // Before anything leaves the link: logout stays off until it is back as a voucher.
         await cashlinkSeam.markMoving(pubkey, rows[0].id)
@@ -1402,7 +1476,9 @@ export async function reconcileGiftLinks(
     )
     const reconcileOne = async (k: string, snapshot: LinkRow[]): Promise<void> => {
       const doubted = doubtedLinks.has(k)
-      if (!doubted && !snapshot.some((p) => p.link.status === 'outstanding')) return
+      // #261: a claim that rests on one SPENT read is read again once it is due.
+      const singleRead = !doubted && snapshot.some((p) => isSingleReadClaim(p.link) && nowMs - (p.link.spentSeenAt ?? 0) >= CLAIM_RECHECK_AFTER_MS)
+      if (!doubted && !singleRead && !snapshot.some((p) => p.link.status === 'outstanding')) return
       const secret = secretFromText(k)
       if (!secret) return
       let tokens: GiftToken[]
@@ -1418,7 +1494,8 @@ export async function reconcileGiftLinks(
         if (verdict === 'returned') reclaimed += 1
         if (verdict !== 'open') return
       }
-      const parts = doubted ? (await linkRows()).filter((r) => r.link.k === k) : snapshot
+      if (singleRead && (await recheckSpentRead(snapshot, tokens, state, nowMs)) !== 'open') return
+      const parts = doubted || singleRead ? (await linkRows()).filter((r) => r.link.k === k) : snapshot
       if (!parts.some((p) => p.link.status === 'outstanding')) return
       // #295 phase 4, first: a link part way through being locked is finished, and a link whose gift
       // is locked to it is settled by its own rules. Its original bearer gift, spent by the lock,
@@ -1463,7 +1540,7 @@ export async function reconcileGiftLinks(
           if (link.i !== undefined) await armLink(sessionAccount(getSigner) ?? '', k, secret, link.i, link.x)
           return
         }
-        await setLinkStatus(parts, 'claimed')
+        await setLinkStatus(parts, 'claimed', nowMs, spentReadClaim(nowMs))
         claimed += 1
         return
       }
@@ -1474,7 +1551,8 @@ export async function reconcileGiftLinks(
         // The take-back is always tried first: the mint's clock, not this device's, decides whether a
         // coupon has lapsed (second check of #367). A wallet clock running fast must never close a
         // link the mint would still let come back.
-        const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim')
+        // The link key: its bundle id goes on the take-back's History row.
+        const outcome = await redeemGiftTokens(unspent, 'gift_link_reclaim', k, creationRowId(parts))
         if (outcome.kind === 'ok') {
           await setLinkStatus(parts, 'reclaimed', nowMs)
           reclaimed += 1
@@ -1551,6 +1629,16 @@ function openLinkOf(parts: LinkRow[]): GiftLinkRecord {
 
 /** A row the restore scan wrote (`adoptLink`), not the send itself. */
 const isAdoptedRow = (r: LinkRow): boolean => r.id.startsWith('sent:gift-')
+
+/**
+ * The row that made a Cashlink, which its take-back's row links to: the send's own row before one a
+ * restore scan adopted, and of a several-coupon send its first row in id order, so every run of a
+ * take-back names the same one. Exported for tests.
+ */
+export function creationRowId(rows: readonly LinkRow[]): string {
+  const ranked = [...rows].sort((a, b) => Number(isAdoptedRow(a)) - Number(isAdoptedRow(b)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return ranked[0].id
+}
 
 /**
  * #379: whether a link's spent bearer gift went into this wallet's own burn outputs (an arm), which

@@ -416,6 +416,11 @@ export async function discharge(
     if (error instanceof IssuanceFailed && error.unrecorded) {
       return { kind: 'unrecorded', reason: error.message }
     }
+    if (error instanceof IssuanceFailed && error.salesLimit) {
+      // gc#317: a paid sale the stall's Free plan cannot cover. Retrying would leave a charged buyer
+      // waiting forever with nobody looking; a person refunds or issues by hand once the stall upgrades.
+      return { kind: 'attention', reason: `sales_limit_reached: ${error.message}; refund or issue by hand` }
+    }
     if (error instanceof IssuanceFailed) {
       // A burnt credential will never mint. Retrying it forever would bury the
       // one case that needs a human in a log of identical failures.
@@ -498,6 +503,14 @@ export async function discharge(
       fetch,
       () => ports.now(),
     )
+    // #570: a self gift has no tracker row and nothing left to send: its personal fields go now.
+    if (obligation.gift?.kind === 'self' && ports.gifts?.scrubAll) {
+      try {
+        await ports.gifts.scrubAll(obligation.id)
+      } catch {
+        // payment-adapter's backstop scrubs it if this never lands.
+      }
+    }
     return {
       kind: 'discharged',
       voucherId: coupon.voucherId,
@@ -701,8 +714,17 @@ async function trackGift(
   const delivery = obligation.gift!.delivery!
   const draftId = obligation.gift!.draftId
   const kind = code ? 'code' : (obligation.gift!.kind as 'handle' | 'email')
+  // #570: a gift nobody tracks has nothing left to send, so its personal data goes now.
+  const scrubNow = async () => {
+    try {
+      await gifts.scrubAll?.(obligation.id)
+    } catch {
+      // payment-adapter's 400-day backstop scrubs it if this never lands.
+    }
+  }
   if (!draftId || !delivery.buyerEmail) {
     console.warn(JSON.stringify({ event: 'gift_not_tracked', kind, reason: draftId ? 'no buyer email' : 'no draft' }))
+    await scrubNow()
     return
   }
   const recipientDisplay =
@@ -713,6 +735,7 @@ async function trackGift(
         : 'the recipient'
   // Guest: no signed-in buyer, or a refund key that is not the buyer's wallet key (it is R).
   const guest = !delivery.buyerPubkey || delivery.buyerPubkey.toLowerCase() !== lock.refundPubkey.toLowerCase()
+  const stall = (await gifts.stallName(obligation.stallPubkey)) ?? 'a local stall'
   try {
     const mintUrl = tokenMintUrl(token)
     await gifts.track(
@@ -723,18 +746,41 @@ async function trackGift(
         claimBy: lock.locktime * 1000,
         buyerEmail: delivery.buyerEmail,
         recipientDisplay,
-        stall: (await gifts.stallName(obligation.stallPubkey)) ?? 'a local stall',
+        stall,
         amount: formatAmount(obligation.faceValue, obligation.faceDecimals, obligation.faceUnit),
         guest,
         returnMailDate: guest && delivery.draftCreatedAt ? displayDate(delivery.draftCreatedAt) : null,
         spendBy: spendByMs,
         ...(code ? { code } : {}),
+        eventId: obligation.id,
+        // §6d: who to remind, and how the reminder names the original email (G13).
+        ...(kind !== 'handle' && delivery.recipientEmail
+          ? {
+              recipient: {
+                email: delivery.recipientEmail,
+                from: delivery.from ?? null,
+                claimSubject: claimSubject(kind, delivery.from ?? null, stall),
+                sender: gifts.mailFrom ?? 'gifts@imani.casa',
+              },
+            }
+          : {}),
       },
       mintUrl,
     )
   } catch (error) {
     console.warn(JSON.stringify({ event: 'gift_not_tracked', kind, reason: error instanceof Error ? error.name : 'error' }))
+    await scrubNow()
   }
+}
+
+/**
+ * The subject the claim (or code) email went out with, as imani-mailer renders it from the built-in
+ * template, so the reminder can name it (G13). Kept beside the templates' own text: a template
+ * changed in builtins.ts is caught by the tracker test that renders both.
+ */
+export function claimSubject(kind: 'email' | 'code', from: string | null, stall: string): string {
+  const who = from && from.trim() ? from.trim() : 'Someone'
+  return kind === 'code' ? `${who} sent you a ${stall} shop code` : `${who} sent you a voucher for ${stall}`
 }
 
 function claimLink(walletOrigin: string, linkSecretHex: string, x: number): string | null {

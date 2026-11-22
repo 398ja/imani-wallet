@@ -43,7 +43,12 @@ export function formatGiftLink(walletOrigin: string, secret: Uint8Array, expires
 
 /** `src/lib/cashlinkFlow.ts` `wrapForLink`, for the same reason (pinned by a test). */
 export function wrapForLink(linkSecret: Uint8Array, token: string) {
-  return nip17.wrapEvent(linkSecret, { publicKey: getPublicKey(linkSecret) }, JSON.stringify({ type: 'cashu_token_transfer', token }))
+  return nip17.wrapEvent(linkSecret, { publicKey: getPublicKey(linkSecret) }, linkWrapContent(token))
+}
+
+/** The rumor content of a link wrap, for the size budget (#532). */
+export function linkWrapContent(token: string): string {
+  return JSON.stringify({ type: 'cashu_token_transfer', token })
 }
 
 /** G17: the longest a gift waits to be claimed, whatever the draft asks for. */

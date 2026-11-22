@@ -17,6 +17,8 @@ import { ownerActor, type Actor } from '../lib/actor'
 import type { TerminalSession } from '../lib/terminalSession'
 import { TERMINAL_CASHBACK_UNSUPPORTED, mayWarrantSale } from '../lib/warrantSigner'
 import { userMessage } from '../lib/userMessage'
+import { CashbackGenerateError } from '../lib/cashback'
+import { UPGRADE_PATH, salesAllowance } from '../lib/salesAllowance'
 
 /**
  * Create a Cashlink (the stall's cashback): a coupon for someone who has not installed the app.
@@ -77,6 +79,23 @@ export function CashbackIssuePage({
     }
   }, [])
 
+  // Review of gc#317: a Cashlink is a sale too. A stall whose Free plan is used up is sent to the
+  // upgrade screen (owner) or stopped (till) before an amount is typed, as on Sell.
+  const isOwner = (actor?.kind ?? 'owner') === 'owner'
+  const [allowanceReached, setAllowanceReached] = useState(false)
+  useEffect(() => {
+    let live = true
+    void salesAllowance(merchant.issuanceCurrency).then((a) => {
+      if (!live) return
+      const reached = a.kind === 'limited' && a.reached
+      setAllowanceReached(reached)
+      if (reached && isOwner) navigate(UPGRADE_PATH, { replace: true })
+    })
+    return () => {
+      live = false
+    }
+  }, [merchant.issuanceCurrency, isOwner, navigate])
+
   const decimals = currencyDecimals(merchant.issuanceCurrency)
   const minor = parseAmountToMinor(amount, decimals)
 
@@ -107,6 +126,13 @@ export function CashbackIssuePage({
       if (cashback) setIssued(cashback)
       else ran = false
     } catch (e) {
+      if (e instanceof CashbackGenerateError && e.code === 'SALES_LIMIT_REACHED') {
+        if (isOwner) {
+          navigate(UPGRADE_PATH)
+          return
+        }
+        setAllowanceReached(true)
+      }
       setError(userMessage(e))
     } finally {
       if (ran) setBusy(false)
@@ -125,6 +151,26 @@ export function CashbackIssuePage({
         <BackLink to="/" label="Back" />
         <PageHeader title="Cashlink" />
         <Alert>{TERMINAL_CASHBACK_UNSUPPORTED}</Alert>
+        <div className="mt-4">
+          <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
+            Back
+          </Button>
+        </div>
+      </Screen>
+    )
+  }
+
+  if (allowanceReached && !isOwner) {
+    return (
+      <Screen>
+        <BackLink to="/" label="Back" />
+        <PageHeader title="Cashlink" />
+        <Alert>
+          <span data-testid="sales-limit-reached-till">
+            This stall has used its Free plan’s issuance allowance, so this till cannot create
+            Cashlinks. Ask the stall owner to upgrade the plan. Redeeming coupons still works.
+          </span>
+        </Alert>
         <div className="mt-4">
           <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
             Back

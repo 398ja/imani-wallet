@@ -202,6 +202,11 @@ const R = (prefix: string, reduce: InventoryRule['reduce'], why: string, extra: 
 export const RULES: InventoryRule[] = [
   // Keys, sessions, credentials: never.
   X('imani-wallet-key', 'nap encrypted key envelope'),
+  // #348: where the key is backed up, the install id, and the event/record names. Not support data.
+  X('imani-wallet:key-backups:', 'key backup locations, key fingerprints and device ids'),
+  X('imani:key-backups', 'key backup record tag and change event'),
+  X('imani-device-id', 'install identifier'),
+  X('imani-device-name', 'install name'),
   X('imani-wallet:onboarding-nsec', 'an nsec'),
   X('imani-wallet:resume', 'resume wrap pointer'),
   X('imani-wallet:identity:', 'identity material'),
@@ -221,6 +226,7 @@ export const RULES: InventoryRule[] = [
   X('imani-wallet:send-intents:', 'idempotency keys'),
   X('imani-wallet:pending-claim', 'a claim link secret'),
   X('imani:afterLogin', 'navigation intent with link secrets'),
+  X('imani:pull-acks:', 'send ids waiting for a pull ack (gateway-core#220), keyed by pubkey'),
   X('imani:pendingPurchase', 'checkout session'),
   X('imani_dm_held', 'held DMs: encrypted payloads'),
   X('imani_pending_bundle_sends', 'bundle sends carry tokens'),
@@ -292,6 +298,7 @@ export const RULES: InventoryRule[] = [
   X('imani-wallet:held-coupons:', 'held coupons carry tokens'),
   X('imani-wallet:refused-coupons:', 'refused coupons carry tokens'),
   X('imani-wallet:bundle-claims:', 'bundle claims carry tokens'),
+  X('imani-wallet:pending-attestations:', 'customer signatures awaiting their card-sale row'),
   X('imani-wallet:pending-bundles:', 'pending bundles carry tokens'),
   R('imani-wallet:receive-trouble:', counted, 'receive trouble entries'),
 ]

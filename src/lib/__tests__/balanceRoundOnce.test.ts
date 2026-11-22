@@ -85,7 +85,7 @@ describe('balance rounded once per voucher (georges 8.98 vs 8.99)', () => {
       // Never above what each part is credited for, never above the ledger's floor of the exact value.
       expect(available).toBeLessThanOrEqual(perRow)
       expect(available).toBeLessThanOrEqual(Math.floor(exact + 1e-9))
-      expect(available).toBe(Math.min(perRow, roundedOnceTotal(rows)))
+      expect(available).toBe(Math.min(perRow, Math.floor(exact + 1e-9)))
       // And never above the balance shown.
       expect(available).toBeLessThanOrEqual(roundedOnceTotal(rows))
     }

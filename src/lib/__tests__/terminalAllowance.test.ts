@@ -73,12 +73,11 @@ afterEach(() => {
 })
 
 describe('a stall with no subscription', () => {
-  it('may enrol its first terminal, which is the free one', async () => {
-    const status = await noLicence()
-    expect(mayEnrol(status, 0)).toEqual({ allowed: true })
+  it('has no free terminal: the free tier includes none', async () => {
+    expect(FREE_TERMINALS).toBe(0)
   })
 
-  it('is refused the second, and told what the limit is', async () => {
+  it('is refused even its first terminal, and told what the limit is', async () => {
     const status = await noLicence()
     const decision = mayEnrol(status, FREE_TERMINALS)
 
@@ -87,8 +86,8 @@ describe('a stall with no subscription', () => {
       expect(decision.reason).toBe(ENROL_REFUSAL.AT_FREE_LIMIT)
       // Names the limit AND the way to lift it — the ticket asks for both,
       // and a refusal without the second is a dead end.
-      expect(decision.message).toContain('free till')
-      expect(decision.message).toContain('subscription')
+      expect(decision.message).toContain('free Starter plan')
+      expect(decision.message).toContain('Essentials')
       expect(decision.message).toContain('Settings › Subscription')
     }
   })
@@ -149,11 +148,13 @@ describe('a stall whose subscription lapsed', () => {
     }
   })
 
-  it('still allows the free one, because a lapse suspends rather than revokes', async () => {
-    // Dropping to the free allowance is the design; dropping below it would be
-    // taking away what the stall had before it ever subscribed.
+  it('drops to the free allowance, which is no terminal at all', async () => {
+    // Dropping to the free allowance is the design. Since 2026-11 that is the
+    // owner's own device only, so even a first terminal is refused.
     const status = await withLicence(EXPIRES_AT + DAY)
-    expect(mayEnrol(status, 0)).toEqual({ allowed: true })
+    const decision = mayEnrol(status, 0)
+    expect(decision.allowed).toBe(false)
+    if (!decision.allowed) expect(decision.reason).toBe(ENROL_REFUSAL.LAPSED)
   })
 })
 
@@ -232,10 +233,10 @@ describe('when the device cannot read its own wallet', () => {
 })
 
 describe('how many are left', () => {
-  it('counts down to the free limit without a subscription', async () => {
+  it('has none left without a subscription', async () => {
     const status = await noLicence()
-    expect(remainingTerminals(status, 0)).toBe(FREE_TERMINALS)
-    expect(remainingTerminals(status, FREE_TERMINALS)).toBe(0)
+    expect(remainingTerminals(status, 0)).toBe(0)
+    expect(remainingTerminals(status, 1)).toBe(0)
   })
 
   it('never goes negative, however many are somehow enrolled', async () => {

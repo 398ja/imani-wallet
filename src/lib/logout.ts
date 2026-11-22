@@ -34,6 +34,8 @@ import {
   tokenRedemptionsInFlight,
 } from './receiveGate'
 import { pauseOtherTabs, type PauseResult } from './logoutTabs'
+import { checkKeyBackup, KEY_BACKUP_COPY, logoutBackupLines, type KeyBackupCheck } from './keyBackups'
+import { isTerminalDevice } from './terminalEnrol'
 
 /**
  * Log out: end the session and erase the key from this browser.
@@ -103,6 +105,15 @@ export const LOGOUT_BLOCKED_COPY = {
   inFlight:
     'A payment or a Cashlink is still going through. Logging out now could lose it, so ' +
     'logging out stays off until it finishes. Nothing has been erased. Try again in a moment.',
+  /**
+   * #389: a send whose request got no answer, and the gateway cannot say yet whether it arrived.
+   * Waiting a moment does not help; reaching the gateway does.
+   */
+  sendUnknown:
+    'A send you made did not get an answer, and Imani could not check yet whether it went ' +
+    'through. Logging out now could lose that money, so logging out stays off until Imani can check. ' +
+    'Nothing has been erased. Check your connection, then try again. Imani also checks each time it starts, ' +
+    'and stops counting the send after 24 hours.',
   checkoutCode: (shop: string, amount: string, back: string) =>
     `Your checkout code for ${shop} worth ${amount} is still being made. Logging out now could lose it, ` +
     `so logging out stays off until it is ready. If it cannot be finished, its value comes back to this wallet on ${back}. ` +
@@ -110,6 +121,8 @@ export const LOGOUT_BLOCKED_COPY = {
   checkoutCodeUnconfirmed: (shop: string, amount: string) =>
     `Backing up your checkout code for ${shop} worth ${amount}. Logging out stays off until the backup is ` +
     'confirmed, so the code comes back when you log in again. Nothing has been erased. Check your connection and try again.',
+  /** #348: no known backup holds this key. No override: the dialog leads to Backup. */
+  keyNotBackedUp: KEY_BACKUP_COPY.blocked,
   otherTab:
     'This wallet is open in another tab or window, and it could not be paused safely. ' +
     'Close the other tabs of this wallet, or wait for them to finish, then try again. Nothing has been erased.',
@@ -129,10 +142,12 @@ export type LogoutOutcome =
         | 'store-unreadable'
         | 'changed'
         | 'in-flight'
+        | 'send-unknown'
         | 'cashback-unconfirmed'
         | 'checkout-code'
         | 'checkout-code-unconfirmed'
         | 'other-tab'
+        | 'key-not-backed-up'
       unconfirmed: UnconfirmedCoupon[]
       /** For 'cashback-unconfirmed': how many stashed cashback tokens are not confirmed. */
       cashback?: number
@@ -155,7 +170,7 @@ export interface LogoutDeps {
    * Live entries in the pending-send and swap-intent ledgers, which hold value
    * no coupon row describes and which the sweep below would delete.
    */
-  inFlight?: (pubkey: string) => { sends: number; swaps: number; cashlinks?: number; codes?: number }
+  inFlight?: (pubkey: string) => { sends: number; swaps: number; cashlinks?: number; codes?: number; unanswered?: number }
   /** Try to finish pending sends first, so a settled one does not block. Bounded, never throws. */
   settleInFlight?: (pubkey: string) => Promise<void>
   /** The read-back check of the cashback stash (#331). Must never answer ok on a failure. */
@@ -191,10 +206,26 @@ export interface LogoutDeps {
    * stopped. Account deletion deletes the handle here. False cancels the logout.
    */
   proceed?: () => Promise<boolean>
+  /**
+   * #348: whether a known backup (Drive verified at backup time, or a recorded download) holds the
+   * key this browser holds. Must never answer ok on a failure. Not asked on a terminal device,
+   * whose key is a disposable credential with no backup.
+   */
+  checkKey?: (pubkey: string) => Promise<KeyBackupCheck>
+  /** Whether this device is a terminal. Injected for tests. */
+  isTerminal?: () => boolean
 }
 
 /** How long logout gives the pending sends to settle before it checks them. */
 export const SETTLE_IN_FLIGHT_TIMEOUT_MS = 20_000
+
+function safeIsTerminal(read: () => boolean): boolean {
+  try {
+    return read()
+  } catch {
+    return false
+  }
+}
 
 async function defaultSettleInFlight(pubkey: string): Promise<void> {
   if (moneyInFlight(pubkey).sends === 0) return
@@ -213,16 +244,23 @@ async function defaultSettleInFlight(pubkey: string): Promise<void> {
   }
 }
 
-function hasMoneyInFlight(read: NonNullable<LogoutDeps['inFlight']>, pubkey: string): boolean {
+/**
+ * Why money in flight refuses the logout, or undefined when none does. #389: when the only thing
+ * left is a send with no answer at all, the refusal says so ('send-unknown'), since "try again in
+ * a moment" does not fit a send only the gateway can place.
+ */
+function inFlightReason(read: NonNullable<LogoutDeps['inFlight']>, pubkey: string): 'in-flight' | 'send-unknown' | undefined {
   try {
     // #557: `codes` is not read here. An outstanding checkout code is checked on its own, by the
     // read-back of its relay backup (`codesBlocked`).
-    const { sends, swaps, cashlinks } = read(pubkey)
+    const { sends, swaps, cashlinks, unanswered } = read(pubkey)
     // #295 phase 4: a Cashlink claim part way, or a Cashlink whose value is moving, is value no
     // coupon row describes yet, and the sweep below would delete its only record.
-    return sends > 0 || swaps > 0 || (cashlinks ?? 0) > 0
+    if (!(sends > 0 || swaps > 0 || (cashlinks ?? 0) > 0)) return undefined
+    const onlyUnanswered = (unanswered ?? 0) > 0 && sends === unanswered && swaps === 0 && (cashlinks ?? 0) === 0
+    return onlyUnanswered ? 'send-unknown' : 'in-flight'
   } catch {
-    return true
+    return 'in-flight'
   }
 }
 
@@ -356,6 +394,15 @@ export async function attemptLogout(
   // does not refuse the logout for no reason (second check of #326).
   await settleInFlight(pubkey).catch(() => undefined)
 
+  // 0b. #348: the key itself. Logout erases the only copy on this device, so it is refused, with
+  // no override, until a known backup holds THIS key (owner rule 2026-10-20). Offline-safe: it
+  // trusts what was verified at backup time and only reads the relay record when it answers.
+  let keyCheck: KeyBackupCheck = { ok: true, backups: [] }
+  if (!safeIsTerminal(deps.isTerminal ?? isTerminalDevice)) {
+    keyCheck = await (deps.checkKey ?? checkKeyBackup)(pubkey).catch((): KeyBackupCheck => ({ ok: false, backups: [] }))
+    if (!keyCheck.ok) return { status: 'blocked', reason: 'key-not-backed-up', unconfirmed: [] }
+  }
+
   // 1. Before anything is asked or stopped.
   const first = await safeCheck(check, pubkey)
   if (!first.ok) return blocked(first)
@@ -369,7 +416,8 @@ export async function attemptLogout(
   if (!firstCodes.ok) return codesBlocked(firstCodes)
   // A send or swap still in flight holds value outside every coupon row, and
   // the sweep below would delete its only record (second check of #326).
-  if (hasMoneyInFlight(inFlight, pubkey)) return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
+  const firstInFlight = inFlightReason(inFlight, pubkey)
+  if (firstInFlight) return { status: 'blocked', reason: firstInFlight, unconfirmed: [] }
   // #379: and no Cashlink whose gift only this wallet can still take back. Its only record is the
   // History row and this device's key; a logout before the next run would leave it at the mint.
   if ((await safeStranded(deps.strandedLinks ?? defaultStrandedLinks, pubkey)) > 0) {
@@ -378,7 +426,9 @@ export async function attemptLogout(
   const writesAtConfirm = writes()
 
   // 2.
-  if (!confirm(LOGOUT_WARNING)) return { status: 'cancelled' }
+  // Where the key is, and not to delete it, on the logout screen before confirming (#348).
+  const where = logoutBackupLines(keyCheck.backups)
+  if (!confirm(where ? `${where}\n\n${LOGOUT_WARNING}` : LOGOUT_WARNING)) return { status: 'cancelled' }
 
   // 2b. Every other tab of this wallet pauses first, or nothing happens (#335).
   // Asked after the confirmation, so a declined logout never disturbs them.
@@ -467,7 +517,9 @@ export async function attemptLogout(
   // 4. Re-verify only if the held set changed since step 1.
   if ((await safeHeld(() => heldNow(pubkey))) !== first.fingerprint || writes() !== writesAtConfirm) {
     const writesBeforeFinal = writes()
-    const final = await safeCheck(check, pubkey)
+    // No reconcile here: its writes would read as the race this re-check exists to catch, and
+    // the first check already converged with the account's other devices.
+    const final = await safeCheck(check, pubkey, { reconcile: async () => undefined })
     // 5. Refused, or something still wrote DURING the check (the writers are
     // stopped, so that would be a writer this list does not know about):
     // restart what was stopped, erase nothing.
@@ -481,8 +533,9 @@ export async function attemptLogout(
 
   // Last, with the writers stopped: nothing may have started a send or a swap
   // since step 1 (a second tab can). From here on nothing is checked again.
-  if (hasMoneyInFlight(inFlight, pubkey)) {
-    return { status: 'blocked', reason: 'in-flight', unconfirmed: [] }
+  const lastInFlight = inFlightReason(inFlight, pubkey)
+  if (lastInFlight) {
+    return { status: 'blocked', reason: lastInFlight, unconfirmed: [] }
   }
   // And no receive is running (#331). With the gate closed and the poller's
   // generation bumped none can START, so this only catches one this list does
@@ -657,9 +710,10 @@ async function safeHeld(heldNow: () => Promise<string>): Promise<string | null> 
 async function safeCheck(
   check: NonNullable<LogoutDeps['checkBackups']>,
   pubkey: string,
+  options?: ConfirmOptions,
 ): Promise<BackupCheck> {
   try {
-    return await check(pubkey)
+    return await (options ? check(pubkey, options) : check(pubkey))
   } catch {
     return { ok: false, reason: 'store-unreadable', unconfirmed: [], fingerprint: '' }
   }

@@ -12,6 +12,8 @@ import { StrictMode } from 'react'
  * tills a lapse stops — runs for real, because it is the thing being wired.
  */
 let subscribed = true
+/** Why an unsubscribed check refuses: `expired` is a lapse, `absent` a stall that never subscribed. */
+let denialReason: 'expired' | 'absent' = 'expired'
 vi.mock('../../lib/licenceStatus', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/licenceStatus')>()
   return {
@@ -20,7 +22,7 @@ vi.mock('../../lib/licenceStatus', async (importOriginal) => {
       checkedAt: Date.now(),
       decision: subscribed
         ? { granted: true as const, source: 'verified' as const, grant: { features: ['terminals'] } }
-        : { granted: false as const, reason: 'expired' as const },
+        : { granted: false as const, reason: denialReason },
     }),
   }
 })
@@ -110,6 +112,7 @@ function enrol(over: Parameters<typeof recordTerminal>[1] | Record<string, unkno
 
 beforeEach(() => {
   localStorage.clear()
+  denialReason = 'expired'
   spendFails = false
   spent.length = 0
   confirmations = []
@@ -354,17 +357,16 @@ describe('what a lapse shows the owner', () => {
 
   it('marks only the tills a lapse actually stopped', async () => {
     /**
-     * The free one keeps serving, so exactly one of these two is marked. A
-     * screen that marked both would tell an owner their stall had stopped
-     * trading over a billing problem, which is the thing the whole design
-     * refuses.
+     * The free tier includes no terminals (2026-11), so a lapse stops both and
+     * both are marked. The stall still trades on the owner's own device, which
+     * is not on this list.
      */
     subscribed = false
     two()
     renderPage()
 
     await waitFor(() =>
-      expect(screen.getAllByText(/subscription is inactive/)).toHaveLength(1),
+      expect(screen.getAllByText(/subscription is inactive/)).toHaveLength(2),
     )
   })
 
@@ -376,7 +378,7 @@ describe('what a lapse shows the owner', () => {
     two()
     renderPage()
 
-    await waitFor(() => expect(screen.getByText(/subscription is inactive/)).toBeTruthy())
+    await waitFor(() => expect(screen.getAllByText(/subscription is inactive/).length).toBeGreaterThan(0))
     expect(screen.getByText('In service')).toBeTruthy()
     expect(screen.queryByText('No longer in service')).toBeNull()
   })
@@ -389,7 +391,7 @@ describe('what a lapse shows the owner', () => {
     renderPage()
 
     await waitFor(() =>
-      expect(screen.getByText(/nothing needs setting up on the device/)).toBeTruthy(),
+      expect(screen.getAllByText(/nothing needs setting up on the device/).length).toBeGreaterThan(0),
     )
   })
 
@@ -400,7 +402,7 @@ describe('what a lapse shows the owner', () => {
     two()
     const { container } = renderPage()
 
-    await waitFor(() => expect(screen.getByText(/subscription is inactive/)).toBeTruthy())
+    await waitFor(() => expect(screen.getAllByText(/subscription is inactive/).length).toBeGreaterThan(0))
     expect(container.textContent).not.toMatch(/paused|suspended/i)
   })
 })
@@ -675,43 +677,29 @@ describe('renewal on the list (#160 phase 6, decision 1)', () => {
   })
 })
 
-describe('#402: an online shop on the list', () => {
+describe('#402: an online shop and the Terminals list', () => {
   const shopRow = { shop: { url: 'https://shop.example', platform: 'woocommerce' }, status: 'in-service', name: 'shop.example' }
 
-  it('shows its outstanding codes, publishes online_shop, and withdraws it on revoke', async () => {
-    const { saveMerchant, emptyMerchant, loadMerchant, mergeMerchantEvent } = await import('../../lib/merchant')
-    saveMerchant({ ...emptyMerchant(STALL), acceptsCards: true })
+  it('lists a live shop only as a pointer to Settings › Online shop', async () => {
+    // Arrange: one till and one connected shop.
+    enrol({ name: 'Front counter', terminalPubkey: 'd'.repeat(64) })
     enrol(shopRow)
-    const published: Array<{ content: string }> = []
-    let at = 100
+
+    // Act
     render(
       <MemoryRouter>
-        <TerminalsPage
-          sync={noSync}
-          renewals={noRenewals}
-          stallPubkey={STALL}
-          spendApi={async () => fakeMint}
-          collect={collect}
-          confirm={async () => 204}
-          deliver={async () => 0}
-          profile={{ sign: async (t) => ({ ...t, created_at: at++ }), publish: async (e) => (published.push(e as never), { ok: 1 }) }}
-          exposure={async (_s, key) => (key === DOOR ? { codes: 3, amount: 4500, unit: 'EUR' } : null)}
-        />
+        <TerminalsPage sync={noSync} renewals={noRenewals} stallPubkey={STALL} spendApi={async () => fakeMint}
+          collect={collect} confirm={async () => 204} deliver={async () => 0} />
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByTestId('shop-line').textContent).toMatch(/^3 codes, .*45.* outstanding at shop\.example$/))
-    await waitFor(() => expect(published).toHaveLength(1))
-    expect(mergeMerchantEvent(emptyMerchant(STALL), published[0].content, 1).onlineShop?.redeemKey).toBe(DOOR)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
-    fireEvent.click(screen.getByRole('button', { name: /Revoke shop\.example/ }))
-    await waitFor(() => expect(isRevoked(STALL, DOOR)).toBe(true))
-    await waitFor(() => expect(published).toHaveLength(2))
-    const after = mergeMerchantEvent(emptyMerchant(STALL), published[1].content, 1)
-    expect(after.onlineShop).toBeUndefined()
-    expect(after.acceptsCards).toBe(true)
-    expect(loadMerchant(STALL)?.onlineShop).toBeUndefined()
+    // Assert: the till is a row; the shop is managed elsewhere and has no Revoke here.
+    const pointer = await screen.findByTestId('online-shop-pointer')
+    expect(pointer.getAttribute('href')).toBe('/settings/online-shop')
+    expect(pointer.textContent).toMatch(/Online shop: shop\.example/)
+    expect(screen.getByText('Front counter')).toBeTruthy()
+    expect(screen.queryByTestId('shop-line')).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Revoke' })).toHaveLength(1)
   })
 
   it('retries a publish whose relay connect timed out, with no other change to the list', async () => {
@@ -732,7 +720,6 @@ describe('#402: an online shop on the list', () => {
             confirm={async () => 204}
             deliver={async () => 0}
             profile={{ sign: async (t) => ({ ...t, created_at: 100 + calls }), publish: async () => ({ ok: ++calls >= 3 ? 1 : 0 }) }}
-            exposure={async () => null}
           />
         </MemoryRouter>,
       )
@@ -749,15 +736,22 @@ describe('#402: an online shop on the list', () => {
     }
   })
 
-  it('shows the shop without a figure when the code store cannot say', async () => {
-    enrol(shopRow)
+  it('keeps a disconnected shop in No longer in service, as history', async () => {
+    // Arrange
+    enrol({ ...shopRow, revokedAt: 1_000 })
+
+    // Act
     render(
       <MemoryRouter>
         <TerminalsPage sync={noSync} renewals={noRenewals} stallPubkey={STALL} spendApi={async () => fakeMint}
-          collect={collect} confirm={async () => 204} deliver={async () => 0} exposure={async () => null} />
+          collect={collect} confirm={async () => 204} deliver={async () => 0} />
       </MemoryRouter>,
     )
+
+    // Assert
     expect(screen.getByTestId('shop-line').textContent).toBe('Online shop at https://shop.example')
+    expect(screen.getByText('No longer in service')).toBeTruthy()
+    expect(screen.queryByTestId('online-shop-pointer')).toBeNull()
   })
 })
 
@@ -774,3 +768,73 @@ describe('the stall profile publisher (#402): only the relay confirms', () => {
   })
 })
 
+
+describe('the free tier has no terminals (2026-11)', () => {
+  it('disables the section for a stall that never subscribed', async () => {
+    // Terminals start at Essentials. The screen says so and the way in is off,
+    // rather than leaving an owner to discover it at the enrolment refusal.
+    subscribed = false
+    denialReason = 'absent'
+    renderPage()
+
+    await waitFor(() => expect(screen.getByTestId('terminals-disabled')).toBeTruthy())
+    expect(screen.getByText(/not included in the free Starter plan/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Add a terminal' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByText(/No terminals yet/)).toBeNull()
+  })
+
+  it('still lists, and lets the owner revoke, a till enrolled before, but offers no Renew', async () => {
+    // A paywall in front of revocation would turn a billing problem into a
+    // security one: a stolen device must stay revocable on every tier. Renewing
+    // would mint a credential for a till the portal refuses (402), so it is gone.
+    subscribed = false
+    denialReason = 'absent'
+    enrol({ status: 'in-service' })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByTestId('terminals-disabled')).toBeTruthy())
+    expect(screen.getByText('Door')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Revoke/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Renew Door' })).toBeNull()
+  })
+
+  it('tells a never-subscribed stall its stopped till needs a plan, not a renewal', async () => {
+    subscribed = false
+    denialReason = 'absent'
+    enrol({ status: 'in-service' })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/Upgrading to Essentials starts it again/)).toBeTruthy())
+    expect(screen.queryByText(/subscription is inactive/)).toBeNull()
+  })
+
+  it('is not disabled for a lapsed subscriber, who is told to renew rather than buy', async () => {
+    // mayEnrol's own distinction: telling someone who already pays to buy a
+    // plan is the message the refusal reasons exist to avoid.
+    subscribed = false
+    denialReason = 'expired'
+    enrol({ status: 'in-service' })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/subscription is inactive/)).toBeTruthy())
+    expect(screen.queryByTestId('terminals-disabled')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Add a terminal' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('offers Renew on the same row under a subscription (the control for the test above)', async () => {
+    subscribed = true
+    enrol({ status: 'in-service' })
+    renderPage()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Renew Door' })).toBeTruthy())
+  })
+
+  it('is not disabled under a subscription', async () => {
+    subscribed = true
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText(/No terminals yet/)).toBeTruthy())
+    expect(screen.queryByTestId('terminals-disabled')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Add a terminal' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+})

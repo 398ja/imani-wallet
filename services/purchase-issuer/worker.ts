@@ -43,6 +43,8 @@ export interface WorkerDeps {
   outbox?: DeliveryOutbox
   /** G15 §4.3: claimed/expired notices for delivered gifts, swept once per pass. Absent, nothing is swept. */
   giftTracker?: { sweep(): Promise<unknown> }
+  /** Follow-up to #655: forward customer receipts queued for delegate keys to their stalls. Never throws. */
+  receiptForwarder?: () => Promise<unknown>
 }
 
 /** Host and process, which is what an operator needs to find the claimant. */
@@ -314,6 +316,13 @@ export async function runPass(deps: WorkerDeps): Promise<PassResult> {
     } catch (error) {
       countGiftSweepError()
       console.warn(JSON.stringify({ event: 'gift_sweep_failed', reason: error instanceof Error ? error.name : 'error' }))
+    }
+  }
+  if (deps.receiptForwarder) {
+    try {
+      await deps.receiptForwarder()
+    } catch {
+      // forwardAllReceipts never throws; a receipt left queued is retried next pass.
     }
   }
   return result

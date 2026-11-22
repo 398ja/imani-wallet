@@ -290,6 +290,22 @@ describe('fetching a token for a coupon still minting', () => {
     expect(payload).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
   })
 
+  // gc#233: the gateway checks the delegate still holds a LIVE credential, so
+  // tokenFor names it exactly as the mint does.
+  it('names the terminal credential, as the mint does', async () => {
+    let sent: string | undefined
+    await tokenFor(
+      'http://gateway:8082',
+      credential,
+      'v-1',
+      (async (_url: string, init: RequestInit) => {
+        sent = (init.headers as Record<string, string>)['X-Imani-Terminal-Credential']
+        return new Response(JSON.stringify({ token: 't' }), { status: 200 })
+      }) as unknown as typeof fetch,
+    )
+    expect(sent).toBe('c1')
+  })
+
   it('escapes a voucher id rather than pasting it into a path', async () => {
     let seen = ''
     await tokenFor(

@@ -7,6 +7,7 @@ import { ChevronRight, CloudDownload, FileText, Loader2 } from 'lucide-react'
 import { Alert, Button, IdentityInline, Input, Panel } from './ui'
 import { applyBackup, parseBackup, type ParsedBackup } from '../lib/backup'
 import { recordBackup } from '../lib/backupRecord'
+import { recordKeyBackup } from '../lib/keyBackups'
 import { refuseIfAnotherWallet } from '../lib/keySlotGuard'
 import { userMessage } from '../lib/userMessage'
 import { listBackups, type DriveBackup } from '../lib/drive'
@@ -319,7 +320,11 @@ function savedLabel(backup: DriveBackup): string {
 
 /** A restore proves a backup of that kind exists: remember it for the passphrase change. */
 function recordRestoreSource(privkeyHex: string, source: 'drive' | 'file' | null) {
-  if (source) recordBackup(getPublicKey(hexToBytes(privkeyHex)), source)
+  if (!source) return
+  const pubkey = getPublicKey(hexToBytes(privkeyHex))
+  recordBackup(pubkey, source)
+  // #348: it just opened to this key, so it is a verified backup of the envelope now stored here.
+  recordKeyBackup(pubkey, source, { verified: true })
 }
 
 /** The backup's account as a hex pubkey: from the verified npub, else the profile. */

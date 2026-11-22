@@ -14,10 +14,8 @@ import type {
   BalanceEventMap,
   BalanceUpdateTrigger,
 } from '../types';
-import type { SelectionRequest, SelectionResult, SelectableVoucher } from '../types/selection';
 import { TypedEventEmitter } from '../utils/EventEmitter';
 import { BalanceCalculator, type BalanceVoucher } from './BalanceCalculator';
-import { SelectionOptimizer } from './SelectionOptimizer';
 import { CurrencyAggregator } from './CurrencyAggregator';
 
 /**
@@ -256,26 +254,6 @@ export class BalanceManager extends TypedEventEmitter<BalanceEventMap> {
   async getTopIssuers(limit: number = 3): Promise<IssuerBalance[]> {
     const issuers = await this.getIssuerBalances();
     return issuers.slice(0, limit);
-  }
-
-  // ==========================================
-  // Selection
-  // ==========================================
-
-  /**
-   * Select vouchers for a payment amount
-   */
-  async selectVouchersForAmount(request: SelectionRequest): Promise<SelectionResult> {
-    const vouchers = await this.voucherStore.getAll();
-    return SelectionOptimizer.selectForAmount(vouchers as SelectableVoucher[], request);
-  }
-
-  /**
-   * Get total available for a currency
-   */
-  async getAvailableForCurrency(currency: string): Promise<number> {
-    const vouchers = await this.voucherStore.getAll();
-    return SelectionOptimizer.getTotalAvailable(vouchers as SelectableVoucher[], currency);
   }
 
   // ==========================================

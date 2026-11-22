@@ -303,6 +303,35 @@ describe('the owner attests the till at enrolment (#160 decision 5)', () => {
     })
   })
 
+  // #402: the gateway gates a shop's FIRST enrolment on the plan's `ecommerce`; only that mint is marked.
+  it('marks a first online-shop enrolment with X-Imani-Online-Shop: 1', async () => {
+    // Arrange
+    const c = { ...attested(), onlineShop: true }
+    const t = transport(minted(c))
+
+    // Act
+    await mintTerminalCredential(c, async () => true, t, { idempotencyKey: 'k' })
+
+    // Assert
+    const headers = (t.post.mock.calls[0] as unknown[])[2] as Record<string, string>
+    expect(headers['X-Imani-Online-Shop']).toBe('1')
+  })
+
+  // A renewal is never gated, so a shop on a lapsed plan keeps its credential and finishes its codes.
+  it('never marks a renewal, even of an online shop', async () => {
+    // Arrange
+    const c = { ...attested(), onlineShop: true, renewsToken: 'tok' }
+    const t = transport(minted(c))
+
+    // Act
+    await mintTerminalCredential(c, async () => true, t, { idempotencyKey: 'k' })
+
+    // Assert
+    const headers = (t.post.mock.calls[0] as unknown[])[2] as Record<string, string>
+    expect(headers['X-Imani-Online-Shop']).toBeUndefined()
+    expect(headers['X-Imani-Terminal-Renews']).toBe('tok')
+  })
+
   // What 5b-2 mints for an attested request is accepted as it is.
   it('accepts the credential the gateway minted as asked', () => {
     const c = attested()

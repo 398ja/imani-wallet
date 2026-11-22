@@ -79,7 +79,7 @@ import {
 import { linkKeySigner, linkPubOf, secretFromText, type GiftToken, type ProofState } from './giftLink'
 import { nip98Header, type RequestSigner } from './nip98'
 import { encodePlainTokenV4 } from './plainToken'
-import { parseVoucherToken, referencedDocuments, tokenProofs, voucherOfProof, type TokenProof } from './voucherToken'
+import { isVoucherByReference, parseVoucherToken, referencedDocuments, tokenProofs, voucherOfProof, type TokenProof } from './voucherToken'
 import { splitTokenByVoucher } from './tokenSplit'
 import { splitIntoDenominations, unblindOutputs, type BlindSignatureResponse, type BlindedOutput, type UnblindedProof } from './walletSwap'
 import { cashlinkClaimsKey } from './inFlightMoney'
@@ -155,6 +155,10 @@ export interface KeptCoupon {
    * sats of a burn), which have their own records.
    */
   takenBack?: true
+  /** With `takenBack`: the id of the `sent` row that made the Cashlink, for the return row's link. */
+  returnOf?: string
+  /** With `takenBack`: the return row's memo, when it is not a Cashlink's ("Taken back from Cashlink"). */
+  returnMemo?: string
 }
 
 /**
@@ -189,6 +193,14 @@ const proofBody = (p: TokenProof) => ({
 })
 
 const burnOutputsBody = (outputs: ReadonlyArray<{ amount: number; B_: string }>) => outputs.map((o) => ({ amount: o.amount, B_: o.B_ }))
+
+/**
+ * cashu-voucher#64: an unlocked predecessor stored by reference names its voucher only by hash, so
+ * the gateway needs the document beside it (`predecessor_document`, hex) to read the voucher. Sent
+ * only when the proof is by reference; an inline or locked predecessor's body is unchanged.
+ */
+const predecessorDocument = (p: TokenProof): { predecessor_document?: string } =>
+  p.document && isVoucherByReference(p.secret) ? { predecessor_document: p.document } : {}
 
 /**
  * Our outputs the mint has signed, as proofs, matched by `B_` (a restore answers a subset). The
@@ -384,9 +396,25 @@ const tokenOf = (mintUrl: string, proofs: UnblindedProof[]): string => encodePla
  * proofs of one gift kept under the same token would leave only the last proof's sats
  * (rev-wallet377 H1).
  */
-async function keepAsSats(ports: CashlinkPorts, mintUrl: string, source: TokenProof, proofs: UnblindedProof[], why: KeptCoupon['why'], faceValue?: number, bundleId?: string, takenBack?: boolean): Promise<void> {
+async function keepAsSats(
+  ports: CashlinkPorts,
+  mintUrl: string,
+  source: TokenProof,
+  proofs: UnblindedProof[],
+  why: KeptCoupon['why'],
+  faceValue?: number,
+  { bundleId, takenBack, returnOf, returnMemo }: Pick<KeptCoupon, 'bundleId' | 'takenBack' | 'returnOf' | 'returnMemo'> = {},
+): Promise<void> {
   const couponToken = tokenOf(mintUrl, [{ amount: source.amount, id: source.id, secret: source.secret, C: source.C }])
-  await ports.keep({ token: couponToken, satsToken: tokenOf(mintUrl, proofs), sats: proofs.reduce((n, p) => n + p.amount, 0), why, ...faceOf(faceValue), ...(bundleId ? { bundleId } : {}), ...(takenBack && bundleId ? { takenBack: true as const } : {}) })
+  await ports.keep({
+    token: couponToken,
+    satsToken: tokenOf(mintUrl, proofs),
+    sats: proofs.reduce((n, p) => n + p.amount, 0),
+    why,
+    ...faceOf(faceValue),
+    ...(bundleId ? { bundleId } : {}),
+    ...(takenBack && (bundleId || returnOf) ? { takenBack: true as const, ...(returnOf ? { returnOf } : {}), ...(returnMemo ? { returnMemo } : {}) } : {}),
+  })
 }
 
 // --- Sending: arming --------------------------------------------------------
@@ -409,6 +437,11 @@ export type UnarmedReason =
   | 'rate_limited'
   /** The mint refused the burn itself (nothing moved). The only one that can follow `onArming`. */
   | 'burn_refused'
+  /**
+   * The lock key is a stall's online shop and the stall's plan takes no new checkout codes
+   * (`422 FEATURE_NOT_IN_PLAN`, #402). Decided by the dry run, so nothing was burnt.
+   */
+  | 'not_in_plan'
 
 export type ArmOutcome =
   /** Locked, and the take-back is waiting at the relay: it comes back on its own. */
@@ -416,7 +449,7 @@ export type ArmOutcome =
   /** Locked, but the relay did not take the take-back: this wallet takes it back itself. */
   | { kind: 'not_armed'; keyset: string; why: string }
   /** Left as an ordinary gift, untouched. */
-  | { kind: 'unarmed'; why: UnarmedReason }
+  | { kind: 'unarmed'; why: UnarmedReason; /** #644: the gateway's own refusal name, when it gave one. */ detail?: string }
   /** Part way; the next run carries on (`arm.s = 'arming'`). Nothing is lost. */
   | { kind: 'arming'; why: string }
   /** The gift left the link before it could be locked: it was claimed. */
@@ -724,7 +757,12 @@ async function preflight(
     const dry = d.value
     if (dry.status === 429) return { kind: 'unarmed', why: 'rate_limited' }
     if (dry.status === 404 || dry.status === 405 || dry.status >= 500) return { kind: 'unarmed', why: 'lock_route_unavailable' }
-    if (!(dry.status === 409 && dry.body?.refusal === 'PREDECESSOR_NOT_SPENT')) return { kind: 'unarmed', why: 'lock_refused' }
+    if (dry.status === 422 && refusalOf(dry) === 'FEATURE_NOT_IN_PLAN') return { kind: 'unarmed', why: 'not_in_plan' }
+    if (!(dry.status === 409 && dry.body?.refusal === 'PREDECESSOR_NOT_SPENT')) {
+      // #644: keep the gateway's reason, so the customer (and support) can read why.
+      const detail = typeof dry.body?.refusal === 'string' ? dry.body.refusal : undefined
+      return { kind: 'unarmed', why: 'lock_refused', ...(detail ? { detail } : {}) }
+    }
     return null
   }
   const dryBodies = proofs.map(({ proof }) =>
@@ -771,6 +809,7 @@ function lockBody(ctx: ArmContext, proof: TokenProof, linkPub: string, refundPub
     authorization: cashlinkAuthorization(self ?? ctx.refundSecret, CASHLINK_LOCK_TAG, proof.secret, proposed),
     predecessor_proof: proofBody(proof),
     burn_outputs: burnOutputsBody(burnOutputs),
+    ...predecessorDocument(proof),
   }
 }
 
@@ -1195,6 +1234,13 @@ export interface ReturnContext {
   depositKeyset?: string
   /** "Take it back" before the link expires: it goes the link key's way. */
   takeBackNow?: boolean
+  /** The `sent` row that made the Cashlink: a take-back's History row links to it. */
+  returnOf?: string
+  /**
+   * #643: a return with no link key (an expired checkout code, an unclaimed minted-locked gift) gets
+   * its own incoming History row too, with this memo, linked by `returnOf` to the row it reverses.
+   */
+  returnMemo?: string
   /** Called before anything leaves the link, so a page that dies finishes the return on the next run. */
   onReturning(): Promise<void>
 }
@@ -1377,7 +1423,7 @@ async function reform(
   }
   if (notYet(answer.status)) return 'pending'
   // A definite refusal after the sats came back (422, or 404: the routes are gone): keep them.
-  await keepAsSats(ports, mintUrl, locked, plain, 'returned', share, takenBackOf(ctx, locked).bundleId, true)
+  await keepAsSats(ports, mintUrl, locked, plain, 'returned', share, takenBackOf(ctx, locked))
   return 'returned'
 }
 
@@ -1386,9 +1432,11 @@ async function reform(
  * incoming row, in the link's bundle (#530) so the coupons of one link fold into one entry. Other
  * returns through `settle` (code and guest gifts, no link key) keep their own records.
  */
-function takenBackOf(ctx: ReturnContext, locked: TokenProof): { bundleId?: string; takenBack?: true } {
+function takenBackOf(ctx: ReturnContext, locked: TokenProof): Pick<KeptCoupon, 'bundleId' | 'takenBack' | 'returnOf' | 'returnMemo'> {
   const linkPub = ctx.linkSecret ? readLinkLock(locked.secret)?.linkPub : undefined
-  return linkPub ? { bundleId: cashlinkBundleId(linkPub), takenBack: true } : {}
+  if (linkPub) return { bundleId: cashlinkBundleId(linkPub), takenBack: true, ...(ctx.returnOf ? { returnOf: ctx.returnOf } : {}) }
+  // #643: no link key, but the caller names the debit it reverses: its own credit row.
+  return ctx.returnOf && ctx.returnMemo ? { takenBack: true, returnOf: ctx.returnOf, returnMemo: ctx.returnMemo } : {}
 }
 
 /** Mint a signed successor from plain proofs, or find it if an earlier run already did. */
@@ -1603,7 +1651,7 @@ async function finishClaim(ports: CashlinkPorts, pubkey: string, linkSecret: Uin
   }
   if (notYet(answer.status)) return PARTLY
   // A definite refusal after the burn: the value is kept as sats, in this wallet. Never lost.
-  await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue, bundleId)
+  await keepAsSats(ports, mintUrl, proof, plain, 'claimed', claim.faceValue, { bundleId })
   forget()
   return 'ok'
 }
@@ -1735,7 +1783,7 @@ export function lockedOnLink(tokens: GiftToken[], linkPub: string): GiftToken[] 
  * #402: the shared steps, for the checkout-code flow (`checkoutCodeFlow.ts`), which reuses them
  * rather than growing a second copy of the money path.
  */
-export const cashlinkSteps = { mintOf, proofBody, burnOutputsBody, restoreMine, swapOrRestore, signRoute, notYet, refusalOf, tokenOf, keepAsSats, mintCarrier }
+export const cashlinkSteps = { mintOf, proofBody, burnOutputsBody, predecessorDocument, restoreMine, swapOrRestore, signRoute, notYet, refusalOf, tokenOf, keepAsSats, mintCarrier }
 
 // --- The default ports ------------------------------------------------------
 

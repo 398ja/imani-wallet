@@ -18,7 +18,7 @@
 import { createHmac, randomUUID } from 'node:crypto'
 
 import type { ClientConfig, MailerConfig } from './config.ts'
-import { isEmail, render, resolveFields, TemplateError } from './templates.ts'
+import { checkUrl, isEmail, render, resolveFields, TemplateError } from './templates.ts'
 import type { Store } from './store.ts'
 import { TransportError, type Transport } from './transport.ts'
 
@@ -27,6 +27,12 @@ export interface SendRequest {
   to: string
   fields?: Record<string, unknown>
   idempotencyKey: string
+  /**
+   * RFC 8058 one-click unsubscribe target for this one message (a reminder). Checked against the
+   * link policy like a url field, then sent as `List-Unsubscribe` + `List-Unsubscribe-Post`. Never
+   * logged (it carries a per-message token).
+   */
+  unsubscribeUrl?: string
 }
 
 export type SendOutcome =
@@ -106,7 +112,7 @@ export function createMailer(deps: MailerDeps) {
   const fingerprint = (req: SendRequest) => {
     const fields = Object.entries(req.fields ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))
     return createHmac('sha256', config.tagKey)
-      .update(JSON.stringify([req.template, req.to.trim().toLowerCase(), fields]))
+      .update(JSON.stringify([req.template, req.to.trim().toLowerCase(), fields, ...(req.unsubscribeUrl ? [req.unsubscribeUrl] : [])]))
       .digest('hex')
   }
 
@@ -191,6 +197,10 @@ export function createMailer(deps: MailerDeps) {
       'X-Imani-Template': compiled.name,
     }
     if (sandboxed) headers['X-Imani-Sandbox-Recipient'] = recipientTag
+    if (req.unsubscribeUrl) {
+      headers['List-Unsubscribe'] = `<${req.unsubscribeUrl}>`
+      headers['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
+    }
     try {
       const result = await transport.send({
         to: sandboxed ? (config.sandboxRedirect as string) : to,
@@ -221,7 +231,7 @@ export function createMailer(deps: MailerDeps) {
     tag,
     async send(client: ClientConfig, req: SendRequest): Promise<SendOutcome> {
       if (!req || typeof req !== 'object') return fail(400, 'invalid_request', 'expected a JSON object')
-      const extra = Object.keys(req).filter((k) => !['template', 'to', 'fields', 'idempotencyKey'].includes(k))
+      const extra = Object.keys(req).filter((k) => !['template', 'to', 'fields', 'idempotencyKey', 'unsubscribeUrl'].includes(k))
       if (extra.length) return fail(400, 'invalid_request', `unknown property ${extra[0]}`)
       if (typeof req.template !== 'string' || !config.templates.has(req.template)) {
         count('unknown', 'invalid')
@@ -243,6 +253,14 @@ export function createMailer(deps: MailerDeps) {
       if (typeof req.idempotencyKey !== 'string' || !IDEMPOTENCY_KEY.test(req.idempotencyKey)) {
         count(req.template, 'invalid')
         return fail(400, 'invalid_request', 'idempotencyKey must be 8 to 200 of [A-Za-z0-9_:.-]')
+      }
+      if (req.unsubscribeUrl !== undefined) {
+        const checked = typeof req.unsubscribeUrl === 'string' && req.unsubscribeUrl.length <= 2048 ? checkUrl(req.unsubscribeUrl.trim(), config.links) : null
+        if (!checked) {
+          count(req.template, 'invalid')
+          return fail(400, 'invalid_request', 'unsubscribeUrl must be a link to an allowed host')
+        }
+        req = { ...req, unsubscribeUrl: checked }
       }
       // Namespaced per client: one caller's keys can never collide with, or probe, another's.
       const key = `${client.id}/${req.idempotencyKey}`
@@ -266,6 +284,13 @@ export function createMailer(deps: MailerDeps) {
       store.suppress(t, { reason, at: now() })
       log({ event: 'mail_suppression_added', client: client.id, to: t, reason })
       return t
+    },
+
+    /** Whether an address is suppressed, and why (a bounce check by a sender). Logs only the tag. */
+    isSuppressed(client: ClientConfig, address: string): { suppressed: boolean; reason?: string } {
+      const s = store.getSuppression(tag(address))
+      log({ event: 'mail_suppression_checked', client: client.id, to: tag(address), suppressed: !!s })
+      return s ? { suppressed: true, reason: s.reason } : { suppressed: false }
     },
 
     unsuppress(client: ClientConfig, address: string): boolean {

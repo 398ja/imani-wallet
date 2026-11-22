@@ -137,9 +137,9 @@ describe('the owner-side gate', () => {
 })
 
 describe('terminals from the tier', () => {
-  it('is 1 free, 3 on Basic, unlimited on Pro and on a licence sold before tiers', () => {
+  it('is none free, 3 on Basic, unlimited on Pro and on a licence sold before tiers', () => {
     const g = (over: Partial<LicenceGrant>): LicenceGrant => ({ features: ['terminals'], pilot: false, expiresAt: NOW + DAY, ...over })
-    expect(terminalLimit(status([]))).toBe(1)
+    expect(terminalLimit(status([]))).toBe(0)
     expect(terminalLimit(status([g({ tier: 'basic' })]))).toBe(3)
     expect(terminalLimit(status([g({ tier: 'pro' })]))).toBeNull()
     expect(terminalLimit(status([g({})]))).toBeNull()

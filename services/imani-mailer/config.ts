@@ -49,6 +49,8 @@ export interface ClientConfig {
   templates: readonly string[]
   /** May report bounces and lift suppressions (a provider webhook, an operator tool). */
   bounce: boolean
+  /** May ask whether an address is suppressed (`POST /v1/suppressions/check`), nothing more. */
+  check?: boolean
   /** Sends per minute for this client. */
   perMinute: number
 }
@@ -285,7 +287,7 @@ export function loadConfig(env: Env = process.env, readFile: (path: string) => s
           if (tpl.includes('*') && production) problems.push(`${where}: "*" templates is for development; list them`)
           const perMinute = c.perMinute === undefined ? 60 : Number(c.perMinute)
           if (!Number.isInteger(perMinute) || perMinute < 1 || perMinute > 100_000) return problems.push(`${where}.perMinute is out of range`)
-          clients.push({ id, tokenSha256: hash, templates: tpl, bounce: c.bounce === true, perMinute })
+          clients.push({ id, tokenSha256: hash, templates: tpl, bounce: c.bounce === true, check: c.check === true, perMinute })
         })
       }
     }
@@ -358,7 +360,7 @@ export function describeConfig(c: MailerConfig): Record<string, unknown> {
     sandbox: !!c.sandboxRedirect,
     recipientAllow: c.recipientAllowDomains,
     recipientDeny: c.recipientDenyDomains.length,
-    clients: c.clients.map((k) => ({ id: k.id, templates: k.templates, bounce: k.bounce })),
+    clients: c.clients.map((k) => ({ id: k.id, templates: k.templates, bounce: k.bounce, check: !!k.check })),
     templates: [...c.templates.keys()],
     persistent: !!c.stateFile,
   }

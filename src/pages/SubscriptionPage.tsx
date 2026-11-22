@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { RefreshCw, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react'
 
-import { Screen, BackLink, PageHeader, Panel, DetailRow, Button, Centered, buttonClasses } from '../components/ui'
+import { Screen, BackLink, PageHeader, Panel, DetailRow, Button, Centered, buttonClasses, Alert } from '../components/ui'
 import { formatDate, formatFace } from '../lib/format'
 import { explain, licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { refreshCatalog, salesPosition, subscriptionSiteUrl, type SalesPosition } from '../lib/entitlement'
@@ -10,6 +11,7 @@ import { GRACE_WINDOW_SECONDS } from '@imani/licence'
 import { listTransactions, onWalletChanged } from '../lib/wallet'
 import { SUBSCRIPTION_STATUS_EVENT, subscriptionStatusFor } from '../lib/subscriptionStatusStore'
 import type { SubscriptionStatusMessage } from '../lib/subscriptionStatus'
+import { SALES_LIMIT_REASON } from '../lib/salesAllowance'
 
 /**
  * Subscription diagnostics: what the licence check believes, and why.
@@ -43,6 +45,9 @@ import type { SubscriptionStatusMessage } from '../lib/subscriptionStatus'
 export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currency?: string }) {
   const [status, setStatus] = useState<LicenceStatus | null>(null)
   const [position, setPosition] = useState<SalesPosition | null>(null)
+  // Sent here from Sell because the Free plan's issuance allowance is used up (review of gc#317).
+  const [params] = useSearchParams()
+  const fromSalesLimit = params.get('reason') === SALES_LIMIT_REASON
   const [checking, setChecking] = useState(false)
 
   const check = useCallback(async () => {
@@ -102,6 +107,16 @@ export function SubscriptionPage({ pubkey, currency }: { pubkey: string; currenc
         title="Subscription"
         subtitle="What this device believes about your subscription, and why"
       />
+
+      {fromSalesLimit ? (
+        <div className="mb-6" data-testid="sales-limit-upgrade-banner">
+          <Alert>
+            You have used your Free plan’s voucher allowance, so you can’t sell more vouchers on the
+            Free plan. Upgrade your plan below to keep selling. Redeeming coupons still works, and
+            nothing was issued or charged.
+          </Alert>
+        </div>
+      ) : null}
 
       <Panel className="mb-6 p-4">
         <div className="flex items-start gap-3">
@@ -277,7 +292,13 @@ function PlanPanel({ position }: { position: SalesPosition }) {
       ) : null}
       <DetailRow
         label="Tills"
-        value={entitlement.terminals === null ? 'No limit' : `${entitlement.terminals} besides this device`}
+        value={
+          entitlement.terminals === null
+            ? 'No limit'
+            : entitlement.terminals === 0
+              ? 'This device only'
+              : `${entitlement.terminals} besides this device`
+        }
       />
       {entitlement.features.length ? (
         <DetailRow label="Includes" value={entitlement.features.map(featureName).join(', ')} />

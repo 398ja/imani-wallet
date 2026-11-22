@@ -52,7 +52,7 @@ import {
   type WarrantVerdict,
 } from './issuanceWarrant'
 import { reconcileIssuances, saleFor, saleIsComplete } from './reconcileIssuance'
-import { isVoucherIssuance, type WalletTransaction } from './transactions'
+import { isVoucherIssuance, warrantIssuedAt, type WalletTransaction } from './transactions'
 
 export { isVoucherIssuance }
 
@@ -269,12 +269,14 @@ export function issuedVoucher(
   // Judged at the moment the sale was recorded, not today: a card sale made
   // under a live delegation stays authorised in the stall's ledger after the
   // delegation lapses (#176 review). A row with no recorded time (0) falls
-  // back to the current clock.
+  // back to the current clock. A card row re-dated to its payment is judged at
+  // its mint time, which a delegation signed between the two still covers (#648).
+  const issuedAt = warrantIssuedAt(row)
   const warrantVerdict = verifyIssuanceWarrant(
     warrant,
     stallPubkey,
     { faceValueMinor: row.amount, unit: row.unit, faceDecimals: row.decimals },
-    row.at > 0 ? { issuedAt: row.at } : {},
+    issuedAt !== undefined ? { issuedAt } : {},
   )
 
   const attestation = parseCashAttestation(row.cashAttestation)

@@ -27,6 +27,13 @@ export interface WalletTransaction {
   direction: 'in' | 'out'
   /** Normalised to epoch milliseconds. */
   at: number
+  /**
+   * The time the sender recorded for a card sale, kept when `cardSalePull` re-dates `at` to the
+   * payment time. It is the mint time, so the issuer delegation is judged against it (#648): a
+   * stall that enrols after taking card payments mints the backlog after signing, but `at` then
+   * says the coupon predates the delegation.
+   */
+  senderSaleAt?: number
   amount: number
   unit: string
   decimals: number
@@ -56,6 +63,11 @@ export interface WalletTransaction {
   terminalPubkey?: string
   /** A gift link this `sent` row went to (claim links phase 4). */
   link?: GiftLinkRecord
+  /**
+   * On a Cashlink take-back row: the id of the `sent` row that made the Cashlink, so the return
+   * opens the send it undoes (and the send lists what came back). A row id, never the link key.
+   */
+  returnOf?: string
   /**
    * What was actually checked about this coupon when it arrived.
    *
@@ -233,6 +245,16 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
+/**
+ * When the coupon on this row was issued, for judging its issuance warrant: the sender's recorded
+ * time when `cardSalePull` re-dated the row to the payment, else the row's time. Undefined when the
+ * row has no time, so the caller judges it now (#648).
+ */
+export function warrantIssuedAt(tx: Pick<WalletTransaction, 'at' | 'senderSaleAt'>): number | undefined {
+  const when = tx.senderSaleAt ?? tx.at
+  return when > 0 ? when : undefined
+}
+
 export function toTransaction(row: TransactionRow): WalletTransaction {
   const r = row as unknown as Record<string, unknown>
   const type = String(r.type ?? 'received')
@@ -252,6 +274,10 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
         ? 'out'
         : 'in',
     at: toEpochMs(r.timestamp ?? r.created_at),
+    senderSaleAt:
+      typeof r.senderSaleAt === 'number' && Number.isFinite(r.senderSaleAt) && r.senderSaleAt > 0
+        ? toEpochMs(r.senderSaleAt)
+        : undefined,
     amount: Number(r.amount ?? 0),
     unit: String(r.unit ?? r.face_unit ?? 'UNKNOWN'),
     // The unit decides, and only then the row. A history row written before
@@ -321,6 +347,7 @@ export function toTransaction(row: TransactionRow): WalletTransaction {
     // screen. Either spelling, as for the evidence above.
     terminalPubkey: str(r.terminalPubkey) ?? str(r.terminal_pubkey),
     link: asGiftLinkRecord(r.link),
+    returnOf: str(r.returnOf) ?? str(r.return_of),
     ...(asCheckoutCodeSnapshot(r.checkoutCode) ? { checkoutCode: asCheckoutCodeSnapshot(r.checkoutCode) } : {}),
     ...(parseSpendSource(r.spendSource ?? r.spend_source) ? { spendSource: parseSpendSource(r.spendSource ?? r.spend_source) } : {}),
   }
@@ -362,6 +389,14 @@ export interface GiftLinkRecord {
    * it was written by an older build, which could read its own burn as a claim, and is checked again.
    */
   verifiedAt?: number
+  /**
+   * #261: why a `claimed` was written when it rests on one mint read: `mint-spent` is a single
+   * NUT-07 checkstate that said SPENT. Kept with `spentSeenAt` (ms), and without `verifiedAt`, so a
+   * later pass asks the mint again and an UNSPENT answer opens the link again. A refunded proof read
+   * as SPENT (cashu-mint#556) would otherwise have closed a link whose gift could still come back.
+   */
+  claimReason?: 'mint-spent'
+  spentSeenAt?: number
 }
 
 /**
@@ -420,7 +455,7 @@ const LINK_STATUSES: readonly GiftLinkStatus[] = ['outstanding', 'claimed', 'rec
 /** A stored link record, or undefined for anything malformed (never trusted as-is). */
 export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const { k, i, x, status, closedAt, noticedAt, arm, verifiedAt } = value as Record<string, unknown>
+  const { k, i, x, status, closedAt, noticedAt, arm, verifiedAt, claimReason, spentSeenAt } = value as Record<string, unknown>
   if (typeof k !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(k)) return undefined
   if (typeof x !== 'number' || !Number.isFinite(x)) return undefined
   if (typeof status !== 'string' || !LINK_STATUSES.includes(status as GiftLinkStatus)) return undefined
@@ -434,6 +469,8 @@ export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
     ...(typeof noticedAt === 'number' && Number.isFinite(noticedAt) ? { noticedAt } : {}),
     ...(parsedArm ? { arm: parsedArm } : {}),
     ...(typeof verifiedAt === 'number' && Number.isFinite(verifiedAt) ? { verifiedAt } : {}),
+    ...(claimReason === 'mint-spent' ? { claimReason } : {}),
+    ...(typeof spentSeenAt === 'number' && Number.isFinite(spentSeenAt) ? { spentSeenAt } : {}),
   }
 }
 
@@ -443,10 +480,24 @@ export function asGiftLinkRecord(value: unknown): GiftLinkRecord | undefined {
  * this wallet's return key can bring it back after the expiry. The next run checks it again; until
  * then logout stays off. By link key, over every row of each link.
  */
-export function unconfirmedClaimLinks(links: ReadonlyArray<Pick<GiftLinkRecord, 'k' | 'status' | 'arm' | 'verifiedAt'>>): Set<string> {
+export function unconfirmedClaimLinks(links: ReadonlyArray<Pick<GiftLinkRecord, 'k' | 'status' | 'arm' | 'verifiedAt' | 'claimReason'>>): Set<string> {
   const armed = new Set(links.filter((l) => l.arm !== undefined).map((l) => l.k))
-  return new Set(links.filter((l) => armed.has(l.k) && isUnverifiedClaim(l)).map((l) => l.k))
+  // #261: a claim this build wrote on one SPENT read (`claimReason`) is not an older build's guess.
+  // It is read again by the reconcile, and does not hold logout off meanwhile: since cashu-mint#556
+  // a SPENT read is right, and the re-read is a safety net, not a doubt.
+  return new Set(links.filter((l) => armed.has(l.k) && isUnverifiedClaim(l) && !isSingleReadClaim(l)).map((l) => l.k))
 }
+
+/**
+ * #261: a `claimed` resting on one SPENT checkstate (`claimReason: 'mint-spent'`), not yet read
+ * again. Due for its second read once `CLAIM_RECHECK_AFTER_MS` has passed since the first.
+ */
+export function isSingleReadClaim(link: Pick<GiftLinkRecord, 'status' | 'verifiedAt' | 'claimReason'>): boolean {
+  return link.status === 'claimed' && link.verifiedAt === undefined && link.claimReason === 'mint-spent'
+}
+
+/** #261: how long after a single SPENT read a link's claim is read again. */
+export const CLAIM_RECHECK_AFTER_MS = 10 * 60 * 1000
 
 /** A `claimed` record the mint was never asked about (see `verifiedAt`). */
 export function isUnverifiedClaim(link: Pick<GiftLinkRecord, 'status' | 'verifiedAt'>): boolean {
@@ -810,6 +861,36 @@ export function buildCashbackTransaction(input: {
     ...(input.terminalPubkey ? { terminalPubkey: input.terminalPubkey } : {}),
   } as unknown as TransactionRow
 }
+
+/**
+ * The take-back rows of the Cashlink a `sent` row made: every row whose `returnOf` names any row of
+ * the same link (a several-coupon send is several rows, and the take-back names one of them).
+ * Matched on the link's rows, never by showing the link key. Newest first. Empty for a row that
+ * made no Cashlink.
+ */
+export function cashlinkReturnsOf(all: readonly WalletTransaction[], sent: WalletTransaction): WalletTransaction[] {
+  const k = sent.link?.k
+  if (!k) return []
+  const linkRowIds = new Set(all.filter((t) => t.link?.k === k).map((t) => t.id))
+  linkRowIds.add(sent.id)
+  return all.filter((t) => t.returnOf !== undefined && linkRowIds.has(t.returnOf)).sort((a, b) => b.at - a.at)
+}
+
+/**
+ * What History calls a Cashlink's coupon back with its sender, by hand or at the link's expiry, on
+ * every path that brings it back: the locked one (`cashlinkPorts.takenBackRow`) and a link that was
+ * never locked, received back through TokenRedemption (`giftLinks.swapGiftTokens`).
+ */
+/** Where a return row's link goes, and what it says, by the kind of row it reverses (#643). */
+export function returnOfLabel(returnOf: string): { title: string; link: string; to: string } {
+  const checkout = /^checkout:([^:]+)$/.exec(returnOf)
+  if (checkout) return { title: 'Checkout code', link: 'See the checkout code', to: `/online/code/${encodeURIComponent(checkout[1])}` }
+  const to = `/transaction/${encodeURIComponent(returnOf)}`
+  if (returnOf.startsWith('locked-gift:')) return { title: 'Gift', link: 'See the gift you sent', to }
+  return { title: 'Cashlink', link: 'See the Cashlink you sent', to }
+}
+
+export const CASHLINK_TAKEN_BACK_MEMO = 'Taken back from Cashlink'
 
 /**
  * The row for a coupon claimed off a Cashlink by this wallet's own swap (#295 phase 4).

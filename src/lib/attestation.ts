@@ -695,11 +695,13 @@ export async function reconcileAttestations(
 // ===================================================================== voucher ledger v2 (#310)
 
 /**
- * Whether the stall publishes voucher ledger v2 REDEEMED events. Off unless the build sets
- * `VITE_VOUCHER_LEDGER_V2=true`, so the feature ships dark. Read per call so a test can stub it.
+ * Whether the stall publishes voucher ledger v2 REDEEMED events. On by default since the v2
+ * switch (imani-gateway-customer#310): the platform publishes ISSUED in v2 and nothing publishes
+ * v1 any more, so a stall that stays silent leaves every redemption unrecorded. A build can still
+ * opt out with `VITE_VOUCHER_LEDGER_V2=false` (rollback only). Read per call so a test can stub it.
  */
 export function voucherLedgerV2Enabled(): boolean {
-  return String(import.meta.env.VITE_VOUCHER_LEDGER_V2 ?? '').toLowerCase() === 'true'
+  return String(import.meta.env.VITE_VOUCHER_LEDGER_V2 ?? '').trim().toLowerCase() !== 'false'
 }
 
 /**

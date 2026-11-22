@@ -8,6 +8,7 @@ import { restatedFace } from '../couponFaceRepair'
 import { carveProofs } from '../checkoutCarve'
 import { creditableFaceValue, parseVoucherToken } from '../voucherToken'
 import { buildVoucherToken } from './voucherFixtures'
+import { sendFaceOf } from '../sendFace'
 
 const KEY = schnorr.utils.randomSecretKey()
 const credit = (t: string) => creditableFaceValue(parseVoucherToken(t)).faceValue
@@ -38,5 +39,32 @@ describe('a carve left the row overstated (staging 2026-11-01: 5.19 shown, 5.10 
     const t = coupon([1024, 512])
     expect(restatedFace(row(t, credit(t) - 20))).toBeNull()
     expect(restatedFace(row(t, credit(t) + 50, 'swapped_to_sats'))).toBeNull()
+  })
+})
+
+describe('#638: a row whose token is credited for 0 is dust', () => {
+  // staging 2026-11-20: face 1 on 8 sats of a 407-face / 7020-sat GBP coupon, worth 0.46p.
+  const dust = buildVoucherToken({ voucherId: 'v-d', faceValue: 407, unit: 'GBP', issuanceRatio: 0.05797720797720798, expiresAt: 1_900_000_000 }, [8], {}, KEY).token
+
+  it('restates the 1-vs-0 row to 0, which the one-unit tolerance used to leave alone', () => {
+    expect(credit(dust)).toBe(0)
+    expect(restatedFace(row(dust, 1))).toBe(0)
+  })
+
+  it('rounds half up like the gateway: a token worth 0.58 of a unit sends as 1 and is left alone', () => {
+    const t = buildVoucherToken({ voucherId: 'v-d2', faceValue: 407, unit: 'GBP', issuanceRatio: 0.05797720797720798, expiresAt: 1_900_000_000 }, [8, 2], {}, KEY).token
+    expect(sendFaceOf(t, 1)).toMatchObject({ sendFace: 1, fullSend: true })
+    expect(restatedFace(row(t, 1))).toBeNull()
+    // Overstated past the tolerance, it is still restated, to 1, never to 0.
+    expect(restatedFace(row(t, 5))).toBe(1)
+  })
+
+  it('never touches a dust row that is not active money', () => {
+    expect(restatedFace(row(dust, 1, 'spent'))).toBeNull()
+    expect(restatedFace(row(dust, 1, 'swapped_to_sats'))).toBeNull()
+  })
+
+  it('leaves a row already at 0 alone', () => {
+    expect(restatedFace(row(dust, 0))).toBeNull()
   })
 })

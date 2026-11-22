@@ -421,8 +421,8 @@ export function liveTerminals(stallPubkey: string): TerminalRecord[] {
  * trades, and counting them would make revocation a punishment.
  */
 export function enrolledCount(stallPubkey: string): number {
-  // Waiting rows do NOT count against the free terminal (decision 4 on #160):
-  // a botched setup must never block the owner from trying again. They are
+  // Waiting rows do NOT count against the tier's terminal allowance (decision 4
+  // on #160): a botched setup must never block the owner from trying again. They are
   // bounded instead, by `MAX_WAITING` and the 24-hour expiry. A row still
   // minting is a waiting row that has not been checked yet.
   return liveTerminals(stallPubkey).filter((t) => t.status !== 'waiting' && t.status !== 'minting')

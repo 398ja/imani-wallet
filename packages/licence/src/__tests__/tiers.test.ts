@@ -156,9 +156,9 @@ describe('the catalog', () => {
 })
 
 describe('the effective entitlement', () => {
-  it('is the free tier with no licence: 100 once, one till, no paid features', () => {
+  it('is the free tier with no licence: 100 once, no tills beyond the owner device, no paid features', () => {
     const e = ask([])
-    expect(e).toMatchObject({ tier: 'free', terminals: 1, features: [] })
+    expect(e).toMatchObject({ tier: 'free', terminals: 0, features: [] })
     expect(e.sales).toMatchObject({ period: 'lifetime', amount: 100_00, periodStart: 0, overshoot: 10_00 })
   })
 
@@ -191,10 +191,10 @@ describe('the effective entitlement', () => {
     expect(e.sales).toMatchObject({ amount: 200_00, period: 'window', periodStart: NOW - DAY, source: 'g20000' })
   })
 
-  it('lets a hand grant raise a free stall to 200 and keeps the free till count', () => {
+  it('lets a hand grant raise a free stall to 200 and keeps the free tier at no tills', () => {
     const e = ask([grant({ limits: { sales: { period: 'window', amounts: { GBP: 200_00 } } }, validFrom: NOW - DAY })])
     expect(e.sales?.amount).toBe(200_00)
-    expect(e.terminals).toBe(1)
+    expect(e.terminals).toBe(0)
   })
 
   it('ignores a grant outside its own window', () => {

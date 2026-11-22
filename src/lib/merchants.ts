@@ -5,7 +5,7 @@ import { issuerKey as coreIssuerKey, readExpiry } from '@imani/wallet-core'
 
 import { toEpochMs } from './format'
 import { parseIssuanceWarrant, verifyIssuanceWarrant } from './issuanceWarrant'
-import { parseVoucherToken } from './voucherToken'
+import { isUnverifiableVoucherError, parseVoucherToken } from './voucherToken'
 import { isLicence } from './licences'
 import { roundedOnceTotal, spendableTotal } from './couponTotals'
 import { isTerminalCredential } from './notMoney'
@@ -67,7 +67,8 @@ export function toVoucher(row: VoucherRow): Voucher {
     face_value: row.face_value ?? row.amount,
     face_unit: row.face_unit ?? 'SAT',
     face_decimals: row.face_decimals ?? 0,
-    token_amount: row.token_amount ?? row.amount,
+    // #638: a row without sats was valued at its stored face; the proofs say what it holds.
+    token_amount: row.token_amount ?? tokenSatsOf(row.token) ?? row.amount,
     backing_strategy: row.backing_strategy,
     // Part of VoucherGrouper's group key (`merchantId-unit-issuanceRatio`), and
     // it reads `voucher.issuance_ratio || 1`. Omitting it collapsed every
@@ -112,10 +113,54 @@ export function issuanceRatioOf(row: VoucherRow): number | undefined {
   const stored = row.issuance_ratio
   if (typeof stored === 'number' && Number.isFinite(stored) && stored > 0) return stored
 
+  // #638 regression (staging 2026-11-20): the token's own signed ratio before face / sats. Most
+  // ingest paths (DM receive, cash links, checkout codes, unlocked change) never store the ratio,
+  // and once a row's face is the rounded-up remnant of a split the quotient is wrong: face 1 on 8
+  // sats derived 0.125, valued the dust at 1, and every bundle drawing on it aborted.
+  const signed = signedRatioOf(row.token)
+  if (signed !== undefined) return signed
+
   const face = row.face_value
   const sats = row.token_amount
   if (typeof face !== 'number' || typeof sats !== 'number' || sats <= 0) return undefined
   return face / sats
+}
+
+const tokenFacts = new Map<string, { ratio?: number; sats?: number }>()
+
+/** The ratio signed into a coupon's token and the sats its proofs hold, where readable. Memoised. */
+function tokenFactsOf(token: string | undefined | null): { ratio?: number; sats?: number } {
+  if (!token) return {}
+  const hit = tokenFacts.get(token)
+  if (hit) return hit
+  let facts: { ratio?: number; sats?: number } = {}
+  try {
+    const parsed = parseVoucherToken(token)
+    const r = parsed.voucher.issuanceRatio
+    const n = parsed.tokenAmount
+    facts = {
+      ratio: typeof r === 'number' && Number.isFinite(r) && r > 0 ? r : undefined,
+      sats: Number.isSafeInteger(n) && n > 0 ? n : undefined,
+    }
+  } catch (e) {
+    // Unverifiable or unreadable: no facts, so the row's own figures stand as before. Never money,
+    // and never more than the row claims (couponValue only ever lowers the stored face).
+    if (isUnverifiableVoucherError(e)) facts = {}
+    facts = {}
+  }
+  if (tokenFacts.size > 2000) tokenFacts.clear()
+  tokenFacts.set(token, facts)
+  return facts
+}
+
+/** The issuance ratio signed into a coupon's token, or undefined when it cannot be read. */
+export function signedRatioOf(token: string | undefined | null): number | undefined {
+  return tokenFactsOf(token).ratio
+}
+
+/** The sats a coupon's token proofs hold, or undefined when it cannot be read. */
+export function tokenSatsOf(token: string | undefined | null): number | undefined {
+  return tokenFactsOf(token).sats
 }
 
 /**

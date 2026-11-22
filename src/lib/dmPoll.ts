@@ -23,7 +23,7 @@ import {
 } from './arrivalToast'
 import { announceQueued, settleQueued, type QueuedBundleSeed } from './queuedToast'
 import { gatesSealed, receivesOpen } from './receiveGate'
-import { announceRefusal } from './refusalToast'
+import { REFUSAL_MESSAGES, announceRefusal } from './refusalToast'
 import {
   announceUnsaved,
   dropAcknowledgedReceipts,
@@ -42,6 +42,7 @@ import { attestRedemption, nullifierFor, publishRedeemed } from './attestation'
 import { attestationForReceivedCoupon } from './cashAttestation'
 import { getSigner } from './nap'
 import { postPaymentReceipt } from './paymentReceipt'
+import { receiptAddressee } from './receiptAddressee'
 import {
   awaitsHeldWrap,
   noteTransferReceived,
@@ -66,13 +67,32 @@ import { withWebLock } from './webLock'
 import { CALLS_PER_RECEIVE, receivePacer } from './receivePacer'
 import { checkTokenBacking, loadTrustedMints, onTrustedMintsChange } from './trustedMint'
 import { couponReference, fullyRedeemedMessage, isVoucherFullyRedeemed } from './fullyRedeemed'
+import { refusalOf } from './cardPaymentState'
 import type { SpendSource } from './spendSource'
+import { createHeldPartPuller, type HeldPartPuller, type IncomingPart } from './heldPartPull'
+import { openBundles } from './bundleArrival'
 
 /**
  * A receive the mint refused as redeemed in full (cashu-mint#540), as dm-poll's terminal refusal.
  * Anything else is returned unchanged.
  */
 export function asFullyRedeemedRefusal(failure: unknown, meta: Record<string, unknown> | undefined): unknown {
+  // imani-wallet#277: the gateway refused a card voucher whose payment was refunded or disputed.
+  const card = refusalOf(failure)
+  if (card) {
+    const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
+    console.warn('[dmPoll] coupon refused by the gateway: card payment refunded', {
+      reference: couponReference(voucherId),
+      status: card.status,
+    })
+    return new RedemptionRefusedError(
+      REFUSAL_MESSAGES['payment-refunded'].detail,
+      voucherId,
+      0,
+      card.remainingMinor,
+      'payment-refunded',
+    )
+  }
   if (!isVoucherFullyRedeemed(failure)) return failure
   const voucherId = typeof meta?.voucherId === 'string' ? meta.voucherId : ''
   const signed = Number((meta?.validation as { signedFaceValue?: unknown } | undefined)?.signedFaceValue ?? 0)
@@ -1433,8 +1453,12 @@ function redemptionAdapter(): RedemptionAdapter {
         //      coupon straight to a customer the stall IS the sender, so this
         //      still reaches the right party in the one case it is right, and
         //      is now unreachable in the case where it was wrong.
-        senderPubkeyHex: String(
-          meta?.senderPubkey ?? opts?.senderPubkey ?? meta?.issuerId ?? '',
+        //
+        // A card sale's sender is the stall's DELEGATE (the purchase issuer), whose receipt queue
+        // nobody drains; `receiptAddressee` sends those to the stall instead (card receipts).
+        senderPubkeyHex: receiptAddressee(
+          String(meta?.senderPubkey ?? opts?.senderPubkey ?? meta?.issuerId ?? ''),
+          token,
         ),
         deliveryEventId: String(opts?.deliveryEventId ?? ''),
         voucherId: meta?.voucherId as string | undefined,
@@ -1973,6 +1997,8 @@ export function startDmPoll(pubkey: string): DmPollService {
       // configuration was fixed while the app was closed.
       void starting.start().then(() => {
         if (service === starting) void reofferHeld()
+        // #220 B: and the parts the gateway holds for this wallet, after the relay catch-up.
+        if (service === starting) void heldPartPuller?.poke('login')
       })
     }
   })
@@ -1982,6 +2008,8 @@ export function startDmPoll(pubkey: string): DmPollService {
   // The first `onopen` fires after `start()` has already caught up, so it costs
   // one duplicate query per session — worth not special-casing.
   onSseOpen = catchUp
+  heldPartPuller?.stop()
+  heldPartPuller = startHeldPartPuller(pubkey, service)
   // The socket is not the only thing a freeze breaks. Coming back to the
   // foreground catches the case where the stream looks alive to the client but
   // the gateway already reaped it (`sse_cleanup reason=keepalive failed`).
@@ -1991,7 +2019,41 @@ export function startDmPoll(pubkey: string): DmPollService {
 }
 
 function onVisible(): void {
-  if (document.visibilityState === 'visible') catchUp()
+  if (document.visibilityState === 'visible') {
+    catchUp()
+    void heldPartPuller?.poke('resume')
+  }
+}
+
+/** The recipient pull of held bundle parts (imani-gateway-core#220 B), see heldPartPull.ts. */
+let heldPartPuller: HeldPartPuller | undefined
+
+function startHeldPartPuller(pubkey: string, polling: DmPollService): HeldPartPuller | undefined {
+  // A partial service double in older suites has no pull entry: no pull, nothing else changes.
+  if (typeof (polling as { processPulledToken?: unknown }).processPulledToken !== 'function') return undefined
+  type PullApi = {
+    getIncomingAtomicSends?: (o: { since: number; limit: number }) => Promise<{ items?: IncomingPart[]; next_since?: number | null }>
+    ackIncomingAtomicSend?: (id: string) => Promise<unknown>
+  }
+  const api = async (): Promise<PullApi> => (await legacyApi()) as unknown as PullApi
+  const puller = createHeldPartPuller({
+    recipientPubkey: pubkey,
+    async getIncoming(opts) {
+      const a = await api()
+      // A build of the API client without the method behaves like a gateway without the route.
+      if (typeof a.getIncomingAtomicSends !== 'function') throw Object.assign(new Error('no pull'), { status: 404 })
+      return a.getIncomingAtomicSends(opts)
+    },
+    async ack(sendId) {
+      const a = await api()
+      if (typeof a.ackIncomingAtomicSend !== 'function') throw Object.assign(new Error('no ack'), { status: 404 })
+      return a.ackIncomingAtomicSend(sendId)
+    },
+    receive: (input) => polling.processPulledToken(input),
+    hasOpenBundle: () => openBundles(pubkey).length > 0,
+  })
+  puller.start()
+  return puller
 }
 
 /**
@@ -2009,6 +2071,8 @@ export function stopDmPoll(): void {
   // so `drainDmPoll` waiting for the ones already started is enough.
   pollerGeneration++
   onSseOpen = undefined
+  heldPartPuller?.stop()
+  heldPartPuller = undefined
   if (deferredRetryTimer !== undefined) clearTimeout(deferredRetryTimer)
   deferredRetryTimer = undefined
   deferredRetries.clear()

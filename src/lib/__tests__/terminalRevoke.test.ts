@@ -107,6 +107,19 @@ describe('a credential request whose answer was lost', () => {
     expect(allTerminals(STALL)[0].status).toBe('waiting')
   })
 
+  // #402: a shop's resumed first mint is the same request the connect screen sent, marker included.
+  it('re-sends a shop with its online-shop marker (a till: see the test above, no marker)', async () => {
+    // Arrange
+    recordTerminal(STALL, row({ shop: { url: 'https://shop.example', platform: 'woocommerce' } }))
+    const t = transport(good())
+
+    // Act
+    await resumeMinting(STALL, spendApi(), t)
+
+    // Assert
+    expect((t.post.mock.calls[0] as unknown[])[2]).toEqual({ 'Idempotency-Key': 'key-1', 'X-Imani-Online-Shop': '1' })
+  })
+
   // Still no answer: the row stays as it is and is tried again next time,
   // rather than being dropped while a credential might be live.
   it('stays minting while the gateway cannot be reached', async () => {

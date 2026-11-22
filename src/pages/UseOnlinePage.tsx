@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { checkoutRefusalMessage, splitCheckoutRefusalMessage } from '../lib/checkoutRefusal'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Copy, ExternalLink, Globe } from 'lucide-react'
 
@@ -12,13 +13,14 @@ import { availableOf, checkoutPlan, maxExpiryFor, type CheckoutExclusion, type C
 import { display } from '../lib/checkoutCode'
 import { reconcileCheckoutCodesNow } from '../lib/checkoutCodesApp'
 import { loadCheckoutCodes, remainingOf, type CheckoutCodeRecord } from '../lib/checkoutCodeRecords'
-import { CHECKOUT_CODES_PATH, startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
+import { CHECKOUT_CODES_PATH, checkCheckoutSource, startCheckoutCode, type CheckoutPlanPart } from '../lib/checkoutCodeFlow'
 import { asCheckoutCodeSnapshot, checkoutTxId, CHECKOUT_STATUS_WORDS } from '../lib/checkoutCodeHistory'
 import { appCheckoutPorts } from '../lib/checkoutCodePorts'
 import { splitVoucher } from '../lib/voucherSplit'
 import { warmMint } from '../lib/cashlinkFlow'
 import { trustedMintUrls } from '../lib/trustedMint'
 import type { OnlineShop } from '../lib/onlineShop'
+import { stallAcceptsNewCheckoutCodes } from '../lib/stallCheckoutCodes'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 /**
@@ -34,7 +36,12 @@ export interface OnlineStall {
   pubkey: string
   name: string
   shop: OnlineShop
+  /** #639: false when the stall's plan takes no new checkout codes; null when not known. */
+  acceptsNew: boolean | null
 }
+
+/** #639: the reason Get code is off, the words the lock's refusal would have used. */
+export const NOT_IN_PLAN_TEXT = checkoutRefusalMessage({ kind: 'refused', why: 'not_in_plan' })
 
 /** Seams for tests. */
 export interface UseOnlineDeps {
@@ -45,6 +52,8 @@ export interface UseOnlineDeps {
   codes: (pubkey: string) => CheckoutCodeRecord[]
   ports: typeof appCheckoutPorts
   split: typeof splitVoucher
+  /** #644: the lock check on the voucher a split would carve, before the split. */
+  checkSource?: typeof checkCheckoutSource
   /** #477: open the mint connection and read its keyset while the amount is typed. */
   warm?: () => void
   /** #557: the code's History row, for a code whose record is not on this device. */
@@ -53,7 +62,15 @@ export interface UseOnlineDeps {
   mine?: () => Promise<Array<Record<string, unknown>> | null>
   /** #405: one catch-up pass (`/mine`), so a Shopify code waiting for its shop turns ready. */
   reconcile?: (pubkey: string) => Promise<number>
+  /**
+   * #639: whether the stall's shop takes new checkout codes. Null (or absent, or throwing) is
+   * unknown: Get code stays on and the lock decides. Only false turns it off.
+   */
+  acceptsNew?: (stall: string) => Promise<boolean | null>
 }
+
+const askAcceptsNew = (deps: UseOnlineDeps, stall: string): Promise<boolean | null> =>
+  (deps.acceptsNew ?? (async () => null))(stall).catch(() => null)
 
 const realDeps: UseOnlineDeps = {
   rows: listVouchers,
@@ -63,6 +80,7 @@ const realDeps: UseOnlineDeps = {
   codes: loadCheckoutCodes,
   ports: appCheckoutPorts,
   split: splitVoucher,
+  checkSource: checkCheckoutSource,
   historyRow: async (txId) => ((await getTransactionRow(txId)) as unknown as Record<string, unknown> | null) ?? null,
   mine: async () => {
     const answer = await appCheckoutPorts().store.call('GET', `${CHECKOUT_CODES_PATH}/mine`)
@@ -76,6 +94,7 @@ const realDeps: UseOnlineDeps = {
     for (const url of trustedMintUrls()) warmMint(url)
   },
   reconcile: reconcileCheckoutCodesNow,
+  acceptsNew: (stall) => stallAcceptsNewCheckoutCodes(stall),
 }
 
 /** #405: how often, and how long, a code waiting for its shop is re-checked. */
@@ -172,8 +191,13 @@ function StallPicker({ deps }: { deps: UseOnlineDeps }) {
     let live = true
     void (async () => {
       const merchants = toMerchants(await deps.rows())
-      const found = await Promise.all(merchants.map(async (m) => ({ m, shop: await deps.shopOf(m.pubkey).catch(() => null) })))
-      if (live) setStalls(found.filter((f) => f.shop).map((f) => ({ pubkey: f.m.pubkey, name: f.m.name, shop: f.shop! })))
+      const found = await Promise.all(
+        merchants.map(async (m) => {
+          const shop = await deps.shopOf(m.pubkey).catch(() => null)
+          return { m, shop, acceptsNew: shop ? await askAcceptsNew(deps, m.pubkey) : null }
+        }),
+      )
+      if (live) setStalls(found.filter((f) => f.shop).map((f) => ({ pubkey: f.m.pubkey, name: f.m.name, shop: f.shop!, acceptsNew: f.acceptsNew })))
     })()
     return () => {
       live = false
@@ -198,7 +222,7 @@ function StallPicker({ deps }: { deps: UseOnlineDeps }) {
             <button
               key={s.pubkey}
               type="button"
-              className="press-row flex w-full items-center gap-3 p-4 text-left"
+              className="press-row flex w-full flex-wrap items-center gap-3 p-4 text-left"
               onClick={() => navigate(`/online?stall=${s.pubkey}`)}
             >
               <span className="min-w-0 flex-1">
@@ -207,6 +231,11 @@ function StallPicker({ deps }: { deps: UseOnlineDeps }) {
               <span className="flex shrink-0 items-center gap-1 text-sm text-mono-500">
                 <Globe className="h-4 w-4" aria-hidden /> {hostOf(s.shop.url)}
               </span>
+              {s.acceptsNew === false && (
+                <span className="basis-full text-xs text-amber-700 dark:text-amber-300" data-testid="not-in-plan">
+                  {NOT_IN_PLAN_TEXT}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -218,6 +247,8 @@ function StallPicker({ deps }: { deps: UseOnlineDeps }) {
 function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; deps: UseOnlineDeps }) {
   const navigate = useNavigate()
   const [loaded, setLoaded] = useState<{ rows: VoucherRow[]; shop: OnlineShop | null; nowS: number } | null>(null)
+  // #639: asked alongside, never waited on: until it answers, Get code behaves as before.
+  const [acceptsNew, setAcceptsNew] = useState<boolean | null>(null)
   const [amountText, setAmountText] = useState('')
   const [days, setDays] = useState<number>(7)
   const [busy, setBusy] = useState<false | 'splitting' | 'making'>(false)
@@ -235,6 +266,9 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
     let live = true
     void Promise.all([deps.rows(), deps.shopOf(stall).catch(() => null)]).then(([rows, shop]) => {
       if (live) setLoaded({ rows, shop, nowS: Math.floor(deps.nowMs() / 1000) })
+    })
+    void askAcceptsNew(deps, stall).then((answer) => {
+      if (live) setAcceptsNew(answer)
     })
     return () => {
       live = false
@@ -288,6 +322,11 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
   /** The split part replaced by the coupons the split made, or a sentence saying what happened. */
   const runSplit = async (ports: ReturnType<typeof deps.ports>): Promise<CheckoutPlanPart[] | string> => {
     if (!splitting) return []
+    // #644: the lock check first, so a refusal it can see leaves the voucher as it was (no split,
+    // no re-signs to undo it).
+    const refused = await (deps.checkSource ?? (async () => null))({ ports, stall, shop, unit, x, token: splitting.row.token })
+    if (refused) return splitCheckoutRefusalMessage(refused)
+    setBusy('splitting')
     const out = await deps.split(ports, pubkey, { tokenId: splitting.row.token_id, token: splitting.row.token, amount: splitting.amount })
     if (out.kind === 'split') return out.parts
     if (out.kind === 'refused') return 'Your voucher could not be split right now. Nothing has changed.'
@@ -295,9 +334,10 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
     return 'Your voucher is being split. It is safe, and it finishes the next time Imani opens. Try again in a moment.'
   }
 
+  const notInPlan = acceptsNew === false
   const onGet = async () => {
-    if (!plan.plan) return
-    setBusy(splitting ? 'splitting' : 'making')
+    if (!plan.plan || notInPlan) return
+    setBusy('making')
     setError(null)
     try {
       const ports = deps.ports()
@@ -321,9 +361,11 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
         x,
         parts,
       })
+      const detail = out.record.refusalDetail
       if (out.kind === 'issued' || out.kind === 'pending') navigate(`/online/code/${out.record.id}`)
-      else if (splitting) setError('Your voucher was split, but no code could be made. Both parts are in your wallet.')
-      else setError(out.kind === 'refused' ? 'These vouchers cannot be used online right now. Nothing has changed.' : 'No code could be made. Your vouchers come back on their own when the expiry passes.')
+      // #644: refused means nothing was burnt; never count the parts a split made.
+      else if (splitting && out.kind === 'refused') setError(splitCheckoutRefusalMessage({ why: out.why, ...(detail ? { detail } : {}) }))
+      else setError(checkoutRefusalMessage({ kind: out.kind, why: out.why, ...(detail ? { detail } : {}) }))
       // #402: the split's change is locked to this wallet's own key; make it an ordinary coupon again
       // now, so the next send can draw on it. The catch-up sweep finishes it if this is cut short.
       if (splitting) void import('../lib/selfLockedCouponsApp').then((m) => m.unlockSelfLockedCouponsNow(pubkey)).catch(() => 0)
@@ -407,7 +449,12 @@ function AmountScreen({ pubkey, stall, deps }: { pubkey: string; stall: string; 
         </div>
 
         {error && <Alert>{error}</Alert>}
-        <Button size="lg" className="w-full" disabled={!plan.plan || busy !== false || !offered.includes(days as 1 | 7 | 30)} onClick={() => void onGet()}>
+        {notInPlan && !error && (
+          <p id="online-not-in-plan" role="status" className="text-sm text-amber-700 dark:text-amber-300" data-testid="not-in-plan">
+            {NOT_IN_PLAN_TEXT}
+          </p>
+        )}
+        <Button size="lg" className="w-full" aria-describedby={notInPlan ? 'online-not-in-plan' : undefined} disabled={notInPlan || !plan.plan || busy !== false || !offered.includes(days as 1 | 7 | 30)} onClick={() => void onGet()}>
           {busy === 'splitting' ? 'Splitting your voucher…' : busy ? 'Making your code…' : 'Get code'}
         </Button>
         {busy && (

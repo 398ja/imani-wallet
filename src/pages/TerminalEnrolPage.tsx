@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { Check, Clock } from 'lucide-react'
 
@@ -8,63 +8,22 @@ import { ScanRecipient } from '../components/ScanRecipient'
 import { ALL_TERMINAL_ROLES, TERMINAL_ROLE_LABELS, type TerminalRole } from '../lib/terminalRole'
 import { TERMINAL_NAME_MAX_CHARS, checkEnrolment, prepareEnrolment } from '../lib/terminalIssue'
 import { licenceStatus } from '../lib/licenceStatus'
-import {
-  WAITING_TTL_MS,
-  enrolledCount,
-  holdsLiveCredential,
-  recordTerminal,
-  updateTerminal,
-  waitingTerminals,
-} from '../lib/terminalRoster'
-import {
-  attestEnrolment,
-  checkCode,
-  formatCheckCode,
-  mintTerminalCredential,
-  ownerTransport,
-  type MintTransport,
-} from '../lib/terminalMint'
-import { revokeCredential, type CredentialMintApi } from '../lib/credentialRevocation'
-import { settleMintFailure } from '../lib/terminalRevoke'
+import { enrolledCount, holdsLiveCredential, waitingTerminals } from '../lib/terminalRoster'
+import { ownerTransport, type MintTransport } from '../lib/terminalMint'
+import type { CredentialMintApi } from '../lib/credentialRevocation'
 import { legacyApi } from '../lib/legacyBridge'
-import { parseVoucherToken } from '../lib/voucherToken'
-import {
-  DEFAULT_IDLE_LOCK_MINUTES,
-  IDLE_LOCK_CHOICES,
-  sendCredential,
-  setupCode,
-  type WrapPublisher,
-} from '../lib/terminalDelivery'
+import { DEFAULT_IDLE_LOCK_MINUTES, IDLE_LOCK_CHOICES, type WrapPublisher } from '../lib/terminalDelivery'
+import { EnrolNotStartedError, enrolTerminal, ownerMessageFor } from '../lib/terminalEnrolFlow'
 import { ownerPublisher } from '../lib/terminalDeliveryNet'
 import { getSigner } from '../lib/nap'
 import type { StallSigner } from '../lib/ownerAttestation'
 import { useOnline } from '../lib/useOnline'
 import type { LicenceStatus } from '../lib/licenceStatus'
 import { merchantStatus, type MerchantStatus } from '../lib/merchant'
-import {
-  ENROLMENT_CODE_MESSAGES,
-  TERMINAL_KEY_CHECK_UNAVAILABLE_MESSAGE,
-  enrolmentProofHeader,
-  readEnrolmentCode,
-} from '../lib/terminalEnrolProof'
-import { CredentialMintError } from '../lib/terminalMint'
-import { SHOP_ENROL_MESSAGES, SHOP_ENROL_PREFIX, readShopEnrolCode, shopHost, type ShopEnrolment } from '../lib/shopEnrol'
-import { TERMINAL_ROLES } from '../lib/terminalRole'
-import { allTerminals } from '../lib/terminalRoster'
+import { ENROLMENT_CODE_MESSAGES, enrolmentProofHeader, readEnrolmentCode } from '../lib/terminalEnrolProof'
+import { SHOP_ENROL_PREFIX } from '../lib/shopEnrol'
 import { userMessage } from '../lib/userMessage'
 
-/**
- * The gateway's refusals of the KEY, in the owner's words (inv-terminal-not-merchant). Everything
- * else keeps the message it already had.
- */
-function ownerMessageFor(e: unknown): string {
-  if (e instanceof CredentialMintError) {
-    if (e.code === 'TERMINAL_KEY_NOT_A_TERMINAL') return ENROLMENT_CODE_MESSAGES['not-a-terminal-code']
-    if (e.code === 'TERMINAL_KEY_IS_MERCHANT') return ENROLMENT_CODE_MESSAGES.merchant
-    if (e.code === 'TERMINAL_KEY_CHECK_UNAVAILABLE') return TERMINAL_KEY_CHECK_UNAVAILABLE_MESSAGE
-  }
-  return userMessage(e, 'Could not set up the terminal.')
-}
 
 /** The stall's key, lent for one wrap, as `signer.withPrivkey` lends it everywhere else. */
 const stallSeal = <T,>(borrow: (key: Uint8Array) => T): T => getSigner().withPrivkey(borrow)
@@ -133,9 +92,6 @@ export function TerminalEnrolPage({
   const [terminalPubkey, setTerminalPubkey] = useState<string | null>(null)
   // The device's proof that the scanned key was created as a terminal (inv-terminal-not-merchant).
   const [enrolmentProof, setEnrolmentProof] = useState<string | null>(null)
-  // An online shop's code was scanned (#402 §0): the key is the shop's `S`, and the terminal can
-  // only ever be redeem-only. Its url and platform go on the row, and from there on the profile.
-  const [shop, setShop] = useState<ShopEnrolment | null>(null)
   // Why the last scan was refused, in the owner's words.
   const [scanRefusal, setScanRefusal] = useState<string | null>(null)
   const lastScanned = useRef<string | null>(null)
@@ -201,29 +157,10 @@ export function TerminalEnrolPage({
       lastScanned.current = null
       setScanRefusal(message)
     }
+    // An online shop's code (#402 §0) is connected from its own screen, which checks the plan and
+    // fixes the role. Taken there with the code, so the owner does not have to scan it twice.
     if (text.trim().toLowerCase().startsWith(SHOP_ENROL_PREFIX)) {
-      const code = readShopEnrolCode(text)
-      if (typeof code === 'string') {
-        refuse(SHOP_ENROL_MESSAGES[code])
-        return true
-      }
-      // One online shop per stall in v1: a second would split the profile's single `online_shop`.
-      const other = allTerminals(stallPubkey).find(
-        (t) => t.shop && t.revokedAt === undefined && t.terminalPubkey !== code.redeemKey,
-      )
-      if (other) {
-        refuse(`Your stall is already connected to ${shopHost(other.shop!.url)}. Revoke it first.`)
-        return true
-      }
-      if (code.redeemKey === stallPubkey.toLowerCase()) {
-        refuse('That is your own stall. Copy the code from the shop.')
-        return true
-      }
-      setShop(code)
-      setRole(TERMINAL_ROLES.REDEEM_ONLY)
-      if (!name.trim()) setName(shopHost(code.url))
-      setTerminalPubkey(code.redeemKey)
-      setEnrolmentProof(code.enrolmentProof)
+      navigate('/settings/online-shop', { state: { shopCode: text.trim() } })
       return true
     }
     if (typeof read === 'string') {
@@ -269,103 +206,15 @@ export function TerminalEnrolPage({
    */
   const enrol = async () => {
     if (!context || busy) return
-    // A shop is never anything but redeem-only (#402 §0), whatever the picker says.
-    const prepared = {
-      ...prepareEnrolment(shop ? { ...request, role: TERMINAL_ROLES.REDEEM_ONLY } : request, context),
-      idleLockMinutes: idleLock,
-      ...(enrolmentProof ? { enrolmentProof } : {}),
-    }
+    const prepared = { ...prepareEnrolment(request, context), idleLockMinutes: idleLock, ...(enrolmentProof ? { enrolmentProof } : {}) }
     setBusy(true)
     setFailure(null)
-    const mintKey = crypto.randomUUID()
-    const startedAt = Date.now()
-    let credential: typeof prepared
     try {
-      // The stall's own consent to this till (#160 decision 5): signed here, once, with the key
-      // that signs `merchant` warrants, before anything is sent. Every customer's wallet checks
-      // it, so a till minted without it could never sell.
-      credential = { ...prepared, attestation: attestEnrolment(prepared, stallSigner(), startedAt) }
-      // Written BEFORE the request leaves this phone (#160 review). If the
-      // gateway mints but its answer, or the token, never arrives, this row is
-      // what lets the next open of Terminals finish the job or cancel it,
-      // instead of a live credential nobody on this phone knows about.
-      recordTerminal(stallPubkey, {
-        terminalPubkey: credential.lockedTo,
-        name: credential.name,
-        role: credential.role,
-        enrolledAt: startedAt,
-        status: 'minting',
-        mintKey,
-        // With the key, so a resumed mint re-sends this exact body (spec 4.6.2).
-        attestation: credential.attestation,
-        ...(credential.enrolmentProof ? { enrolmentProof: credential.enrolmentProof } : {}),
-        idleLockMinutes: idleLock,
-        waitingUntil: startedAt + WAITING_TTL_MS,
-        ...(shop ? { shop: { url: shop.url, platform: shop.platform } } : {}),
-      })
+      // The shared pipeline (terminalEnrolFlow.ts): the row is written before the request leaves this
+      // phone, the credential is checked on its own bytes, then delivered by NIP-17 DM.
+      setIssued(await enrolTerminal(stallPubkey, prepared, { idleLockMinutes: idleLock }, { transport, spendApi, publisher, seal, stallSigner }))
     } catch (e) {
-      setFailure(userMessage(e, 'Could not set up the terminal.'))
-      setBusy(false)
-      return
-    }
-    try {
-      const minted = await mintTerminalCredential(
-        credential,
-        async (token) => {
-          const metadata = parseVoucherToken(token).voucher.merchantMetadata
-          const out = await revokeCredential(token, metadata, await spendApi())
-          return out.revoked || out.reason === 'already-revoked'
-        },
-        transport,
-        {
-          idempotencyKey: mintKey,
-          onAccepted: (voucherId) =>
-            updateTerminal(stallPubkey, credential.lockedTo, (row) => ({ ...row, voucherId })),
-        },
-      )
-      const now = Date.now()
-      // Recorded on the OWNER's device, with the token revocation spends. If
-      // the token were only kept by the terminal, a lost device could never be
-      // revoked, which is the case that matters most.
-      updateTerminal(stallPubkey, credential.lockedTo, (row) => ({
-        ...row,
-        // Waiting, not in service: the device has not confirmed it, and it
-        // cannot trade until it has (#160). Cancelled after 24 hours.
-        status: 'waiting',
-        token: minted.token,
-        voucherId: minted.voucherId,
-        enrolledAt: now,
-        waitingUntil: now + WAITING_TTL_MS,
-        mintKey: undefined,
-        idleLockMinutes: idleLock,
-      }))
-      // Phase 2: hand it to the device by NIP-17 DM, sealed by the stall. A DM
-      // that did not land leaves the row waiting, and the screen says so: the
-      // owner can cancel it and add the device again.
-      const sent = await sendCredential(
-        {
-          voucherId: minted.voucherId,
-          token: minted.token,
-          stallPubkey,
-          name: credential.name,
-          idleLockMinutes: idleLock,
-        },
-        credential.lockedTo,
-        seal,
-        publisher,
-      ).catch(() => false)
-      // Remembered, so the Terminals list re-sends a DM that did not land (#160 round 2).
-      updateTerminal(stallPubkey, credential.lockedTo, (row) => ({ ...row, delivered: sent }))
-      setIssued({
-        name: credential.name,
-        code: formatCheckCode(checkCode(minted.voucherId, stallPubkey, credential.lockedTo)),
-        sent,
-        setup: setupCode(stallPubkey, minted.voucherId),
-      })
-    } catch (e) {
-      // Shared with resumeMinting: only a definitive 4xx forgets the row (#160 round 2).
-      await settleMintFailure(stallPubkey, credential.lockedTo, e)
-      setFailure(ownerMessageFor(e))
+      setFailure(e instanceof EnrolNotStartedError ? userMessage(e.cause, 'Could not set up the terminal.') : ownerMessageFor(e))
     } finally {
       setBusy(false)
     }
@@ -459,14 +308,7 @@ export function TerminalEnrolPage({
           </p>
         </div>
 
-        {shop ? (
-          <p className="text-sm text-mono-500" data-testid="shop-role">
-            Online shop at {shopHost(shop.url)}: {TERMINAL_ROLE_LABELS[TERMINAL_ROLES.REDEEM_ONLY].name.toLowerCase()}.
-            It can take your coupons at checkout and can never sell them.
-          </p>
-        ) : (
-          <RolePicker value={role} onChange={setRole} />
-        )}
+        <RolePicker value={role} onChange={setRole} />
 
         {/* Decision 2 on #160. On top of the 12-hour session: an unattended till
             locks itself after this long with no touch. */}
@@ -519,7 +361,6 @@ export function TerminalEnrolPage({
                 onClick={() => {
                   setTerminalPubkey(null)
                   setEnrolmentProof(null)
-                  setShop(null)
                   lastScanned.current = null
                 }}
               >
@@ -532,8 +373,15 @@ export function TerminalEnrolPage({
                 onFound={() => {}}
                 onText={onScanned}
                 selfPubkey={stallPubkey}
-                manualLabel="Or enter the device's or online shop's code"
+                manualLabel="Or enter the device's code"
               />
+              <p className="mt-2 text-xs text-mono-500">
+                Connecting an online shop?{' '}
+                <Link to="/settings/online-shop" className="underline">
+                  Use Online shop
+                </Link>
+                .
+              </p>
               {scanRefusal ? (
                 <div className="mt-3">
                   <Alert>{scanRefusal}</Alert>

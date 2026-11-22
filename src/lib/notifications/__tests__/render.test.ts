@@ -119,3 +119,34 @@ describe('toRenderable', () => {
     expect(result.body).toBe('A coupon arrived in your wallet.')
   })
 })
+
+describe('send_retrying (gateway-core#220)', () => {
+  it('renders the resume notice the gateway sends to the sender, in plain words', () => {
+    const result = toRenderable({
+      title: 'Payment on its way',
+      body: "We are retrying a payment you sent to Alice. You don't need to do anything.",
+      type: 'send_retrying',
+      data: { type: 'send_retrying', send_id: 's-1', bundle_id: 'b-1' },
+    })
+
+    expect(result.type).toBe('send_retrying')
+    expect(result.body).toBe("We are retrying a payment you sent to Alice. You don't need to do anything.")
+    expect(result.url).toBe('/')
+  })
+
+  it('has its own words when the server sends none', () => {
+    const result = toRenderable({ data: { type: 'send_retrying' } })
+
+    expect(result.type).toBe('send_retrying')
+    expect(result.title).toBe('Payment on its way')
+    expect(result.body).toBe("We are retrying a payment you sent. You don't need to do anything.")
+  })
+
+  it('never shows a key: key-shaped server words are replaced by the plain ones', () => {
+    for (const leak of ['to 0123456789abcdef', 'to npub1qqqsyqcyq5rqwzqf', 'to ' + 'a'.repeat(64)]) {
+      const result = toRenderable({ type: 'send_retrying', title: 'Retrying', body: `We are retrying a payment you sent ${leak}.` })
+      expect(result.body).toBe("We are retrying a payment you sent. You don't need to do anything.")
+      expect(`${result.title} ${result.body}`).not.toMatch(/[0-9a-f]{12}|npub1/)
+    }
+  })
+})

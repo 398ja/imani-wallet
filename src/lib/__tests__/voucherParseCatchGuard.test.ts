@@ -36,6 +36,11 @@ const NAMED_WRAPPERS = ['licenceFromToken', 'terminalCredentialFromToken', 'read
 
 const AUDITED = new Set<string>([
   // Each fails safe: no claim, zero credit, not lockable, unreadable, pending or retried.
+  // The NGN overcharge: sendFaceOf answers undefined and debitFor the request on any failure, so an
+  // unverifiable voucher gets no prediction; the screen and the history keep the request, and the
+  // gateway refuses the send itself. Neither credits anything.
+  'src/lib/pay.ts#debitFor#02159eb3f93f',
+  'src/lib/sendFace.ts#sendFaceOf#e6d14ec06b1e',
   'src/components/SwapBackOffer.tsx#SwapBackOffer#61b402ebda63',
   'src/lib/cashback.ts#commitToken#6eb60a5b13a2',
   'src/lib/cashback.ts#resolveClaimUrl#c0a6b1d9439b',
@@ -107,6 +112,9 @@ const AUDITED = new Set<string>([
   'src/lib/licences.ts#licenceFromToken#7fa34d6c8a4e',
   'src/lib/licences.ts#licenceSignatureVerifier#fd266fd0a09b',
   'src/lib/lockedGiftsApp.ts#readGiftReturn#d4de9e2ef54a',
+  // #532: merging a buyer's copy handed over in parts. On any failure the first part is kept as it
+  // is, unmerged; checkLockedGift then decides it, so nothing is credited or spent by the catch.
+  'src/lib/lockedGiftsApp.ts#mergeSameVoucher#023567cb5c07',
   'src/lib/lockedGiftsApp.ts#runSweep#4d51dc63f638',
   'src/lib/lockedGiftsApp.ts#runSweep#a29d28c626f5',
   'src/lib/lockedGifts.ts#checkLockedGift#29e0cbd762d4',
@@ -120,7 +128,16 @@ const AUDITED = new Set<string>([
   'src/lib/notMoneyNotice.ts#announceTerminalDm#fd266fd0a09b',
   'src/lib/notMoney.ts#terminalCredentialFromToken#7fa34d6c8a4e',
   'src/lib/pay.ts#signedPartOf#e6d14ec06b1e',
+  // imani-wallet#277: an unreadable token has no card reference, so it gets no refund badge and no
+  // send-side check. Display and UX only: gateway-customer's receive guard still refuses it.
+  'src/lib/cardVoucherRef.ts#cardReferenceOfRow#e6d14ec06b1e',
   'src/lib/receiveSwap.ts#receiveByOwnSwap#95ffa067ed7a',
+  // Card receipts: an unreadable token keeps the ordinary receipt addressee. Routing only, after
+  // the redemption; the token itself was already accepted or refused by the receive path.
+  'src/lib/receiptAddressee.ts#receiptAddressee#14016c80da3c',
+  // imani-wallet#248: rethrows everything except a 12002 MintRefusal, which restores the old
+  // outputs (NUT-09) before any re-blind. Swallows nothing. Re-audited after the review fix.
+  'src/lib/receiveSwap.ts#receiveByOwnSwap#5ebf8b729932',
   'src/lib/redemptionRows.ts#refile#4e947b60885a',
   'src/lib/selfLockedCoupons.ts#faceShare#e6d14ec06b1e',
   'src/lib/selfLockedCoupons.ts#hasSelfLockedProof#fd266fd0a09b',
@@ -152,8 +169,15 @@ const AUDITED = new Set<string>([
   'src/lib/voucherSplit.ts#finishOne#ee4a1919ef0b',
   'src/lib/witness.ts#secretsFromToken#9d08a4ee6905',
   'src/pages/DeleteAccountPage.tsx#go#877cb02e068b',
-  'src/pages/TerminalEnrolPage.tsx#enrol#2f906b0921a6',
-  'src/pages/TerminalsPage.tsx#TerminalsPage#a3a5f1cc76ec',
+  // #402 online shop: the enrol pipeline moved to terminalEnrolFlow.ts. Its catches rethrow (the row
+  // write as EnrolNotStartedError, the mint after settleMintFailure); the screens' catches only word
+  // the failure. None reads a token as plain ecash.
+  'src/lib/terminalEnrolFlow.ts#enrolTerminal#c0372312dea7',
+  // The Terminals open-time pass, moved unchanged into a hook both screens share (same hash).
+  'src/hooks/useTerminalUpkeep.ts#useTerminalUpkeep#a3a5f1cc76ec',
+  'src/pages/OnlineShopPage.tsx#connect#7da9854e1956',
+  'src/pages/OnlineShopPage.tsx#disconnect#1a467249bb31',
+  'src/pages/TerminalEnrolPage.tsx#enrol#c6d87daadd72',
   'src/pages/TerminalsPage.tsx#TerminalsPage#a86fffe832b1',
 ])
 

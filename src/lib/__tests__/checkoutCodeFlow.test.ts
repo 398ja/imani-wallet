@@ -127,6 +127,24 @@ describe('making a code', () => {
     expect(records.loadCheckoutCodes(ME)[0].parts[0].i).toBe(2)
   })
 
+  // #402: the stall's plan lapsed, so its shop takes no new codes. Refused by the lock dry run,
+  // before any burn: the customer keeps the coupon as a coupon, and nothing reaches the store.
+  it("a shop whose plan takes no new codes: refused not_in_plan, nothing burnt, nothing deposited", async () => {
+    // Arrange
+    const { LOCK_PATH } = await import('../cashlinkFlow')
+    w.gateway.override.set(LOCK_PATH, { status: 422, body: { refusal: 'FEATURE_NOT_IN_PLAN' } })
+
+    // Act
+    const out = await start([part(coupon([64], 'a'))])
+
+    // Assert
+    expect(out).toMatchObject({ kind: 'refused', why: 'not_in_plan' })
+    expect(w.mint.log.swaps.length).toBe(0)
+    expect(store.calls.some((c) => c.path === '/v1/checkout-codes')).toBe(false)
+    expect(consumed).toEqual([])
+    expect(records.checkoutCodesInFlight(ME)).toBe(0)
+  })
+
   it('a part that cannot be locked (no amount proof) stops the code before anything is burnt', async () => {
     const good = coupon([64], 'a')
     const bad = coupon([32], 'b')

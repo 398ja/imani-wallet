@@ -3,6 +3,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// #348: the key backup gate is pinned in logoutKeyBackup348.test.ts. Here the key is backed up.
+vi.mock('../keyBackups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../keyBackups')>()),
+  checkKeyBackup: async () => ({ ok: true, backups: [] }),
+}))
+
 /**
  * Claim links phase 3 (spec 2.5, CL-SWITCH): the real `logout` keeps the parked claim links and
  * still erases every other `imani-wallet:*` key.

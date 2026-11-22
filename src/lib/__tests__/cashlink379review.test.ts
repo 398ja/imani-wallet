@@ -2,6 +2,12 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// #348: the key backup gate is pinned in logoutKeyBackup348.test.ts. Here the key is backed up.
+vi.mock('../keyBackups', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../keyBackups')>()),
+  checkKeyBackup: async () => ({ ok: true, backups: [] }),
+}))
 import { hexToBytes } from '@noble/hashes/utils'
 import { hashToCurve } from '@cashu/crypto/modules/common'
 
@@ -242,12 +248,13 @@ describe('review #380: our own burn is never read as a stranger\'s claim', () =>
     expect(moneyInFlight(PUB).cashlinks).toBe(1)
   })
 
-  it('control: a stranger\'s spend of the ordinary gift IS claimed, with verifiedAt, and holds nothing', async () => {
+  it('control: a stranger\'s spend of the ordinary gift IS claimed, on one read (#261), and holds nothing', async () => {
     w.gateway.relayOn = false
     await send()
     strangerSpendsBearer()
     await giftLinks.reconcileGiftLinks(NOW * 1000, h.state as never)
-    expect(links()).toEqual([expect.objectContaining({ status: 'claimed', verifiedAt: NOW * 1000 })])
+    // #261: one SPENT read closes it with its reason and time; a later pass confirms or undoes it.
+    expect(links()).toEqual([expect.objectContaining({ status: 'claimed', claimReason: 'mint-spent', spentSeenAt: NOW * 1000 })])
     expect(strandedCashlinks(h.rows, NOW * 1000)).toBe(0)
   })
 })

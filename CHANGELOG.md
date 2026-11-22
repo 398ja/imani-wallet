@@ -9,8 +9,361 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-11-22
+
+### Added
+
+- **The merchant dashboard shows the overall total issued.** Under "Outstanding vouchers", "Issued in total" is the face value of every voucher the stall has issued, in its issuance currency, whatever range is picked (the "Value issued" tile stays the range). From `merchantStats`' new `totalIssuedValue` in `@imani/reports`, over the same rows as `issuedValue` with no window.
+
+### Changed
+
+- **Card payments are Essentials and above, no longer on Starter.** Settings › Card payments shows a Starter stall the plan and a "See plans" link in place of Connect Stripe, and the Settings row is locked with "Available on Essentials and above". A stall already taking cards without a paid plan (Starter, or a plan that ended) has its published `acceptsCards` offer withdrawn the next time it opens the screen, and is told why. Disconnecting Stripe stays available. The gate is "a paid plan is in force", not a new licence feature, so Essentials and Pro licences sold before this keep card payments without being reissued. A plan check that fails changes nothing: it neither starts an offer nor withdraws one. The subscription site's Essentials and Pro plans now list "Card payments for your vouchers".
+- **Subscription service: catalog 7 adds `card_payments` to Essentials (`basic`) and Pro.** `GET /v1/plans` lists it on those two tiers and never on Starter, and licences sold from catalog 7 carry it. The wallet's bundled catalog mirrors it. Redeploy the subscription service to publish catalog 7.
+
+- **Card payments are enforced on the server.** purchase-issuer's `/api/v1/card-sales/ready/<stall>` answers `{ready: false, reason: "card_payments_not_in_plan"}` when gateway-customer's sales-allowance says `paid_plan: false`, before any allowance check, for the public Buy check and for payment-adapter's checkout alike, so a Starter stall cannot sell by card whatever its own record or app says. The plan is asked even when no sale currency is known (in USD, plan only), and still read from a gateway 503 that carries `paid_plan`. For payment-adapter's checkout, a plan nobody could check is a 503, which the checkout refuses as "try again" before Stripe: nothing after the charge checks the plan, so a card sale is never let through on an unchecked one. The public Buy check stays advice. A gateway that answers 200 without `paid_plan` predates it and refuses nothing. Buy reads the new reason and tells the shopper "This merchant doesn't take card payments on their current plan." Deploy gateway-customer (with `paid_plan`) first; until then the refusal is inert.
+
+- **Connecting Stripe is refused on the server for a Starter stall** (merchant-service, 403, before any account is created), and Settings › Card payments reads "Available on Essentials" with the lock, as Online shop reads "Available on Pro". If the app offered Connect because it could not check the plan, the merchant sees the server's refusal.
+
 ### Fixed
 
+- Card payments gate (review): a licence store that could not be read is no longer read as Starter. It is an unknown plan, so a paying stall keeps its card offer through a storage outage. The plan check is bounded (5 s) so it cannot hold the screen on Loading, and Check again re-reads it, so a merchant who upgrades is unlocked without a reload. The locked screen keeps its error and publish messages (a Starter stall that disconnects is still told if the withdrawal was not sent), a failed Stripe read shows the error rather than an upgrade prompt, an unchecked plan says shoppers cannot buy by card yet instead of "Taking card payments", and a Starter stall live on Stripe reads "Card payments are off on your current plan" rather than "Paid in GBP".
+
+## [0.77.0] - 2026-11-22
+
+### Fixed
+
+- Logout no longer stays refused for good on a device holding coupons already spent on another device of the same account (staging, Android app with the account also open in a browser). The voucher backup check behind "You can't log out yet" counted those stale `active` coupons as unbacked money, and since their relay record is a spend tombstone it could never read them back. The check now reconciles first (tombstones and mint state, as above) and treats a held coupon named by this account's own verified tombstone as spent, marking it so. A coupon with no backup at all, or one the mint cannot be asked about, still refuses the logout.
+- Coupons spent on another device (e.g. in the browser) no longer stay live on this one (e.g. the Android app). The relay restore now applies other devices' spend tombstones to coupons this device already holds (before, it only skipped them as restore candidates, so a held copy stayed `active` forever), and every coupon still counted as money is checked against the mint (NUT-07) so a spend whose tombstone was lost is pruned too. Runs at login and on every return to the foreground (Capacitor `resume`, `visibilitychange`), throttled to once per 30s.
+
+## [0.76.0] - 2026-11-22
+
+### Changed
+
+- **The claims page is headed by its voucher.** `/merchant/coupon/:id/claims` now opens with the same panel as the voucher screen: the face value, the voucher id, and the claimed bar with claimed and outstanding amounts, so the list is read against the voucher it belongs to. The subtitle keeps only the claim count.
+
+## [0.75.0] - 2026-11-22
+
+### Added
+
+- Cashlink confirm prompt shows the issuing stall's avatar above its name, from the same cached
+  kind-0 lookup (no extra request). Initials or a placeholder when there is no picture, it fails to
+  load or the profile is slow; Add is never blocked. Clearer hierarchy (stall, amount, action),
+  44px touch targets, and announced verification / progress states.
+- **A voucher's claims are grouped by bundle and paged on their own screen.** The merchant's
+  voucher screen folds claims sharing a bundle id into one line, exactly as History does (same
+  `groupHistory`, same per-part voucher count from #661), and shows only the newest three records,
+  with "See all claims" when there are more. The new `/merchant/coupon/:id/claims` lists every
+  claim newest first, 21 records per page (a record is one displayed row: a single claim or one
+  folded bundle), with the page in `?page=N` and empty, loading, error and past-the-end states.
+  Built from the one local read the voucher screen already does: nothing is fetched per row.
+
+## [0.74.0] - 2026-11-20
+
+### Fixed
+
+- **A multi-voucher payment's History line now counts its vouchers: five parts read "5 vouchers", not "1 voucher".** The folded line's chip (`entryVoucherCount`, since #587) merged rows sharing a `voucherId`, which is right for the proofs of one held voucher coming back (a Cashlink take-back) but wrong for a bundle's parts: when the planner draws every part of a send from ONE source voucher, each part is its own token and its own voucher to the recipient, yet all carry the source's `voucherId` (staging bundle `1d67db42`: ten parts, one source id; `4643f289`: three). A bundle's parts now count one per token; only `returned:` take-back rows still fold by voucher. Display only; amounts and rows are unchanged.
+
+## [0.73.0] - 2026-11-20
+
+### Fixed
+
+- **A card sale now shows the customer's receipt ("Customer signed for it") instead of "Not collected".** Since 0.72.0 the receipt reached the stall, and the stall drained and acknowledged it, but the attestation inside was dropped. A card sale's `issued:<voucher>` row is not written at a till: it arrives as the purchase issuer's sealed sale record, filed on the stall's next inbox read, and the customer's receipt routinely gets there first. `recordCashAttestation` found no row and returned, and the drain acknowledged the receipt anyway, so the evidence was gone from the gateway and from the device. The drain now keeps every attestation on the device (`pendingAttestations.ts`, per account, keyed on voucher and attestation so a junk one cannot evict the genuine one) before acknowledging, asks for an inbox read, and files it once the sale row lands: on every drain pass and after each batch of filed sale rows. It is dropped once filed or definitely refused, and after 30 days. Receipts already acknowledged before this release are not recoverable by the stall: the gateway removed them from the queue on ack, and only the customer's device could re-send them.
+
+## [0.72.0] - 2026-11-20
+
+### Fixed
+
+- **Card-sale receipts from customers on older wallets now reach the stall too.** A wallet without the 0.71.0 fix still posts its receipt to the stall's delegate key. The purchase issuer, the only holder of that key, now drains each delegate's receipt queue every pass and re-sends each receipt, unchanged inside, to the stall (`receiptForward.ts`). It forwards only for a credential whose stored delegation verifies as the stall's own `coupon:issue` grant to that exact key, acknowledges the original only after the gateway accepts the forward, and derives the forwarded id from the original so a retry is a 409, not a second receipt. Receipts already queued for delegate keys are forwarded on the first pass after deploy. The stall's wallet needs no change: it decrypts with the delegate as counterparty and still checks the customer's attestation against its own sale row.
+
+## [0.71.0] - 2026-11-20
+
+### Fixed
+
+- **A card sale now gets the same customer receipt as a cash sale.** The purchase issuer delivers a card-bought coupon with the key the stall delegated `coupon:issue` to, and the gateway names that key as the sender, so the customer's wallet posted its receipt (and the signed attestation inside it) to the delegate, whose queue nobody drains. The stall's record read "Customer receipt: Not collected" for every card sale (staging, voucher ee84bf74, 2026-11-20). The wallet now addresses the receipt to the coupon's issuer when the sender is exactly the delegate named by the coupon's own `delegated` warrant and the stall's delegation verifies (`receiptAddressee`). Read off the signed voucher only, so no envelope field can redirect a receipt.
+
+## [0.70.0] - 2026-11-20
+
+### Fixed
+
+- **A checkout code the shop lock refuses no longer splits your voucher first, and says plainly that nothing was spent** (Closes #644). "Use online" split a voucher before checking that its parts could be locked to the shop key, so a refusal the check could have caught still split the voucher and then re-signed every part back, and the page said "Your voucher was split... Both parts are in your wallet" (there can be more than two parts). The lock check (`checkCheckoutSource`, the same read-only `armPreflight` the parts get) now runs on the voucher before any split, so a refused attempt changes nothing. A refusal now reads "No code could be made. Nothing was spent and your voucher is still in your wallet.", without counting parts. When the gateway gave a reason for refusing the dry lock, it is kept on the code record (`refusalDetail`) and shown as "Reason given: ...". No value was ever lost.
+- **A send the gateway calls off now says so straight away, and the screen no longer goes quiet** (Closes #651). The wallet only treated `ABORTED` as an answer, so a bundle sat in `ABORTING` (staging bundle `2f757a36`: 85 s while the last part's split retries ran out) under "This takes a few seconds", which looked like nothing was happening. `ABORTING` now shows at once as "Not sent: nothing reached the recipient. Your vouchers are coming back to you." `ABORTED` is still the only final state, and it is the one that puts the coupons back. When the 180 s live wait ends, the wallet keeps checking the bundle in the background (every 5 s, for up to 15 min), and the send, pay and Cashlink screens switch to Sent or Not sent when the answer comes, instead of stopping at "still sending" until the next login.
+
+## [0.69.0] - 2026-11-20
+
+### Fixed
+
+- **A card backlog minted right after a stall enrolled no longer reads as "does not match its signature"** (Closes #648). A stall that turns on card sales after taking card payments mints that backlog seconds after it signs the delegation. `cardSalePull` then re-dates each row to the Stripe payment time, which is before the delegation, and the warrant was judged at that time, so every such sale was refused as issued before the delegation existed (corda on staging: 3 sales, GBP 20.00, all genuine). The warrant is now judged at the time the sender recorded (`senderSaleAt`, the mint time), which `cardSalePull` already kept beside the re-dated `timestamp`. The row's own time stays the payment time for the books. A coupon really minted before its delegation is still refused.
+
+## [0.68.0] - 2026-11-20
+
+### Fixed
+
+- A dust coupon remnant was still planned into a send and aborted the whole bundle (#638 regression on v0.67.0, staging 2026-11-20: 8 sats of a ratio-0.058 GBP coupon stored as face 1). Rows received by DM, cash link, checkout code or unlocked change never store `issuance_ratio`, and the fallback derived it as face / sats (0.125), so `couponValue` read 1 instead of 0. The ratio now comes from the token's signed voucher first, missing sats come from its proofs, and the face repair runs before every send plans instead of only on the DM catch-up.
+- **Value back from an expired checkout code or an unclaimed gift now has its own credit in History** (Closes #643). The balance went up but only the code's or gift's own row changed, so the returned money had no incoming entry. Each coupon that comes back off a checkout code ("Checkout code expired, returned") or a minted-locked gift the buyer takes back ("Gift not claimed, returned") now gets an incoming row at the kept coupon's face, linked by `returnOf` to the code or gift row it reverses, as Cashlink take-backs already do. The row is keyed `returned:<token_id>`, so a rerun, a restore or another device overwrites it instead of adding a second one. The return row's link now opens the checkout code or gift, not "the Cashlink you sent".
+
+## [0.67.0] - 2026-11-20
+
+### Fixed
+
+- **A dust coupon no longer sinks every send from its stall** (Closes #638). A coupon row can say face 1 while its token holds 8 sats of a 407-face / 7020-sat coupon, worth 0 to the gateway. It expired first, so every send planned it as a bundle part and the gateway aborted the whole bundle (`Insufficient balance: requested 1, available 0`). `@imani/wallet-core` now values a coupon at `couponValue`: the smaller of its stored face and what its sats are worth to the nearest unit (half up), as gateway-core's `CouponRate.shownFaceOf` values them. `planParts`, `selectVouchers`, `chooseSpend`, `checkSplittable`, `passedOver` and `splitObstacle` plan by it, a coupon worth 0 is never a part, and `valueHolding` reports it as `no-value` rather than spendable. The face repair restates such a row to 0, which its one-unit tolerance used to leave alone, so the balance and coupon list stop showing value no send can move.
+- **Use online says a shop takes no new checkout codes before Get code is pressed** (Closes #639). Use online asks gateway-customer's `GET /api/v1/wallet/stalls/{stall}/checkout-codes` per stall. A clear `accepts_new: false` lists the stall with the `not_in_plan` words and turns Get code off on the amount screen with the same words. A 503, a 404 (an older gateway), a network error or a malformed answer leaves Get code on and the lock decides, as before. Needs the gateway-customer route (gateway-customer 0.54.0).
+
+## [0.66.0] - 2026-11-19
+
+### Fixed
+
+- **An NGN send says what it really sends, before and after the tap** (Closes #635). A coupon part is whole sats and an NGN sat is worth more than a kobo, so NGN 200 can really send 200.74. The confirm screens (Send, Pay) now headline the 200.74 with the asked 200.00 under it, and the done screens (Send, Pay, Cashlink) headline what the gateway confirmed left: `SendResult.sent`, summed from each settled part on the single, bundle and per-part paths. An overcharge is never read as a partial send. GBP and EUR are unchanged.
+
+## [0.65.0] - 2026-11-19
+
+### Security
+
+- **purchase-issuer names its terminal credential when it reads a card coupon's token** (imani-gateway-customer#233 step 1, #274). `tokenFor` now sends `X-Imani-Terminal-Credential`, as the mint already does, so the gateway can check the delegate's credential is still live. **Deploy order:** imani-gateway-customer with #233 first. An older gateway sends a request that names a credential down the till-only path, which refuses a delegated card coupon with 404.
+
+### Removed
+
+- **`SelectionOptimizer` is gone from `@imani/wallet-balance`** (#435). It was a second voucher selector that nothing in the app used. `chooseSpend` in `@imani/wallet-core` is the one rule for every send and payment.
+
+### Fixed
+
+- **Receiving €0.50 + €0.50 as split coupons now adds €1.00 to the balance, not €0.99** (#551). A voucher held as several rows whose faces were filed as shares of one exact value (largest remainder, as #384 does for a take-back) is shown at the sum of those shares, its exact total rounded once across the whole group. Other multi-row vouchers keep the floor of their exact total. What a payment may draw still never exceeds what the redemption ledger credits, and Pay and Send say so when it is a cent below the balance.
+- **A coupon or Cashlink closed on one SPENT reading from the mint can now come back** (#261). When a merchant's own coupon is marked redeemed, or a Cashlink is marked claimed, because a single checkstate said SPENT (rather than by this wallet's own burn or a confirmed claim), the wallet records why and when, reads the mint again on a later pass (after 10 minutes), and undoes it if the proofs are UNSPENT: the coupon goes back to active and is burnt properly, and the Cashlink opens again so it can be taken back. A second SPENT reading confirms it for good.
+- **A send whose answer was lost no longer holds logout off for a day** (#389). On every start, and before logout, the wallet now asks the gateway's send history what became of each unanswered send. One that arrived moves to the pending-send ledger and is settled like any other; one that never arrived is cleared, so pressing Send again is a new send. Only a send the gateway cannot place yet keeps logout off, with copy that says so instead of "try again in a moment". Nothing is re-sent to find out.
+
+## [0.64.0] - 2026-11-19
+
+### Fixed
+
+- **A receive left unfinished across a mint keyset rotation now completes on retry** (#248). The mint refuses the stored outputs with `12002 keyset_inactive` before spending anything, so the wallet now drops them, re-blinds against the active keyset and swaps again. Every other failure still replays the original request byte for byte, and nothing is re-blinded once any signature has come back.
+
+## [0.63.0] - 2026-11-19
+
+### Added
+
+- **Logout is refused until your key is backed up somewhere Imani knows of** (#348). One Google Drive backup (read back right after the upload) or one downloaded backup file is enough, and the check works offline. There is no override: the refusal leads to Backup. A backup made before a passphrase change does not count.
+- **Imani tells you where your key went, and not to delete it** (#348). After a backup, the screen names your Google Drive (private app storage) or the file in your Downloads. Settings has a new "Your key backup" section listing every known backup across your devices, with a "Check a backup file" step, and the logout screen shows the same before you confirm.
+- **Each install has a device id and a friendly name** (#348), and the backup locations travel between your devices in one record encrypted to your own key, read from the relay and the gateway.
+- **Renew card sales** (#306). While card sales are on, Settings shows until when, and a Renew button that renews the credential and delegation early.
+- The stall's own card-sales status names its credential (`credentialId`); the public `/ready` answer does not.
+- `src/lib/wrapSize.ts`: the one relay size model (gateway-customer's `GiftWrapSizeModel`, ported), checked byte for byte against real NIP-17 wraps, with `OversizeEventError` (#532).
+- **Missed card sales are pulled on login** (#275 item 3, card atomicity U9). After the till
+  sales, the owner's login lists the stall's card sales from payment-adapter
+  (`GET /api/v1/purchases?stall=<self>`, NIP-98 as the stall) and, for any sale with no
+  `issued:<voucher>` row, asks purchase-issuer to re-send its sale record
+  (`POST /api/v1/card-sales/sales/resend`, NIP-98 as the stall). The issuer rebuilds each record
+  from payment-adapter's own list (read with its token, the wallet's ids are only a filter) with
+  the deterministic warrant, via the existing `resendSaleRecords`, and the stall files it through
+  the same checks as any sale record. At most 50 per login. Never throws.
+- **A card sale's time is checked against the payment** (#275, review residual R1). A card row
+  dated more than an hour from when payment-adapter recorded its payment is re-dated to the
+  payment time; the sender's time is kept as `senderSaleAt` and the mismatch is logged. A re-sent
+  record is dated by the payment from the start.
+- **`e2e/card-purchase.e2e.mts`** (#267 item 1): a card purchase against the local stack with a
+  real Stripe test key and the Stripe CLI (seed a `charges_enabled` account, pay 4242, assert one
+  `stripe_purchase` row, one coupon, a delegated warrant with the `pi_`; decline 0002, replayed
+  event, delayed webhook). Reads `STRIPE_SECRET_KEY` from the environment only and skips cleanly
+  (exit 0) without a test key, the CLI, the stack or an enrolled stall.
+
+### Fixed
+
+- **Turning on card sales no longer locks a stall out for a day after two failures** (#306). The enrol step is retried on a 502 or a lost answer with the SAME minted credential, instead of minting a new one each attempt (the gateway holds at most two unconfirmed per stall for 24 hours). If it never lands, the phone cancels its own unconfirmed credential so the slot comes back at once. A lost answer that did land is recognised from the stall's status and counted as on.
+- **Re-enrolling cancels the card-sales credential it replaced** (#306). It used to stay live at the gateway for a year.
+- **purchase-issuer: the begin map can no longer be filled to lock stalls out** (#306). A stall that begins again within a minute gets the same lock key back, and when 1000 enrolments are in progress the oldest is dropped instead of refusing the newcomer.
+- **A Cashlink is "delivered" only once the relay holds it** (#532). `deliver` and the direct-send `publishWrap` count a wrap only when strfry said OK and a read by id from the relay finds it. The gateway mirror kept wraps strfry refused, so a 66 KB wrap could read as delivered while no relay held it.
+- **`relay.ts` tells a size refusal apart** (#532): `publish` returns `refusals` (`too_large` with the byte count, `unreachable`, `refused`), logs a `too_large` loudly, and a size refusal is never retried as it is.
+- **purchase-issuer email gifts and the buyer's copy go to the relay, fit its budget, and are read back** (#532). A large token is cut into self-contained parts of the same voucher (one wrap each, at most 55,121 bytes); each wrap is published to strfry (`PURCHASE_RELAY_URL`) and read back by id before the gateway copy. A size refusal is permanent. The return page merges a copy handed over in parts.
+- **NIP-60 kind 7375 token events share the 55,121-byte budget** (#532), down from 60,000: the largest stored on staging was 65,381 bytes, 155 under the limit.
+
+### Changed
+
+- The "no key material leaves the phone" test for card-sales enrolment is now an allowlist of every field and header each request may carry, with the shape of each value (#306), so a key split in two or written as a decimal is caught too.
+
+**Deploy:** the edge must route `GET /api/v1/purchases` (that exact path) on the wallet origin to
+payment-adapter, which needs payment-adapter with the stall purchases list.
+
+## [0.62.2] - 2026-11-18
+
+### Changed
+
+- **Help improve Imani: the consent text is four short lines instead of one long paragraph** (#591, owner review). It still says how often (at most twice a month, Wi-Fi only), what is in a health check and what never is, who reads it (support's AI, after names and ids are replaced on the phone), that it is deleted after 14 days, and that turning it off makes the server forget the device. 87 words, down from 211.
+
+## [0.62.1] - 2026-11-17
+
+### Fixed
+
+- **The production build compiles again.** Two type errors from the fleet client (#591) failed `tsc -b`, so v0.62.0 could not be built into an image.
+
+## [0.62.0] - 2026-11-17
+
+### Fixed
+
+- **Sends and payments spend the soonest-expiring vouchers first** (owner report 2026-11-17). Any
+  one voucher big enough to cover the amount used to win, so a smaller voucher expiring sooner was
+  never spent and lapsed. A send, a payment request, a gift link and the pay screen's estimate now
+  share one rule, `chooseSpend` in `@imani/wallet-core`: one voucher only when no usable voucher of
+  the same stall and currency expires sooner, otherwise a bundle drawn in expiry order. A voucher
+  with no expiry goes last. Ties: exact match, then smallest face, then voucher id.
+
+### Added
+
+- **The wallet pulls bundle parts the gateway holds for it** (imani-gateway-core#220, decision B).
+  A part of a multi-coupon payment past its decision is the recipient's money, and a relay outage
+  could keep it away. At login, on resume, and every minute while a payment is "on its way", the
+  wallet calls `GET /api/v1/atomic-send/incoming` (NIP-98, at most once a minute, doubling backoff
+  after a failure) and feeds each row through the same receive path as a token DM: the same parser,
+  the same received-coupon set and the same arrival counting (`DmPollService.processPulledToken`).
+  A part that comes by DM and by pull is credited once. After the mint swap it calls
+  `POST /api/v1/atomic-send/incoming/{sendId}/ack`. A failed ack is kept (across reloads) and
+  retried on the next pull, and never swaps again. A row for another key is ignored. A gateway
+  without the route (404 or 405) is skipped silently for the session.
+- **"Payment on its way" notification for the sender** (imani-gateway-core#220). New notification
+  type `send_retrying`, sent when an operator resumes delivery of a payment you sent. Plain words
+  ("We are retrying a payment you sent. You don't need to do anything."). Server text carrying
+  anything key-shaped is replaced by those words. Uses the "coupon claimed" switch.
+- **`scripts/operator.mjs stuck-sends list | show <sendId> | resume <sendId> --note "..."`**
+  (imani-gateway-core#220), the break-glass CLI for stuck bundle parts. `resume` is a NIP-98 signed
+  POST bound to the note (1 to 500 characters). There is no reclaim or refund command: a part past
+  the decision can only go forward.
+
+- **Cashlink lock and bearer split send `predecessor_document` for a by-reference coupon**
+  (cashu-voucher#64 phase B). A v2 predecessor names its voucher only by hash, so the gateway
+  (imani-gateway-customer#321) needs the document beside it. Inline and locked predecessors send
+  the same body as before. This is the last wallet prerequisite for turning on
+  `gateway.voucher.by-reference.enabled`.
+
+- **Refunded card vouchers are labelled and not offered for sending** (#277). A card voucher whose
+  payment the stall refunded, partly refunded or that is disputed shows an amber badge with text and
+  an icon ("Refunded", "Partly refunded £3.00 of £10.00", "Disputed", plus the date):
+  - on the stall's voucher record (`/merchant/coupon/:id`, with what can still be redeemed) and its
+    sales list, from payment-adapter `GET /api/v1/purchase-state/stall/{pubkey}` (NIP-98 as the stall);
+  - on the holder's voucher card and detail ("Can’t be spent: the card payment for this voucher was
+    refunded."), from `GET /api/v1/purchase-state/holder/{pi_}` (the `pi_` in the signed warrant).
+  Send and pay skip such a voucher, and a partly refunded one is only offered up to what is still
+  backed (UX only: gateway-customer's receive refuses it 422 `VOUCHER_PAYMENT_REFUNDED`, which dm-poll
+  now reads as a terminal `payment-refunded` refusal). A lookup that fails shows nothing, never
+  "Refunded". New Vite proxy rule `/api/v1/purchase-state` to payment-adapter. Needs payment-adapter
+  with `/purchase-state` and `PURCHASE_STATE_PUBLIC_ORIGINS` naming the wallet origin.
+- **Gift expiry reminders (#410 §6d).** purchase-issuer's gift tracker emails the recipient of an
+  unclaimed email gift `gift-expiring` 7 days and 1 day before its claim date
+  (`PURCHASE_GIFT_REMINDER_OFFSETS_HOURS`, default `168,24`, `none` turns them off). Only the latest
+  due reminder is sent, once per offset (idempotency `<draftId>:expiring:<offset>`), never within
+  1 h of the claim date, never for a claimed, bounced or unsubscribed gift. An untouched shop code
+  gets `gift-code-expiring` (new template). The reminder names the claim email by date, subject and
+  From (`PURCHASE_GIFT_MAIL_FROM`, default `gifts@imani.casa`). The recipient's address is sealed
+  in the tracker like the buyer's.
+- **One-click unsubscribe (RFC 8058).** Each reminder carries `List-Unsubscribe` and
+  `List-Unsubscribe-Post` to `PURCHASE_PUBLIC_ORIGIN/api/v1/gifts/unsubscribe/<draft>?t=<token>`,
+  a per-gift HMAC token. POST stops that gift's reminders. GET shows a button only, so a link
+  scanner unsubscribes nobody. With no `PURCHASE_PUBLIC_ORIGIN`, no reminders are sent.
+  imani-mailer takes `unsubscribeUrl` on `/v1/send` (checked against `MAILER_LINK_HOSTS`).
+- **Hard bounce reaches the buyer.** The tracker asks imani-mailer `POST /v1/suppressions/check`
+  (new `check` client scope) about the recipient. On a hard bounce the buyer gets `gift-bounced`
+  once and reminders stop. **Operators:** give purchase-issuer's mailer client `"check": true` and
+  the templates `gift-expiring`, `gift-code-expiring` and `gift-bounced`, and add the issuer's public
+  host to `MAILER_LINK_HOSTS`.
+
+### Changed
+
+- **A payment drawn from several vouchers is now one atomic send (#552).** The wallet sends the whole
+  plan in one `POST /api/v1/atomic-send/bundles` and follows `GET /api/v1/atomic-send/bundles/{id}`,
+  instead of one send per voucher. It ends Sent (every part reached the recipient), Not sent
+  (nothing left the wallet and every voucher is back), or Still sending. "Partly sent" and "Partly
+  paid" no longer happen against a gateway that has the endpoint. A pending-bundle record is written
+  before the request and dropped only once DELIVERED or ABORTED is applied. While it is open, its
+  vouchers are held and logout is refused, and the next login finishes it.
+- One payment uses at most the gateway's `atomic_send_bundle_max_parts` vouchers (10 by default). Over
+  it, the wallet plans fewer, larger parts, and refuses before anything is spent if that is still too
+  many.
+- A gateway without the bundle endpoint (404 or 405) keeps the old per-voucher sends, so an older
+  gateway still works. Single-voucher sends are unchanged.
+- Recipient: a multi-voucher payment counts as received only once every part is in. Until then it
+  reads "on its way", never "has not arrived".
+- **Gift data is deleted when the gift is done (#570).** A finished tracker row is dropped only
+  after payment-adapter's `POST /purchases/{id}/scrub?all=true` succeeds, retried on every sweep.
+  Self gifts, and gifts with no tracker row, are scrubbed straight after delivery. Needs
+  payment-adapter with #570 (it also clears the Purchase Draft).
+- The gifting site's thank-you page no longer mentions a signed-in wallet.
+
+- **The free (Starter) tier no longer includes an extra terminal.** Additional terminals are now an
+  Essentials-and-above feature (Essentials 3, Pro unlimited). The free tier's `terminals` limit is 0
+  in both the bundled catalog and the published `services/subscription/catalog.json` (version 5 → 6;
+  redeploy the subscription service so wallets adopt it). `FREE_TERMINALS` is 0, so `mayEnrol`
+  refuses even a first terminal without a subscription, and a lapse or seller revocation now stops
+  every enrolled terminal. The stall's own device is unaffected.
+- Settings › Terminals is disabled for a stall that has never subscribed: it explains that
+  terminals start at Essentials, links to Settings › Subscription, turns off "Add a terminal", and
+  offers no Renew or setup code. Terminals enrolled before stay listed and revocable, marked as
+  needing a plan. A lapsed, revoked or offline subscriber keeps the ordinary page (renew, not buy). Settings › Subscription shows "This device only", and the
+  subscription site's plan cards read "Your device only, no extra tills" for Starter.
+- Publish catalog 6 (redeploy the subscription service) before or with gateway-portal: a device that
+  cached catalog 5 keeps the free tier's 1 terminal until it fetches 6.
+- Consumers: a free stall's existing terminal stops serving once its device adopts catalog 6, and
+  stops selling as soon as gateway-portal ships its matching change (`TerminalLicenceGate` no longer
+  honours `terminal:free`).
+### Added
+
+- **Settings › Online shop (#402).** Connecting a website now has its own screen instead of a
+  paste box under Add a terminal: what an online shop is, the platform (WooCommerce, WordPress,
+  Magento, Shopify) with its steps, the shop's code, and a confirmation naming the address. The
+  same screen shows the connected shop (outstanding codes, whether customers can see it, expiry
+  and Renew) and disconnects it. Terminals lists a connected shop as one line pointing there, and
+  a shop's code scanned in Add a terminal is handed to it.
+- **Online shops follow the plan (`ecommerce`, Pro).** The row is listed for every merchant and
+  locked below Pro, with the way to plans. A shop's first credential mint is marked
+  `X-Imani-Online-Shop: 1`, and gateway-customer refuses it (`422 FEATURE_NOT_IN_PLAN`) and any new
+  checkout-code lock for a stall without the feature. When a plan lapses, codes already made still
+  finish; only new ones are refused, and the customer is told the shop is not taking new codes
+  before anything is burnt. Needs the matching gateway-customer release; against an older gateway
+  nothing is refused and the screen works as before.
+
+- **The stall publishes voucher ledger v2 REDEEMED by default** (imani-gateway-customer#310).
+  `VITE_VOUCHER_LEDGER_V2` used to default to off; it is now on unless set to exactly `false`
+  (rollback only). The platform publishes ISSUED in v2 and the gateway no longer publishes
+  REDEEMED, so a stall left on the old default would record no redemptions at all.
+  **Deploy:** set `VITE_VOUCHER_ISSUER_PUBKEYS` to the gateway's voucher-signing key(s); left
+  empty, every platform-published ISSUED reads as "no record" in the wallet.
+- **The merchant's voucher record shows what the public ledger says** (imani-gateway-customer#310).
+  A "Public ledger" row under "What stands behind this" reads "Recorded as issued", "Recorded as
+  redeemed", "No public record yet" or "Could not check right now". A gateway that did not answer
+  is never shown as "no record". Hidden when `VITE_VOUCHER_LEDGER_V2=false`.
+- **New subscription prices.** Essentials is £10/month or £100/year (was £8 or £70) and Pro is
+  £35/month or £350/year (was £25 or £250), all in GBP, VAT inclusive. Stripe prices are immutable,
+  so `deploy/subscription-local/stripe-prices.sh` creates new ones under new lookup keys; point
+  `SUBSCRIPTION_PRICES` at the new price ids. Starter and the Town / BID Partner plan are unchanged.
+
+### Fixed
+
+- **A stall that has used its Free plan's issuance allowance can no longer sell, and Sell takes
+  the owner to upgrade (gateway-customer#317).** On pressing Sell (or Cashlink), the wallet asks the
+  gateway for the stall's standing (`GET /api/v1/wallet/vouchers/sales-allowance`). At the
+  allowance, the owner is sent to Settings > Subscription with a banner explaining that the Free
+  plan's voucher allowance is used up and inviting an upgrade; a till is stopped with "ask the stall
+  owner to upgrade". A sale refused at the mint (`SALES_LIMIT_REACHED`) also sends the owner there.
+  An unreadable answer lets the sale go ahead: the gateway still refuses at the mint. The card
+  purchase issuer parks a paid sale the Free plan refuses for a person to refund, instead of
+  retrying it.
+
+- **An NGN send says, and records, what really leaves the balance.** A sat of an NGN coupon is
+  worth about 128 kobo, so 1500.00 cannot be sent exactly: the gateway sends the fewest sats worth
+  it, up to a sat more. The history recorded 1500.00 while the balance fell by up to NGN 1.35 more.
+  The Pay and Send confirmation screens now show "Taken from your balance" with the real figure
+  before the tap (`debitFor`, `sendFace.ts`, which mirrors gateway-core's split), and the history
+  records it once the gateway's `keep_face_value` confirms it (`recordedAmount`); a gateway that
+  has not been upgraded is recorded as before. The transfer signature now commits to the sats the
+  gateway really sends on a PROPORTIONAL coupon (it assumed FLOOR, the gateway rounds up), so it
+  no longer falls a sat short of what the receiver credits. EUR, USD and XAF sends are unchanged.
+- **A Cashlink taken back at its expiry has a History row of its own, whichever way it was sent.**
+  A link that was never locked to its link (the legacy send, or an arm that did not take) comes
+  back through the ordinary receive, whose row read "Received via DM", in no bundle, with nothing
+  tying it to the link. The sender got "Your Cashlink expired, so its voucher came back to you" and
+  found no take-back in History. That row, and the one written by Take it back on such a link, now
+  reads "Taken back from Cashlink" in the link's bundle, as a locked link's take-back has since
+  0.55.3. App only, no configuration.
+- **A Cashlink take-back links to the Cashlink it came from.** Every take-back row, locked link or
+  not, at expiry or by Take it back, now names the row that made the Cashlink (`returnOf`, a row
+  id, never the link key). Its record page has "See the Cashlink you sent", and the Cashlink's
+  record page lists what "Came back" from it. The link travels in the encrypted history backup
+  (`return_of`), so a restored device keeps it. Rows written before this have no link.
 - **A send the gateway is retrying is no longer called failed, and a bundle no longer stops
   part-paid because one part's relay publish failed once (#552).** The wallet took `DM_ERROR`,
   `SPLIT_ERROR` and `RECLAIM_READY` as the end of a send, gave up after 20 s, asked the gateway to

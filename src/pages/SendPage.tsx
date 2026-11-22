@@ -24,6 +24,7 @@ import { closedMessage, mayTradeWith } from '../lib/merchantStatus'
 import { toMerchants, unitHoldings, type Merchant, type UnitHolding } from '../lib/merchants'
 import { formatFace, parseAmountToMinor } from '../lib/format'
 import { roundingShortfallNote } from '../lib/couponTotals'
+import { debitNote } from '../lib/sendFace'
 import {
   humanName,
   identityLabel,
@@ -32,6 +33,7 @@ import {
   useMerchantLabel,
 } from '../lib/identity'
 import {
+  debitFor,
   SendOutcomeUnknownError,
   sendVouchers,
   splitObstacle,
@@ -272,7 +274,12 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     // screen reports the delivered figure rather than the one that was typed —
     // showing the full amount here would send the customer away believing money
     // arrived that never did.
+    // #552: an atomic bundle is Sent, Not sent (an error) or Still sending (an error), never
+    // partial. Only the per-part fallback for a gateway without the bundle endpoint lands here.
     const partial = sent.delivered < sent.requested
+    // #635: what really left, up to a sat more per voucher than asked where a sat is worth more
+    // than a minor unit (NGN). Never read as partial: `partial` compares in the asked amount.
+    const sentFace = Math.max(sent.sent ?? sent.delivered, sent.delivered)
     // A part the gateway accepted but could not confirm may already have arrived: the screen
     // says so, and never suggests sending it again (#125).
     const inFlight = sent.inFlight ?? 0
@@ -281,7 +288,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
     return (
       <Screen>
         <PageHeader
-          title={inFlight > 0 ? 'Still going through' : partial ? 'Partly sent' : asMerchant ? 'Paid' : 'Sent'}
+          title={inFlight > 0 ? 'Still sending' : partial ? 'Not all sent' : asMerchant ? 'Paid' : 'Sent'}
         />
         <Panel>
           <div className="flex flex-col items-center py-4 text-center">
@@ -295,8 +302,11 @@ export function SendPage({ pubkey }: { pubkey: string }) {
               )}
             </div>
             <p className="text-amount text-mono-900 dark:text-mono-50">
-              {formatFace(sent.delivered, chosen)}
+              {formatFace(sentFace, chosen)}
             </p>
+            {!partial && sentFace > sent.requested && (
+              <p className="mt-1 text-xs text-mono-500">You asked to send {formatFace(sent.requested, chosen)}.</p>
+            )}
             <p className="mt-1 text-sm text-mono-500">
               {partial
                 ? `of ${formatFace(sent.requested, chosen)} reached ${recipientLabel}.`
@@ -406,6 +416,11 @@ export function SendPage({ pubkey }: { pubkey: string }) {
       ? null
       : roundingShortfallNote(minor, chosen.spendable, chosen.totalFaceValue, (v) => formatFace(v, chosen))
 
+  // What really leaves: up to a sat more than `minor` where a sat is worth more than a minor
+  // unit (NGN). Same coupon choice as `sendVouchers`.
+  const debit = minor === null || minor <= 0 ? null : debitFor(chosen.vouchers, minor)
+  const overNote = minor === null || debit === null ? null : debitNote(minor, debit, (v) => formatFace(v, chosen))
+
   // ── Step 4: confirm ──────────────────────────────────────────────────────
   if (confirming && minor !== null) {
     return (
@@ -424,9 +439,11 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         </div>
 
         <Panel className="mb-6 p-5">
+          {/* #635: the headline is what really leaves; the asked amount, when it differs, under it. */}
           <p className="text-amount text-mono-900 dark:text-mono-50">
-            {formatFace(minor, chosen)}
+            {formatFace(overNote && debit !== null ? debit : minor, chosen)}
           </p>
+          {overNote && <p className="mt-1 text-xs text-mono-500">You asked to send {formatFace(minor, chosen)}.</p>}
           {memo.trim() && <p className="mt-2 text-sm text-mono-500">{memo.trim()}</p>}
           <dl className="mt-4 space-y-1 text-sm">
             <Row
@@ -435,6 +452,7 @@ export function SendPage({ pubkey }: { pubkey: string }) {
             />
             <Row label="Your balance" value={formatFace(chosen.totalFaceValue, chosen)} />
           </dl>
+          {overNote && <p className="mt-3 text-xs text-mono-500">{overNote}</p>}
         </Panel>
 
         {/* Said before the tap, not after it. On this stack a send that fails at
@@ -491,6 +509,17 @@ export function SendPage({ pubkey }: { pubkey: string }) {
                   message: userMessage(e, 'Send failed.'),
                   swapBackTokenId: e instanceof VoucherFullyRedeemedError ? e.tokenId : undefined,
                 })
+                // #651: the wallet keeps checking; the screen follows when the answer comes.
+                if (e instanceof SendOutcomeUnknownError) {
+                  void e.settled?.then((out) => {
+                    if (!out) return
+                    if (out instanceof Error) setStatus({ step: 'failed', message: userMessage(out, 'Send failed.') })
+                    else {
+                      setSent(out)
+                      setStatus({ step: 'idle' })
+                    }
+                  })
+                }
               }
             }}
           >

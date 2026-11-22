@@ -20,7 +20,7 @@ vi.mock('@capacitor/core', () => ({
   }),
 }))
 
-import { listBackups, putBackup } from '../drive'
+import { listBackups, putAndVerifyBackup, putBackup } from '../drive'
 import { parseBackup } from '../backup'
 
 const A = getPublicKey(hexToBytes('1'.repeat(64)))
@@ -216,5 +216,26 @@ describe('Drive keeps one backup per account (#559)', () => {
   it('refuses a backup that names no account rather than guess a file', async () => {
     await expect(putBackup('{}')).rejects.toThrow(/does not name/)
     expect(writes).toEqual([])
+  })
+})
+
+describe('#348: a Drive backup counts only once it is read back', () => {
+  it('writes, reads the file back, and resolves when it holds this key', async () => {
+    await putAndVerifyBackup(backup(A, 'key-A'))
+    expect(files).toHaveLength(1)
+    expect(files[0].content).toContain('key-A')
+  })
+
+  it('rejects when Drive answers with another envelope', async () => {
+    const realFetch = fakeDrive
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string, init?: RequestInit) => {
+        const res = await realFetch(input, init)
+        if (/\/drive\/v3\/files\/[^/?]+\?alt=media/.test(input)) return new Response(backup(A, 'something-else'))
+        return res
+      }),
+    )
+    await expect(putAndVerifyBackup(backup(A, 'key-A'))).rejects.toThrow(/does not match/)
   })
 })

@@ -67,6 +67,9 @@ export interface CredentialMintApi {
  * `terminalLogin` deliberately admits on reduced authority rather than
  * refusing.
  */
+// #261 review: SPENT is kept as a single read here. Nothing is written from it: the state is asked
+// again at every check (login, revoke), so a wrong SPENT (cashu-mint#556, fixed in 0.44.2) heals by
+// itself on the next read, and revoke's "already revoked" leaves the credential's proofs untouched.
 export async function credentialState(
   token: string,
   api: Pick<CredentialMintApi, 'validateToken'>,
