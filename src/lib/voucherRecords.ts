@@ -399,21 +399,30 @@ function lastWriteSec(row: VoucherRow): number {
  * copy is money again. An older tombstone is left to the mint check.
  */
 async function applyTombstones(spentAt: Map<string, number>, pubkey?: string): Promise<number> {
-  if (spentAt.size === 0) return 0
+  return (await markTombstoned(spentAt, pubkey)).size
+}
+
+/**
+ * `applyTombstones`, answering WHICH token ids it marked spent. Same gates: `markable`, the
+ * tombstone newer than the row's last local write, not held by an in-flight ledger. A row it
+ * leaves alone is still money as far as the caller knows (logout's backup check relies on this).
+ */
+async function markTombstoned(spentAt: Map<string, number>, pubkey?: string): Promise<Set<string>> {
+  const marked = new Set<string>()
+  if (spentAt.size === 0) return marked
   const rows = (await getWallet().getAllVouchers()).filter(
     (row) => row.token_id && markable(row) && (spentAt.get(row.token_id) ?? -1) > lastWriteSec(row),
   )
-  if (rows.length === 0) return 0
+  if (rows.length === 0) return marked
   const held = await inFlightIds(pubkey, rows)
-  if (!held) return 0
-  let changed = 0
+  if (!held) return marked
   for (const row of rows) {
     if (held.has(row.token_id!)) continue
     await addRestoredVoucher({ ...row, status: 'spent' } as VoucherRow)
     noteSpent(row.token_id!)
-    changed += 1
+    marked.add(row.token_id!)
   }
-  return changed
+  return marked
 }
 
 function noteSpent(tokenId: string): void {
@@ -819,7 +828,7 @@ function describeCoupon(row: VoucherRow): UnconfirmedCoupon {
  * between a delete and the money, so it does not lean on the relay library
  * having verified what it handed over.
  */
-async function readBackRecords(pubkey: string): Promise<{ live: VoucherRow[]; spent: Set<string> }> {
+async function readBackRecords(pubkey: string): Promise<{ live: VoucherRow[]; spent: Map<string, number> }> {
   const events = (await allEventsWithGateway(pubkey, NIP60_TOKEN_KIND)).filter((event) => {
     if (event.pubkey !== pubkey || event.kind !== NIP60_TOKEN_KIND) return false
     const { id, created_at, kind, tags, content, sig } = event
@@ -945,18 +954,23 @@ export async function confirmBackups(pubkey: string, options: ConfirmOptions = {
     }
     const backed = await within(readBackRecords(pubkey), left(), null)
     if (backed === null) continue
-    // A held row its own verified tombstone names is not unbacked value: another device spent it.
-    // Mark it spent here (as #667's restore does) and drop it from the set, never re-publish it:
-    // a fresh live record of a spent coupon is exactly what a later restore must not see.
-    const spentElsewhere = held.filter((row) => row.token_id && backed.spent.has(row.token_id))
-    if (spentElsewhere.length > 0) {
+    // A held row its own verified tombstone names, where that tombstone is NEWER than the row's
+    // last local write, is not unbacked value: another device spent it. Mark it spent here (the
+    // same gates as #667's restore: markable, time gate, not in flight) and drop exactly the rows
+    // that were marked. Never re-publish them: a fresh live record of a spent coupon is what a
+    // later restore must not see. A row re-acquired after an old tombstone (a Cashlink taken
+    // back, a returned send) fails the time gate, stays held and must still read back.
+    let spentElsewhere = new Set<string>()
+    if (held.some((row) => row.token_id && backed.spent.has(row.token_id))) {
       try {
-        await applyTombstones(new Set(spentElsewhere.map((row) => row.token_id)))
-        notifyWalletChanged()
+        spentElsewhere = await markTombstoned(backed.spent, pubkey)
       } catch {
-        // The row stays as it is; it is dropped from this check either way.
+        spentElsewhere = new Set() // Nothing marked: nothing exempted.
       }
-      held = held.filter((row) => !spentElsewhere.includes(row))
+    }
+    if (spentElsewhere.size > 0) {
+      notifyWalletChanged()
+      held = held.filter((row) => !(row.token_id && spentElsewhere.has(row.token_id)))
       fingerprint = heldFingerprint(held)
       if (held.length === 0) return { ok: true, confirmed: 0, fingerprint }
     }
