@@ -44,8 +44,9 @@ COPY services/purchase-issuer ./services/purchase-issuer
 # also holds the WALLET's refund signer (one `schnorr.sign`); purchase-issuer imports only its two
 # readers (`readLinkLock`, `assertNotOpenAfterLocktime`) and holds no key that signer would take.
 # #532: the shared relay size model and proof packer, and the relay refusal reader (no imports
-# beyond these files).
-COPY src/lib/voucherToken.ts src/lib/cashlinkLock.ts src/lib/walletSwap.ts src/lib/plainToken.ts src/lib/wrapSize.ts src/lib/wrapPacking.ts src/lib/relayRefusal.ts ./src/lib/
+# beyond these files). cardProcessor.ts (payment-adapter ADR 0002): the card reference shapes, Stripe
+# `pi_` or a PayPal capture id, that salePull accepts; no imports.
+COPY src/lib/voucherToken.ts src/lib/cashlinkLock.ts src/lib/walletSwap.ts src/lib/plainToken.ts src/lib/wrapSize.ts src/lib/wrapPacking.ts src/lib/relayRefusal.ts src/lib/cardProcessor.ts ./src/lib/
 COPY services/imani-mailer/client.ts services/imani-mailer/mailer.ts ./services/imani-mailer/
 
 # The shared currency table, mounted where a bare Node resolver will find it.
