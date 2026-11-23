@@ -25,6 +25,11 @@ describe('the online shop enrolment code (#402 §0)', () => {
     expect(readEnrolmentCode(`imani-terminal-key:1:${S}:${at}:${sig}`, NOW)).toMatchObject({ terminalPubkey: S })
   })
 
+  it('reads a code the PrestaShop module signed (#414, imani-checkout-prestashop Enrolment::code)', () => {
+    const php = `imani-shop-enrol:1:${S}:https://shop.example:prestashop:${NOW}:d71e7caa9981375ded36b3ac3b6159e809946936c7be896d3a7d645a4e6fcf217608362671696750cddd2667e0c0f8a413997e714d244e40fa6daf1fe31a4e21`
+    expect(readShopEnrolCode(php, NOW)).toMatchObject({ redeemKey: S, url: 'https://shop.example', platform: 'prestashop' })
+  })
+
   it.each([
     ['a till code', () => `imani-terminal-key:1:${S}:${NOW}:${'0'.repeat(128)}`, 'not-a-shop-code'],
     ['http', () => signShopEnrolCode(SK, S, 'http://shop.example', 'woocommerce', NOW), 'bad-url'],
