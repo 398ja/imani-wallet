@@ -120,6 +120,12 @@ describe('loadShop: the stall-page edge cases', () => {
       expect(s.kind).toBe('no-cards')
     }
   })
+  it('a stall taking cards through PayPal: no form, the gifting checkout is Stripe only', async () => {
+    const s = await loadShop('alice', deps({ record: async () => record({ acceptsCards: true, cardProcessor: 'paypal' }) }))
+    expect(s.kind).toBe('no-cards')
+    const stripe = await loadShop('alice', deps({ record: async () => record({ acceptsCards: true, cardProcessor: 'stripe' }) }))
+    expect(stripe.kind).toBe('ok')
+  })
   it('paused stall: not selling', async () => {
     const s = await loadShop('alice', deps({ record: async () => record({ active: false }) }))
     expect(s.kind).toBe('paused')

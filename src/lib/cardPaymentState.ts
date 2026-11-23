@@ -10,8 +10,8 @@
  *
  * - **The stall's own sales**: payment-adapter `GET /api/v1/purchase-state/stall/{pubkey}`, NIP-98
  *   signed by that stall key. Feeds the merchant voucher record and the sales list.
- * - **A holder's voucher**: payment-adapter `GET /api/v1/purchase-state/holder/{pi_}`. The `pi_`
- *   is the capability: it is inside the issuer-signed warrant, and the answer is status and
+ * - **A holder's voucher**: payment-adapter `GET /api/v1/purchase-state/holder/{ref}`. The ref (a
+ *   Stripe `pi_` or a PayPal capture id) is the capability: it is inside the issuer-signed warrant, and the answer is status and
  *   amounts only.
  * - **A refusal**: the gateway's 422 `VOUCHER_PAYMENT_REFUNDED`, `details` = `<state>:<remaining>`.
  *
@@ -19,6 +19,7 @@
  * network blip is worse than none. The gateway is what enforces; this only explains.
  */
 import { signedFetch, type RequestSigner } from './nip98'
+import { isCardReference } from './cardProcessor'
 
 export const VOUCHER_PAYMENT_REFUNDED = 'VOUCHER_PAYMENT_REFUNDED'
 
@@ -36,12 +37,11 @@ export interface CardPaymentState {
   reversedAt?: string
   /** The voucher this purchase issued, on the stall's own read. */
   voucherId?: string
-  /** The Stripe payment intent, on the stall's own read. */
+  /** The processor's payment reference (Stripe `pi_`, PayPal capture id), on the stall's own read. */
   ref?: string
 }
 
 const STATE_PATH = '/api/v1/purchase-state'
-const PI_SHAPE = /^pi_[A-Za-z0-9_]{1,250}$/
 const TTL_MS = 2 * 60 * 1000
 
 function num(v: unknown): number {
@@ -208,9 +208,9 @@ function cached<T>(cache: Map<string, Cached<T>>, key: string, load: () => Promi
   return entry.value
 }
 
-/** A holder's voucher, by the `pi_` its warrant carries. Undefined when it cannot be read. */
+/** A holder's voucher, by the card reference its warrant carries. Undefined when it cannot be read. */
 export function holderCardPaymentState(ref: string | undefined): Promise<CardPaymentState | undefined> {
-  if (!ref || !PI_SHAPE.test(ref)) return Promise.resolve(undefined)
+  if (!ref || !isCardReference(ref)) return Promise.resolve(undefined)
   return cached(holderCache, ref, async () => {
     try {
       const response = await fetch(`${STATE_PATH}/holder/${encodeURIComponent(ref)}`, {

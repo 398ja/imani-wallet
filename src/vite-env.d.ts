@@ -37,4 +37,6 @@ interface ImportMetaEnv {
   readonly VITE_WALLET_VERSION?: string
   /** The Android APK this deploy publishes (Settings → About's download row). Unset: no row. */
   readonly VITE_ANDROID_APK_URL?: string
+  /** `on` lets a stall choose PayPal instead of Stripe for card payments. Off by default (dark). */
+  readonly VITE_PAYPAL?: string
 }

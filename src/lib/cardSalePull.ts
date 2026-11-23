@@ -22,6 +22,7 @@
 import type { TransactionRow } from '@imani/wallet-storage'
 
 import { cardReferenceOf } from './paymentReference'
+import { isCardReference } from './cardProcessor'
 import { signedFetch } from './nip98'
 import { toTransaction } from './transactions'
 
@@ -46,7 +47,6 @@ export interface StallCardSale {
   paidAt: number
 }
 
-const PI = /^pi_[A-Za-z0-9_]{1,250}$/
 const VOUCHER_ID = /^[0-9A-Za-z-]{1,64}$/
 
 export function parseStallCardSale(raw: unknown): StallCardSale | undefined {
@@ -54,7 +54,7 @@ export function parseStallCardSale(raw: unknown): StallCardSale | undefined {
   const r = raw as Record<string, unknown>
   const paidAt = typeof r.paid_at === 'string' ? Date.parse(r.paid_at) : NaN
   if (typeof r.voucher_id !== 'string' || !VOUCHER_ID.test(r.voucher_id)) return undefined
-  if (typeof r.ref !== 'string' || !PI.test(r.ref)) return undefined
+  if (typeof r.ref !== 'string' || !isCardReference(r.ref)) return undefined
   if (typeof r.amount_minor !== 'number' || !Number.isSafeInteger(r.amount_minor) || r.amount_minor <= 0) return undefined
   if (!Number.isFinite(paidAt) || paidAt <= 0) return undefined
   return {
@@ -118,7 +118,7 @@ export async function pullCardSales(stallPubkey: string, deps: PullDeps): Promis
 
 /**
  * R1: is this card row dated where payment-adapter says the payment was? Only a row whose signed
- * warrant carries the same `pi_` is judged; anything else is not this sale. True when re-dated.
+ * warrant carries the same card reference is judged; anything else is not this sale. True when re-dated.
  */
 async function crossCheckSaleTime(row: TransactionRow, sale: StallCardSale, deps: PullDeps): Promise<boolean> {
   const tx = toTransaction(row)
