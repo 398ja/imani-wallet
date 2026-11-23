@@ -102,6 +102,13 @@ export interface MerchantProfile {
    */
   acceptsCards?: boolean
   /**
+   * Which processor takes this stall's cards: `paypal`, or Stripe when absent (payment-adapter
+   * ADR 0002). Published beside `acceptsCards` so a buyer is sent to the right checkout, and
+   * self-asserted for the same reason that is safe: each processor's checkout refuses a stall it
+   * cannot charge for. Only meaningful while `acceptsCards` is true.
+   */
+  cardProcessor?: 'stripe' | 'paypal'
+  /**
    * #558 "Close my stall": selling has stopped for good (no Sell, no card sales) while redeeming
    * and receiving go on, so customers can still spend what they hold. Only a literal `true` counts.
    */
@@ -360,7 +367,12 @@ export function buildMerchantEvent(merchant: MerchantProfile): EventTemplate {
   // Only when TRUE. Absent means "this stall does not take cards", which is
   // also what an older client that never knew the field publishes, so the two
   // agree rather than needing to be told apart.
-  if (merchant.acceptsCards === true && merchant.salesClosed !== true) content.acceptsCards = true
+  if (merchant.acceptsCards === true && merchant.salesClosed !== true) {
+    content.acceptsCards = true
+    // Only PayPal is written: an absent processor is Stripe, which is what every record published
+    // before PayPal says, so a Stripe stall's record is byte-for-byte what it always was.
+    if (merchant.cardProcessor === 'paypal') content.cardProcessor = 'paypal'
+  }
   if (merchant.salesClosed === true) content.salesClosed = true
   if (merchant.giftingIndexable === true) content.giftingIndexable = true
   // Republished as read, so saving the profile here never drops a shop another client connected.
@@ -423,6 +435,9 @@ export function mergeMerchantEvent(
     // record that stops asserting it has stopped being evidence for it. Holding
     // the old value would keep a Buy button alive on a stall that disconnected.
     acceptsCards: parsed.acceptsCards === true && parsed.salesClosed !== true,
+    // Absent or anything else is Stripe, for the reason `acceptsCards` reads absent as false: the
+    // record is the only evidence, and it is evidence only of what it literally says.
+    cardProcessor: parsed.cardProcessor === 'paypal' ? 'paypal' : undefined,
     salesClosed: parsed.salesClosed === true,
     giftingIndexable: parsed.giftingIndexable === true,
     // Absent or malformed means no shop, for the reason `acceptsCards` gives: a record that stops

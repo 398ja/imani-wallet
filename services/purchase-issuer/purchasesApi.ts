@@ -48,7 +48,7 @@ export interface OwedPurchase {
   livemode: boolean
   attempts: number
   /**
-   * The processor's own record of the payment (a Stripe payment intent),
+   * The processor's own record of the payment (a Stripe payment intent, or a PayPal capture id),
    * copied verbatim into the coupon's `processor` issuance warrant so the
    * stall can reconcile it on its own dashboard (imani-wallet#96). Null when
    * payment-adapter recorded none.
@@ -107,7 +107,7 @@ const HEX64 = /^[0-9a-fA-F]{64}$/
 /** An ISO-4217 alphabetic currency code. */
 const ISO4217 = /^[A-Za-z]{3}$/
 
-/** A processor record id, e.g. Stripe's `pi_...`: short, printable, no spaces. */
+/** A processor record id, e.g. Stripe's `pi_...` or a PayPal capture id: short, printable, no spaces. */
 const PROCESSOR_REF = /^[A-Za-z0-9_-]{1,100}$/
 
 /**

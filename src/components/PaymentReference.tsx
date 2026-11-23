@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { AlertTriangle, Check, CheckCircle2, Copy, HelpCircle, RotateCcw, ShieldAlert } from 'lucide-react'
 
 import { compactReference } from '../lib/paymentReference'
+import { processorName, processorOfReference } from '../lib/cardProcessor'
 import type { ReferenceVerification } from '../lib/referenceVerification'
 import { useReferenceVerification } from '../lib/useReferenceVerification'
 
@@ -21,6 +22,9 @@ import { useReferenceVerification } from '../lib/useReferenceVerification'
  *
  * Refunded and disputed payments are reported (amber) but not acted on:
  * reversing the voucher is payment-adapter#265.
+ *
+ * The processor is named from the reference's shape (Stripe `pi_…`, PayPal capture id), so a
+ * PayPal sale says "PayPal" everywhere this says "Stripe" (payment-adapter ADR 0002).
  */
 
 function useCopy(text: string) {
@@ -75,13 +79,18 @@ export function CopyReferenceButton({ reference, compact = false }: { reference:
  * (the resting state, so it must not cry wolf).
  */
 const REFERENCE_STYLE = {
-  verified: { Icon: CheckCircle2, tone: 'text-green-600', label: 'Genuine payment on your Stripe account' },
-  refunded: { Icon: RotateCcw, tone: 'text-amber-600', label: 'Refunded on Stripe' },
-  disputed: { Icon: ShieldAlert, tone: 'text-amber-600', label: 'Disputed on Stripe' },
-  failed: { Icon: AlertTriangle, tone: 'text-red-500', label: 'Not a matching payment on your Stripe account' },
-  unknown: { Icon: HelpCircle, tone: 'text-mono-500', label: 'Could not check this payment with Stripe' },
-  checking: { Icon: HelpCircle, tone: 'text-mono-500', label: 'Checking this payment with Stripe' },
+  verified: { Icon: CheckCircle2, tone: 'text-green-600', label: (n: string) => `Genuine payment on your ${n} account` },
+  refunded: { Icon: RotateCcw, tone: 'text-amber-600', label: (n: string) => `Refunded on ${n}` },
+  disputed: { Icon: ShieldAlert, tone: 'text-amber-600', label: (n: string) => `Disputed on ${n}` },
+  failed: { Icon: AlertTriangle, tone: 'text-red-500', label: (n: string) => `Not a matching payment on your ${n} account` },
+  unknown: { Icon: HelpCircle, tone: 'text-mono-500', label: (n: string) => `Could not check this payment with ${n}` },
+  checking: { Icon: HelpCircle, tone: 'text-mono-500', label: (n: string) => `Checking this payment with ${n}` },
 } as const
+
+/** Which processor issued this reference, by name. Stripe for anything else, as before PayPal. */
+function nameFor(reference: string): string {
+  return processorName(processorOfReference(reference) ?? 'stripe')
+}
 
 type ReferenceState = keyof typeof REFERENCE_STYLE
 
@@ -93,12 +102,16 @@ function referenceState(answer: ReferenceVerification | undefined): ReferenceSta
 export function ReferenceVerificationBadge({
   verification,
   className = '',
+  processor = 'Stripe',
 }: {
   verification: ReferenceVerification | undefined
   className?: string
+  /** The processor's name, for the label. */
+  processor?: string
 }) {
   const state = referenceState(verification)
-  const { Icon, tone, label } = REFERENCE_STYLE[state]
+  const { Icon, tone } = REFERENCE_STYLE[state]
+  const label = REFERENCE_STYLE[state].label(processor)
   return (
     <Icon
       data-testid="reference-verification"
@@ -114,23 +127,23 @@ export function ReferenceVerificationBadge({
 
 /** The compact mark for a list row: the badge alone, asking on its own. */
 export function CardReferenceMark({ reference }: { reference: string }) {
-  return <ReferenceVerificationBadge verification={useReferenceVerification(reference)} />
+  return <ReferenceVerificationBadge verification={useReferenceVerification(reference)} processor={nameFor(reference)} />
 }
 
 /** The one-line explanation under the full reference. */
-function referenceSentence(answer: ReferenceVerification | undefined): string {
-  if (answer === undefined) return 'Checking with Stripe…'
-  if (answer.kind === 'verified') return 'Genuine: a succeeded payment on your Stripe account, for this amount.'
+function referenceSentence(answer: ReferenceVerification | undefined, n: string): string {
+  if (answer === undefined) return `Checking with ${n}…`
+  if (answer.kind === 'verified') return `Genuine: a succeeded payment on your ${n} account, for this amount.`
   if (answer.kind === 'reversed') {
-    const what = answer.result === 'refunded' ? 'Refunded on Stripe.' : 'Disputed on Stripe.'
-    return `${what} The voucher was still issued. Refunds and disputes are not handled automatically, so check your Stripe dashboard.`
+    const what = answer.result === 'refunded' ? `Refunded on ${n}.` : `Disputed on ${n}.`
+    return `${what} The voucher was still issued. Refunds and disputes are not handled automatically, so check your ${n} dashboard.`
   }
   if (answer.kind === 'failed') {
     return answer.result === 'not_found'
-      ? 'Not found on your Stripe account. Check your Stripe dashboard before honouring it.'
-      : 'Found on your Stripe account, but it does not match this purchase. Check your Stripe dashboard.'
+      ? `Not found on your ${n} account. Check your ${n} dashboard before honouring it.`
+      : `Found on your ${n} account, but it does not match this purchase. Check your ${n} dashboard.`
   }
-  return 'Could not check with Stripe right now.'
+  return `Could not check with ${n} right now.`
 }
 
 /** The reconciliation block on a voucher record: reference, amount, date. */
@@ -145,11 +158,12 @@ export function PaymentReferenceBlock({
 }) {
   const verification = useReferenceVerification(reference)
   const state = referenceState(verification)
+  const n = nameFor(reference)
   return (
     <div data-testid="payment-reference" className="flex flex-col gap-1 p-4">
-      <span className="text-sm text-mono-500">Card payment reference</span>
+      <span className="text-sm text-mono-500">Card payment reference ({n})</span>
       <span className="flex min-w-0 items-center gap-1.5">
-        <ReferenceVerificationBadge verification={verification} className="text-sm" />
+        <ReferenceVerificationBadge verification={verification} className="text-sm" processor={n} />
         <CopyReferenceButton reference={reference} />
       </span>
       <span className="text-sm text-mono-500">
@@ -159,7 +173,7 @@ export function PaymentReferenceBlock({
         aria-live="polite"
         className={`text-sm ${REFERENCE_STYLE[state].tone}`}
       >
-        {referenceSentence(verification)}
+        {referenceSentence(verification, n)}
       </span>
     </div>
   )

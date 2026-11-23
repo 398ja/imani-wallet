@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { CreditCard, ExternalLink, Lock, TriangleAlert } from 'lucide-react'
+import { CreditCard, ExternalLink, Lock, TriangleAlert, Wallet } from 'lucide-react'
 
 import { Button, Screen, BackLink, PageHeader, Centered } from '../components/ui'
 import {
@@ -11,6 +11,9 @@ import {
   type StripeAccountStatus,
   type StripeResult,
 } from '../lib/stripeAccount'
+import { connectPaypal, disconnectPaypal, fetchPaypalStatus, refreshPaypal } from '../lib/paypalAccount'
+import { chooseCardAccount } from '../lib/cardAccount'
+import { paypalEnabled, processorName, processorOf, type CardProcessor } from '../lib/cardProcessor'
 import { reconcileCardOffer } from '../lib/cardOffer'
 import { CARD_PAYMENTS_PLAN_NAME, cardPaymentsPlan, type CardPaymentsPlan } from '../lib/cardPaymentsAccess'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
@@ -53,12 +56,22 @@ import { publish } from '../lib/relay'
  * ended) that still publishes "I take cards" has the offer withdrawn here, and
  * one that never connected is shown the plan instead of Connect Stripe. A plan
  * that could not be checked changes nothing, as an unreachable Stripe does not.
+ *
+ * ## Stripe or PayPal
+ *
+ * A stall takes cards through ONE processor (payment-adapter ADR 0002). Before connecting, the
+ * merchant picks Stripe or PayPal (offered when the build has `VITE_PAYPAL=on`); once connected,
+ * the screen is about that account and the published offer names it (`cardProcessor`), so buyers
+ * are sent to its checkout. To switch, the merchant stops taking card payments and connects the
+ * other. Both read through the same status shape and the same `apply`, so every rule above holds
+ * for either.
  */
 export function PaymentsSettingsPage({
   merchant,
   onSaved,
   cardSales,
   status: planStatus = ownerLicenceStatus,
+  paypal = paypalEnabled(),
 }: {
   merchant: MerchantProfile
   onSaved: (next: MerchantProfile) => void
@@ -66,7 +79,13 @@ export function PaymentsSettingsPage({
   cardSales?: CardSalesDeps
   /** Injected by tests. The licence check otherwise. */
   status?: (pubkey: string) => Promise<LicenceStatus>
+  /** Whether PayPal is offered (`VITE_PAYPAL=on`). Injected by tests. */
+  paypal?: boolean
 }) {
+  // A stall already on PayPal is read through PayPal even in a build that no longer offers it, so
+  // its offer is never reconciled against a Stripe account it does not have (and withdrawn). The
+  // flag only decides whether a stall may CHOOSE PayPal.
+  const readsPaypal = paypal || processorOf(merchant) === 'paypal'
   const [params, setParams] = useSearchParams()
   const [status, setStatus] = useState<StripeAccountStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -76,6 +95,17 @@ export function PaymentsSettingsPage({
   const [plan, setPlan] = useState<CardPaymentsPlan>('unknown')
   /** The plan as last read, for `apply` without making it a new function per read. */
   const planRef = useRef<CardPaymentsPlan>('unknown')
+  /**
+   * Which processor this screen is about: the connected one, else the one the record names, else
+   * the merchant's pick before connecting. A ref beside the state so `apply` reads it current.
+   */
+  const [processor, setProcessorState] = useState<CardProcessor>(() => (readsPaypal ? processorOf(merchant) : 'stripe'))
+  const processorRef = useRef<CardProcessor>(processor)
+  const setProcessor = useCallback((next: CardProcessor) => {
+    processorRef.current = next
+    setProcessorState(next)
+  }, [])
+  const name = processorName(processor)
 
   /**
    * Read the plan again. On mount and on EVERY action, so a merchant who upgrades in the
@@ -132,6 +162,7 @@ export function PaymentsSettingsPage({
         {
           chargesEnabled: result.status.chargesEnabled,
           defaultCurrency: result.status.defaultCurrency,
+          processor: processorRef.current,
         },
         planRef.current,
       )
@@ -176,15 +207,25 @@ export function PaymentsSettingsPage({
     // On mount, and after Stripe redirects back. `refresh` re-reads Stripe
     // itself, so a merchant returning from onboarding sees the truth rather
     // than a mirror that has not caught up.
-    const returning = params.get('stripe') !== null
+    const returningFrom: CardProcessor | null =
+      params.get('stripe') !== null ? 'stripe' : readsPaypal && params.get('paypal') !== null ? 'paypal' : null
     const load = async () => {
-      // The plan and Stripe together, so the first reconcile already knows both. A failed plan
-      // check is `unknown`, which changes nothing.
-      const [stripe] = await Promise.all([returning ? refreshStripe() : fetchStripeStatus(), readPlan()])
-      await apply(stripe)
-      if (returning) {
+      // The plan and the account(s) together, so the first reconcile already knows both. A failed
+      // plan check is `unknown`, which changes nothing. Coming back from onboarding re-reads that
+      // processor itself, so the merchant sees the truth rather than a lagging read.
+      const [stripe, paypalRead] = await Promise.all([
+        returningFrom === 'stripe' ? refreshStripe() : fetchStripeStatus(),
+        readsPaypal ? (returningFrom === 'paypal' ? refreshPaypal() : fetchPaypalStatus()) : Promise.resolve(undefined),
+        readPlan(),
+      ])
+      const chosen = readsPaypal
+        ? chooseCardAccount({ stripe, paypal: paypalRead }, returningFrom ?? processorOf(current.current))
+        : { processor: 'stripe' as const, result: stripe }
+      setProcessor(chosen.processor)
+      await apply(chosen.result)
+      if (returningFrom) {
         // Drop the marker so a refresh of this page is an ordinary visit.
-        params.delete('stripe')
+        params.delete(returningFrom)
         setParams(params, { replace: true })
       }
     }
@@ -223,7 +264,7 @@ export function PaymentsSettingsPage({
         // inventing a failure.
         setError(
           result.status.onboardingUrlRejected ??
-            'Stripe did not send a setup link. Try Check again in a moment.',
+            `${processorName(processorRef.current)} did not send a setup link. Try Check again in a moment.`,
         )
       }
     } finally {
@@ -290,7 +331,7 @@ export function PaymentsSettingsPage({
             {note}
           </p>
         )}
-        <LockedCardPayments busy={busy} onCheckAgain={() => act(fetchStripeStatus, false)} />
+        <LockedCardPayments busy={busy} name={name} onCheckAgain={() => act(processor === 'paypal' ? fetchPaypalStatus : fetchStripeStatus, false)} />
       </Screen>
     )
   }
@@ -301,7 +342,7 @@ export function PaymentsSettingsPage({
       <PageHeader title="Card payments" />
 
       <p className="mb-6 text-[15px] leading-relaxed text-mono-500">
-        Let shoppers buy your vouchers by card. You are paid directly by Stripe,
+        Let shoppers buy your vouchers by card. You are paid directly by {name},
         into your own account.
       </p>
 
@@ -352,7 +393,7 @@ export function PaymentsSettingsPage({
           {offering
             ? 'Taking card payments'
             : live && notInPlan
-              ? 'Stripe connected'
+              ? `${name} connected`
               : live
                 ? 'Not offered yet'
                 : connected
@@ -367,8 +408,8 @@ export function PaymentsSettingsPage({
               : live
                 ? 'Waiting for your plan to be checked.'
                 : connected
-              ? 'Stripe still needs something from you before you can be paid.'
-              : 'Connect a Stripe account to start.'}
+              ? `${name} still needs something from you before you can be paid.`
+              : `Connect a ${name} account to start.`}
         </p>
 
         {/* Stripe's own words about what is outstanding. Shown rather than
@@ -395,10 +436,10 @@ export function PaymentsSettingsPage({
         <div className="mb-6 flex gap-2 rounded-xl bg-amber-50 p-3 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <p className="text-sm leading-relaxed">
-            Your vouchers are in {merchant.issuanceCurrency.toUpperCase()} but your Stripe
+            Your vouchers are in {merchant.issuanceCurrency.toUpperCase()} but your {name}{' '}
             account pays in {status?.defaultCurrency?.toUpperCase()}. Card payments stay off
-            until these match. Change your voucher currency in Your business, or use a
-            Stripe account in {merchant.issuanceCurrency.toUpperCase()}.
+            until these match. Change your voucher currency in Your business, or use a{' '}
+            {name} account in {merchant.issuanceCurrency.toUpperCase()}.
           </p>
         </div>
       )}
@@ -412,14 +453,42 @@ export function PaymentsSettingsPage({
       {offering && !currencyMismatch && <GiftingPageSection merchant={merchant} onToggleIndexing={toggleIndexing} />}
 
       <div className="grid gap-3">
+        {/* The choice, before connecting only: a connected stall switches by stopping first, so
+            the published offer never names an account that is not set up. */}
+        {paypal && !connected && !notInPlan && (
+          <fieldset data-testid="card-processor-choice" className="mb-1 grid grid-cols-2 gap-2" disabled={busy}>
+            <legend className="mb-2 text-sm font-medium">Take cards through</legend>
+            {(['stripe', 'paypal'] as const).map((p) => (
+              <label
+                key={p}
+                className={`pressable flex items-center justify-center gap-2 rounded-xl border px-3 py-3 text-[15px] ${processor === p ? 'border-mono-900 dark:border-mono-50' : 'border-mono-200 dark:border-mono-800'}`}
+              >
+                <input
+                  type="radio"
+                  name="card-processor"
+                  className="sr-only"
+                  checked={processor === p}
+                  onChange={() => {
+                    setProcessor(p)
+                    setError(null)
+                    setNote(null)
+                  }}
+                />
+                {p === 'paypal' ? <Wallet className="h-4 w-4" aria-hidden /> : <CreditCard className="h-4 w-4" aria-hidden />}
+                {processorName(p)}
+              </label>
+            ))}
+          </fieldset>
+        )}
+
         {!connected && !notInPlan && (
-          <Button size="lg" disabled={busy} onClick={() => act(connectStripe, true)}>
-            <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Connect Stripe
+          <Button size="lg" disabled={busy} onClick={() => act(processor === 'paypal' ? connectPaypal : connectStripe, true)}>
+            <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Connect {name}
           </Button>
         )}
 
         {connected && !live && !notInPlan && (
-          <Button size="lg" disabled={busy} onClick={() => act(connectStripe, true)}>
+          <Button size="lg" disabled={busy} onClick={() => act(processor === 'paypal' ? connectPaypal : connectStripe, true)}>
             <ExternalLink className="mr-2 h-5 w-5" aria-hidden /> Finish setting up
           </Button>
         )}
@@ -429,7 +498,7 @@ export function PaymentsSettingsPage({
             size="lg"
             variant="outline"
             disabled={busy}
-            onClick={() => act(refreshStripe, false)}
+            onClick={() => act(processor === 'paypal' ? refreshPaypal : refreshStripe, false)}
           >
             Check again
           </Button>
@@ -469,7 +538,7 @@ export function PaymentsSettingsPage({
               disabled={busy}
               onClick={async () => {
                 setConfirming(false)
-                await act(disconnectStripe, false)
+                await act(processor === 'paypal' ? disconnectPaypal : disconnectStripe, false)
               }}
             >
               Stop
@@ -489,7 +558,7 @@ export function PaymentsSettingsPage({
           pays. Imani never holds it.
         </p>
         <p>
-          That also means disputes are yours to answer, and Stripe may hold back
+          That also means disputes are yours to answer, and {name} may hold back
           a percentage of new sales for a period before paying out. That is
           normal for vouchers, because you are promising something for later.
         </p>
@@ -524,7 +593,7 @@ function withTimeout<T>(promise: Promise<T | null>, ms: number): Promise<T | nul
  * Starter, never connected: what card payments are and which plan has them, instead of Connect.
  * Check again re-reads the plan, so a merchant back from upgrading is unlocked without a reload.
  */
-function LockedCardPayments({ busy, onCheckAgain }: { busy: boolean; onCheckAgain: () => void }) {
+function LockedCardPayments({ busy, name, onCheckAgain }: { busy: boolean; name: string; onCheckAgain: () => void }) {
   return (
     <div data-testid="card-payments-locked" className="flex flex-col items-center px-2 pt-6 text-center">
       <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-mono-100 dark:bg-mono-900">
@@ -532,10 +601,10 @@ function LockedCardPayments({ busy, onCheckAgain }: { busy: boolean; onCheckAgai
       </div>
       <p className="text-lg font-semibold text-mono-900 dark:text-mono-50">Sell your vouchers by card</p>
       <p className="mt-2 text-sm leading-relaxed text-mono-500">
-        Shoppers buy your vouchers by card and you are paid directly by Stripe, into your own account.
+        Shoppers buy your vouchers by card and you are paid directly by {name}, into your own account.
       </p>
       <p className="mt-3 text-sm leading-relaxed text-mono-500">
-        Card payments are part of {CARD_PAYMENTS_PLAN_NAME} and above. Upgrade to connect Stripe.
+        Card payments are part of {CARD_PAYMENTS_PLAN_NAME} and above. Upgrade to connect {name}.
       </p>
       <Link to="/settings/subscription" className="mt-6 block w-full">
         <Button className="w-full">See plans</Button>

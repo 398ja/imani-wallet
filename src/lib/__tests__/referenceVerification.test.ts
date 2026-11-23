@@ -59,7 +59,19 @@ describe('verifyCardReference', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     expect((await verifyCardReference('../stripe/disconnect')).kind).toBe('unknown')
+    expect((await verifyCardReference('5o190127tn364715t')).kind).toBe('unknown')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('asks PayPal about a PayPal capture id, with the same verdicts', async () => {
+    // payment-adapter ADR 0002: a PayPal sale's warrant carries the capture id, and the stall's own
+    // PayPal seller account is asked through merchant-service the same way Stripe is.
+    const capture = '5O190127TN364715T'
+    const fetchMock = vi.fn().mockResolvedValue(reply(200, { result: 'refunded', payment_intent_id: capture, refunded_minor: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await verifyCardReference(capture)).toEqual({ kind: 'reversed', result: 'refunded', refundedMinor: 500 })
+    expect(fetchMock.mock.calls[0][0]).toBe(`/api/v1/merchant/paypal/payments/${capture}/verification`)
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' })
   })
 
   it('caches a final verdict but retries an unknown one', async () => {

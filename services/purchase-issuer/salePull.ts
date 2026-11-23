@@ -20,6 +20,7 @@
 import { getDecimals } from '@imani/money'
 
 import { DELEGATION_SKEW_MARGIN_MS, checkDelegation, delegatedWarrant } from './delegatedWarrant'
+import { isCardReference } from '../../src/lib/cardProcessor'
 import type { StallCredential } from './issuer'
 import { resendSaleRecords, type CardSale } from './saleRecord'
 
@@ -41,7 +42,6 @@ export interface StallPurchase {
 }
 
 const VOUCHER_ID = /^[0-9A-Za-z-]{1,64}$/
-const PI = /^pi_[A-Za-z0-9_]{1,250}$/
 const CURRENCY = /^[a-z]{3}$/
 
 /** One row of payment-adapter's answer, or null when any field is not what it must be. */
@@ -53,7 +53,8 @@ export function parseStallPurchase(raw: unknown): StallPurchase | null {
   const currency = typeof r.currency === 'string' ? r.currency.toLowerCase() : ''
   const amount = r.amount_minor
   const paidAt = typeof r.paid_at === 'string' ? Date.parse(r.paid_at) : typeof r.paid_at === 'number' ? r.paid_at * 1000 : NaN
-  if (!VOUCHER_ID.test(voucherId) || !PI.test(ref) || !CURRENCY.test(currency)) return null
+  // A Stripe `pi_` or a PayPal capture id (payment-adapter ADR 0002): both are card sales here.
+  if (!VOUCHER_ID.test(voucherId) || !isCardReference(ref) || !CURRENCY.test(currency)) return null
   if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) return null
   if (!Number.isFinite(paidAt) || paidAt <= 0) return null
   return { voucherId, ref, amountMinor: amount, currency, livemode: r.livemode === true, paidAt }

@@ -106,7 +106,7 @@ const ACCOUNT_APP = 'http://localhost:28081'
  * catch-all and reaches customer-wallet WITH edge headers attached. The list
  * stays exactly as wide as the routes it protects.
  */
-export const EDGE_AUTH_PREFIXES = ['/api/v1/portal', '/api/v1/merchant/stripe'] as const
+export const EDGE_AUTH_PREFIXES = ['/api/v1/portal', '/api/v1/merchant/stripe', '/api/v1/merchant/paypal'] as const
 
 /**
  * The exact test Vite's proxy uses to pick a rule: a bare `startsWith` on the
@@ -176,6 +176,21 @@ const portalEdgeAuth = (): Plugin => ({
     server.middlewares.use(edgeAuth)
   },
 })
+
+/**
+ * merchant-service's edge hop, shared by its Stripe and PayPal rules. Same fail-closed shape as the
+ * portal rule: vouch only for a pubkey the middleware actually validated, and strip a permissions
+ * header that could only have come from the page otherwise.
+ */
+const merchantEdgeAuth = (proxy: { on(event: 'proxyReq', cb: (req: ClientRequest) => void): void }) => {
+  proxy.on('proxyReq', (proxyReq) => {
+    if (proxyReq.getHeader('x-auth-pubkey')) {
+      proxyReq.setHeader('X-Edge-Auth', EDGE_SHARED_SECRET)
+    } else {
+      proxyReq.removeHeader('x-auth-permissions')
+    }
+  })
+}
 
 /**
  * Same-origin proxying so the NAP session cookie just works — no CORS config,
@@ -307,20 +322,16 @@ export const proxy = {
   '/api/v1/merchant/stripe': {
     target: 'http://localhost:28088',
     changeOrigin: false,
-    configure: (proxy: {
-      on(event: 'proxyReq', cb: (req: ClientRequest) => void): void
-    }) => {
-      proxy.on('proxyReq', (proxyReq) => {
-        // Same fail-closed shape as the portal rule: vouch only for a pubkey
-        // the middleware actually validated, and strip a permissions header
-        // that could only have come from the page otherwise.
-        if (proxyReq.getHeader('x-auth-pubkey')) {
-          proxyReq.setHeader('X-Edge-Auth', EDGE_SHARED_SECRET)
-        } else {
-          proxyReq.removeHeader('x-auth-permissions')
-        }
-      })
-    },
+    configure: merchantEdgeAuth,
+  },
+  /*
+   * A stall's own PayPal seller account (payment-adapter ADR 0002), on merchant-service beside
+   * Stripe's: the same service, the same session, the same edge secret.
+   */
+  '/api/v1/merchant/paypal': {
+    target: 'http://localhost:28088',
+    changeOrigin: false,
+    configure: merchantEdgeAuth,
   },
   // Receipt notifications live on account-app as well: IncomingNotificationController
   // is in gateway-core-rest, not customer-wallet. Without this rule the drain and

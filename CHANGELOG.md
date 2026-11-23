@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A stall can take cards through PayPal instead of Stripe** (payment-adapter ADR 0002, behind `VITE_PAYPAL=on`). Settings › Card payments asks "Take cards through Stripe or PayPal" before connecting; once connected, the screen is about that account with the same plan gate, currency check, Check again, Finish setting up and Stop as Stripe, and every sentence names the processor. The published record says `cardProcessor: "paypal"` beside `acceptsCards` (only for PayPal, so a Stripe stall's record is unchanged), and an offer naming the wrong processor is corrected even when the plan is unknown. A stall with both connected (from two devices) shows the one its record names unless only the other can charge. A PayPal read that fails is never read as "not connected", so nothing is withdrawn on a blip. Setup links are followed only to https `paypal.com` hosts.
+- **Buy pays a PayPal stall through PayPal.** The stall's record is read again at the tap and the purchase goes to `/api/v1/checkout/paypal/purchase`, which takes the same body and returns to the same `/buy/done` and `/buy/cancelled` pages. An unreadable record is Stripe, as an old one is. The gifting shop stays Stripe only, so it shows a PayPal stall no card form.
+- **PayPal payment references are checked with PayPal.** A sale's card reference is a Stripe PaymentIntent (`pi_…`) or a PayPal capture id (17 upper-case letters and digits). The transaction detail labels each by its processor ("Card payment reference", "Checked with PayPal") and asks `/api/v1/merchant/paypal/payments/{id}/verification`, with the same verdicts as Stripe. purchase-issuer's sale pull and the card-payment state accept either shape.
+- Dev proxy and edge auth route `/api/v1/merchant/paypal` to merchant-service, and the Docker build takes `VITE_PAYPAL`.
+
 ## [0.78.0] - 2026-11-22
 
 ### Added

@@ -82,6 +82,10 @@ export async function loadShop(raw: string | undefined, deps: ShopDeps): Promise
   if (!record.active) return { kind: 'paused', shop }
   // Only a literal true counts (ADR 0012).
   if (record.acceptsCards !== true) return { kind: 'no-cards', shop }
+  // The gifting checkout is Stripe's (`/api/v1/checkout/purchase`). A stall that takes cards through
+  // PayPal (payment-adapter ADR 0002) has no Stripe account to pay, so it gets no form rather than a
+  // draft payment-adapter would refuse after the buyer typed their details.
+  if (record.cardProcessor === 'paypal') return { kind: 'no-cards', shop }
   return { kind: 'ok', shop }
 }
 

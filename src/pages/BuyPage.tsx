@@ -11,6 +11,8 @@ import { giftingOrigin, giftingPageUrl } from '../lib/giftingPage'
 import { useIdentity } from '../lib/identity'
 import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
 import { cardSalesReason, type CardSalesReadiness } from '../lib/merchantActions'
+import { fetchMerchantRecord } from '../lib/merchant'
+import { processorOf, type CardProcessor } from '../lib/cardProcessor'
 
 
 /**
@@ -39,6 +41,14 @@ import { cardSalesReason, type CardSalesReadiness } from '../lib/merchantActions
  * Typed rather than chosen from a list. A stall sells whatever it sells, and a
  * fixed ladder would be this screen guessing at a stall's prices from another
  * country.
+ *
+ * ## Stripe or PayPal
+ *
+ * The stall's public record names its processor (`cardProcessor`, Stripe when absent), and the
+ * buyer is sent to that processor's checkout. Read again at the moment of paying, like the
+ * open-for-business check, so a stall that switched while this screen was open is paid where it
+ * now takes cards. An unreadable record is Stripe, as an old record is: each checkout refuses a
+ * stall it cannot charge for, so the worst case is one refused tap and nothing charged.
  */
 export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null }) {
   const { pubkey = '' } = useParams()
@@ -113,10 +123,12 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
     // trusting anything Stripe puts in the URL. Before the call, so a slow
     // redirect cannot race it.
     rememberPurchase(pubkey)
+    const processor: CardProcessor = processorOf(await fetchMerchantRecord(pubkey))
     const result = await startPurchase({
       stallPubkey: pubkey,
       amountMinor: minor,
       buyerPubkey,
+      processor,
     })
 
     if (result.kind === 'ok') {
