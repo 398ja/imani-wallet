@@ -39,7 +39,7 @@ function proof(i: number, amount: number, lockedTo?: string): CashuProofEvidence
   return { mint: MINT, keysetId: '00ab', amount, secret, c: '02' + '11'.repeat(32), dleqE: 'aa'.repeat(32), dleqS: 'bb'.repeat(32), dleqR: 'cc'.repeat(32) }
 }
 
-async function receipt(opts: { proofs: CashuProofEvidence[]; countersign?: boolean; amount?: number; presenterAt?: number; evidence?: 'ok' | 'missing' | 'swapped' }) {
+async function receipt(opts: { proofs: CashuProofEvidence[]; countersign?: boolean; amount?: number; presenterAt?: number; evidence?: 'ok' | 'missing' | 'swapped'; memo?: string }) {
   const evidence: PaymentEvidence = { rail: RAIL_CASHU, proofs: opts.proofs }
   const ev = encodeEvidence(evidence)
   const s = makeSummary({
@@ -53,6 +53,7 @@ async function receipt(opts: { proofs: CashuProofEvidence[]; countersign?: boole
     paidAt: NOW - 600,
     reference: 'order 7',
     evidenceDigest: evidenceDigest(ev),
+    memo: opts.memo ?? null,
   })
   let r = await signByPayer(s, secretKeySigner(payerSk))
   if (opts.countersign) r = withCountersignature(r, await signCountersignature(s, NOW - 500, true, secretKeySigner(payeeSk)))
@@ -471,12 +472,30 @@ describe('remembered checks and the memo (FR-027a-f)', () => {
     expect(res.priorChecks).toBeUndefined()
   })
 
-  it('the memo of my own record comes back; a terminal has none', async () => {
+  it('a receipt without a signed memo: my own record’s memo comes back; a terminal has none', async () => {
     const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
     const owner = await verifyScannedWith(ports({ blob, ownRecord: async () => ({ memo: 'Two coffees' }) }), qr)
     expect(owner.memo).toBe('Two coffees')
     const till = await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)
     expect(till.memo).toBeUndefined()
+  })
+
+  it('the memo the payer signed is shown on every scanner, a till too, and wins over my record (FR-002a)', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true, memo: 'Table 4, two flat whites' })
+    const till = await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)
+    expect(till.memo).toBe('Table 4, two flat whites')
+    const owner = await verifyScannedWith(ports({ blob, ownRecord: async () => ({ memo: 'Received' }) }), qr)
+    expect(owner.memo).toBe('Table 4, two flat whites')
+    // A third party (neither payer nor payee) sees it too: it is part of what the payer signed.
+    const stranger = await verifyScannedWith(ports({ blob, me: 'dd'.repeat(32) }), qr)
+    expect(stranger.memo).toBe('Table 4, two flat whites')
+  })
+
+  it('an invalid receipt shows no memo', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true, memo: 'Paid in full', amount: 999 })
+    const res = await verifyScannedWith(ports({ blob }), qr)
+    expect(res.verdict).toBe('invalid')
+    expect(res.memo).toBeUndefined()
   })
 
   it('isPaidToMe matches the card: records, or the mint on a bound verdict', () => {

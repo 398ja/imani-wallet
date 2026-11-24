@@ -11,6 +11,8 @@ export const VERSION = 1
 export const QR_PREFIX = 'imrc1:'
 export const QR_BODY_LIMIT = 600
 export const MAX_REFERENCE_BYTES = 80
+/** The payer's own note on the payment (FR-002a), signed with the summary. Short: it rides in a QR. */
+export const MAX_MEMO_BYTES = 64
 export const MAX_MINTS = 4
 
 export const TAG_PAYMENT_ID = 'imani-receipt/v1/payment-id'
@@ -39,6 +41,8 @@ export const S = {
   EVIDENCE_DIGEST: 11,
   ITEMS_COMMITMENT: 12,
   REFUND_OF: 13,
+  /** FR-002a: the payer's memo. Added in v1: older readers skip it, signatures still cover it. */
+  MEMO: 14,
 } as const
 
 /** Acknowledgement tags (Java `A_*`). */
@@ -79,15 +83,18 @@ export interface ReceiptSummary {
   evidenceDigest: string
   itemsCommitment: string | null
   refundOf: string | null
+  /** The payer's memo, `''` when absent. Not in the acknowledgement: the payee signs the payment. */
+  memo: string
 }
 
-export type ReceiptSummaryInput = Omit<ReceiptSummary, 'version' | 'reference' | 'itemsCommitment' | 'refundOf' | 'payer' | 'mints'> & {
+export type ReceiptSummaryInput = Omit<ReceiptSummary, 'version' | 'reference' | 'itemsCommitment' | 'refundOf' | 'payer' | 'mints' | 'memo'> & {
   version?: number
   payer?: string | null
   mints?: string[] | null
   reference?: string | null
   itemsCommitment?: string | null
   refundOf?: string | null
+  memo?: string | null
 }
 
 const HEX64 = /^[0-9a-f]{64}$/
@@ -142,6 +149,7 @@ export function makeSummary(s: ReceiptSummaryInput): ReceiptSummary {
     evidenceDigest: requireHex32(s.evidenceDigest, 'evidenceDigest'),
     itemsCommitment: s.itemsCommitment == null ? null : requireHex32(s.itemsCommitment, 'itemsCommitment'),
     refundOf: s.refundOf == null ? null : requireHex32(s.refundOf, 'refundOf'),
+    memo: s.memo ?? '',
   }
 }
 
@@ -150,10 +158,38 @@ export const payerIdentified = (s: ReceiptSummary): boolean => s.payer != null
 /** First 8 hex characters of the payment id: the only part that may be logged (FR-048). */
 export const logRef = (s: ReceiptSummary): string => s.paymentId.slice(0, 8)
 
+/**
+ * Bytes a QR body can spend on everything but the summary: payer signature (66), acknowledgement
+ * (76), presenter proof (73), evidence id (34) and relay hint (66), and the summary field's own
+ * header (3). A summary within `QR_BODY_LIMIT - QR_FIXED_OVERHEAD` always fits the QR.
+ */
+export const QR_FIXED_OVERHEAD = 320
+
+/**
+ * The memo that fits (FR-002a): at most `MAX_MEMO_BYTES`, cut on a code point and ended with an
+ * ellipsis, then shortened again, or dropped, until the signed summary leaves room for the rest of
+ * a QR. Applied before signing, so the receipt can always be shown.
+ */
+export function fitMemo(summary: ReceiptSummary, memo: string | null | undefined): string {
+  let m = (memo ?? '').replace(/\s+/g, ' ').trim()
+  if (m === '') return ''
+  const budget = QR_BODY_LIMIT - QR_FIXED_OVERHEAD
+  const fits = (x: string) => utf8(x).length <= MAX_MEMO_BYTES && encodeSummary({ ...summary, memo: x }).length <= budget
+  if (fits(m)) return m
+  const points = [...m]
+  while (points.length > 0) {
+    points.pop()
+    m = points.join('').trimEnd() + '…'
+    if (points.length > 0 && fits(m)) return m
+  }
+  return ''
+}
+
 export function encodeSummary(s: ReceiptSummary): Uint8Array {
   if (utf8(s.reference).length > MAX_REFERENCE_BYTES) {
     throw new Error(`reference longer than ${MAX_REFERENCE_BYTES} bytes`)
   }
+  if (utf8(s.memo).length > MAX_MEMO_BYTES) throw new Error(`memo longer than ${MAX_MEMO_BYTES} bytes`)
   if (s.mints.length > MAX_MINTS) throw new Error(`a receipt names at most ${MAX_MINTS} mints`)
   const w = new TlvWriter()
     .varint(S.VERSION, s.version)
@@ -166,11 +202,11 @@ export function encodeSummary(s: ReceiptSummary): Uint8Array {
   for (const m of s.mints) w.utf8(S.MINT, m)
   w.varint(S.PAID_AT, s.paidAt)
   if (s.reference !== '') w.utf8(S.REFERENCE, s.reference)
-  return w
-    .hex(S.EVIDENCE_DIGEST, s.evidenceDigest)
+  w.hex(S.EVIDENCE_DIGEST, s.evidenceDigest)
     .hex(S.ITEMS_COMMITMENT, s.itemsCommitment)
     .hex(S.REFUND_OF, s.refundOf)
-    .toBytes()
+  if (s.memo !== '') w.utf8(S.MEMO, s.memo)
+  return w.toBytes()
 }
 
 /** Decodes a summary, ignoring unknown tags (FR-052). Throws on anything Java rejects. */
@@ -187,6 +223,7 @@ export function decodeSummary(bytes: Uint8Array): ReceiptSummary {
   let evidenceDigest: string | undefined
   let items: string | null = null
   let refundOf: string | null = null
+  let memo: string | null = null
   const mints: string[] = []
   let lastTag = 0
   for (const f of readTlv(bytes)) {
@@ -208,6 +245,7 @@ export function decodeSummary(bytes: Uint8Array): ReceiptSummary {
       case S.EVIDENCE_DIGEST: evidenceDigest = fieldHex(f); break
       case S.ITEMS_COMMITMENT: items = fieldHex(f); break
       case S.REFUND_OF: refundOf = fieldHex(f); break
+      case S.MEMO: memo = fieldUtf8(f); break
       default: break // unknown: tolerated, still covered by the signatures
     }
   }
@@ -219,7 +257,7 @@ export function decodeSummary(bytes: Uint8Array): ReceiptSummary {
   }
   return makeSummary({
     version, paymentId, rail: rail as Rail, payer, payee, amount, unit, mints, paidAt, reference,
-    evidenceDigest, itemsCommitment: items, refundOf,
+    evidenceDigest, itemsCommitment: items, refundOf, memo,
   })
 }
 

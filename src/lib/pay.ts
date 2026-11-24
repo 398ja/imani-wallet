@@ -667,6 +667,8 @@ async function captureReceipt(
       sendEvidenceState: s.send_evidence_state ?? null,
       payeeKey: pending.recipientPubkey ?? pending.merchantPubkey,
       reference: pending.paymentRequestId ?? null,
+      // FR-002a: what the payment was for, signed into the receipt so the payee's scan shows it.
+      memo: pending.memo ?? null,
       paidAt: Math.floor((pending.at || Date.now()) / 1000),
       txId: `${pending.recipientPubkey ? 'sent' : 'payment'}:${pending.tokenId}`,
       sendId: pending.sendId,
