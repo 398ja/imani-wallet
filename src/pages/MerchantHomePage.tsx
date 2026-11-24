@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { ClosedNote, SalesClosedNote } from '../components/StallClosed'
-import { Clock, QrCode, Send, ShieldOff } from 'lucide-react'
+import { Clock, QrCode, ReceiptText, Send, ShieldOff } from 'lucide-react'
 
 import { Button, Screen } from '../components/ui'
 import type { Actor } from '../lib/actor'
@@ -8,6 +8,7 @@ import {
   LAPSE,
   type LapseReason,
   canIssueNow,
+  canReadReceiptsNow,
   canRedeemNow,
   sessionState,
   type TerminalSession,
@@ -113,6 +114,8 @@ export function MerchantHomePage({
   const roleMayIssue = actor ? canIssueNow(actor, session ?? null) : true
   const mayIssue = roleMayIssue && (actor ? mayWarrantSale(actor, session ?? null) : true)
   const mayRedeem = actor ? canRedeemNow(actor, session ?? null) : true
+  // Spec 049: the same question the till asks. The owner always may.
+  const mayCheckReceipts = actor ? canReadReceiptsNow(actor, session ?? null) : true
   const owner = !actor
 
   return (
@@ -143,6 +146,14 @@ export function MerchantHomePage({
             </Button>
           ) : null}
         </div>
+        {/* Spec 049: a customer's receipt is checked on Scan, which recognises it and says "Paid to
+            you" for this stall's key. Secondary to the till's two buttons, and never disabled:
+            checking a receipt moves nothing, so a closed stall can still settle a dispute. */}
+        {mayCheckReceipts ? (
+          <Button variant="outline" className="mt-3 w-full" onClick={() => navigate('/scan')}>
+            <ReceiptText className="mr-2 h-5 w-5" aria-hidden /> Check a receipt
+          </Button>
+        ) : null}
         {closed && <ClosedNote owner={owner} />}
         {!closed && salesClosed && <SalesClosedNote />}
       </div>
