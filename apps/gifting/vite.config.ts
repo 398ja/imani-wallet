@@ -21,7 +21,7 @@ const imani = (name: string) => r(`../../packages/${name}/src/index.ts`)
 const WORKSPACE = [
   'wallet-storage', 'nostr-vouchers', 'nostr-transactions', 'wallet-balance', 'voucher-send', 'profile-service',
   'blossom-upload', 'gateway-client', 'dm-poll', 'money', 'wallet-core', 'licence', 'merchant-record', 'redemption',
-  'reports', 'payment-requests',
+  'reports', 'payment-requests', 'receipts',
 ]
 
 const API = process.env.GIFTING_API ?? 'http://localhost:28082'

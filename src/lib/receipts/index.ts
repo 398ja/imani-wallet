@@ -340,6 +340,16 @@ export function restoreReceiptBackup(): Promise<{ added: number; merged: number 
 /** Flush receipt telemetry (on hide / sign-out). */
 export const flushReceipts = flushReceiptTelemetry
 
+let lifecycleInstalled = false
+/** Flushes telemetry whenever the page is hidden. Idempotent. */
+export function installReceiptLifecycle(): void {
+  if (lifecycleInstalled || typeof document === 'undefined') return
+  lifecycleInstalled = true
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') void flushReceiptTelemetry().catch(() => undefined)
+  })
+}
+
 // ---------------------------------------------------------------- verifier
 
 async function keysetOf(mintUrl: string, keysetId: string): Promise<{ unit: string; keys: Record<string, string> } | null> {

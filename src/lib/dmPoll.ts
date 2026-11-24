@@ -57,7 +57,7 @@ import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
 import { ForeignVoucherRefusedError, MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN, refuseForeignVouchers } from './merchantVouchers'
 import { checkPart, checkRedemption, redeemLockName } from './redemptionLedger'
-import { exactFaceValue, parseVoucherToken, type VoucherValidation } from './voucherToken'
+import { exactFaceValue, parseVoucherToken, tokenProofs, type VoucherValidation } from './voucherToken'
 import { raiseHomecomingAlert } from './terminalHomecoming'
 import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
@@ -1356,6 +1356,10 @@ function redemptionAdapter(): RedemptionAdapter {
       // hear its own BroadcastChannel post — see notifyWalletChanged.
       notifyWalletChanged()
 
+      // Spec 049: the payee's record of this payment, and its acknowledgement to the payer when
+      // policy allows. Not awaited, never throws: it cannot touch the redemption above.
+      void noteReceiptClaim(token, opts?.senderPubkey as string | undefined, meta?.paymentRequestId as string | undefined)
+
       // Say so on screen. This is the ONLY announcement most arrivals ever get:
       // the "payment on its way" toast is driven by the Artemis queue, and the
       // only thing that enqueues to it is the atomic-send saga. A coupon
@@ -2120,4 +2124,34 @@ export function stopDmPoll(): void {
   // and those ids are what stop the next session re-reading wraps it has
   // already handled.
   flushDeferredWrites()
+}
+
+/**
+ * Spec 049 payee side: store a PAYEE receipt for a token just redeemed, keyed by its payment id,
+ * and acknowledge it to the payer when policy allows. NEVER THROWS.
+ */
+async function noteReceiptClaim(token: string, senderPubkey: string | undefined, reference: string | undefined): Promise<void> {
+  try {
+    const parsed = parseVoucherToken(token)
+    const proofs = tokenProofs(token).map((p) => ({
+      mint: parsed.mintUrl,
+      id: p.id,
+      amount: p.amount,
+      secret: p.secret,
+      C: p.C,
+      dleq: p.dleq ?? null,
+    }))
+    if (proofs.length === 0) return
+    const { noteClaimedPayment } = await import('./receipts')
+    await noteClaimedPayment({
+      proofs,
+      mint: parsed.mintUrl,
+      unit: parsed.unit,
+      payerKey: senderPubkey ?? null,
+      reference: reference ?? null,
+      paidAt: 0,
+    })
+  } catch (error) {
+    console.warn('[dmPoll] receipt claim not recorded', (error as Error)?.name ?? 'error')
+  }
 }
