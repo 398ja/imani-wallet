@@ -792,4 +792,16 @@ export async function acknowledgeWaiting(ports: ReceiptPorts): Promise<number> {
   return done
 }
 
+/**
+ * How many received payments are waiting on the owner's "acknowledge payments?" answer (FR-017).
+ * What the one-time prompt keys on: it is asked at the first payment it could acknowledge, not before.
+ */
+export async function awaitingOwnerAnswer(store: ReceiptPorts['store']): Promise<number> {
+  let n = 0
+  for (const { receipt } of await store.all()) {
+    if (receipt.role === 'PAYEE' && !receipt.receipt.countersignature && receipt.notes.includes(WAITING_OWNER)) n++
+  }
+  return n
+}
+
 export { truncate }

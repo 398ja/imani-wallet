@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info, LifeBuoy, HeartPulse, Globe, Lock } from 'lucide-react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info, LifeBuoy, HeartPulse, Globe, Lock, ReceiptText } from 'lucide-react'
 
 import { fleetConfig, supportSnapshotConfig } from '../lib/config'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
@@ -67,6 +67,12 @@ export function SettingsPage({
           icon={Bell}
           label="Notifications"
           hint="What Imani tells you about"
+        />
+        <SettingRow
+          to="/settings/receipts"
+          icon={ReceiptText}
+          label="Receipts"
+          hint="Confirm payments you receive"
         />
       </ListSection>
 

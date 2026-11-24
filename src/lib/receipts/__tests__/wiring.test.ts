@@ -315,6 +315,36 @@ describe('service against the IndexedDB store', () => {
       const r = (await payerStore.byTx('sent:x'))!.receipt
       expect(r.receipt.countersignature).toBeNull()
     })
+
+    /** FR-017: a personal wallet holds the ack until its owner answers, and the prompt counts it. */
+    it('a personal wallet waits for its owner, then a yes confirms what waited and sends the ack', async () => {
+      const payerStore = await openReceiptStore(`p-${Math.random()}`)
+      const payeeStore = await openReceiptStore(`q-${Math.random()}`)
+      const acks: service.AckEnvelope[] = []
+      let answer: boolean | null = null
+      const payer = ports(payerStore, () => ['SPENT', 'SPENT'], [])
+      const payeePorts: service.ReceiptPorts = {
+        ...ports(payeeStore, () => ['SPENT', 'SPENT'], []),
+        publicKey: payee,
+        signer: () => secretKeySigner(payeeSk),
+        walletKind: () => 'PERSONAL',
+        acknowledgementSetting: () => answer,
+        now: () => SENT + 40,
+        sendAck: async (_to, env) => void acks.push(env),
+      }
+      const s = send(payee)
+      await service.captureSendEvidence(payer, { sendEvidence: s, payeeKey: payee, paidAt: SENT, txId: 'sent:x' })
+      const claim = await service.onClaimed(payeePorts, { proofs: s.proofs, mint: s.mint, unit: s.unit, payerKey: getPublicKey(payerSk), paidAt: 0 })
+      expect(claim).toBe('not_acknowledged')
+      expect(acks).toHaveLength(0)
+      expect(await service.awaitingOwnerAnswer(payeeStore)).toBe(1)
+
+      answer = true
+      expect(await service.acknowledgeWaiting(payeePorts)).toBe(1)
+      expect(await service.awaitingOwnerAnswer(payeeStore)).toBe(0)
+      expect(acks).toHaveLength(1)
+      expect(await service.onAcknowledgement(payer, payee, acks[0])).toBe('attached')
+    })
   })
 })
 

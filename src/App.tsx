@@ -72,6 +72,8 @@ import {
 import { MerchantEditPage } from './pages/MerchantEditPage'
 import { PaymentsSettingsPage } from './pages/PaymentsSettingsPage'
 import { NotificationSettingsPage } from './pages/NotificationSettingsPage'
+import { ReceiptSettingsPage } from './pages/ReceiptSettingsPage'
+import { ReceiptAckPrompt } from './components/ReceiptAckPrompt'
 import { SellPage } from './pages/SellPage'
 import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
@@ -594,6 +596,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       {restoring && <RestoringVouchers />}
       {/* #332, #339: a quiet, dismissible link for an account with no handle, on Home only. Never a gate. */}
       <FinishProfilePrompt profile={profile} />
+      {/* Spec 049 FR-017: asked once, at the first received payment it could confirm. Home only. */}
+      <ReceiptAckPrompt />
       <Routes>
         {/*
           The role split. A merchant gets a different home and the two money
@@ -827,6 +831,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           path="/settings/notifications"
           element={<NotificationSettingsPage pubkey={pubkey} />}
         />
+        {/* Every account: anyone can be paid, and the answer must stay changeable (FR-017). */}
+        <Route path="/settings/receipts" element={<ReceiptSettingsPage />} />
         <Route
           path="/settings/payments"
           element={
