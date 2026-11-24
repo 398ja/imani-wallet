@@ -89,6 +89,37 @@ export function unsignedReceipt(s: ReceiptSummary): SignedReceipt {
   return { summaryBytes: encodeSummary(s), payerSignature: null, countersignature: null }
 }
 
+const G_SUMMARY = 1, G_PAYER_SIG = 2, G_ACK_AT = 3, G_ACK_NAMES_PAYER = 4, G_ACK_SIG = 5
+
+/** Java `StoredReceiptCodec.encodeSigned`. */
+export function encodeSignedField(r: SignedReceipt): Uint8Array {
+  const w = new TlvWriter().bytes(G_SUMMARY, r.summaryBytes).hex(G_PAYER_SIG, r.payerSignature)
+  const cs = r.countersignature
+  if (cs) w.varint(G_ACK_AT, cs.claimedAt).varint(G_ACK_NAMES_PAYER, cs.namesPayer ? 1 : 0).hex(G_ACK_SIG, cs.signature)
+  return w.toBytes()
+}
+
+/** Java `StoredReceiptCodec.decodeSigned`. */
+export function decodeSignedField(bytes: Uint8Array): SignedReceipt {
+  let summary: Uint8Array | null = null
+  let payerSig: string | null = null, ackSig: string | null = null
+  let ackAt: number | null = null
+  let namesPayer = true
+  for (const f of readTlv(bytes)) {
+    switch (f.tag) {
+      case G_SUMMARY: summary = f.value; break
+      case G_PAYER_SIG: payerSig = fieldHex(f); break
+      case G_ACK_AT: ackAt = fieldVarint(f); break
+      case G_ACK_NAMES_PAYER: namesPayer = fieldVarint(f) !== 0; break
+      case G_ACK_SIG: ackSig = fieldHex(f); break
+      default: break
+    }
+  }
+  if (!summary) throw new Error('signed receipt has no summary')
+  const cs = ackAt != null && ackSig != null && ackAt > 0 ? { claimedAt: ackAt, namesPayer, signature: ackSig } : null
+  return { summaryBytes: summary, payerSignature: payerSig, countersignature: cs }
+}
+
 /** At most one countersignature is kept (FR-019): an existing one is never replaced. */
 export function withCountersignature(r: SignedReceipt, cs: Countersignature): SignedReceipt {
   if (r.countersignature) return r
