@@ -276,6 +276,45 @@ describe('service against the IndexedDB store', () => {
       const { payer, ack } = await pair(SENT + 40, true)
       expect(await service.onAcknowledgement(payer, getPublicKey(generateSecretKey()), ack)).toBe('mismatch')
     })
+
+    /**
+     * Found on the local stack: the acknowledgement DM arrived while the payer could not reach the
+     * mint. It answered not_settled and the DM was marked processed, so the countersignature was
+     * lost and the receipt was later built payer-only. The verified acknowledgement is kept and
+     * attached when the receipt is built.
+     */
+    it('an acknowledgement that arrives while the mint is unreachable is kept and attached later', async () => {
+      const { payer, payerStore, ack } = await pair(SENT + 40, false)
+      let mintUp = false
+      const flaky: service.ReceiptPorts = {
+        ...payer,
+        checkState: async (m, ys) => {
+          if (!mintUp) throw new Error('mint unreachable')
+          return payer.checkState(m, ys)
+        },
+      }
+      expect(await service.onAcknowledgement(flaky, payee, ack)).toBe('not_settled')
+      expect((await payerStore.allPending())[0].reason).toBe('mint_unreachable')
+      mintUp = true
+      expect((await service.settlePending(flaky)).built).toBe(1)
+      const r = (await payerStore.byTx('sent:x'))!.receipt
+      const sum = decodeSummary(r.receipt.summaryBytes)
+      expect(sum.paidAt).toBe(SENT + 40)
+      expect(verifyCountersignature(r.receipt.countersignature!, sum)).toBe(true)
+      expect(r.showable).toBe(true)
+      expect(r.notes).toEqual([])
+    })
+
+    it('a kept acknowledgement that no longer verifies is dropped, not attached', async () => {
+      const { payer, payerStore, ack } = await pair(SENT + 40, false)
+      const down: service.ReceiptPorts = { ...payer, checkState: async () => { throw new Error('down') } }
+      expect(await service.onAcknowledgement(down, payee, ack)).toBe('not_settled')
+      // Something rewrites the pending row's reference after the ack was kept.
+      await payerStore.updatePending((await payerStore.allPending())[0].paymentId, (x) => ({ ...x, reference: 'changed' }))
+      expect((await service.settlePending(payer)).built).toBe(1)
+      const r = (await payerStore.byTx('sent:x'))!.receipt
+      expect(r.receipt.countersignature).toBeNull()
+    })
   })
 })
 

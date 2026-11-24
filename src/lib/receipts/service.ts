@@ -259,7 +259,9 @@ export async function settle(ports: ReceiptPorts, paymentId: string, ack: Counte
     return null
   }
   const spent = all.proofs.filter((x) => spentYs.has(ysOf.get(x.secret)!))
-  if (spent.length !== all.proofs.length && (ack == null || spent.length === 0)) {
+  // An acknowledgement kept from before the receipt could be built counts as one here too.
+  const ackIn = ack ?? p.heldAck ?? null
+  if (spent.length !== all.proofs.length && (ackIn == null || spent.length === 0)) {
     // FR-003: never while any proof could still be spendable, unless the payee acknowledged a
     // partial claim, and then the receipt states the acknowledged amount, never more.
     await setReason(ports, paymentId, 'awaiting_spend')
@@ -293,7 +295,7 @@ export async function settle(ports: ReceiptPorts, paymentId: string, ack: Counte
     await setReason(ports, paymentId, 'signer_unsupported')
     return null
   }
-  let acked = ack
+  let acked = ackIn
   if (acked) {
     if (!verifyCountersignature(acked, summary)) {
       await ports.store.updatePending(paymentId, (x) => ({ ...x, notes: [...x.notes, 'acknowledgement rejected: does not match the payment'] }))
@@ -313,7 +315,7 @@ export async function settle(ports: ReceiptPorts, paymentId: string, ack: Counte
     showable: p.lockedToPayee || acked != null,
   }
   const kept = await ports.store.putIfAbsent(stored, p.txId ? { txId: p.txId } : undefined)
-  await ports.store.updatePending(paymentId, (x) => ({ ...x, state: 'RECEIPTED', reason: undefined }))
+  await ports.store.updatePending(paymentId, (x) => ({ ...x, state: 'RECEIPTED', reason: undefined, heldAck: undefined }))
   ports.count('built', acked ? 'countersigned' : 'uncountersigned')
   console.info('[receipts] built', ref(paymentId), acked ? 'countersigned' : 'payer-only')
   await saveBackup(ports, paymentId, kept)
@@ -507,7 +509,13 @@ async function handleAck(ports: ReceiptPorts, author: string, env: AckEnvelope):
     await ports.store.updatePending(pid, (x) => ({ ...x, paidAt: claimed.paidAt }))
   }
   const built = await settle(ports, pid, cs)
-  if (!built) return 'not_settled'
+  if (!built) {
+    // Verified above, but the receipt cannot be built yet (mint unreachable, or a proof not yet
+    // seen spent). The DM that carried it is marked processed, so keep it: settlePending attaches
+    // it, re-verified, when the receipt is built.
+    await ports.store.updatePending(pid, (x) => ({ ...x, heldAck: cs }))
+    return 'not_settled'
+  }
   return built.receipt.countersignature ? 'attached' : 'mismatch'
 }
 

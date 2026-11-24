@@ -51,6 +51,12 @@ export interface PendingPaymentRow {
   sendId?: string
   /** Set once `pending_stale` was counted, so it is counted once (telemetry contract). */
   staleCounted?: boolean
+  /**
+   * The payee's acknowledgement, verified when it arrived but before the receipt could be built
+   * (mint unreachable, or not yet seen spent). Attached at settlement, re-verified there. The DM
+   * that carried it is marked processed, so this is the only copy. Signatures only: no secrets.
+   */
+  heldAck?: { claimedAt: number; namesPayer: boolean; signature: string }
 }
 
 /** One stored receipt with the fields a list renders without decoding. */
