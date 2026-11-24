@@ -92,6 +92,7 @@ import { CouponsPage, ExpiringCouponsPage, TransactionsPage } from './pages/Reco
 import { useExpiryReminders } from './hooks/useExpiryReminders'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
+import { ReceiptCheckPage } from './pages/ReceiptCheckPage'
 import { PayPage } from './pages/PayPage'
 import { UseOnlinePage } from './pages/UseOnlinePage'
 import { checkoutCodesEnabled } from './lib/checkoutCodePorts'
@@ -722,6 +723,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           </>
         )}
         <Route path="/scan" element={<ScanPage />} />
+        {/* Spec 049: a scanned receipt, checked. The code arrives in router state only. */}
+        <Route path="/receipt/check" element={<ReceiptCheckPage />} />
         {/* A terminal setup code scanned, or a setup link opened, on a device that holds a
             personal wallet (#160 owner report). A terminal is a fresh identity on its own
             device, so this explains rather than sets anything up. */}

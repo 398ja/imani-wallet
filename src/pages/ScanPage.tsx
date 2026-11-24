@@ -64,6 +64,14 @@ export function ScanPage() {
           navigate(`/pay?paymentRequest=${encodeURIComponent(text.trim())}`)
           return
         }
+        // A payment receipt (spec 049, `imrc1:`). Checked locally, before anything that costs a
+        // round trip. Passed in router state, not the URL: it carries a payer signature and the
+        // key to its evidence, and URLs end up in history.
+        const { isReceiptQr } = await import('../lib/receipts')
+        if (isReceiptQr(text)) {
+          navigate('/receipt/check', { state: { qr: text.trim() } })
+          return
+        }
         // A terminal setup code (#160, owner report on wallet 0.19.0). It is scanned by the
         // device being set up, on its setup screen, and the owner's operator reached this screen
         // instead, which said "not a payment request, a voucher, or an account". Sent to
@@ -93,7 +101,7 @@ export function ScanPage() {
         // A stall's own QR opens its profile, where Buy and Pay live (#280);
         // anyone else keeps the send flow.
         if (hex) navigate(await routeForAddress(hex))
-        else setError('That is not a payment request, a voucher, or an account we can find.')
+        else setError('That is not a payment request, a receipt, a voucher, or an account we can find.')
       } finally {
         resolving.current = false
       }
@@ -145,7 +153,7 @@ export function ScanPage() {
   return (
     <Screen>
       <BackLink to="/" label="Back" />
-      <PageHeader title="Scan" subtitle="A payment request, or someone's code" />
+      <PageHeader title="Scan" subtitle="A payment request, a receipt, or someone's code" />
 
       <div className="overflow-hidden rounded-2xl bg-mono-900">
         <video ref={videoRef} className="aspect-square w-full object-cover" />
