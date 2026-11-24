@@ -375,13 +375,17 @@ async function keysetOf(mintUrl: string, keysetId: string): Promise<{ unit: stri
   return k?.keys ? { unit: meta.unit, keys: k.keys } : null
 }
 
-function verifyPorts(): VerifyPorts {
+function verifyPorts(forStall?: string): VerifyPorts {
   return {
-    publicKey: myPubkey,
+    // A terminal checks for the stall it acts for, not its own device key.
+    publicKey: forStall ? () => forStall : myPubkey,
     keyset: keysetOf,
     checkState: checkStateWithWitness,
     fetchEvidence: (eventId) => fetchEvidenceBlob(io, eventId),
     ownRecord: async (paymentId) => {
+      // The payment records are the owner's (its receipt store, keyed by its own key). A terminal
+      // holds none: it relies on the mint, which saw the payment collected with the stall's key.
+      if (forStall) return 'no_records'
       const ports = await portsOrNull()
       const found = ports ? await ports.store.get(paymentId) : null
       if (!found || found.receipt.role !== 'PAYEE') return null
@@ -394,7 +398,12 @@ function verifyPorts(): VerifyPorts {
   }
 }
 
-/** Verify a scanned `imrc1:` receipt with the app's ports. Never throws. */
-export function verifyScanned(qrText: string): Promise<VerifyResult> {
-  return verifyScannedWith(verifyPorts(), qrText)
+/**
+ * Verify a scanned `imrc1:` receipt with the app's ports. Never throws.
+ *
+ * `forStall`: a terminal passes the stall it acts for (it holds `receipt:read` for it), so "Paid to
+ * you" means paid to that stall, confirmed by the mint. The owner's app passes nothing.
+ */
+export function verifyScanned(qrText: string, forStall?: string): Promise<VerifyResult> {
+  return verifyScannedWith(verifyPorts(forStall), qrText)
 }

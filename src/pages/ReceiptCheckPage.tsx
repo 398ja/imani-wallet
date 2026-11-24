@@ -18,7 +18,15 @@ import { verifyScanned, type VerifyResult } from '../lib/receipts'
  * The QR text arrives in router state, never in the URL: it carries a payer
  * signature and a key to the evidence, and URLs end up in history and logs.
  */
-export function ReceiptCheckPage() {
+export function ReceiptCheckPage({
+  forStall,
+  scanPath = '/scan',
+}: {
+  /** A terminal: the stall it checks for (`receipt:read`). The owner's app passes nothing. */
+  forStall?: string
+  /** Where Back and Scan another go. */
+  scanPath?: string
+} = {}) {
   const location = useLocation()
   const navigate = useNavigate()
   const qrText = (location.state as { qr?: string } | null)?.qr
@@ -27,16 +35,16 @@ export function ReceiptCheckPage() {
   useEffect(() => {
     if (!qrText) return
     let live = true
-    void verifyScanned(qrText).then((r) => live && setResult(r))
+    void verifyScanned(qrText, forStall).then((r) => live && setResult(r))
     return () => {
       live = false
     }
-  }, [qrText])
+  }, [qrText, forStall])
 
   if (!qrText) {
     return (
       <Screen>
-        <BackLink to="/scan" label="Scan" />
+        <BackLink to={scanPath} label="Scan" />
         <p className="text-sm text-mono-500">Scan a receipt code to check it.</p>
       </Screen>
     )
@@ -44,10 +52,10 @@ export function ReceiptCheckPage() {
 
   return (
     <Screen>
-      <BackLink to="/scan" label="Scan" />
-      {result ? <ResultCard result={result} /> : <CheckingCard />}
+      <BackLink to={scanPath} label="Scan" />
+      {result ? <ResultCard result={result} forStall={forStall !== undefined} /> : <CheckingCard />}
       {result ? <Details result={result} /> : null}
-      <Button variant="outline" className="mt-2 w-full" onClick={() => navigate('/scan', { replace: true })}>
+      <Button variant="outline" className="mt-2 w-full" onClick={() => navigate(scanPath, { replace: true })}>
         <ScanLine className="mr-2 h-4 w-4" aria-hidden /> Scan another
       </Button>
     </Screen>
@@ -68,8 +76,12 @@ function CheckingCard() {
 
 type Tone = 'good' | 'caution' | 'bad'
 
-/** What the verdict means to the person at the till, in their words. */
-function headline(r: VerifyResult): { tone: Tone; title: string; line: string } {
+/**
+ * What the verdict means to the person at the till, in their words. On a terminal (`forStall`) the
+ * till is not the payee, the stall is: "Paid to this stall", confirmed by the mint.
+ */
+function headline(r: VerifyResult, forStall = false): { tone: Tone; title: string; line: string } {
+  const paidTitle = forStall ? 'Paid to this stall' : 'Paid to you'
   if (r.verdict === 'invalid') {
     return { tone: 'bad', title: 'Not a valid receipt', line: 'Do not accept it as proof of payment.' }
   }
@@ -77,16 +89,23 @@ function headline(r: VerifyResult): { tone: Tone; title: string; line: string } 
     return { tone: 'bad', title: 'Payment not confirmed', line: 'The mint has no record of this payment being collected.' }
   }
   if (r.mine === 'payee' && r.records === 'found_in_records') {
-    return { tone: 'good', title: 'Paid to you', line: 'This payment is in your records.' }
+    return { tone: 'good', title: paidTitle, line: 'This payment is in your records.' }
   }
   if (r.mine === 'payee' && r.mint === 'confirmed') {
-    return { tone: 'good', title: 'Paid to you', line: 'The mint confirms the payment was collected with your key.' }
+    return {
+      tone: 'good',
+      title: paidTitle,
+      line: forStall
+        ? 'The mint confirms the stall collected this payment.'
+        : 'The mint confirms the payment was collected with your key.',
+    }
   }
   if (r.verdict === 'verified' || r.verdict === 'verified_offline') {
+    const other = r.mine === 'neither'
     return {
-      tone: r.mine === 'neither' ? 'caution' : 'good',
-      title: r.mine === 'neither' ? 'Valid, but not paid to you' : 'Valid receipt',
-      line: r.mine === 'neither' ? 'The signatures check out, for a payment to someone else.' : 'The signatures check out.',
+      tone: other ? 'caution' : 'good',
+      title: other ? (forStall ? 'Valid, but not paid to this stall' : 'Valid, but not paid to you') : 'Valid receipt',
+      line: other ? 'The signatures check out, for a payment to someone else.' : 'The signatures check out.',
     }
   }
   if (r.verdict === 'unacknowledged') {
@@ -101,8 +120,8 @@ const TONE: Record<Tone, { Icon: typeof CheckCircle2; ring: string; icon: string
   bad: { Icon: XCircle, ring: 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40', icon: 'text-red-600' },
 }
 
-function ResultCard({ result }: { result: VerifyResult }) {
-  const h = headline(result)
+function ResultCard({ result, forStall = false }: { result: VerifyResult; forStall?: boolean }) {
+  const h = headline(result, forStall)
   const { Icon, ring, icon } = TONE[h.tone]
   return (
     <section

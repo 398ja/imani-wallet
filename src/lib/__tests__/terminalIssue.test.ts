@@ -254,7 +254,7 @@ describe('the authority that is issued', () => {
     )
 
     expect(credential.role).toBe(TERMINAL_ROLES.REDEEM_ONLY)
-    expect(credential.permissions).toEqual([`voucher:redeem:${STALL}`])
+    expect(credential.permissions).toEqual([`voucher:redeem:${STALL}`, `receipt:read:${STALL}`])
   })
 
   it('refuses to be prepared at all when the check would fail', async () => {

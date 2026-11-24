@@ -197,3 +197,12 @@ export function mayRedeem(actor: Actor): boolean {
   if (actor.kind === 'owner') return true
   return mayAct(actor.permissions, TERMINAL_ACTIONS.REDEEM, actor.stallPubkey)
 }
+
+/**
+ * May this actor check a customer's receipt for its stall (spec 049)? Every role holds
+ * `receipt:read` by default; an owner always can. Read-only: an expired credential still checks.
+ */
+export function mayReadReceipts(actor: Actor): boolean {
+  if (actor.kind === 'owner') return true
+  return mayAct(actor.permissions, TERMINAL_ACTIONS.RECEIPT_READ, actor.stallPubkey)
+}

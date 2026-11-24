@@ -108,6 +108,11 @@ export function roleOf(value: unknown): TerminalRole | null {
 export const TERMINAL_ACTIONS = {
   REDEEM: 'voucher:redeem',
   ISSUE: 'voucher:issue',
+  /**
+   * Check a customer's payment receipt (spec 049) for this stall. Read-only: it moves no value
+   * and signs nothing, so every role holds it by default.
+   */
+  RECEIPT_READ: 'receipt:read',
 } as const
 
 export type TerminalAction = (typeof TERMINAL_ACTIONS)[keyof typeof TERMINAL_ACTIONS]
@@ -116,9 +121,10 @@ export type TerminalAction = (typeof TERMINAL_ACTIONS)[keyof typeof TERMINAL_ACT
 const ROLE_ACTIONS: Record<TerminalRole, readonly TerminalAction[]> = {
   // Redemption must never need the network to authorise it, and it is the one
   // action that carries no value out of the stall — so it is the floor.
-  [TERMINAL_ROLES.REDEEM_ONLY]: [TERMINAL_ACTIONS.REDEEM],
+  // Receipt checking is read-only and carries nothing out of the stall: every role has it.
+  [TERMINAL_ROLES.REDEEM_ONLY]: [TERMINAL_ACTIONS.REDEEM, TERMINAL_ACTIONS.RECEIPT_READ],
   // Issuance is value-bearing and additive: a full till redeems too.
-  [TERMINAL_ROLES.ISSUE_AND_REDEEM]: [TERMINAL_ACTIONS.ISSUE, TERMINAL_ACTIONS.REDEEM],
+  [TERMINAL_ROLES.ISSUE_AND_REDEEM]: [TERMINAL_ACTIONS.ISSUE, TERMINAL_ACTIONS.REDEEM, TERMINAL_ACTIONS.RECEIPT_READ],
 }
 
 /** A stall pubkey: 32-byte hex, lowercased. */
