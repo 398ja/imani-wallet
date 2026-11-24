@@ -95,6 +95,7 @@ import { useExpiryReminders } from './hooks/useExpiryReminders'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
 import { ReceiptCheckPage } from './pages/ReceiptCheckPage'
+import { ReceiptScanPage } from './pages/ReceiptScanPage'
 import { PayPage } from './pages/PayPage'
 import { UseOnlinePage } from './pages/UseOnlinePage'
 import { checkoutCodesEnabled } from './lib/checkoutCodePorts'
@@ -701,6 +702,11 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             {terminal.actor === null && (
               <>
                 <Route path="/merchant/transactions" element={<MerchantTransactionsPage />} />
+                {/* Spec 049: the owner's receipt scanner, opened from Transactions. */}
+                <Route
+                  path="/receipts/scan"
+                  element={<ReceiptScanPage back={{ to: '/merchant/transactions', label: 'Transactions' }} />}
+                />
                 <Route path="/merchant/coupons" element={<IssuedCouponsPage stallPubkey={pubkey} />} />
                 {/* The full list behind the dashboard's capped "Expiring soon". */}
                 <Route path="/merchant/expiring" element={<ExpiringVouchersPage />} />

@@ -59,7 +59,7 @@ vi.mock('../RedeemPage', () => ({ RedeemPage: () => <p>redeem-screen</p> }))
 // which tills reach their routes.
 vi.mock('../SellPage', () => ({ SellPage: () => <p>sell-screen</p> }))
 vi.mock('../CashbackIssuePage', () => ({ CashbackIssuePage: () => <p>cashback-screen</p> }))
-vi.mock('../TerminalReceiptScanPage', () => ({ TerminalReceiptScanPage: () => <p>receipt-scan-screen</p> }))
+vi.mock('../ReceiptScanPage', () => ({ ReceiptScanPage: () => <p>receipt-scan-screen</p> }))
 vi.mock('../ReceiptCheckPage', () => ({
   ReceiptCheckPage: ({ forStall, scanPath }: { forStall?: string; scanPath?: string }) => (
     <p>

@@ -29,7 +29,11 @@ export function ReceiptCheckPage({
 } = {}) {
   const location = useLocation()
   const navigate = useNavigate()
-  const qrText = (location.state as { qr?: string } | null)?.qr
+  const routed = location.state as { qr?: string; from?: string } | null
+  const qrText = routed?.qr
+  // Back and Scan another return to the scanner that opened the check (the receipt scanner, or the
+  // owner's general Scan). Only an in-app path is honoured.
+  if (routed?.from?.startsWith('/') && !routed.from.startsWith('//')) scanPath = routed.from
   const [result, setResult] = useState<VerifyResult | undefined>(undefined)
 
   useEffect(() => {

@@ -41,7 +41,7 @@ import { RedeemPage } from './RedeemPage'
 import { SellPage } from './SellPage'
 import { CashbackIssuePage } from './CashbackIssuePage'
 import { ReceiptCheckPage } from './ReceiptCheckPage'
-import { TerminalReceiptScanPage } from './TerminalReceiptScanPage'
+import { ReceiptScanPage } from './ReceiptScanPage'
 import { NotTrading } from './MerchantHomePage'
 import { LAPSE } from '../lib/terminalSession'
 import { getSigner } from '../lib/nap'
@@ -254,7 +254,7 @@ export function TerminalApp() {
           are the owner's, not this device's. */}
       <Route
         path="/receipts/scan"
-        element={canReadReceiptsNow(till.actor, till.session) ? <TerminalReceiptScanPage /> : <Navigate to="/" replace />}
+        element={canReadReceiptsNow(till.actor, till.session) ? <ReceiptScanPage /> : <Navigate to="/" replace />}
       />
       <Route
         path="/receipt/check"
