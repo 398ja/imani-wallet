@@ -93,11 +93,30 @@ describe('a permission always names its stall', () => {
 })
 
 describe('what each role grants', () => {
-  it('gives a redemption-only terminal exactly redemption', () => {
+  it('gives a redemption-only terminal redemption and receipt checks, nothing else', () => {
     const grant = grantFor(TERMINAL_ROLES.REDEEM_ONLY, STALL)
-    expect(grant).toEqual([`voucher:redeem:${STALL}`])
+    expect(grant).toEqual([`voucher:redeem:${STALL}`, `receipt:read:${STALL}`])
     // The negative that matters: no issuance, at all.
     expect(grant.some((p) => p.startsWith('voucher:issue'))).toBe(false)
+  })
+
+  it('gives every role receipt checks for its own stall, by default', () => {
+    for (const role of ALL_TERMINAL_ROLES) {
+      expect(grantFor(role, STALL)).toContain(`receipt:read:${STALL}`)
+    }
+    expect(permissionFor(TERMINAL_ACTIONS.RECEIPT_READ, STALL)).toBe(`receipt:read:${STALL}`)
+  })
+
+  it('does not let receipt checks for one stall read another', () => {
+    const permissions = grantFor(TERMINAL_ROLES.REDEEM_ONLY, STALL)
+    expect(mayAct(permissions, TERMINAL_ACTIONS.RECEIPT_READ, STALL)).toBe(true)
+    expect(mayAct(permissions, TERMINAL_ACTIONS.RECEIPT_READ, 'b'.repeat(64))).toBe(false)
+  })
+
+  it('refuses a credential from before receipt checks, whose grant now lacks them', () => {
+    // The grant is re-derived from the role at every login, so an older till simply gains it. A
+    // permission set presented from elsewhere without it is not the role's grant any more.
+    expect(isValidGrant([`voucher:redeem:${STALL}`], TERMINAL_ROLES.REDEEM_ONLY, STALL)).toBe(false)
   })
 
   it('gives a full till both, because issuance is additive', () => {

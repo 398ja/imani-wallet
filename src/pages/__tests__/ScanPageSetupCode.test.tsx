@@ -69,6 +69,6 @@ describe('a terminal setup code on the Scan screen', () => {
 
   it('garbage still gets the ordinary refusal', async () => {
     await scan('imani-terminal:1:nothex:x')
-    expect(await screen.findByText(/not a payment request, a voucher, or an account/)).toBeTruthy()
+    expect(await screen.findByText(/not a payment request, a receipt, a voucher, or an account/)).toBeTruthy()
   })
 })

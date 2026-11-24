@@ -57,9 +57,9 @@ import { loadMerchant } from './merchant'
 import { licenceFromToken } from './licences'
 import { ForeignVoucherRefusedError, MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_UNKNOWN, refuseForeignVouchers } from './merchantVouchers'
 import { checkPart, checkRedemption, redeemLockName } from './redemptionLedger'
-import { exactFaceValue, parseVoucherToken, type VoucherValidation } from './voucherToken'
+import { exactFaceValue, parseVoucherToken, tokenProofs, type VoucherValidation } from './voucherToken'
 import { raiseHomecomingAlert } from './terminalHomecoming'
-import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
+import { getWallet, listTransactions, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
 import { shopAttributionFor } from './shopTakings'
@@ -1356,6 +1356,18 @@ function redemptionAdapter(): RedemptionAdapter {
       // hear its own BroadcastChannel post — see notifyWalletChanged.
       notifyWalletChanged()
 
+      // Spec 049: the payee's record of this payment, and its acknowledgement to the payer when
+      // policy allows. Not awaited, never throws: it cannot touch the redemption above.
+      // The payer is the payload's `sender_pubkey` first (gateway-core sets it from the send row):
+      // a relayed wrap is signed by the gateway, so the envelope signer is the payer only for a
+      // bare wallet-to-wallet wrap. Same precedence as the claim receipt below, minus issuerId,
+      // which names who minted the coupon, never who paid.
+      void noteReceiptClaim(
+        token,
+        receiptPayerOf(meta, opts?.senderPubkey as string | undefined),
+        meta?.paymentRequestId as string | undefined,
+      )
+
       // Say so on screen. This is the ONLY announcement most arrivals ever get:
       // the "payment on its way" toast is driven by the Artemis queue, and the
       // only thing that enqueues to it is the atomic-send saga. A coupon
@@ -2120,4 +2132,63 @@ export function stopDmPoll(): void {
   // and those ids are what stop the next session re-reading wraps it has
   // already handled.
   flushDeferredWrites()
+}
+
+/**
+ * Spec 049 payee side: store a PAYEE receipt for a token just redeemed, keyed by its payment id,
+ * and acknowledge it to the payer when policy allows. NEVER THROWS.
+ */
+async function noteReceiptClaim(token: string, senderPubkey: string | undefined, reference: string | undefined): Promise<void> {
+  try {
+    const parsed = parseVoucherToken(token)
+    // The incoming row: the redeem stamps it with this token's transfer id (withCorrelation), which
+    // survives the swap that changes the row's own token id. Lets the payee's check show the face.
+    const transferId = transferIdFor(token)
+    const txId = await listTransactions().then(
+      (rows) => receivedRowIdFor(rows, transferId),
+      () => undefined,
+    )
+    const proofs = tokenProofs(token).map((p) => ({
+      mint: parsed.mintUrl,
+      id: p.id,
+      amount: p.amount,
+      secret: p.secret,
+      C: p.C,
+      dleq: p.dleq ?? null,
+    }))
+    if (proofs.length === 0) return
+    const { noteClaimedPayment } = await import('./receipts')
+    await noteClaimedPayment({
+      proofs,
+      mint: parsed.mintUrl,
+      unit: parsed.unit,
+      payerKey: senderPubkey ?? null,
+      reference: reference ?? null,
+      paidAt: 0,
+      ...(txId ? { txId } : {}),
+    })
+  } catch (error) {
+    console.warn('[dmPoll] receipt claim not recorded', (error as Error)?.name ?? 'error')
+  }
+}
+
+/**
+ * Spec 049: who paid, for the payee's acknowledgement. The payload's `sender_pubkey` first, then the
+ * envelope signer (a bare wallet-to-wallet wrap). Never `issuerId`: that is who minted the coupon.
+ */
+export function receiptPayerOf(meta: Record<string, unknown> | undefined, envelopeSigner: string | undefined): string | undefined {
+  const fromPayload = meta?.senderPubkey
+  if (typeof fromPayload === 'string' && fromPayload !== '') return fromPayload
+  return envelopeSigner || undefined
+}
+
+/** Spec 049: the id of the incoming row a redeem of this transfer wrote, or undefined. */
+export function receivedRowIdFor(rows: ReadonlyArray<unknown>, transferId: string): string | undefined {
+  for (const row of rows) {
+    const r = row as { id?: unknown; transferId?: unknown; transfer_id?: unknown; type?: unknown; direction?: unknown }
+    if (r.transferId !== transferId && r.transfer_id !== transferId) continue
+    if (r.direction === 'out' || r.type === 'sent' || r.type === 'payment') continue
+    if (typeof r.id === 'string') return r.id
+  }
+  return undefined
 }

@@ -633,6 +633,19 @@ export function createDmCryptoAdapter(): CryptoAdapter {
           if (outcome) return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
         }
 
+        // Spec 049: a payee's receipt acknowledgement. Only from a wrap whose seal matches its
+        // rumor, so the author is the payee and not whoever typed the envelope. Handled here and
+        // marked processed; never shown as a message.
+        if (rumor.content.includes('imani-receipt/ack')) {
+          const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))
+          if (sealAuthor && sealAuthor === rumor.pubkey) {
+            const handled = await import('./receipts').then((m) => m.handleReceiptDm(sealAuthor, rumor.content)).catch(() => false)
+            if (handled) return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+          } else {
+            console.warn('[dmCrypto] receipt acknowledgement in a wrap whose seal does not match its rumor')
+          }
+        }
+
         const transferSignature = parseTransferSignature(rumor.content)
         if (transferSignature) {
           const sealAuthor = getSigner().withPrivkey((key) => sealAuthorOf(event as never, key))

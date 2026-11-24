@@ -14,7 +14,7 @@
  * costs a customer nothing, whereas a guessed or repaired key could cost them the coupons.
  */
 
-export const ONLINE_SHOP_PLATFORMS = ['woocommerce', 'wordpress', 'magento', 'shopify'] as const
+export const ONLINE_SHOP_PLATFORMS = ['woocommerce', 'wordpress', 'magento', 'shopify', 'prestashop'] as const
 
 export type OnlineShopPlatform = (typeof ONLINE_SHOP_PLATFORMS)[number]
 

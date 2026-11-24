@@ -57,6 +57,10 @@ const PLATFORM_LABELS: Record<OnlineShopPlatform, { name: string; steps: string[
     name: 'Shopify',
     steps: ['In your Shopify admin, add the Imani checkout app.', "Open the app's Imani settings and choose Connect to Imani."],
   },
+  prestashop: {
+    name: 'PrestaShop',
+    steps: ['In your PrestaShop back office, upload the Imani checkout codes module.', "Open the module's Configure page and copy its enrolment code."],
+  },
 }
 
 /** The `online_shop` republish retries this often, this many times, while the screen is open. */

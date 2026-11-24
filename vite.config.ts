@@ -654,6 +654,7 @@ export default defineConfig({
       '@imani/redemption': imani('redemption'),
       '@imani/reports': imani('reports'),
       '@imani/payment-requests': imani('payment-requests'),
+      '@imani/receipts': imani('receipts'),
       'imani-qr': imani('imani-qr'),
     },
   },

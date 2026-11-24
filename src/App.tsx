@@ -72,6 +72,8 @@ import {
 import { MerchantEditPage } from './pages/MerchantEditPage'
 import { PaymentsSettingsPage } from './pages/PaymentsSettingsPage'
 import { NotificationSettingsPage } from './pages/NotificationSettingsPage'
+import { ReceiptSettingsPage } from './pages/ReceiptSettingsPage'
+import { ReceiptAckPrompt } from './components/ReceiptAckPrompt'
 import { SellPage } from './pages/SellPage'
 import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
@@ -92,6 +94,7 @@ import { CouponsPage, ExpiringCouponsPage, TransactionsPage } from './pages/Reco
 import { useExpiryReminders } from './hooks/useExpiryReminders'
 import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
+import { ReceiptCheckPage } from './pages/ReceiptCheckPage'
 import { PayPage } from './pages/PayPage'
 import { UseOnlinePage } from './pages/UseOnlinePage'
 import { checkoutCodesEnabled } from './lib/checkoutCodePorts'
@@ -593,6 +596,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       {restoring && <RestoringVouchers />}
       {/* #332, #339: a quiet, dismissible link for an account with no handle, on Home only. Never a gate. */}
       <FinishProfilePrompt profile={profile} />
+      {/* Spec 049 FR-017: asked once, at the first received payment it could confirm. Home only. */}
+      <ReceiptAckPrompt />
       <Routes>
         {/*
           The role split. A merchant gets a different home and the two money
@@ -722,6 +727,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           </>
         )}
         <Route path="/scan" element={<ScanPage />} />
+        {/* Spec 049: a scanned receipt, checked. The code arrives in router state only. */}
+        <Route path="/receipt/check" element={<ReceiptCheckPage />} />
         {/* A terminal setup code scanned, or a setup link opened, on a device that holds a
             personal wallet (#160 owner report). A terminal is a fresh identity on its own
             device, so this explains rather than sets anything up. */}
@@ -824,6 +831,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           path="/settings/notifications"
           element={<NotificationSettingsPage pubkey={pubkey} />}
         />
+        {/* Every account: anyone can be paid, and the answer must stay changeable (FR-017). */}
+        <Route path="/settings/receipts" element={<ReceiptSettingsPage />} />
         <Route
           path="/settings/payments"
           element={

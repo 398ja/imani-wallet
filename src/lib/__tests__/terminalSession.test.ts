@@ -6,6 +6,7 @@ import {
   SESSION_HOURS,
   SESSION_KIND,
   canIssueNow,
+  canReadReceiptsNow,
   canRedeemNow,
   issuePermissionFor,
   openSession,
@@ -205,5 +206,28 @@ describe('a stall on its own device sees no change', () => {
     const dead = { ...session(), expiresAt: 0 }
     expect(canIssueNow(owner, dead)).toBe(true)
     expect(canIssueNow(owner, openSession(terminal(), SESSION_KIND.REDUCED, 1))).toBe(true)
+  })
+})
+
+describe('receipt checks (spec 049, receipt:read)', () => {
+  it('every role may check receipts in a live session, FULL or REDUCED', () => {
+    for (const role of [TERMINAL_ROLES.REDEEM_ONLY, TERMINAL_ROLES.ISSUE_AND_REDEEM]) {
+      expect(canReadReceiptsNow(terminal(role), session())).toBe(true)
+      expect(canReadReceiptsNow(terminal(role), openSession(terminal(role), SESSION_KIND.REDUCED, NOW))).toBe(true)
+    }
+  })
+
+  it('a lapsed or missing session checks nothing', () => {
+    expect(canReadReceiptsNow(terminal(), { ...session(), expiresAt: 0 })).toBe(false)
+    expect(canReadReceiptsNow(terminal(), null)).toBe(false)
+  })
+
+  it('a credential without receipt:read, or for another stall, may not', () => {
+    expect(canReadReceiptsNow({ ...terminal(), permissions: [`voucher:redeem:${STALL}`] }, session())).toBe(false)
+    expect(canReadReceiptsNow({ ...terminal(), permissions: grantFor(TERMINAL_ROLES.REDEEM_ONLY, 'b'.repeat(64)) }, session())).toBe(false)
+  })
+
+  it('the owner always may, session or not', () => {
+    expect(canReadReceiptsNow(owner, null)).toBe(true)
   })
 })

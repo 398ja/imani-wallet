@@ -12,6 +12,12 @@ describe('parseOnlineShop (#402 contract §4)', () => {
     expect(parseOnlineShop({ ...good, redeem_key: S.toUpperCase() })?.redeemKey).toBe(S)
   })
 
+  it('reads every platform a shop module enrols as (#414: PrestaShop)', () => {
+    for (const platform of ['woocommerce', 'wordpress', 'magento', 'shopify', 'prestashop']) {
+      expect(parseOnlineShop({ ...good, platform })?.platform).toBe(platform)
+    }
+  })
+
   it.each([
     ['absent', undefined],
     ['null', null],

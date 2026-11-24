@@ -1,5 +1,5 @@
 import { REVOCATION_DELAY_HOURS } from './terminalRoster'
-import { mayIssue, mayRedeem, type Actor, type TerminalActor } from './actor'
+import { mayIssue, mayReadReceipts, mayRedeem, type Actor, type TerminalActor } from './actor'
 import { TERMINAL_ACTIONS, permissionFor } from './terminalRole'
 
 /**
@@ -169,6 +169,13 @@ export function canRedeemNow(actor: Actor, session: TerminalSession | null): boo
   if (actor.kind === 'owner') return mayRedeem(actor)
   if (!sessionState(session).live) return false
   return mayRedeem(actor)
+}
+
+/** May this actor check receipts right now? A terminal needs a live session, like Redeem. */
+export function canReadReceiptsNow(actor: Actor, session: TerminalSession | null): boolean {
+  if (actor.kind === 'owner') return mayReadReceipts(actor)
+  if (!sessionState(session).live) return false
+  return mayReadReceipts(actor)
 }
 
 /**

@@ -2501,6 +2501,15 @@ class GatewayAPI {
     return this.requestWithHeaders('POST', `/api/v1/atomic-send/${sendId}/ack-keep-token`, {});
   }
 
+  /**
+   * Spec 049: lets gateway-core erase the sent proofs (`send_evidence`) it returned for a
+   * COMPLETED send. Idempotent. Call only AFTER the evidence is durably stored as a pending
+   * receipt; a failed ack is harmless, the gateway's retention expires it.
+   */
+  async ackSendEvidence(sendId) {
+    return this.requestWithHeaders('POST', `/api/v1/atomic-send/${sendId}/ack-send-evidence`, {});
+  }
+
   // ==================== Business Portal Endpoints ====================
 
   /**
