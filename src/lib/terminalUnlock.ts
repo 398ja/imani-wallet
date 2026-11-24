@@ -171,6 +171,33 @@ export function openTill(): {
   return unlocked ? held : null
 }
 
+/**
+ * Spec 049 FR-027d: the open till's authority for a receipt check, from the credential it unlocked
+ * with: the signed `stall_pubkey`, `lock_key`, `role` and `owner_attestation`, plus the
+ * credential's own expiry, so any of the stall's devices can rebuild the stall's signature. Null
+ * while locked, or for a legacy till with no attestation (its checks then count only on the
+ * owner's wallet, through the roster).
+ */
+export function tillCheckProof(): import('./receipts/checks').TerminalProof | null {
+  if (!unlocked || !heldToken) return null
+  const facts = credentialFromToken(heldToken)
+  if (!facts?.attested || facts.expiresAt === undefined) return null
+  try {
+    const m = JSON.parse(facts.merchantMetadata) as Record<string, unknown>
+    const a = m.owner_attestation
+    if (typeof m.stall_pubkey !== 'string' || typeof m.lock_key !== 'string' || typeof m.role !== 'string' || !a) return null
+    return {
+      stall_pubkey: m.stall_pubkey,
+      lock_key: m.lock_key,
+      role: m.role,
+      expires_at: String(facts.expiresAt),
+      owner_attestation: a as import('./ownerAttestation').OwnerAttestation,
+    }
+  } catch {
+    return null
+  }
+}
+
 /** Lock the till: drop the signer, keep the twelve-hour session (spec 2.3). */
 export function lockTerminal(): void {
   unlocked = false

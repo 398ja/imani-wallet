@@ -166,3 +166,102 @@ describe('the receipt check card', () => {
     expect(seen).toEqual([])
   })
 })
+
+/**
+ * Spec 049 FR-027b/e/f: a receipt already checked. The verdict stays, the top area and its tick
+ * turn grey so staff notice, and the line says when and by whom, in the viewer's words.
+ */
+describe('already checked (FR-027b)', () => {
+  const AT = 1_795_003_600
+  const when = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(AT * 1000))
+  const paid = (over: Partial<VerifyResult>) => result({ mine: 'payee', records: 'found_in_records', ...over })
+
+  it('first check: green, no "Already checked"', async () => {
+    next = paid({ priorChecks: [] })
+    open({ qr: 'imrc1:x' })
+    expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Paid to you')
+    expect(document.querySelector('[data-tone="good"]')).toBeTruthy()
+    expect(screen.queryByText(/Already checked/)).toBeNull()
+  })
+
+  it('a repeat: grey top area and grey tick, the verdict kept, when and by which till', async () => {
+    next = paid({ priorChecks: [{ at: AT, by: { kind: 'named_till', name: 'Till 2' } }] })
+    open({ qr: 'imrc1:x' })
+    expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Paid to you')
+    const card = document.querySelector('[data-tone="checked"]') as HTMLElement
+    expect(card).toBeTruthy()
+    expect(card.className).toMatch(/bg-mono-/)
+    expect(card.className).not.toMatch(/green/)
+    const tick = card.querySelector('svg') as SVGElement
+    expect(tick.getAttribute('class')).toMatch(/text-mono-/)
+    expect(tick.getAttribute('class')).not.toMatch(/green/)
+    expect(screen.getByText(`Already checked ${when} by Till 2`)).toBeTruthy()
+  })
+
+  it('on a till: "another till", "the owner" or "this till", never a colleague’s name', async () => {
+    next = paid({
+      records: undefined,
+      mint: 'confirmed',
+      priorChecks: [
+        { at: AT, by: { kind: 'another_till' } },
+        { at: AT + 60, by: { kind: 'owner' } },
+        { at: AT + 120, by: { kind: 'this_device' } },
+      ],
+    })
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/receipt/check', state: { qr: 'imrc1:x' } }]}>
+        <Routes>
+          <Route path="/receipt/check" element={<ReceiptCheckPage forStall={'aa'.repeat(32)} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Paid to this stall')
+    // The first check leads; the rest are counted, then listed below.
+    expect(screen.getByText(`Already checked ${when} on another till`)).toBeTruthy()
+    expect(screen.getByText('Checked 3 times before')).toBeTruthy()
+    expect(screen.getByText(/by the owner/)).toBeTruthy()
+    expect(screen.getByText(/on this till/)).toBeTruthy()
+  })
+
+  it('the owner’s own earlier check reads "on this device"', async () => {
+    next = paid({ priorChecks: [{ at: AT, by: { kind: 'this_device' } }] })
+    open({ qr: 'imrc1:x' })
+    expect(await screen.findByText(`Already checked ${when} on this device`)).toBeTruthy()
+  })
+
+  it('an invalid receipt stays red even with earlier checks', async () => {
+    next = result({ verdict: 'invalid', priorChecks: [{ at: AT, by: { kind: 'owner' } }] })
+    open({ qr: 'imrc1:x' })
+    await screen.findByRole('heading', { level: 1 })
+    expect(document.querySelector('[data-tone="bad"]')).toBeTruthy()
+  })
+
+  it('history unknown: no claim either way', async () => {
+    next = paid({})
+    open({ qr: 'imrc1:x' })
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.queryByText(/Already checked|First check/)).toBeNull()
+    expect(document.querySelector('[data-tone="good"]')).toBeTruthy()
+  })
+})
+
+describe('the payment memo (FR-027f)', () => {
+  it('shows my record’s memo on the card', async () => {
+    next = result({ mine: 'payee', records: 'found_in_records', memo: 'Two coffees, table 4' })
+    open({ qr: 'imrc1:x' })
+    expect(await screen.findByText('Two coffees, table 4')).toBeTruthy()
+  })
+
+  it('and on a repeat too', async () => {
+    next = result({ mine: 'payee', records: 'found_in_records', memo: 'Two coffees', priorChecks: [{ at: 1, by: { kind: 'owner' } }] })
+    open({ qr: 'imrc1:x' })
+    expect(await screen.findByText('Two coffees')).toBeTruthy()
+  })
+
+  it('no memo, no line', async () => {
+    next = result({ mine: 'payee', records: 'found_in_records' })
+    open({ qr: 'imrc1:x' })
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.queryByTestId('receipt-memo')).toBeNull()
+  })
+})

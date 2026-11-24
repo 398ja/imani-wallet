@@ -25,6 +25,7 @@ import {
 } from '@imani/receipts'
 import { verifyVoucher, voucherOfSecret } from '../voucherToken'
 import { allowedIssuerKeys } from '../issuerAllowlist'
+import { repeatOutcome, type PriorCheck } from './checks'
 
 /**
  * Verifying a scanned receipt (spec 049 US2 to US4): the TypeScript port of wallet-core
@@ -59,7 +60,12 @@ export interface VerifyPorts {
    * The merchant's own record of this payment (FR-030), when this wallet is the payee. The face
    * value comes from the wallet's transaction row and is display only, never signed.
    */
-  ownRecord: (paymentId: string) => Promise<{ face?: { value: number; unit: string; decimals: number } } | null | 'no_records'>
+  ownRecord: (paymentId: string) => Promise<{ face?: { value: number; unit: string; decimals: number }; memo?: string } | null | 'no_records'>
+  /**
+   * Spec 049 FR-027a-d: record this check of a payment paid to `payee` and return the earlier
+   * ones. Optional: a verifier with no memory (tests, a third party) passes nothing.
+   */
+  remember?: (payee: string, paymentId: string) => Promise<{ prior: PriorCheck[]; known: boolean; record: 'published' | 'deferred' | null }>
   /** Whether a mint URL may be contacted at all: only mints this build trusts. */
   mintAllowed: (mintUrl: string) => boolean
   /** Closed-set telemetry; never throws. */
@@ -87,7 +93,25 @@ export interface VerifyResult {
   mine: 'payee' | 'payer' | 'neither'
   records?: 'found_in_records' | 'not_in_records'
   face?: { value: number; unit: string; decimals: number }
+  /** FR-027f: the payee's own record's memo. Display only, never signed; absent on a terminal. */
+  memo?: string
+  /**
+   * FR-027b: earlier checks of this payment by the payee's devices, oldest first. Absent when this
+   * is not a payment to me, or when nothing could be known (offline, no history): never "first".
+   */
+  priorChecks?: PriorCheck[]
   warnings: string[]
+}
+
+/**
+ * Whether the card says "paid to you / this stall". One predicate for the card and the check
+ * record (FR-027a), so a receipt is remembered exactly when it was accepted as paid.
+ */
+export function isPaidToMe(r: Pick<VerifyResult, 'verdict' | 'mine' | 'mint' | 'records'>): boolean {
+  if (r.verdict === 'invalid' || r.mine !== 'payee' || r.mint === 'not_valid') return false
+  if (r.records === 'found_in_records') return true
+  // The mint saying "spent" ties the spend to the payee only with a countersignature or a payee lock.
+  return r.mint === 'confirmed' && (r.verdict === 'verified' || r.verdict === 'verified_offline')
 }
 
 /** `imrc1:` prefix, case-insensitive, after trimming. */
@@ -468,6 +492,7 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
 
   let records: VerifyResult['records']
   let face: VerifyResult['face']
+  let memo: string | undefined
   if (s && mine === 'payee' && report.verdict !== 'INVALID') {
     try {
       const own = await ports.ownRecord(s.paymentId)
@@ -475,6 +500,7 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
       if (own !== 'no_records') {
         records = own ? 'found_in_records' : 'not_in_records'
         face = own?.face
+        memo = own?.memo || undefined
       }
     } catch {
       records = undefined
@@ -489,6 +515,22 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
 
   const verdict = VERDICT[report.verdict]
   ports.count('verification', verdict)
+
+  // FR-027a-d: remembered only when the card will say "paid", so a receipt that is not mine, or
+  // not proven mine, never leaves a trace. A failure here never touches the verdict.
+  let priorChecks: PriorCheck[] | undefined
+  if (s && ports.remember && isPaidToMe({ verdict, mine, mint, records })) {
+    try {
+      const m = await ports.remember(s.payee, s.paymentId)
+      if (m.record) ports.count('check_record', m.record)
+      if (m.known) ports.count('check_repeat', repeatOutcome(m.prior))
+      // Unknown history: only what this device itself remembers, never an implied "first".
+      if (m.known || m.prior.length > 0) priorChecks = m.prior
+    } catch {
+      priorChecks = undefined
+    }
+  }
+
   return {
     verdict,
     checks: CHECK_ORDER.filter((c) => report.checks[c] !== undefined).map((check) => {
@@ -514,6 +556,8 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
     mine,
     ...(records ? { records } : {}),
     ...(face ? { face } : {}),
+    ...(memo ? { memo } : {}),
+    ...(priorChecks ? { priorChecks } : {}),
     warnings: report.warnings,
   }
 }

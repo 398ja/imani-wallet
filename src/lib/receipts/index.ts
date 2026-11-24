@@ -30,6 +30,7 @@ import * as service from './service'
 import { verifyScannedWith, type SpentState, type VerifyPorts, type VerifyResult } from './verify'
 
 export * from './verify'
+export type { CheckedBy, PriorCheck } from './checks'
 export { countReceiptEvent, flushReceiptTelemetry } from './telemetry'
 export { ReceiptNotReadyError, parseAckEnvelope, type AckEnvelope, type CaptureInput, type IncomingPayment } from './service'
 export type { PendingReason } from './store'
@@ -408,13 +409,73 @@ function verifyPorts(forStall?: string): VerifyPorts {
       const ports = await portsOrNull()
       const found = ports ? await ports.store.get(paymentId) : null
       if (!found || found.receipt.role !== 'PAYEE') return null
-      const face = await faceOf(found.row.txId)
-      return face ? { face } : {}
+      const [face, memo] = await Promise.all([faceOf(found.row.txId), memoOf(found.row.txId)])
+      return { ...(face ? { face } : {}), ...(memo ? { memo } : {}) }
     },
+    remember: (payee, paymentId) => rememberHere(payee, paymentId, forStall),
     mintAllowed,
     count: countReceiptEvent,
     now,
   }
+}
+
+/** FR-027f: the memo on the payee's own transaction row. Display only. */
+async function memoOf(txId: string | undefined): Promise<string | undefined> {
+  if (!txId) return undefined
+  try {
+    const row = await getTransactionRow(txId)
+    const memo = row ? toTransaction(row).memo?.trim() : undefined
+    return memo || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * FR-027a-e on this device: the owner's wallet signs as the stall and names its tills from the
+ * roster; a till signs with its own key and carries its attestation. Reads through the gateway
+ * cache, writes to the relay and the gateway.
+ */
+async function rememberHere(payee: string, paymentId: string, forStall?: string) {
+  const signer = getSigner()
+  const [{ rememberCheck }, roster, attribution] = await Promise.all([
+    import('./checkMemory'),
+    forStall ? Promise.resolve(null) : import('../terminalRoster'),
+    forStall ? Promise.resolve(null) : import('../terminalAttribution'),
+  ])
+  let terminal: import('./checks').TerminalProof | undefined
+  let publishCheck: (e: Event) => Promise<boolean>
+  if (forStall) {
+    const [{ tillCheckProof }, { devicePublisher }] = await Promise.all([import('../terminalUnlock'), import('../terminalDeliveryNet')])
+    terminal = tillCheckProof() ?? undefined
+    const publisher = devicePublisher(signer)
+    publishCheck = (e) => publisher.publish(e).catch(() => false)
+  } else {
+    publishCheck = (e) => io.publish(e).then((n) => n > 0, () => false)
+  }
+  const terminals = roster ? roster.allTerminals(payee) : []
+  return rememberCheck(
+    {
+      device: signer.pubkey,
+      withKey: (use) => signer.withPrivkey(use),
+      ...(terminal ? { terminal } : {}),
+      ...(roster && attribution
+        ? {
+            roster: {
+              keys: new Set(terminals.map((t) => t.terminalPubkey.toLowerCase())),
+              // The same words as the owner's transaction history: a name, a retired name, or unlisted.
+              nameOf: (k: string) => attribution.describeHandler({ terminalPubkey: k.toLowerCase() }, terminals).label,
+            },
+          }
+        : {}),
+      publish: publishCheck,
+      query: gatewayQuery,
+      store: localStorage,
+      now,
+    },
+    payee,
+    paymentId,
+  )
 }
 
 /**
