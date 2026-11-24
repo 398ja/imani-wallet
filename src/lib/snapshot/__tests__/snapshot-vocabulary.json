@@ -495,6 +495,7 @@
   "imani:merchant",
   "imani:pendingPurchase",
   "imani:pull-acks:",
+  "imani:receipt-check-device",
   "imani:receipt-check-outbox:",
   "imani:receipt-checks:",
   "imani:settings",

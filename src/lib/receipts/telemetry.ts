@@ -36,7 +36,7 @@ export const VOCABULARY: Readonly<Record<string, readonly string[]>> = {
   check: [...CHECK_STATES.map((s) => `records_${s}`), ...CHECK_STATES.map((s) => `mint_${s}`)],
   verification: ['verified', 'verified_offline', 'verified_summary_only', 'unacknowledged', 'invalid'],
   // Spec 049 FR-027a-d: a check that showed "paid", and what its history was; whether its record went out.
-  check_repeat: ['first', 'repeat_this_device', 'repeat_other_device'],
+  check_repeat: ['first', 'repeat_this_device', 'repeat_other_device', 'unknown'],
   check_record: ['published', 'deferred'],
   refund: ['refunded', 'delivery_deferred', 'payment_failed', 'refused_over_remaining', 'refused_unknown_payment', 'refused_payer_unknown', 'refused_other'],
   refund_received: ['accepted', 'rejected'],

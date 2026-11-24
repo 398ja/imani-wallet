@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2, CircleDashed, HelpCircle, ScanLine, XCircl
 import { BackLink, Button, DetailRow, IdentityInline, ListSection, Screen } from '../components/ui'
 import { ReceiptAmount } from '../components/ReceiptSection'
 import { formatDate } from '../lib/format'
-import { verifyScanned, type PriorCheck, type VerifyResult } from '../lib/receipts'
+import { isPaidToMe, verifyScanned, type PriorCheck, type VerifyResult } from '../lib/receipts'
 
 /**
  * The stall's answer to "did this customer pay me?" after scanning a receipt (spec 049 story 4).
@@ -54,7 +54,7 @@ export function ReceiptCheckPage({
     <Screen>
       <BackLink to={scanPath} label="Scan" />
       {result ? <ResultCard result={result} forStall={forStall !== undefined} /> : <CheckingCard />}
-      {result && headline(result, forStall !== undefined).tone === 'good' ? (
+      {result && isPaidToMe(result) ? (
         <EarlierChecks prior={result.priorChecks ?? []} forStall={forStall !== undefined} />
       ) : null}
       {result ? <Details result={result} /> : null}
@@ -91,13 +91,12 @@ function headline(r: VerifyResult, forStall = false): { tone: Tone; title: strin
   if (r.mint === 'not_valid') {
     return { tone: 'bad', title: 'Payment not confirmed', line: 'The mint has no record of this payment being collected.' }
   }
-  if (r.mine === 'payee' && r.records === 'found_in_records') {
-    return { tone: 'good', title: paidTitle, line: 'This payment is in your records.' }
-  }
-  // The mint saying "spent" proves only that SOMEONE spent the proofs. It is the payee's collection
-  // only when the spend is tied to the payee: a countersignature or a payee lock, which is exactly
-  // when the verdict is verified. An unacknowledged receipt of unlocked proofs falls through.
-  if (r.mine === 'payee' && r.mint === 'confirmed' && (r.verdict === 'verified' || r.verdict === 'verified_offline')) {
+  // "Paid to you" is exactly `isPaidToMe`, the same predicate that decides whether the check is
+  // remembered (FR-027a): one rule, so the card and the record never disagree.
+  if (isPaidToMe(r)) {
+    if (r.records === 'found_in_records') return { tone: 'good', title: paidTitle, line: 'This payment is in your records.' }
+    // The mint saying "spent" is the payee's collection only when the spend is tied to the payee (a
+    // countersignature or a payee lock), which `isPaidToMe` requires.
     return {
       tone: 'good',
       title: paidTitle,
@@ -122,21 +121,25 @@ function headline(r: VerifyResult, forStall = false): { tone: Tone; title: strin
 
 const TONE: Record<Tone, { Icon: typeof CheckCircle2; ring: string; icon: string }> = {
   good: { Icon: CheckCircle2, ring: 'border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/40', icon: 'text-green-600' },
-  // FR-027b: paid, and checked before. Grey, not green, so a second presentation is noticed; the
-  // same tick, so it still reads as paid.
-  checked: { Icon: CheckCircle2, ring: 'border-mono-200 bg-mono-100 dark:border-mono-800 dark:bg-mono-900', icon: 'text-mono-500' },
+  // FR-027b: paid, and checked before. Grey, not green, so a second presentation is noticed at a
+  // glance; the same tick, so it still reads as paid. A filled grey, not a tint, against the page.
+  checked: { Icon: CheckCircle2, ring: 'border-mono-300 bg-mono-200 dark:border-mono-700 dark:bg-mono-800', icon: 'text-mono-600 dark:text-mono-300' },
   caution: { Icon: AlertTriangle, ring: 'border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40', icon: 'text-amber-600' },
   bad: { Icon: XCircle, ring: 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40', icon: 'text-red-600' },
 }
 
 function ResultCard({ result, forStall = false }: { result: VerifyResult; forStall?: boolean }) {
   const h = headline(result, forStall)
-  const prior = h.tone === 'good' ? (result.priorChecks ?? []) : []
+  const paid = isPaidToMe(result)
+  const prior = paid ? (result.priorChecks ?? []) : []
   const tone: Tone = prior.length > 0 ? 'checked' : h.tone
   const { Icon, ring, icon } = TONE[tone]
+  // FR-027d: earlier checks could not be looked up. Never presented as a first check.
+  const unknown = paid && prior.length === 0 && result.history === 'unknown'
   return (
     <section
-      // Polite: the result appears in answer to the scan the merchant just did.
+      // Polite: the result appears in answer to the scan the merchant just did. The verdict and
+      // "Already checked" are read first; the memo after them.
       role="status"
       data-tone={tone}
       className={`materialize mb-6 flex flex-col items-center gap-2 rounded-2xl border p-6 text-center ${ring}`}
@@ -145,6 +148,18 @@ function ResultCard({ result, forStall = false }: { result: VerifyResult; forSta
       <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.015em] text-mono-900 dark:text-mono-50">
         {h.title}
       </h1>
+      {prior.length > 0 ? (
+        <p className="text-[15px] font-semibold leading-snug text-mono-900 dark:text-mono-50">
+          Already checked {formatDate(prior[0].at * 1000)} {byLine(prior[0].by, forStall)}
+        </p>
+      ) : (
+        <p className="text-[15px] leading-snug text-mono-600 dark:text-mono-300">{h.line}</p>
+      )}
+      {unknown ? (
+        <p data-testid="history-unknown" className="text-[15px] leading-snug text-mono-600 dark:text-mono-300">
+          Couldn’t look up earlier checks.
+        </p>
+      ) : null}
       {result.face ? (
         <div className="mt-1 flex flex-col items-center gap-0.5">
           <ReceiptAmount face={result.face} />
@@ -155,13 +170,6 @@ function ResultCard({ result, forStall = false }: { result: VerifyResult; forSta
           {result.memo}
         </p>
       ) : null}
-      {prior.length > 0 ? (
-        <p className="text-[15px] font-semibold leading-snug text-mono-900 dark:text-mono-50">
-          Already checked {formatDate(prior[0].at * 1000)} {byLine(prior[0].by, forStall)}
-        </p>
-      ) : (
-        <p className="text-[15px] leading-snug text-mono-600 dark:text-mono-300">{h.line}</p>
-      )}
     </section>
   )
 }
@@ -173,6 +181,8 @@ function byLine(by: PriorCheck['by'], onTill: boolean): string {
       return onTill ? 'on this till' : 'on this device'
     case 'owner':
       return 'by the owner'
+    case 'owner_other_device':
+      return 'on another of your devices'
     case 'named_till':
       return `by ${by.name}`
     case 'another_till':

@@ -357,8 +357,8 @@ describe('tillCheckProof (spec 049 FR-027d)', () => {
     expect(proof).toMatchObject({ stall_pubkey: STALL, lock_key: DEVICE })
     const { buildCheckEvent, readChecks } = await import('../receipts/checks')
     const at = Math.floor(Date.now() / 1000)
-    const e = buildCheckEvent({ payee: STALL, paymentId: 'ab'.repeat(32), at, terminal: proof! }, (use) => use(DEVICE_KEY))
-    expect(readChecks([e], STALL, 'ab'.repeat(32))).toEqual([{ at, device: DEVICE }])
+    const e = buildCheckEvent({ payee: STALL, paymentId: 'ab'.repeat(32), at, device: DEVICE, deviceId: '11'.repeat(16), terminal: proof! }, (use) => use(DEVICE_KEY))
+    expect(readChecks([e], STALL, 'ab'.repeat(32))).toMatchObject([{ at, device: DEVICE }])
   })
 
   it('a legacy till (no attestation): none, so other tills do not trust its checks', async () => {
