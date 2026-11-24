@@ -1358,7 +1358,15 @@ function redemptionAdapter(): RedemptionAdapter {
 
       // Spec 049: the payee's record of this payment, and its acknowledgement to the payer when
       // policy allows. Not awaited, never throws: it cannot touch the redemption above.
-      void noteReceiptClaim(token, opts?.senderPubkey as string | undefined, meta?.paymentRequestId as string | undefined)
+      // The payer is the payload's `sender_pubkey` first (gateway-core sets it from the send row):
+      // a relayed wrap is signed by the gateway, so the envelope signer is the payer only for a
+      // bare wallet-to-wallet wrap. Same precedence as the claim receipt below, minus issuerId,
+      // which names who minted the coupon, never who paid.
+      void noteReceiptClaim(
+        token,
+        receiptPayerOf(meta, opts?.senderPubkey as string | undefined),
+        meta?.paymentRequestId as string | undefined,
+      )
 
       // Say so on screen. This is the ONLY announcement most arrivals ever get:
       // the "payment on its way" toast is driven by the Artemis queue, and the
@@ -2162,6 +2170,16 @@ async function noteReceiptClaim(token: string, senderPubkey: string | undefined,
   } catch (error) {
     console.warn('[dmPoll] receipt claim not recorded', (error as Error)?.name ?? 'error')
   }
+}
+
+/**
+ * Spec 049: who paid, for the payee's acknowledgement. The payload's `sender_pubkey` first, then the
+ * envelope signer (a bare wallet-to-wallet wrap). Never `issuerId`: that is who minted the coupon.
+ */
+export function receiptPayerOf(meta: Record<string, unknown> | undefined, envelopeSigner: string | undefined): string | undefined {
+  const fromPayload = meta?.senderPubkey
+  if (typeof fromPayload === 'string' && fromPayload !== '') return fromPayload
+  return envelopeSigner || undefined
 }
 
 /** Spec 049: the id of the incoming row a redeem of this transfer wrote, or undefined. */
