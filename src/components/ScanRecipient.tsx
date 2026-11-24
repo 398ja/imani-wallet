@@ -38,7 +38,8 @@ export function ScanRecipient({
   /**
    * Sees the raw scanned or typed text first. Return true to consume it, so it is not
    * resolved as an account (the terminal setup code, #160). Its own error copy is the
-   * caller's to show.
+   * caller's to show. Return false to let it through to the account lookup (Sell, which
+   * consumes a receipt and sells to anyone else, spec 049).
    */
   onText?: (text: string) => boolean
   /** The paste field's placeholder. */
@@ -69,10 +70,7 @@ export function ScanRecipient({
 
     const accept = async (text: string) => {
       if (resolving) return
-      if (onText) {
-        onText(text)
-        return
-      }
+      if (onText?.(text)) return
       resolving = true
       try {
         const found = await resolveRecipient(text)
@@ -131,10 +129,7 @@ export function ScanRecipient({
 
   const submitManual = async () => {
     setError(null)
-    if (onText) {
-      onText(manual.trim())
-      return
-    }
+    if (onText?.(manual.trim())) return
     setLooking(true)
     const found = await resolveRecipient(manual)
     setLooking(false)
