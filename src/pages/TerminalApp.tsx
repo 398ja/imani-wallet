@@ -145,6 +145,21 @@ export function TerminalApp() {
     )
   }, [till])
 
+  // Spec 049 FR-027c: receipt checks made while this till was offline go out when it unlocks and
+  // whenever it is back online. The key is the till's own, so only while it is open.
+  useEffect(() => {
+    if (!till) return
+    let stop: (() => void) | undefined
+    let live = true
+    void import('../lib/receipts').then((r) => {
+      if (live) stop = r.installReceiptCheckFlush(till.actor.stallPubkey)
+    })
+    return () => {
+      live = false
+      stop?.()
+    }
+  }, [till])
+
   // Renewal (#160 phase 6, plan 2.3): at every unlock and every five minutes while open, look for
   // the owner's renewal of this till's credential, adopt it, and re-derive the till from it so a
   // renewed till sells with no reload. A failed spend of the old credential is retried here too.

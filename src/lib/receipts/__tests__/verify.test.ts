@@ -404,12 +404,28 @@ describe('remembered checks and the memo (FR-027a-f)', () => {
     expect(p.counted).toEqual(expect.arrayContaining(['check_repeat:first', 'check_record:deferred']))
   })
 
-  it('history unknown (offline): no list at all, and no "first" counted', async () => {
+  it('history unknown (offline): no list, history "unknown", counted as unknown and never as first', async () => {
     const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
     const p = ports({ blob, remember: async () => ({ prior: [], known: false, record: 'deferred' }) })
     const res = await verifyScannedWith(p, qr)
     expect(res.priorChecks).toBeUndefined()
-    expect(p.counted.some((c) => c.startsWith('check_repeat:'))).toBe(false)
+    expect(res.history).toBe('unknown')
+    expect(p.counted).toContain('check_repeat:unknown')
+    expect(p.counted).not.toContain('check_repeat:first')
+  })
+
+  it('passes the payment date so backdated checks can be refused (M6)', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const dates: number[] = []
+    await verifyScannedWith(ports({ blob, remember: async (_p, _i, paidAt) => (dates.push(paidAt), { prior: [], known: true, record: 'published' }) }), qr)
+    expect(dates).toHaveLength(1)
+    expect(Number.isInteger(dates[0])).toBe(true)
+  })
+
+  it('a failing remember: history unknown, never presented as a first check', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const res = await verifyScannedWith(ports({ blob, remember: async () => { throw new Error('flooded') } }), qr)
+    expect(res.history).toBe('unknown')
   })
 
   it('offline but this device checked before: shows that one', async () => {
@@ -423,7 +439,7 @@ describe('remembered checks and the memo (FR-027a-f)', () => {
     const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
     const first = await verifyScannedWith(ports({ blob }), qr)
     const again = await verifyScannedWith(ports({ blob, remember: async () => ({ prior: PRIOR, known: true, record: null }) }), qr)
-    expect({ ...again, priorChecks: undefined }).toEqual({ ...first, priorChecks: undefined })
+    expect({ ...again, priorChecks: undefined, history: undefined }).toEqual({ ...first, priorChecks: undefined, history: undefined })
   })
 
   it('not mine: never remembered', async () => {

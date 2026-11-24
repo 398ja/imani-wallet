@@ -15,7 +15,9 @@ import type { VerifyResult } from '../../lib/receipts/verify'
 let next: VerifyResult
 const seen: string[] = []
 const stalls: (string | undefined)[] = []
-vi.mock('../../lib/receipts', () => ({
+vi.mock('../../lib/receipts', async () => ({
+  // The real predicate, so the card's "paid" and the remembered check use one rule.
+  isPaidToMe: (await import('../../lib/receipts/verify')).isPaidToMe,
   verifyScanned: async (qr: string, forStall?: string) => (seen.push(qr), stalls.push(forStall), next),
 }))
 
@@ -236,12 +238,51 @@ describe('already checked (FR-027b)', () => {
     expect(document.querySelector('[data-tone="bad"]')).toBeTruthy()
   })
 
-  it('history unknown: no claim either way', async () => {
-    next = paid({})
+  it('history known and empty: green, no claim of an earlier check', async () => {
+    next = paid({ history: 'known' })
     open({ qr: 'imrc1:x' })
     await screen.findByRole('heading', { level: 1 })
     expect(screen.queryByText(/Already checked|First check/)).toBeNull()
+    expect(screen.queryByTestId('history-unknown')).toBeNull()
     expect(document.querySelector('[data-tone="good"]')).toBeTruthy()
+  })
+
+  it('history unknown (offline, flooded): the verdict stands, and it says it could not look (M3)', async () => {
+    next = paid({ history: 'unknown' })
+    open({ qr: 'imrc1:x' })
+    expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Paid to you')
+    expect(screen.getByTestId('history-unknown').textContent).toBe('Couldn’t look up earlier checks.')
+  })
+
+  it('history unknown but this device checked before: still "Already checked"', async () => {
+    next = paid({ priorChecks: [{ at: AT, by: { kind: 'this_device' } }], history: 'unknown' })
+    open({ qr: 'imrc1:x' })
+    expect(await screen.findByText(`Already checked ${when} on this device`)).toBeTruthy()
+    expect(screen.queryByTestId('history-unknown')).toBeNull()
+    expect(document.querySelector('[data-tone="checked"]')).toBeTruthy()
+  })
+
+  it('the owner’s other device is named as such (M4)', async () => {
+    next = paid({ priorChecks: [{ at: AT, by: { kind: 'owner_other_device' } }] })
+    open({ qr: 'imrc1:x' })
+    expect(await screen.findByText(`Already checked ${when} on another of your devices`)).toBeTruthy()
+  })
+
+  it('a payment not tied to me never shows earlier checks', async () => {
+    next = result({ mine: 'payee', mint: 'confirmed', verdict: 'unacknowledged', priorChecks: [{ at: AT, by: { kind: 'owner' } }] })
+    open({ qr: 'imrc1:x' })
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.queryByText(/Already checked|Checked \d+ times? before/)).toBeNull()
+    expect(document.querySelector('[data-tone="checked"]')).toBeNull()
+  })
+
+  it('the grey stands out against the page: a filled grey with a border', async () => {
+    next = paid({ priorChecks: [{ at: AT, by: { kind: 'owner' } }] })
+    open({ qr: 'imrc1:x' })
+    await screen.findByRole('heading', { level: 1 })
+    const card = document.querySelector('[data-tone="checked"]') as HTMLElement
+    expect(card.className).toMatch(/\bbg-mono-200\b/)
+    expect(card.className).toMatch(/\bborder-mono-300\b/)
   })
 })
 
@@ -252,10 +293,12 @@ describe('the payment memo (FR-027f)', () => {
     expect(await screen.findByText('Two coffees, table 4')).toBeTruthy()
   })
 
-  it('and on a repeat too', async () => {
+  it('and on a repeat too, read after "Already checked"', async () => {
     next = result({ mine: 'payee', records: 'found_in_records', memo: 'Two coffees', priorChecks: [{ at: 1, by: { kind: 'owner' } }] })
     open({ qr: 'imrc1:x' })
-    expect(await screen.findByText('Two coffees')).toBeTruthy()
+    const memo = await screen.findByText('Two coffees')
+    const already = screen.getByText(/Already checked/)
+    expect(already.compareDocumentPosition(memo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('no memo, no line', async () => {

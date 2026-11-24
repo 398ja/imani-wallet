@@ -65,7 +65,7 @@ export interface VerifyPorts {
    * Spec 049 FR-027a-d: record this check of a payment paid to `payee` and return the earlier
    * ones. Optional: a verifier with no memory (tests, a third party) passes nothing.
    */
-  remember?: (payee: string, paymentId: string) => Promise<{ prior: PriorCheck[]; known: boolean; record: 'published' | 'deferred' | null }>
+  remember?: (payee: string, paymentId: string, paidAt: number) => Promise<{ prior: PriorCheck[]; known: boolean; record: 'published' | 'deferred' | null }>
   /** Whether a mint URL may be contacted at all: only mints this build trusts. */
   mintAllowed: (mintUrl: string) => boolean
   /** Closed-set telemetry; never throws. */
@@ -100,6 +100,11 @@ export interface VerifyResult {
    * is not a payment to me, or when nothing could be known (offline, no history): never "first".
    */
   priorChecks?: PriorCheck[]
+  /**
+   * FR-027d: whether the earlier checks could be looked up. `unknown` (offline, or the history
+   * could not be read whole) must never be shown as a first check. Absent when not paid to me.
+   */
+  history?: 'known' | 'unknown'
   warnings: string[]
 }
 
@@ -519,11 +524,17 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
   // FR-027a-d: remembered only when the card will say "paid", so a receipt that is not mine, or
   // not proven mine, never leaves a trace. A failure here never touches the verdict.
   let priorChecks: PriorCheck[] | undefined
+  let history: VerifyResult['history']
   if (s && ports.remember && isPaidToMe({ verdict, mine, mint, records })) {
+    history = 'unknown'
     try {
-      const m = await ports.remember(s.payee, s.paymentId)
-      if (m.record) ports.count('check_record', m.record)
-      if (m.known) ports.count('check_repeat', repeatOutcome(m.prior))
+      const m = await ports.remember(s.payee, s.paymentId, s.paidAt)
+      // Once per check: a re-render within seconds (record null) is the same check, not counted again.
+      if (m.record) {
+        ports.count('check_record', m.record)
+        ports.count('check_repeat', repeatOutcome(m.prior, m.known))
+      }
+      history = m.known ? 'known' : 'unknown'
       // Unknown history: only what this device itself remembers, never an implied "first".
       if (m.known || m.prior.length > 0) priorChecks = m.prior
     } catch {
@@ -558,6 +569,7 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
     ...(face ? { face } : {}),
     ...(memo ? { memo } : {}),
     ...(priorChecks ? { priorChecks } : {}),
+    ...(history ? { history } : {}),
     warnings: report.warnings,
   }
 }

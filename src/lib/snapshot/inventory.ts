@@ -208,6 +208,7 @@ export const RULES: InventoryRule[] = [
   // Spec 049 FR-027a-c: which payments this device checked, and signed checks not yet sent.
   X('imani:receipt-checks:', 'locators of payments this device checked'),
   X('imani:receipt-check-outbox:', 'signed receipt checks waiting to be sent'),
+  X('imani:receipt-check-device', 'random install id that signs receipt checks'),
   // #348: where the key is backed up, the install id, and the event/record names. Not support data.
   X('imani-wallet:key-backups:', 'key backup locations, key fingerprints and device ids'),
   X('imani:key-backups', 'key backup record tag and change event'),
