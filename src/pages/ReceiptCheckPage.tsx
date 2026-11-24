@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2, CircleDashed, HelpCircle, ScanLine, XCircl
 import { BackLink, Button, DetailRow, IdentityInline, ListSection, Screen } from '../components/ui'
 import { ReceiptAmount } from '../components/ReceiptSection'
 import { formatDate } from '../lib/format'
-import { verifyScanned, type VerifyResult } from '../lib/receipts'
+import { verifyScanned, type PriorCheck, type VerifyResult } from '../lib/receipts'
 
 /**
  * The stall's answer to "did this customer pay me?" after scanning a receipt (spec 049 story 4).
@@ -54,6 +54,9 @@ export function ReceiptCheckPage({
     <Screen>
       <BackLink to={scanPath} label="Scan" />
       {result ? <ResultCard result={result} forStall={forStall !== undefined} /> : <CheckingCard />}
+      {result && headline(result, forStall !== undefined).tone === 'good' ? (
+        <EarlierChecks prior={result.priorChecks ?? []} forStall={forStall !== undefined} />
+      ) : null}
       {result ? <Details result={result} /> : null}
       <Button variant="outline" className="mt-2 w-full" onClick={() => navigate(scanPath, { replace: true })}>
         <ScanLine className="mr-2 h-4 w-4" aria-hidden /> Scan another
@@ -74,7 +77,7 @@ function CheckingCard() {
   )
 }
 
-type Tone = 'good' | 'caution' | 'bad'
+type Tone = 'good' | 'checked' | 'caution' | 'bad'
 
 /**
  * What the verdict means to the person at the till, in their words. On a terminal (`forStall`) the
@@ -119,18 +122,23 @@ function headline(r: VerifyResult, forStall = false): { tone: Tone; title: strin
 
 const TONE: Record<Tone, { Icon: typeof CheckCircle2; ring: string; icon: string }> = {
   good: { Icon: CheckCircle2, ring: 'border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/40', icon: 'text-green-600' },
+  // FR-027b: paid, and checked before. Grey, not green, so a second presentation is noticed; the
+  // same tick, so it still reads as paid.
+  checked: { Icon: CheckCircle2, ring: 'border-mono-200 bg-mono-100 dark:border-mono-800 dark:bg-mono-900', icon: 'text-mono-500' },
   caution: { Icon: AlertTriangle, ring: 'border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40', icon: 'text-amber-600' },
   bad: { Icon: XCircle, ring: 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40', icon: 'text-red-600' },
 }
 
 function ResultCard({ result, forStall = false }: { result: VerifyResult; forStall?: boolean }) {
   const h = headline(result, forStall)
-  const { Icon, ring, icon } = TONE[h.tone]
+  const prior = h.tone === 'good' ? (result.priorChecks ?? []) : []
+  const tone: Tone = prior.length > 0 ? 'checked' : h.tone
+  const { Icon, ring, icon } = TONE[tone]
   return (
     <section
       // Polite: the result appears in answer to the scan the merchant just did.
       role="status"
-      data-tone={h.tone}
+      data-tone={tone}
       className={`materialize mb-6 flex flex-col items-center gap-2 rounded-2xl border p-6 text-center ${ring}`}
     >
       <Icon className={`h-10 w-10 ${icon}`} aria-hidden />
@@ -142,8 +150,45 @@ function ResultCard({ result, forStall = false }: { result: VerifyResult; forSta
           <ReceiptAmount face={result.face} />
         </div>
       ) : null}
-      <p className="text-[15px] leading-snug text-mono-600 dark:text-mono-300">{h.line}</p>
+      {result.memo ? (
+        <p data-testid="receipt-memo" className="text-[15px] font-medium leading-snug text-mono-900 dark:text-mono-50">
+          {result.memo}
+        </p>
+      ) : null}
+      {prior.length > 0 ? (
+        <p className="text-[15px] font-semibold leading-snug text-mono-900 dark:text-mono-50">
+          Already checked {formatDate(prior[0].at * 1000)} {byLine(prior[0].by, forStall)}
+        </p>
+      ) : (
+        <p className="text-[15px] leading-snug text-mono-600 dark:text-mono-300">{h.line}</p>
+      )}
     </section>
+  )
+}
+
+/** FR-027e: who checked, in the viewer's words. A till never names a colleague. */
+function byLine(by: PriorCheck['by'], onTill: boolean): string {
+  switch (by.kind) {
+    case 'this_device':
+      return onTill ? 'on this till' : 'on this device'
+    case 'owner':
+      return 'by the owner'
+    case 'named_till':
+      return `by ${by.name}`
+    case 'another_till':
+      return 'on another till'
+  }
+}
+
+/** Every earlier check, when there is more than one: the card names the first. */
+function EarlierChecks({ prior, forStall }: { prior: PriorCheck[]; forStall: boolean }) {
+  if (prior.length < 2) return null
+  return (
+    <ListSection title={`Checked ${prior.length} times before`}>
+      {prior.map((c, i) => (
+        <DetailRow key={`${c.at}:${i}`} label={formatDate(c.at * 1000)} value={byLine(c.by, forStall)} />
+      ))}
+    </ListSection>
   )
 }
 
