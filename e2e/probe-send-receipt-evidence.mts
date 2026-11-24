@@ -3,7 +3,7 @@
  * the payer the evidence a verifiable receipt needs, and does that evidence
  * make a receipt that verifies?
  *
- *   npx tsx e2e/probe-send-receipt-evidence.mts
+ *   npx tsx --tsconfig tsconfig.app.json e2e/probe-send-receipt-evidence.mts
  *
  * Needs the imani-test stack up with gateway-core carrying spec 049
  * (imani-gateway-core:v2-receipts) and the mint's NUT-07 witness fix.
@@ -19,6 +19,9 @@
  *  6. now every proof is SPENT at the mint: the payer builds and signs the receipt
  *     with @imani/receipts, and it verifies offline (payer signature, evidence
  *     digest, amount); the QR payload round-trips
+ *  6b. the wallet's verifier (src/lib/receipts/verify.ts) checks it against the real
+ *     mint: DLEQ against the mint's keyset, NUT-07 spent, presenter; unacknowledged
+ *     without a countersignature, verified with one
  *  7. ack-send-evidence erases it: the next status says send_evidence_state=acknowledged
  *  8. the gateway metrics moved: returned and acknowledged counted
  *
@@ -35,6 +38,12 @@ import {
   secretKeySigner,
   verifySummary,
   checkEvidenceOffline,
+  encryptEvidence,
+  makeLocator,
+  newEvidenceKey,
+  signCountersignature,
+  signPresenterProof,
+  withCountersignature,
   type SendEvidence,
 } from '../packages/receipts/src/index'
 import { encodePlainTokenV4 } from '../src/lib/plainToken'
@@ -218,6 +227,65 @@ const qr = encodeQr({ receipt: built.receipt, presenter: null, evidence: null, e
 const back = decodeQr(qr)
 check(qr.startsWith('imrc1:') && bytesToHex(back.receipt.summaryBytes) === bytesToHex(built.receipt.summaryBytes),
   `6. QR payload round-trips (${qr.length} chars)`)
+
+// 6b. The wallet's own verifier, against the REAL mint: DLEQ (keyset from the mint) and NUT-07
+//     spent state, evidence fetched from a stand-in cache holding the encrypted blob.
+{
+  const { verifyScannedWith } = await import('../src/lib/receipts/verify')
+  const key = newEvidenceKey()
+  const blob = await encryptEvidence(key, built.evidenceBytes, built.summary.evidenceDigest)
+  const presenter = await signPresenterProof(built.summary.paymentId, Math.floor(Date.now() / 1000), secretKeySigner(payerSk))
+  const shown = encodeQr({ receipt: built.receipt, presenter, evidence: makeLocator('ab'.repeat(32), null), evidenceKey: key })
+  // The mint URL in the evidence is the gateway's name for the mint; this host reaches it here.
+  const reach = (m: string) => (m === MINT ? MINT_HOST : m)
+  const res = await verifyScannedWith({
+    publicKey: () => payee,
+    keyset: async (m, id) => {
+      const rr = await fetch(`${reach(m)}/v1/keys/${id}`)
+      if (!rr.ok) return null
+      const k = ((await rr.json()) as { keysets: { id: string; unit: string; keys: Record<string, string> }[] }).keysets[0]
+      return k && k.id === id ? { unit: k.unit, keys: k.keys } : null
+    },
+    checkState: async (m, ys) => {
+      const rr = await fetch(`${reach(m)}/v1/checkstate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Ys: ys }) })
+      const j = (await rr.json()) as { states: { state: 'UNSPENT' | 'SPENT' | 'PENDING'; witness?: string | null }[] }
+      return j.states.map((x) => ({ state: x.state, witness: x.witness ?? null }))
+    },
+    fetchEvidence: async () => blob,
+    ownRecord: async () => ({ face: { value: 60, unit: 'EUR', decimals: 2 } }),
+    mintAllowed: (m) => m === MINT,
+    count: () => {},
+    now: () => Math.floor(Date.now() / 1000),
+  }, shown)
+  const ok = (c: string) => res.checks.find((x) => x.check === c)?.ok
+  check(ok('MINT_SIGNATURE_DLEQ') === true, `6b. real DLEQ verifies against the mint's keyset (${JSON.stringify(res.checks.find((x) => x.check === 'MINT_SIGNATURE_DLEQ'))})`)
+  check(ok('SPENT_STATE') === true && res.mint === 'confirmed', `6b. NUT-07 confirms spent (${res.mint})`)
+  check(ok('EVIDENCE_DIGEST') === true && ok('AMOUNT') === true, '6b. digest and amount')
+  check(res.presenter === 'PRESENTER_IS_PAYER', `6b. presenter is the payer (${res.presenter})`)
+  // Not countersigned and not locked: the honest verdict is unacknowledged (FR-041).
+  check(res.verdict === 'unacknowledged', `6b. verdict without a countersignature: ${res.verdict}`)
+  const cs = await signCountersignature(built.summary, Math.floor(Date.now() / 1000), true, secretKeySigner(payeeSk))
+  const acked = encodeQr({ receipt: withCountersignature(built.receipt, cs), presenter, evidence: makeLocator('ab'.repeat(32), null), evidenceKey: key })
+  const res2 = await verifyScannedWith({
+    publicKey: () => payee,
+    keyset: async (m, id) => {
+      const rr = await fetch(`${reach(m)}/v1/keys/${id}`)
+      const k = ((await rr.json()) as { keysets: { id: string; unit: string; keys: Record<string, string> }[] }).keysets[0]
+      return { unit: k.unit, keys: k.keys }
+    },
+    checkState: async (m, ys) => {
+      const rr = await fetch(`${reach(m)}/v1/checkstate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Ys: ys }) })
+      return ((await rr.json()) as { states: { state: 'SPENT'; witness?: string | null }[] }).states.map((x) => ({ state: x.state, witness: x.witness ?? null }))
+    },
+    fetchEvidence: async () => blob,
+    ownRecord: async () => ({ face: { value: 60, unit: 'EUR', decimals: 2 } }),
+    mintAllowed: (m) => m === MINT,
+    count: () => {},
+    now: () => Math.floor(Date.now() / 1000),
+  }, acked)
+  check(res2.verdict === 'verified' && res2.mine === 'payee' && res2.records === 'found_in_records',
+    `6b. countersigned: ${res2.verdict}, ${res2.mine}, ${res2.records}`)
+}
 
 // 7. Ack erases it.
 const ack = await call(payerSk, CORE, `/api/v1/atomic-send/${sendId}/ack-send-evidence`, 'POST', {})
