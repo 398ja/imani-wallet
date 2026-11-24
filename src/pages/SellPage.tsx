@@ -26,7 +26,6 @@ import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
 import { userMessage } from '../lib/userMessage'
 import { SalesLimitError } from '../lib/entitlement'
 import { UPGRADE_PATH, salesAllowance } from '../lib/salesAllowance'
-import { canReadReceiptsNow } from '../lib/terminalSession'
 import { isReceiptQr } from '../lib/receipts/verify'
 
 /**
@@ -78,22 +77,20 @@ export function SellPage({
   const navigate = useNavigate()
   const [customer, setCustomer] = useState<string | null>(null)
   const isOwner = (actor?.kind ?? 'owner') === 'owner'
-  // Spec 049: the camera is already pointed at the customer's phone here, so a receipt scanned on
-  // Sell is checked rather than sold to. The till's own rule (`receipt:read`, live session); the
-  // owner always may.
-  const mayCheckReceipts = actor ? canReadReceiptsNow(actor, session ?? null) : true
+  // Spec 049: Sell's scanner is for the customer. A receipt has its own scanner (owner: Transactions;
+  // till: its home), so checking never depends on whether this stall may sell (a used-up Free plan
+  // sends the owner to Upgrade on arrival). A receipt scanned here is never sold to: say where to go.
   const [scanError, setScanError] = useState<string | null>(null)
   const onScanned = (text: string): boolean => {
     if (!isReceiptQr(text)) {
       setScanError(null)
       return false
     }
-    if (!mayCheckReceipts) {
-      setScanError('That is a payment receipt. This till cannot check receipts: ask the stall owner.')
-      return true
-    }
-    // Router state, never the URL: it carries a payer signature and the key to its evidence.
-    navigate('/receipt/check', { state: { qr: text.trim() } })
+    setScanError(
+      isOwner
+        ? 'That is a payment receipt, not a customer. To check it, use Check a receipt on Transactions.'
+        : 'That is a payment receipt, not a customer. To check it, use Check a receipt on the till.',
+    )
     return true
   }
   // Review of gc#317: a stall whose Free plan is used up does not start a sale. The owner is taken
@@ -158,16 +155,7 @@ export function SellPage({
   return (
     <Screen>
       <BackLink to="/" label="Back" />
-      <PageHeader
-        title="Sell"
-        subtitle={
-          customer
-            ? undefined
-            : mayCheckReceipts
-              ? "Scan the customer's code, or a receipt to check it"
-              : "Scan the customer's code"
-        }
-      />
+      <PageHeader title="Sell" subtitle={customer ? undefined : "Scan the customer's code"} />
 
       {customer === null ? (
         <>
