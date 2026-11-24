@@ -115,9 +115,9 @@ function ResultCard({ result }: { result: VerifyResult }) {
       <h1 className="text-[22px] font-semibold leading-tight tracking-[-0.015em] text-mono-900 dark:text-mono-50">
         {h.title}
       </h1>
-      {result.summary ? (
+      {result.face ? (
         <div className="mt-1 flex flex-col items-center gap-0.5">
-          <ReceiptAmount face={result.face} amount={result.summary.amount} unit={result.summary.unit} />
+          <ReceiptAmount face={result.face} />
         </div>
       ) : null}
       <p className="text-[15px] leading-snug text-mono-600 dark:text-mono-300">{h.line}</p>

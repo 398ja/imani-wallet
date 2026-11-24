@@ -54,6 +54,20 @@ afterEach(() => {
 })
 
 describe('the receipt check card', () => {
+  it('shows the face value and never the signed sat amount', async () => {
+    next = result({ mine: 'payee', records: 'found_in_records', face: { value: 500, unit: 'GBP', decimals: 2 } })
+    open({ qr: 'imrc1:x' })
+    expect(await screen.findByText('£5.00')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/sats?\b|1,?200/)
+  })
+
+  it('without a known face value it shows no amount, not sats', async () => {
+    next = result({ mine: 'neither' })
+    open({ qr: 'imrc1:x' })
+    await screen.findByText('Valid, but not paid to you')
+    expect(document.body.textContent).not.toMatch(/sats?\b|1,?200/)
+  })
+
   it('a payee with the payment in its records reads "Paid to you"', async () => {
     next = result({ mine: 'payee', records: 'found_in_records' })
     open({ qr: 'imrc1:x' })

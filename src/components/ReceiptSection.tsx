@@ -3,7 +3,7 @@ import QRCode from 'qrcode'
 import { BadgeCheck, Clock, QrCode } from 'lucide-react'
 
 import { DetailRow, ListSection } from './ui'
-import { formatFace, formatSats } from '../lib/format'
+import { formatFace } from '../lib/format'
 import {
   onReceiptsChanged,
   presentReceipt,
@@ -118,11 +118,9 @@ const PENDING_LINE: Record<NonNullable<ReceiptView['pendingReason']>, string> = 
  * code is redrawn on a timer, and the redraw swaps the image in place: no
  * flash, no layout shift, the scanner sees one continuous code.
  *
- * Amount: the coupon's face value first, because that is what the customer
- * paid in their own terms, and the signed sat amount beneath it, because that
- * is what the receipt actually proves. Showing only sats would make the
- * customer do arithmetic at the till; showing only the face would hide what is
- * signed.
+ * Amount: the coupon's face value only, the amount the customer paid in their own terms. The signed
+ * sat amount is what the receipt proves, but it is not shown: customers and stalls price in their
+ * currency, and a second figure in sats reads as a different price.
  */
 function ReceiptQrDialog({ receipt, onClose }: { receipt: ReceiptView; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null)
@@ -186,7 +184,7 @@ function ReceiptQrDialog({ receipt, onClose }: { receipt: ReceiptView; onClose: 
         </div>
 
         <div className="flex flex-col items-center gap-0.5 text-center">
-          <ReceiptAmount face={receipt.face} amount={receipt.amount} unit={receipt.unit} />
+          <ReceiptAmount face={receipt.face} />
         </div>
 
         <p className="text-center text-[13px] leading-snug text-mono-500">
@@ -208,32 +206,15 @@ function ReceiptQrDialog({ receipt, onClose }: { receipt: ReceiptView; onClose: 
 }
 
 /**
- * Face value large, the signed amount small beneath it. Shared with the stall's
- * scan result, so the two screens of one receipt speak with one voice.
+ * The face value, large. Shared with the stall's scan result, so the two screens of one receipt
+ * speak with one voice. The signed amount is in sats and is never shown (owner decision): when the
+ * face value is not known on this device, no amount line is drawn.
  */
-export function ReceiptAmount({
-  face,
-  amount,
-  unit,
-}: {
-  face?: { value: number; unit: string; decimals: number }
-  amount: number
-  unit: string
-}) {
-  const signed = `${formatSats(amount)} ${unit === 'sat' ? 'sats' : unit} signed`
-  if (!face) {
-    return (
-      <p className="text-[28px] font-semibold leading-tight tracking-[-0.02em] text-mono-900 dark:text-mono-50">
-        {formatSats(amount)} {unit === 'sat' ? 'sats' : unit}
-      </p>
-    )
-  }
+export function ReceiptAmount({ face }: { face?: { value: number; unit: string; decimals: number } }) {
+  if (!face) return null
   return (
-    <>
-      <p className="text-[28px] font-semibold leading-tight tracking-[-0.02em] text-mono-900 dark:text-mono-50">
-        {formatFace(face.value, { unit: face.unit, decimals: face.decimals })}
-      </p>
-      <p className="text-[13px] text-mono-500">{signed}</p>
-    </>
+    <p className="text-[28px] font-semibold leading-tight tracking-[-0.02em] text-mono-900 dark:text-mono-50">
+      {formatFace(face.value, { unit: face.unit, decimals: face.decimals })}
+    </p>
   )
 }
