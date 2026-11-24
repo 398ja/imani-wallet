@@ -176,3 +176,21 @@ describe('the issuer can only come from one place', () => {
     expect(issuingStall(terminalActor(credential(), DEVICE)!)).toBe(STALL)
   })
 })
+
+/**
+ * Regression (spec 049 receipt:read): enrolment re-derives the grant from the signed role before
+ * `terminalActor` checks it, so adding receipt:read to the roles does not lock out a till whose
+ * stored record predates it.
+ */
+describe('receipt:read and enrolment', () => {
+  it('the derived grant passes terminalActor for every role', async () => {
+    const { terminalActor } = await import('../actor')
+    const { ALL_TERMINAL_ROLES, grantFor } = await import('../terminalRole')
+    const stall = 'a'.repeat(64)
+    const device = 'c'.repeat(64)
+    for (const role of ALL_TERMINAL_ROLES) {
+      const actor = terminalActor({ stallPubkey: stall, role, lockedTo: device, permissions: grantFor(role, stall) }, device)
+      expect(actor?.permissions).toContain(`receipt:read:${stall}`)
+    }
+  })
+})

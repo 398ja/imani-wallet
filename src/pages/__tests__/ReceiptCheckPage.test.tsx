@@ -124,6 +124,34 @@ describe('the receipt check card', () => {
     expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Not yet confirmed by the payee')
   })
 
+  /**
+   * Regression (review of 72de4e6c): spent at the mint only proves SOMEONE spent the proofs. With
+   * no countersignature and no lock to the payee, the payer may have spent them elsewhere, so
+   * neither the owner nor a till may be told it was paid to them.
+   */
+  it.each([
+    ['the owner', undefined, 'Paid to you'],
+    ['a till', 'aa'.repeat(32), 'Paid to this stall'],
+  ])('for %s, spent but unacknowledged is never "Paid to"', async (_who, forStall, paid) => {
+    next = result({ verdict: 'unacknowledged', mine: 'payee', mint: 'confirmed' })
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/receipt/check', state: { qr: 'imrc1:x' } }]}>
+        <Routes>
+          <Route path="/receipt/check" element={<ReceiptCheckPage forStall={forStall} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    const h = (await screen.findByRole('heading', { level: 1 })).textContent
+    expect(h).not.toBe(paid)
+    expect(h).toBe('Not yet confirmed by the payee')
+  })
+
+  it('summary only, even for the payee, is never "Paid to"', async () => {
+    next = result({ verdict: 'verified_summary_only', mine: 'payee', mint: 'not_checked' })
+    open({ qr: 'imrc1:x' })
+    expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Partly checked')
+  })
+
   it('a failed check shows as failed in the list', async () => {
     next = result({ verdict: 'invalid', checks: [{ check: 'EVIDENCE_DIGEST', ok: false }] })
     open({ qr: 'imrc1:x' })
