@@ -308,3 +308,19 @@ describe('the payment memo (FR-027f)', () => {
     expect(screen.queryByTestId('receipt-memo')).toBeNull()
   })
 })
+
+describe('Back returns to the scanner that opened the check', () => {
+  it('the receipt scanner, when it opened the check', async () => {
+    next = result({})
+    open({ qr: 'imrc1:x', from: '/receipts/scan' })
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.getByRole('link', { name: /Scan/ }).getAttribute('href')).toBe('/receipts/scan')
+  })
+
+  it('the general Scan otherwise, and never an outside address', async () => {
+    next = result({})
+    open({ qr: 'imrc1:x', from: '//evil.example' })
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.getByRole('link', { name: /Scan/ }).getAttribute('href')).toBe('/scan')
+  })
+})
