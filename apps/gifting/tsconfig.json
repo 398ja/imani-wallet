@@ -58,6 +58,9 @@
       "@imani/payment-requests": [
         "./packages/payment-requests/src/index.ts"
       ],
+      "@imani/receipts": [
+        "./packages/receipts/src/index.ts"
+      ],
       "imani-qr": [
         "./packages/imani-qr/src/index.ts"
       ]

@@ -65,6 +65,7 @@ export {
   type SendPlan,
 } from '@imani/wallet-core'
 import { chooseSpend, passedOver, planParts, splitObstacle, type SendPart } from '@imani/wallet-core'
+import type { SendEvidence } from '@imani/receipts'
 
 /** Why a bundle was refused for a card voucher, in the badge's terms (gateway-core#221). */
 function refundedReason(status: 'refunded' | 'partly_refunded' | 'disputed'): string {
@@ -172,6 +173,9 @@ export type SendStatus = {
    * what the sender's signature (#91) is keyed on. Absent from older gateways.
    */
   sent_voucher_id?: string
+  /** Spec 049: the sent proofs for the payer's receipt. Absent from older gateways. */
+  send_evidence?: SendEvidence | null
+  send_evidence_state?: string
   error?: string
   error_message?: string
   /** Why a FAILED send failed. `VOUCHER_FULLY_REDEEMED` is the mint's 90025 (cashu-mint#540). */
@@ -640,8 +644,48 @@ export function replayedSendReason(
   return undefined
 }
 
+/**
+ * Spec 049: keep the payer's receipt evidence for a COMPLETED send. NEVER THROWS, never awaited
+ * by the settle. The pending receipt is saved durably BEFORE the gateway is told it may erase the
+ * evidence. A bare idempotent COMPLETED answer carries no evidence, so the full status is read once.
+ */
+async function captureReceipt(
+  api: { ackSendEvidence?(sendId: string): Promise<void>; getAtomicSendStatus?(sendId: string): Promise<SendStatus> },
+  pending: PendingSend,
+  status: SendStatus,
+): Promise<void> {
+  try {
+    let s = status
+    if (!s.send_evidence && !s.send_evidence_state && api.getAtomicSendStatus) {
+      s = await api.getAtomicSendStatus(pending.sendId).catch(() => status)
+    }
+    if (!s.send_evidence && !s.send_evidence_state) return
+    const receipts = await import('./receipts')
+    const outcome = await receipts.captureSendEvidence({
+      sendEvidence: s.send_evidence ?? null,
+      sendEvidenceState: s.send_evidence_state ?? null,
+      payeeKey: pending.recipientPubkey ?? pending.merchantPubkey,
+      reference: pending.paymentRequestId ?? null,
+      paidAt: Math.floor((pending.at || Date.now()) / 1000),
+      txId: `${pending.recipientPubkey ? 'sent' : 'payment'}:${pending.tokenId}`,
+      sendId: pending.sendId,
+    })
+    if ((outcome === 'captured' || outcome === 'duplicate' || outcome === 'no_receipt') && s.send_evidence) {
+      await api.ackSendEvidence?.(pending.sendId).catch(() => {
+        // harmless: the gateway's retention expires it
+      })
+    }
+  } catch (error) {
+    console.warn('[pay] receipt evidence not captured', (error as Error)?.name ?? 'error')
+  }
+}
+
 async function settleSend(
-  api: { ackKeepToken(sendId: string): Promise<void> },
+  api: {
+    ackKeepToken(sendId: string): Promise<void>
+    ackSendEvidence?(sendId: string): Promise<void>
+    getAtomicSendStatus?(sendId: string): Promise<SendStatus>
+  },
   wallet: ReturnType<typeof getWallet>,
   payer: string,
   pending: PendingSend,
@@ -792,6 +836,10 @@ async function settleSend(
     void signing.catch((error) => console.error('[pay] transfer signature failed', error))
   }
 
+  // Spec 049: the payer's receipt. Not awaited and never throws, so it can neither fail nor delay
+  // the payment. Durable pending save first, the evidence ack only after it.
+  void captureReceipt(api, pending, status)
+
   // #461: remembered so a second payment of the same request, or a replayed answer naming this
   // send, is refused instead of settled again.
   rememberSettledSend(payer, {
@@ -827,7 +875,18 @@ export function reconcilePendingSends(pubkey: string): Promise<number> {
   // over the same entry would settle the same send twice.
   const running = reconcilesInFlight.get(pubkey)
   if (running) return running
-  const pass = reconcileOnce(pubkey).finally(() => reconcilesInFlight.delete(pubkey))
+  const pass = reconcileOnce(pubkey).finally(() => {
+    reconcilesInFlight.delete(pubkey)
+    // Spec 049: build receipts for payments now spent, and send what telemetry has. After the
+    // sends are reconciled, so a send settled just now is captured first. Never throws.
+    void import('./receipts').then(
+      (r) => {
+        r.installReceiptLifecycle()
+        return r.settlePendingReceipts().then(() => r.flushReceipts())
+      },
+      () => undefined,
+    )
+  })
   reconcilesInFlight.set(pubkey, pass)
   return pass
 }
@@ -848,6 +907,7 @@ async function reconcileOnce(pubkey: string): Promise<number> {
   let api: {
     getAtomicSendStatus(sendId: string): Promise<SendStatus>
     ackKeepToken(sendId: string): Promise<void>
+    ackSendEvidence?(sendId: string): Promise<void>
   }
   try {
     api = (await legacyApi()) as never
@@ -1120,6 +1180,7 @@ type SendApi = {
   ): Promise<{ send_id?: string; sendId?: string; status?: string }>
   getAtomicSendStatus(sendId: string): Promise<SendStatus>
   ackKeepToken(sendId: string): Promise<void>
+  ackSendEvidence?(sendId: string): Promise<void>
 }
 
 /**
