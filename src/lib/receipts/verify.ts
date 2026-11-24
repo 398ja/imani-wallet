@@ -93,7 +93,10 @@ export interface VerifyResult {
   mine: 'payee' | 'payer' | 'neither'
   records?: 'found_in_records' | 'not_in_records'
   face?: { value: number; unit: string; decimals: number }
-  /** FR-027f: the payee's own record's memo. Display only, never signed; absent on a terminal. */
+  /**
+   * What the payment was for: the memo the payer signed into the receipt (FR-002a), shown on every
+   * scanner, a till too; else the payee's own record's memo (FR-027f). Absent on an invalid receipt.
+   */
   memo?: string
   /**
    * FR-027b: earlier checks of this payment by the payee's devices, oldest first. Absent when this
@@ -497,7 +500,10 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
 
   let records: VerifyResult['records']
   let face: VerifyResult['face']
-  let memo: string | undefined
+  // FR-002a: the memo the payer signed into the receipt, so every scanner (a till too) sees what the
+  // payment was for. Shown only on a receipt that is not invalid: the signature is what makes it
+  // the payer's words. The payee's own record fills in when the receipt carries none (FR-027f).
+  let memo: string | undefined = s && report.verdict !== 'INVALID' ? s.memo.trim() || undefined : undefined
   if (s && mine === 'payee' && report.verdict !== 'INVALID') {
     try {
       const own = await ports.ownRecord(s.paymentId)
@@ -505,7 +511,7 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
       if (own !== 'no_records') {
         records = own ? 'found_in_records' : 'not_in_records'
         face = own?.face
-        memo = own?.memo || undefined
+        memo ??= own?.memo || undefined
       }
     } catch {
       records = undefined

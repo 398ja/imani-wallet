@@ -7,6 +7,7 @@ import {
   encodeAck,
   encodeSummary,
   evidenceDigest,
+  fitMemo,
   makeSummary,
   paymentId as paymentIdOf,
   payerIdentified,
@@ -634,12 +635,13 @@ export async function buildPayerReceipt(
   reference: string | null | undefined,
   paidAt: number,
   signer: ReceiptSigner,
+  memo?: string | null,
 ): Promise<PayerReceipt> {
   if (!send.proofs?.length) throw new Error('a payment has at least one proof')
   const evidence = evidenceFromSend(send)
   if (evidence.rail !== RAIL_CASHU) throw new Error('unreachable')
   const evidenceBytes = encodeEvidence(evidence)
-  const summary = makeSummary({
+  const bare = makeSummary({
     paymentId: paymentIdOf(evidence.proofs.map((p) => hashToCurveY(p.secret))),
     rail: RAIL_CASHU,
     payer: signer.publicKey,
@@ -651,5 +653,6 @@ export async function buildPayerReceipt(
     reference,
     evidenceDigest: evidenceDigest(evidenceBytes),
   })
+  const summary = { ...bare, memo: fitMemo(bare, memo) }
   return { summary, receipt: await signByPayer(summary, signer), evidence, evidenceBytes }
 }

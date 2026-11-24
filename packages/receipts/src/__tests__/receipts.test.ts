@@ -22,6 +22,7 @@ import {
   MAX_FIELD,
   encryptEvidence,
   evidenceDigest,
+  fitMemo,
   fromBase64Url,
   hashToCurveY,
   hexToBytes,
@@ -263,8 +264,13 @@ describe('evidence cipher (AES-256-GCM via WebCrypto)', () => {
 })
 
 describe('QR payload', () => {
+  it('a Java receipt with a memo: TS reads the memo Java signed, and the signature verifies', () => {
+    const q = decodeQr(vectors.qr.withMemo.text)
+    expect(decodeSummary(q.receipt.summaryBytes).memo).toBe(vectors.summaries.withMemo.memo)
+    expect(verifySummary(q.receipt, undefined, { nowSeconds: NOW }).checks.PAYER_SIGNATURE?.outcome).toBe('PASS')
+  })
   it('re-encodes Java QR text exactly', () => {
-    for (const q of [vectors.qr.full, vectors.qr.exportNoKey]) {
+    for (const q of [vectors.qr.full, vectors.qr.exportNoKey, vectors.qr.withMemo]) {
       const decoded = decodeQr(q.text)
       expect(bytesToHex(qrBody(decoded))).toBe(q.bodyHex)
       expect(encodeQr(decoded)).toBe(q.text)
@@ -376,4 +382,103 @@ describe('buildPayerReceipt', () => {
     expect(built.summary.mints).toEqual(['https://m.example'])
     expect(built.summary.reference).toBe('order 7')
   })
+})
+
+/**
+ * FR-002a: the payer's memo travels in the signed summary (tag 14), so any scanner, a till too,
+ * shows what the payment was for. Older readers skip the tag; the payee's acknowledgement does not
+ * cover it; and it is fitted before signing so the receipt always fits a QR.
+ */
+describe('the payer memo (tag 14)', () => {
+  const base = fromJson(vectors.summaries.full)
+
+  it('round-trips, after every other tag, and is absent when empty', () => {
+    const s = { ...base, memo: 'Two coffees, table 4 café' }
+    const bytes = encodeSummary(s)
+    const tags = readTlv(bytes).map((f) => f.tag)
+    expect(tags[tags.length - 1]).toBe(14)
+    expect(decodeSummary(bytes)).toEqual(s)
+    expect(bytesToHex(encodeSummary({ ...base, memo: '' }))).toBe(vectors.summaries.full.tlvHex)
+    expect(decodeSummary(hexToBytes(vectors.summaries.full.tlvHex)).memo).toBe('')
+  })
+
+  it('a reader that does not know tag 14 still decodes the rest, and the signature covers it', async () => {
+    const s = { ...base, memo: 'Order 7' }
+    const signed = await signByPayer(s, payer)
+    expect(verifySummary(signed, undefined, { nowSeconds: NOW }).checks.PAYER_SIGNATURE?.outcome).toBe('PASS')
+    // Change the memo bytes after signing: the payer signature no longer verifies.
+    const tampered = { ...signed, summaryBytes: encodeSummary({ ...s, memo: 'Order 8' }) }
+    expect(verifySummary(tampered, undefined, { nowSeconds: NOW }).checks.PAYER_SIGNATURE?.outcome).toBe('FAIL')
+  })
+
+  it('the acknowledgement does not cover it: the same countersignature verifies with or without', async () => {
+    const at = vectors.acks.claimedAt
+    expect(bytesToHex(encodeAck({ ...base, memo: 'anything' }, at))).toBe(vectors.acks.fullNamesPayer)
+    const cs = await signCountersignature(base, at, true, payee)
+    expect(verifyCountersignature(cs, { ...base, memo: 'Two coffees' })).toBe(true)
+  })
+
+  it('refuses an oversized memo on encode', () => {
+    expect(() => encodeSummary({ ...base, memo: 'x'.repeat(65) })).toThrow(/memo/)
+  })
+
+  it('buildPayerReceipt signs the fitted memo', async () => {
+    const send: SendEvidence = {
+      mint: 'https://mint-a.example',
+      unit: 'sat',
+      proofs: vectors.evidence.proofs.map((p) => ({ mint: p.mint, id: p.id, amount: p.amount, secret: p.secret, C: p.C, dleq: p.dleq ?? null })),
+    }
+    const built = await buildPayerReceipt(send, vectors.keys.payeePub, null, NOW, payer, '  Two   coffees ')
+    expect(built.summary.memo).toBe('Two coffees')
+    expect(decodeSummary(built.receipt.summaryBytes).memo).toBe('Two coffees')
+  })
+})
+
+describe('fitMemo: the receipt always fits a QR', () => {
+  // Near the limit without a memo: two long mints and a full request id, no items or refund.
+  const wide = makeSummary({
+    ...vectors.summaries.full,
+    rail: 'cashu',
+    itemsCommitment: null,
+    refundOf: null,
+    reference: 'a1b2c3d4e5f60718',
+    mints: ['https://mint-one.example.org', 'https://mint-two.example.org'],
+  })
+
+  it('keeps a short memo as written, whitespace tidied', () => {
+    expect(fitMemo(base(), ' Two\n coffees ')).toBe('Two coffees')
+    expect(fitMemo(base(), '   ')).toBe('')
+    expect(fitMemo(base(), null)).toBe('')
+  })
+
+  it('cuts a long memo on a code point, within 64 bytes, ending in an ellipsis', () => {
+    const m = fitMemo(base(), 'é'.repeat(100))
+    expect(new TextEncoder().encode(m).length).toBeLessThanOrEqual(64)
+    expect(m.endsWith('…')).toBe(true)
+    expect(m).toMatch(/^é+…$/)
+  })
+
+  it('with a wide summary, the longest memo is cut so a full QR still fits the limit', async () => {
+    const memo = fitMemo(wide, '🍕'.repeat(40))
+    expect(memo).not.toBe('')
+    expect(memo.endsWith('…')).toBe(true)
+    const s = { ...wide, memo }
+    const signed = withCountersignature(await signByPayer(s, payer), await signCountersignature(s, NOW, true, payee))
+    const qr = encodeQr({
+      receipt: signed,
+      presenter: await signPresenterProof(s.paymentId, NOW, payer),
+      evidence: makeLocator('ab'.repeat(32), 'wss://' + 'r'.repeat(58)),
+      evidenceKey: new Uint8Array(32),
+    })
+    expect(decodeQr(qr).receipt.summaryBytes).toEqual(signed.summaryBytes)
+  })
+
+  it('a summary with no room left drops the memo rather than make a receipt that cannot be shown', () => {
+    const full = makeSummary({ ...vectors.summaries.full, rail: 'cashu', reference: 'r'.repeat(80), mints: ['https://a.example.org/' + 'x'.repeat(40), 'https://b.example.org/' + 'x'.repeat(40)] })
+    expect(fitMemo(full, 'Two coffees')).toBe('')
+  })
+
+  function base() {
+    return fromJson(vectors.summaries.minimal)
+  }
 })

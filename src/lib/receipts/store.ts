@@ -37,6 +37,8 @@ export interface PendingPaymentRow {
   payeeKey: string
   unit: string
   reference: string
+  /** FR-002a: the payer's memo, signed into the receipt when it is built. Absent on old rows. */
+  memo?: string
   /** Epoch seconds. */
   paidAt: number
   /** Canonical evidence of every sent proof, hex. Spendable until claimed: never log. */
