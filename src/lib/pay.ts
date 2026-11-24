@@ -650,14 +650,15 @@ export function replayedSendReason(
  * evidence. A bare idempotent COMPLETED answer carries no evidence, so the full status is read once.
  */
 async function captureReceipt(
-  api: { ackSendEvidence?(sendId: string): Promise<void>; getAtomicSendStatus?(sendId: string): Promise<SendStatus> },
+  api: { ackSendEvidence?(sendId: string): Promise<void> },
   pending: PendingSend,
   status: SendStatus,
+  fullStatusLater?: () => Promise<SendStatus | undefined>,
 ): Promise<void> {
   try {
     let s = status
-    if (!s.send_evidence && !s.send_evidence_state && api.getAtomicSendStatus) {
-      s = await api.getAtomicSendStatus(pending.sendId).catch(() => status)
+    if (!s.send_evidence && !s.send_evidence_state && fullStatusLater) {
+      s = (await fullStatusLater()) ?? status
     }
     if (!s.send_evidence && !s.send_evidence_state) return
     const receipts = await import('./receipts')
@@ -684,7 +685,6 @@ async function settleSend(
   api: {
     ackKeepToken(sendId: string): Promise<void>
     ackSendEvidence?(sendId: string): Promise<void>
-    getAtomicSendStatus?(sendId: string): Promise<SendStatus>
   },
   wallet: ReturnType<typeof getWallet>,
   payer: string,
@@ -696,6 +696,8 @@ async function settleSend(
    * awaited here, so a slow gateway cannot hold up the local row.
    */
   transferIdLater?: () => Promise<string | undefined>,
+  /** The full status, read once AFTER the settle, for an answer that carried only `{ status }`. */
+  fullStatusLater?: () => Promise<SendStatus | undefined>,
 ): Promise<number | false> {
   const spentTokenId = pending.tokenId
   // #461: never settle an answer that describes some other send. No removeVoucher, no row, no
@@ -838,7 +840,7 @@ async function settleSend(
 
   // Spec 049: the payer's receipt. Not awaited and never throws, so it can neither fail nor delay
   // the payment. Durable pending save first, the evidence ack only after it.
-  void captureReceipt(api, pending, status)
+  void captureReceipt(api, pending, status, fullStatusLater)
 
   // #461: remembered so a second payment of the same request, or a replayed answer naming this
   // send, is refused instead of settled again.
@@ -1614,13 +1616,20 @@ async function awaitAndSettle(
   // `transferIdLater`): a slow gateway must not hold up the local row for the
   // sake of a receipt. Only that one field is taken, and a failed read costs
   // the receipt, not the send.
-  const transferIdLater =
-    !polled && status.status === 'COMPLETED' && pending.recipientPubkey && !status.sent_voucher_id
+  // One read, shared: the transfer signature takes `sent_voucher_id` from it, the receipt
+  // (spec 049) its `send_evidence`. Memoized so the gateway is asked once.
+  let fullRead: Promise<SendStatus | undefined> | undefined
+  const fullStatusLater =
+    !polled && status.status === 'COMPLETED'
       ? () =>
-          api.getAtomicSendStatus(pending.sendId).then(
-            (full) => full.sent_voucher_id,
+          (fullRead ??= api.getAtomicSendStatus(pending.sendId).then(
+            (full) => full,
             () => undefined,
-          )
+          ))
+      : undefined
+  const transferIdLater =
+    fullStatusLater && pending.recipientPubkey && !status.sent_voucher_id
+      ? () => fullStatusLater().then((full) => full?.sent_voucher_id)
       : undefined
 
   const wallet = getWallet()
@@ -1694,7 +1703,7 @@ async function awaitAndSettle(
   }
 
   // What really left (#635). Settled already elsewhere (another tab): the request, as before.
-  const taken = await settleSend(api, wallet, payer, pending, status, transferIdLater)
+  const taken = await settleSend(api, wallet, payer, pending, status, transferIdLater, fullStatusLater)
   forgetPendingSend(payer, pending.sendId)
   notifyWalletChanged()
   return taken === false ? pending.amount : taken
