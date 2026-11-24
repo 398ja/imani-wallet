@@ -59,7 +59,7 @@ import { ForeignVoucherRefusedError, MERCHANT_FOREIGN_VOUCHER, MERCHANT_STATUS_U
 import { checkPart, checkRedemption, redeemLockName } from './redemptionLedger'
 import { exactFaceValue, parseVoucherToken, tokenProofs, type VoucherValidation } from './voucherToken'
 import { raiseHomecomingAlert } from './terminalHomecoming'
-import { getWallet, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
+import { getWallet, listTransactions, notifyWalletChanged, recordReceiptByNullifier } from './wallet'
 import { legacyApi, withCorrelation } from './legacyBridge'
 import { claimToFile } from './merchantClaim'
 import { shopAttributionFor } from './shopTakings'
@@ -2133,6 +2133,13 @@ export function stopDmPoll(): void {
 async function noteReceiptClaim(token: string, senderPubkey: string | undefined, reference: string | undefined): Promise<void> {
   try {
     const parsed = parseVoucherToken(token)
+    // The incoming row: the redeem stamps it with this token's transfer id (withCorrelation), which
+    // survives the swap that changes the row's own token id. Lets the payee's check show the face.
+    const transferId = transferIdFor(token)
+    const txId = await listTransactions().then(
+      (rows) => receivedRowIdFor(rows, transferId),
+      () => undefined,
+    )
     const proofs = tokenProofs(token).map((p) => ({
       mint: parsed.mintUrl,
       id: p.id,
@@ -2150,8 +2157,20 @@ async function noteReceiptClaim(token: string, senderPubkey: string | undefined,
       payerKey: senderPubkey ?? null,
       reference: reference ?? null,
       paidAt: 0,
+      ...(txId ? { txId } : {}),
     })
   } catch (error) {
     console.warn('[dmPoll] receipt claim not recorded', (error as Error)?.name ?? 'error')
   }
+}
+
+/** Spec 049: the id of the incoming row a redeem of this transfer wrote, or undefined. */
+export function receivedRowIdFor(rows: ReadonlyArray<unknown>, transferId: string): string | undefined {
+  for (const row of rows) {
+    const r = row as { id?: unknown; transferId?: unknown; transfer_id?: unknown; type?: unknown; direction?: unknown }
+    if (r.transferId !== transferId && r.transfer_id !== transferId) continue
+    if (r.direction === 'out' || r.type === 'sent' || r.type === 'payment') continue
+    if (typeof r.id === 'string') return r.id
+  }
+  return undefined
 }
