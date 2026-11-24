@@ -45,6 +45,8 @@ const AUDITED = new Set<string>([
   'src/lib/receipts/service.ts#saveBackup#c7b631faa995',
   'src/lib/receipts/service.ts#settlePending#05fe8f201e1c',
   'src/lib/receipts/telemetry.ts#countReceiptEvent#e56f37c977e3',
+  // FR-027a-d: a failed check memory drops only the "already checked" history; the verdict stands.
+  'src/lib/receipts/verify.ts#verifyScannedWith#1574ca1faf0f',
   // Each fails safe: no claim, zero credit, not lockable, unreadable, pending or retried.
   // The NGN overcharge: sendFaceOf answers undefined and debitFor the request on any failure, so an
   // unverifiable voucher gets no prediction; the screen and the history keep the request, and the

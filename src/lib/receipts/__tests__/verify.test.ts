@@ -21,7 +21,7 @@ import {
   type CashuProofEvidence,
   type PaymentEvidence,
 } from '@imani/receipts'
-import { isReceiptQr, p2pkLock, verifyScannedWith, witnessSignedBy, type SpentState, type VerifyPorts } from '../verify'
+import { isPaidToMe, isReceiptQr, p2pkLock, verifyScannedWith, witnessSignedBy, type SpentState, type VerifyPorts } from '../verify'
 
 const MINT = 'https://mint.test'
 const payerSk = new Uint8Array(32).fill(1)
@@ -374,3 +374,102 @@ function voucherSecretSignedBy(signerSk: Uint8Array, issuerId: string, i: number
   const sig = bytesToHex(schnorr.sign(sha256(canonical), signerSk))
   return JSON.stringify(['P2PK_VOUCHER', { nonce, data: lockKey, tags: [...tags, ['issuer_sig', sig], ['issuer_pubkey', pub]] }])
 }
+
+/**
+ * Spec 049 FR-027a-f: a check paid to me is remembered and earlier checks come back with the
+ * verdict, and my own record's memo shows beside it. Only when the card will say "paid": a check
+ * of a receipt that is not mine, or not proven mine, is never recorded.
+ */
+describe('remembered checks and the memo (FR-027a-f)', () => {
+  const PRIOR = [{ at: NOW - 3600, by: { kind: 'another_till' as const } }]
+
+  it('paid to me: remembers the check, returns the earlier ones, counts a repeat', async () => {
+    const { qr, s, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const remembered: string[] = []
+    const p = ports({
+      blob,
+      remember: async (payeeKey, id) => (remembered.push(`${payeeKey}:${id}`), { prior: PRIOR, known: true, record: 'published' }),
+    })
+    const res = await verifyScannedWith(p, qr)
+    expect(remembered).toEqual([`${payee}:${s.paymentId}`])
+    expect(res.priorChecks).toEqual(PRIOR)
+    expect(p.counted).toEqual(expect.arrayContaining(['check_repeat:repeat_other_device', 'check_record:published']))
+  })
+
+  it('a first check: an empty list, counted as first', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const p = ports({ blob, remember: async () => ({ prior: [], known: true, record: 'deferred' }) })
+    const res = await verifyScannedWith(p, qr)
+    expect(res.priorChecks).toEqual([])
+    expect(p.counted).toEqual(expect.arrayContaining(['check_repeat:first', 'check_record:deferred']))
+  })
+
+  it('history unknown (offline): no list at all, and no "first" counted', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const p = ports({ blob, remember: async () => ({ prior: [], known: false, record: 'deferred' }) })
+    const res = await verifyScannedWith(p, qr)
+    expect(res.priorChecks).toBeUndefined()
+    expect(p.counted.some((c) => c.startsWith('check_repeat:'))).toBe(false)
+  })
+
+  it('offline but this device checked before: shows that one', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const mine = [{ at: NOW - 60, by: { kind: 'this_device' as const } }]
+    const res = await verifyScannedWith(ports({ blob, remember: async () => ({ prior: mine, known: false, record: null }) }), qr)
+    expect(res.priorChecks).toEqual(mine)
+  })
+
+  it('a repeat never changes the verdict', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const first = await verifyScannedWith(ports({ blob }), qr)
+    const again = await verifyScannedWith(ports({ blob, remember: async () => ({ prior: PRIOR, known: true, record: null }) }), qr)
+    expect({ ...again, priorChecks: undefined }).toEqual({ ...first, priorChecks: undefined })
+  })
+
+  it('not mine: never remembered', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const remember = vi.fn()
+    await verifyScannedWith(ports({ blob, me: publicKeyOf(strangerSk), remember }), qr)
+    expect(remember).not.toHaveBeenCalled()
+  })
+
+  it('mine on paper but not proven (unacknowledged, unlocked, not in records): never remembered', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)] })
+    const remember = vi.fn()
+    const res = await verifyScannedWith(ports({ blob, remember, ownRecord: async () => 'no_records' }), qr)
+    expect(res.verdict).toBe('unacknowledged')
+    expect(remember).not.toHaveBeenCalled()
+  })
+
+  it('unspent at the mint: never remembered', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const remember = vi.fn()
+    await verifyScannedWith(ports({ blob, remember, states: [{ state: 'UNSPENT', witness: null }] }), qr)
+    expect(remember).not.toHaveBeenCalled()
+  })
+
+  it('a failing remember leaves the verdict standing', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const res = await verifyScannedWith(ports({ blob, remember: async () => { throw new Error('boom') } }), qr)
+    expect(res.verdict).toBe('verified_offline')
+    expect(res.priorChecks).toBeUndefined()
+  })
+
+  it('the memo of my own record comes back; a terminal has none', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 4)], countersign: true })
+    const owner = await verifyScannedWith(ports({ blob, ownRecord: async () => ({ memo: 'Two coffees' }) }), qr)
+    expect(owner.memo).toBe('Two coffees')
+    const till = await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)
+    expect(till.memo).toBeUndefined()
+  })
+
+  it('isPaidToMe matches the card: records, or the mint on a bound verdict', () => {
+    const base = { verdict: 'verified', mine: 'payee', mint: 'not_checked', checks: [], presenter: 'NOT_CHECKED', warnings: [] } as const
+    expect(isPaidToMe({ ...base, records: 'found_in_records' })).toBe(true)
+    expect(isPaidToMe({ ...base, mint: 'confirmed' })).toBe(true)
+    expect(isPaidToMe({ ...base, verdict: 'unacknowledged', mint: 'confirmed' })).toBe(false)
+    expect(isPaidToMe({ ...base, mine: 'neither', records: 'found_in_records' })).toBe(false)
+    expect(isPaidToMe({ ...base, verdict: 'invalid', records: 'found_in_records' })).toBe(false)
+    expect(isPaidToMe({ ...base, mint: 'not_valid', records: 'found_in_records' })).toBe(false)
+  })
+})
