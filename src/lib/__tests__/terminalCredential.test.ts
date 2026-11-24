@@ -212,3 +212,19 @@ describe('permissions come from the credential, not from a stored record', () =>
     expect(actor.stallPubkey).toBe(STALL)
   })
 })
+
+/**
+ * Regression (spec 049 receipt:read): the permission was added to every role after tills were
+ * already enrolled. Their credentials name only a role, so a till enrolled before it must still
+ * unlock, and gain receipt checks from the role, without re-enrolment.
+ */
+describe('a till enrolled before receipt checks existed', () => {
+  it.each([TERMINAL_ROLES.REDEEM_ONLY, TERMINAL_ROLES.ISSUE_AND_REDEEM])('%s: unlocks and gains receipt:read', (role) => {
+    // What such a credential carried on the wire: a role and a stall, plus (on very old ones) a
+    // list that predates receipt:read. The list is never read as authority.
+    const before = { ...minted({ role }), permissions: [permissionFor(TERMINAL_ACTIONS.REDEEM, STALL)] }
+    const actor = credentialActor(before, DEVICE, { issuerId: STALL })
+    expect(actor).not.toBeNull()
+    expect(actor!.permissions).toContain(permissionFor(TERMINAL_ACTIONS.RECEIPT_READ, STALL))
+  })
+})

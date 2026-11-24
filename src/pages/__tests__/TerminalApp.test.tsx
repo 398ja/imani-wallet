@@ -439,3 +439,17 @@ describe('a till for a stall that is closed for business (#434)', () => {
     }
   })
 })
+
+/**
+ * Regression (spec 049 receipt:read): checking a receipt moves no value, so a REDUCED session
+ * (mint unreachable at unlock) keeps it, the same as Redeem.
+ */
+describe('receipt checks on a REDUCED till', () => {
+  it('still offers Check a receipt and opens the scanner', async () => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    unlockedAs(TERMINAL_ROLES.ISSUE_AND_REDEEM, SESSION_KIND.REDUCED)
+    at('/')
+    fireEvent.click(await screen.findByRole('button', { name: /Check a receipt/ }))
+    expect(await screen.findByText('receipt-scan-screen')).toBeTruthy()
+  })
+})

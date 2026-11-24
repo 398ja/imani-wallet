@@ -24,6 +24,7 @@ import {
   type Verdict,
 } from '@imani/receipts'
 import { verifyVoucher, voucherOfSecret } from '../voucherToken'
+import { allowedIssuerKeys } from '../issuerAllowlist'
 
 /**
  * Verifying a scanned receipt (spec 049 US2 to US4): the TypeScript port of wallet-core
@@ -377,20 +378,30 @@ export async function verifyPayload(ports: VerifyPorts, q: QrPayload): Promise<V
  * The voucher value of a payment, from its evidence: display only, never signed by the receipt.
  *
  * For a device with no record of the payment (a terminal checking for its stall). Every proof must
- * carry the same voucher, issued by the payee, with a valid issuer signature; anything else is
- * null rather than a guess. Value = sats x signed issuance ratio, capped at the signed face value,
- * the same rule `creditableFaceValue` applies at redemption.
+ * carry the same voucher, issued by the payee, with a valid issuer signature from a signing key
+ * this build trusts; anything else is undefined rather than a guess. Value = sats x signed issuance
+ * ratio, capped at the signed face value, the same rule `creditableFaceValue` applies at redemption.
+ *
+ * The allowlist is required, not optional as in `checkIssuer`: the issuer signature is verified
+ * against the key the voucher itself carries, and a mint blind-signs whatever secret a wallet
+ * chooses, so without it any payer could print the face value of their choice. A pre-fix
+ * (legacy canonical) voucher is refused too, because its ratio is not signed.
  */
 export function faceOfEvidence(
   evidence: PaymentEvidence | undefined,
   payee: string,
 ): { value: number; unit: string; decimals: number } | undefined {
   if (!evidence || evidence.rail !== RAIL_CASHU || evidence.proofs.length === 0) return undefined
+  const trusted = allowedIssuerKeys()
+  if (trusted.length === 0) return undefined
   let first: ReturnType<typeof voucherOfSecret> = null
   let sats = 0
   for (const p of evidence.proofs) {
     const v = voucherOfSecret(p.secret)
-    if (!v || !verifyVoucher(v).signatureValid) return undefined
+    if (!v) return undefined
+    const checked = verifyVoucher(v)
+    if (!checked.signatureValid || checked.legacyCanonical) return undefined
+    if (!trusted.includes(v.issuerPublicKey.toLowerCase())) return undefined
     if (xOnly(v.issuerId) !== xOnly(payee)) return undefined
     if (first && v.voucherId !== first.voucherId) return undefined
     first = first ?? v

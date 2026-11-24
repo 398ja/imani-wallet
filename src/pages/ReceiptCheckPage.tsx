@@ -91,7 +91,10 @@ function headline(r: VerifyResult, forStall = false): { tone: Tone; title: strin
   if (r.mine === 'payee' && r.records === 'found_in_records') {
     return { tone: 'good', title: paidTitle, line: 'This payment is in your records.' }
   }
-  if (r.mine === 'payee' && r.mint === 'confirmed') {
+  // The mint saying "spent" proves only that SOMEONE spent the proofs. It is the payee's collection
+  // only when the spend is tied to the payee: a countersignature or a payee lock, which is exactly
+  // when the verdict is verified. An unacknowledged receipt of unlocked proofs falls through.
+  if (r.mine === 'payee' && r.mint === 'confirmed' && (r.verdict === 'verified' || r.verdict === 'verified_offline')) {
     return {
       tone: 'good',
       title: paidTitle,

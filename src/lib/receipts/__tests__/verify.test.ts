@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import {
@@ -275,6 +275,16 @@ function voucherProof(i: number, amount: number, secret: string): CashuProofEvid
 }
 
 describe('a terminal checking for its stall (receipt:read)', () => {
+  // The face fixtures sign with the payee's key; the build trusts that signing key here, so the
+  // tests do not depend on whatever `.env.local` sets.
+  beforeEach(() => vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', bytesToHex(schnorr.getPublicKey(payeeSk))))
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('shows no value when the build trusts no issuer key at all', async () => {
+    vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', '')
+    const { qr, blob } = await receipt({ proofs: [voucherProof(1, 512, voucherSecret(payeeSk, 1))], countersign: true })
+    expect((await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)).face).toBeUndefined()
+  })
   it('keeps no records: paid to the stall on the mint\'s word, no records claim either way', async () => {
     const { qr, blob } = await receipt({ proofs: [proof(1, 8)], countersign: true })
     const p = ports({ blob, ownRecord: async () => 'no_records' })
@@ -314,4 +324,53 @@ describe('a terminal checking for its stall (receipt:read)', () => {
     const { qr, blob } = await receipt({ proofs: [voucherProof(1, 512, forged)], countersign: true })
     expect((await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)).face).toBeUndefined()
   })
+
+  /**
+   * Regression (review of 72de4e6c): the issuer signature is checked against the key the voucher
+   * itself carries, so a voucher naming the stall can be signed by anyone at any face value. The
+   * build's issuer allowlist (as dmCrypto applies it) decides whose signing key counts.
+   */
+  it('shows no value for a voucher signed by a key outside the issuer allowlist', async () => {
+    const service = new Uint8Array(32).fill(9)
+    vi.stubEnv('VITE_VOUCHER_ISSUER_PUBKEYS', bytesToHex(schnorr.getPublicKey(service)))
+    const forged = voucherSecretSignedBy(strangerSk, payee, 1)
+    const { qr, blob } = await receipt({ proofs: [voucherProof(1, 512, forged)], countersign: true })
+    expect((await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)).face).toBeUndefined()
+    const genuine = voucherSecretSignedBy(service, payee, 2)
+    const ok = await receipt({ proofs: [voucherProof(2, 512, genuine)], countersign: true })
+    expect((await verifyScannedWith(ports({ blob: ok.blob, ownRecord: async () => 'no_records' }), ok.qr)).face).toEqual({
+      value: 256, unit: 'GBP', decimals: 2,
+    })
+  })
+
+  it('an unacknowledged receipt of unlocked, spent proofs is not mint-confirmed as paid', async () => {
+    // The payer could have spent these proofs anywhere: only a countersignature or a payee lock
+    // ties the spend to the payee.
+    const { qr, blob } = await receipt({ proofs: [proof(1, 8)], countersign: false })
+    const res = await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)
+    expect(res.verdict).toBe('unacknowledged')
+    expect(res.mine).toBe('payee')
+  })
 })
+
+/** A voucher naming `issuerId` as the stall, signed by `signerSk` (the issuing service's key). */
+function voucherSecretSignedBy(signerSk: Uint8Array, issuerId: string, i: number): string {
+  const pub = bytesToHex(schnorr.getPublicKey(signerSk))
+  const nonce = String(i).padStart(64, '0')
+  const lockKey = '02' + payee
+  const tags: [string, string][] = [
+    ['voucher_id', '1d4410af-70f5-4c14-8606-519404684ea7'],
+    ['issuer', issuerId],
+    ['unit', 'GBP'],
+    ['face_value', '500'],
+    ['face_decimals', '2'],
+    ['issuance_ratio', '0.5'],
+  ]
+  const numeric = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
+  const render = (v: string, k: string) => (numeric.includes(k) ? String(Number(v)) : `"${v}"`)
+  const canonical = new TextEncoder().encode(
+    `["P2PK_VOUCHER","${lockKey}","${nonce}",[${tags.map(([k, v]) => `["${k}",${render(v, k)}]`).join(',')}]]`,
+  )
+  const sig = bytesToHex(schnorr.sign(sha256(canonical), signerSk))
+  return JSON.stringify(['P2PK_VOUCHER', { nonce, data: lockKey, tags: [...tags, ['issuer_sig', sig], ['issuer_pubkey', pub]] }])
+}
