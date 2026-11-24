@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
   Clock,
   MinusCircle,
-  ReceiptText,
   type LucideIcon,
 } from 'lucide-react'
 
 import {
-  Button,
   Screen,
   BackLink,
   PageHeader,
@@ -169,19 +167,10 @@ export function MerchantTransactionsPage() {
   // claims and request settlement read the flat rows, never these entries.
   const entries = useMemo(() => (transactions ? groupHistory(transactions) : null), [transactions])
   const { visible, page, pageCount, setPage } = usePagination(entries ?? [])
-  const navigate = useNavigate()
 
   return (
     <ListFrame
       title="Transactions"
-      // Spec 049: the owner checks a customer's receipt where they already look for "did this
-      // person pay me?". Scan recognises it and says "Paid to you" for this stall's key. This route
-      // is the owner's alone (App.tsx), and checking moves nothing, so it is never gated or disabled.
-      header={
-        <Button variant="outline" className="mb-4 w-full" onClick={() => navigate('/scan')}>
-          <ReceiptText className="mr-2 h-5 w-5" aria-hidden /> Check a receipt
-        </Button>
-      }
       subtitle={
         entries === null
           ? 'Loading…'
