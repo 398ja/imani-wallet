@@ -884,6 +884,8 @@ export function reconcilePendingSends(pubkey: string): Promise<number> {
     void import('./receipts').then(
       (r) => {
         r.installReceiptLifecycle()
+        // FR-027c: checks made while offline go out at login and whenever the device is back online.
+        r.installReceiptCheckFlushOnce()
         return r.settlePendingReceipts().then(() => r.flushReceipts())
       },
       () => undefined,

@@ -412,7 +412,7 @@ function verifyPorts(forStall?: string): VerifyPorts {
       const [face, memo] = await Promise.all([faceOf(found.row.txId), memoOf(found.row.txId)])
       return { ...(face ? { face } : {}), ...(memo ? { memo } : {}) }
     },
-    remember: (payee, paymentId) => rememberHere(payee, paymentId, forStall),
+    remember: (payee, paymentId, paidAt) => rememberHere(payee, paymentId, paidAt, forStall),
     mintAllowed,
     count: countReceiptEvent,
     now,
@@ -431,51 +431,91 @@ async function memoOf(txId: string | undefined): Promise<string | undefined> {
   }
 }
 
-/**
- * FR-027a-e on this device: the owner's wallet signs as the stall and names its tills from the
- * roster; a till signs with its own key and carries its attestation. Reads through the gateway
- * cache, writes to the relay and the gateway.
- */
-async function rememberHere(payee: string, paymentId: string, forStall?: string) {
-  const signer = getSigner()
-  const [{ rememberCheck }, roster, attribution] = await Promise.all([
-    import('./checkMemory'),
-    forStall ? Promise.resolve(null) : import('../terminalRoster'),
-    forStall ? Promise.resolve(null) : import('../terminalAttribution'),
-  ])
+async function checkDevice(forStall?: string): Promise<import('./checkMemory').CheckDevice | null> {
+  let signer: ReturnType<typeof getSigner>
+  try {
+    signer = getSigner()
+    if (typeof signer.hasKey === 'function' && !signer.hasKey()) return null
+  } catch {
+    // A locked till holds no key: nothing can be signed, and the check is reported unknown.
+    return null
+  }
   let terminal: import('./checks').TerminalProof | undefined
   let publishCheck: (e: Event) => Promise<boolean>
+  let roster: import('./checks').RosterView & { nameOf: (k: string) => string } | undefined
   if (forStall) {
     const [{ tillCheckProof }, { devicePublisher }] = await Promise.all([import('../terminalUnlock'), import('../terminalDeliveryNet')])
     terminal = tillCheckProof() ?? undefined
     const publisher = devicePublisher(signer)
     publishCheck = (e) => publisher.publish(e).catch(() => false)
   } else {
+    const [{ allTerminals }, { describeHandler }] = await Promise.all([import('../terminalRoster'), import('../terminalAttribution')])
+    const terminals = allTerminals(signer.pubkey)
+    roster = {
+      // Revocation times in seconds: a revoked till's checks count only from before it was revoked.
+      keys: new Map(terminals.map((t) => [t.terminalPubkey.toLowerCase(), t.revokedAt === undefined ? undefined : Math.floor(t.revokedAt / 1000)])),
+      // The same words as the owner's transaction history: a name, a retired name, or unlisted.
+      nameOf: (k: string) => describeHandler({ terminalPubkey: k.toLowerCase() }, terminals).label,
+    }
     publishCheck = (e) => io.publish(e).then((n) => n > 0, () => false)
   }
-  const terminals = roster ? roster.allTerminals(payee) : []
-  return rememberCheck(
-    {
-      device: signer.pubkey,
-      withKey: (use) => signer.withPrivkey(use),
-      ...(terminal ? { terminal } : {}),
-      ...(roster && attribution
-        ? {
-            roster: {
-              keys: new Set(terminals.map((t) => t.terminalPubkey.toLowerCase())),
-              // The same words as the owner's transaction history: a name, a retired name, or unlisted.
-              nameOf: (k: string) => attribution.describeHandler({ terminalPubkey: k.toLowerCase() }, terminals).label,
-            },
-          }
-        : {}),
-      publish: publishCheck,
-      query: gatewayQuery,
-      store: localStorage,
-      now,
-    },
-    payee,
-    paymentId,
-  )
+  return {
+    device: signer.pubkey,
+    withKey: (use) => signer.withPrivkey(use),
+    ...(terminal ? { terminal } : {}),
+    ...(roster ? { roster } : {}),
+    publish: publishCheck,
+    query: gatewayQuery,
+    store: localStorage,
+    now,
+  }
+}
+
+/**
+ * FR-027a-e on this device: the owner's wallet signs as the stall and names its tills from the
+ * roster; a till signs with its own key and carries its attestation. Reads through the gateway
+ * cache, writes to the relay and the gateway.
+ */
+async function rememberHere(payee: string, paymentId: string, paidAt: number, forStall?: string) {
+  const device = await checkDevice(forStall)
+  if (!device) return { prior: [], known: false, record: null }
+  const { rememberCheck } = await import('./checkMemory')
+  return rememberCheck(device, payee, paymentId, paidAt)
+}
+
+/**
+ * FR-027c: send this device's unsent receipt checks. Called when the app opens or a till unlocks,
+ * and installed on `online` by `installReceiptCheckFlush`. Never throws.
+ */
+export async function flushReceiptChecks(forStall?: string): Promise<number> {
+  try {
+    const device = await checkDevice(forStall)
+    if (!device) return 0
+    const { flushCheckOutbox } = await import('./checkMemory')
+    return await flushCheckOutbox(device)
+  } catch {
+    return 0
+  }
+}
+
+/** Flush now and whenever the device comes back online. Returns the uninstaller. */
+export function installReceiptCheckFlush(forStall?: string): () => void {
+  if (typeof window === 'undefined') return () => undefined
+  const flush = () => void flushReceiptChecks(forStall)
+  flush()
+  window.addEventListener('online', flush)
+  return () => window.removeEventListener('online', flush)
+}
+
+let ownerFlushInstalled = false
+/** The owner's wallet: flush now, and install the `online` listener once per page. */
+export function installReceiptCheckFlushOnce(): void {
+  if (ownerFlushInstalled) {
+    void flushReceiptChecks()
+    return
+  }
+  ownerFlushInstalled = true
+  installReceiptCheckFlush()
 }
 
 /**
