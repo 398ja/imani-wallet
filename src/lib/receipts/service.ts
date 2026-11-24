@@ -445,9 +445,29 @@ async function handleAck(ports: ReceiptPorts, author: string, env: AckEnvelope):
   if (stored) {
     if (stored.receipt.receipt.countersignature) return 'duplicate'
     const s = decodeSummary(stored.receipt.receipt.summaryBytes)
-    if (xOnly(author) !== s.payee || !verifyCountersignature(cs, s)) {
+    if (xOnly(author) !== s.payee) {
+      console.warn('[receipts] ack rejected', ref(pid), 'author is not the payee')
       await ports.store.update(pid, (r) => ({ ...r, notes: [...r.notes, 'acknowledgement rejected'] }))
       return 'mismatch'
+    }
+    if (!verifyCountersignature(cs, s)) {
+      // The payee dated the payment when it claimed it, the payer when it sent it: one payment,
+      // two clocks. Adopt the payee's date (re-signing) when that is the ONLY difference and the
+      // date is plausible, so both signatures cover one summary.
+      const adopted = await adoptPayeeDate(ports, s, env, cs)
+      if (!adopted) {
+        console.warn('[receipts] ack rejected', ref(pid), 'does not match the payment')
+        await ports.store.update(pid, (r) => ({ ...r, notes: [...r.notes, 'acknowledgement rejected'] }))
+        return 'mismatch'
+      }
+      const next = await ports.store.update(pid, (r) => ({
+        ...r,
+        receipt: withCountersignature(adopted, cs),
+        showable: true,
+        notes: r.notes.filter((n) => n !== NOT_ACKED),
+      }))
+      if (next) await saveBackup(ports, pid, next)
+      return 'attached'
     }
     const next = await ports.store.update(pid, (r) => ({
       ...r,
@@ -482,9 +502,56 @@ async function handleAck(ports: ReceiptPorts, author: string, env: AckEnvelope):
     console.warn('[receipts] ack rejected', ref(pid), problem)
     return 'mismatch'
   }
+  // Built with the payee's date when it is a plausible claim time (see adoptPayeeDate).
+  if (claimed.paidAt !== p.paidAt && plausibleClaimTime(claimed.paidAt, p.paidAt, ports.now())) {
+    await ports.store.updatePending(pid, (x) => ({ ...x, paidAt: claimed.paidAt }))
+  }
   const built = await settle(ports, pid, cs)
   if (!built) return 'not_settled'
   return built.receipt.countersignature ? 'attached' : 'mismatch'
+}
+
+/**
+ * Clock skew allowed between the two wallets when the payer adopts the payee's date. Five minutes,
+ * the NIP-98 window: a phone clock further off than that fails NIP-98 already.
+ */
+const CLAIM_SKEW_SECONDS = 300
+
+/**
+ * A payee dates the payment when it claims it, which is after the payer sent it and not in the
+ * future. Bounded on both sides so an acknowledgement cannot move the date anywhere it likes.
+ */
+export function plausibleClaimTime(claimedAt: number, sentAt: number, now: number): boolean {
+  return Number.isSafeInteger(claimedAt) && claimedAt >= sentAt - CLAIM_SKEW_SECONDS && claimedAt <= now + CLAIM_SKEW_SECONDS
+}
+
+/**
+ * The payer's receipt re-signed with the payee's date, or null. Only when the acknowledged summary
+ * equals the payer's in every field but `paidAt`, that date is a plausible claim time, and the
+ * countersignature verifies over it. The payer signs again, over exactly what the payee signed.
+ */
+async function adoptPayeeDate(ports: ReceiptPorts, mine: ReceiptSummary, env: AckEnvelope, cs: Countersignature): Promise<SignedReceipt | null> {
+  let claimed: ReceiptSummary
+  try {
+    claimed = decodeSummary(fromBase64Url(env.summary))
+  } catch {
+    return null
+  }
+  const same = (k: keyof ReceiptSummary) => JSON.stringify(claimed[k]) === JSON.stringify(mine[k])
+  const fields: Array<keyof ReceiptSummary> = ['version', 'paymentId', 'rail', 'payee', 'amount', 'unit', 'mints', 'reference', 'evidenceDigest']
+  if (!fields.every(same)) return null
+  // An acknowledgement that names no payer covers a summary without one; the payer's own names it.
+  if (claimed.payer != null && claimed.payer !== mine.payer) return null
+  if (!plausibleClaimTime(claimed.paidAt, mine.paidAt, ports.now())) return null
+  const dated = makeSummary({ ...mine, paidAt: claimed.paidAt })
+  if (!verifyCountersignature(cs, dated)) return null
+  const signer = ports.signer()
+  if (!signer || xOnly(signer.publicKey) !== xOnly(ports.publicKey)) return null
+  try {
+    return await signByPayer(dated, signer)
+  } catch {
+    return null
+  }
 }
 
 /** Parses a decrypted DM body into an ack envelope, or null. Never throws, never echoes content. */

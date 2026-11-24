@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { finalizeEvent, generateSecretKey, getPublicKey, type Event } from 'nostr-tools'
 import {
   bytesToHex,
+  decodeSummary,
   encodeEvidence,
+  encodeSummary,
+  fromBase64Url,
   makeSummary,
   newEvidenceKey,
   paymentId,
@@ -11,6 +14,9 @@ import {
   RAIL_CASHU,
   secretKeySigner,
   signByPayer,
+  toBase64Url,
+  payerSignatureValid,
+  verifyCountersignature,
   type CashuProofEvidence,
   type StoredReceipt,
 } from '@imani/receipts'
@@ -203,6 +209,73 @@ describe('service against the IndexedDB store', () => {
     await service.captureSendEvidence(p, { sendEvidence: send(), payeeKey: payee, paidAt: 1 })
     expect((await service.settlePending(p)).built).toBe(0)
     expect((await store.allPending())[0].reason).toBe('signer_unsupported')
+  })
+
+  /**
+   * Payer and payee each date the payment by their own clock: the payer when it sent, the payee
+   * when it claimed (seconds to minutes later). Found by the browser e2e: every acknowledgement was
+   * rejected as a mismatch, so no receipt was ever countersigned.
+   */
+  describe('the acknowledgement, payer and payee dating the payment apart', () => {
+    const SENT = 1_800_000_000
+    async function pair(claimedAt: number, payerBuiltFirst: boolean) {
+      const payerStore = await openReceiptStore(`p-${Math.random()}`)
+      const payeeStore = await openReceiptStore(`q-${Math.random()}`)
+      let ack: service.AckEnvelope | null = null
+      const payer = ports(payerStore, () => ['SPENT', 'SPENT'], [])
+      const payeePorts: service.ReceiptPorts = {
+        ...ports(payeeStore, () => ['SPENT', 'SPENT'], []),
+        publicKey: payee,
+        signer: () => secretKeySigner(payeeSk),
+        walletKind: () => 'MERCHANT',
+        now: () => claimedAt,
+        sendAck: async (_to, env) => {
+          ack = env
+        },
+      }
+      const s = send(payee)
+      await service.captureSendEvidence(payer, { sendEvidence: s, payeeKey: payee, paidAt: SENT, txId: 'sent:x' })
+      if (payerBuiltFirst) expect((await service.settlePending(payer)).built).toBe(1)
+      const claim = await service.onClaimed(payeePorts, {
+        proofs: s.proofs, mint: s.mint, unit: s.unit, payerKey: getPublicKey(payerSk), paidAt: 0,
+      })
+      expect(claim).toBe('acknowledged_delivered')
+      return { payer, payerStore, ack: ack! }
+    }
+
+    for (const payerBuiltFirst of [true, false]) {
+      const when = payerBuiltFirst ? 'after the payer built its receipt' : 'before the payer built it'
+      it(`a claim 40 s after the send attaches, ${when}, and both signatures cover one summary`, async () => {
+        const { payer, payerStore, ack } = await pair(SENT + 40, payerBuiltFirst)
+        expect(await service.onAcknowledgement(payer, payee, ack)).toBe('attached')
+        const r = (await payerStore.byTx('sent:x'))!.receipt
+        const sum = decodeSummary(r.receipt.summaryBytes)
+        expect(sum.paidAt).toBe(SENT + 40)
+        expect(payerSignatureValid(r.receipt)).toBe(true)
+        expect(verifyCountersignature(r.receipt.countersignature!, sum)).toBe(true)
+        expect(r.showable).toBe(true)
+      })
+    }
+
+    it('a date outside the plausible window is a mismatch, not adopted', async () => {
+      const { payer, payerStore, ack } = await pair(SENT - 3600, true)
+      expect(await service.onAcknowledgement(payer, payee, ack)).toBe('mismatch')
+      const r = (await payerStore.byTx('sent:x'))!.receipt
+      expect(r.receipt.countersignature).toBeNull()
+      expect(decodeSummary(r.receipt.summaryBytes).paidAt).toBe(SENT)
+    })
+
+    it('another difference than the date is still a mismatch', async () => {
+      const { payer, ack } = await pair(SENT + 40, true)
+      const other = decodeSummary(fromBase64Url(ack.summary))
+      const forged = { ...ack, summary: toBase64Url(encodeSummary(makeSummary({ ...other, reference: 'other' }))) }
+      expect(await service.onAcknowledgement(payer, payee, forged)).toBe('mismatch')
+    })
+
+    it('only the payee may acknowledge', async () => {
+      const { payer, ack } = await pair(SENT + 40, true)
+      expect(await service.onAcknowledgement(payer, getPublicKey(generateSecretKey()), ack)).toBe('mismatch')
+    })
   })
 })
 

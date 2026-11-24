@@ -641,6 +641,8 @@ export function createDmCryptoAdapter(): CryptoAdapter {
           if (sealAuthor && sealAuthor === rumor.pubkey) {
             const handled = await import('./receipts').then((m) => m.handleReceiptDm(sealAuthor, rumor.content)).catch(() => false)
             if (handled) return { eventId: event.id, senderPubkey: rumor.pubkey, content: '', createdAt: rumor.created_at }
+          } else {
+            console.warn('[dmCrypto] receipt acknowledgement in a wrap whose seal does not match its rumor')
           }
         }
 

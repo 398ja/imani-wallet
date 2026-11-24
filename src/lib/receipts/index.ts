@@ -317,15 +317,23 @@ export function captureSendEvidence(input: service.CaptureInput): Promise<servic
 
 /** Payee: a token this wallet just redeemed. Never throws. */
 export function noteClaimedPayment(inc: service.IncomingPayment): Promise<service.ClaimOutcome | 'skipped'> {
-  return withPorts<service.ClaimOutcome | 'skipped'>('skipped', (p) => service.onClaimed(p, inc))
+  return withPorts<service.ClaimOutcome | 'skipped'>('skipped', async (p) => {
+    const outcome = await service.onClaimed(p, inc)
+    console.info('[receipts] claim', outcome, inc.payerKey ? inc.payerKey.slice(0, 8) : 'no-payer')
+    return outcome
+  })
 }
 
 /** A decrypted DM: true when it was a receipt acknowledgement (handled or refused). */
 export async function handleReceiptDm(author: string, content: string): Promise<boolean> {
   if (!content.includes('imani-receipt/ack')) return false
   const env = service.parseAckEnvelope(content)
-  if (!env) return false
-  await withPorts(null, (p) => service.onAcknowledgement(p, author, env, 'message'))
+  if (!env) {
+    console.warn('[receipts] ack DM unreadable')
+    return false
+  }
+  const outcome = await withPorts<service.AckOutcome | 'skipped'>('skipped', (p) => service.onAcknowledgement(p, author, env, 'message'))
+  console.info('[receipts] ack', outcome)
   return true
 }
 
