@@ -324,3 +324,23 @@ describe('Back returns to the scanner that opened the check', () => {
     expect(screen.getByRole('link', { name: /Scan/ }).getAttribute('href')).toBe('/scan')
   })
 })
+
+describe('the memo on the card (FR-002a)', () => {
+  it('a till shows the memo the payer signed, under the verdict', async () => {
+    next = result({ mine: 'payee', mint: 'confirmed', memo: 'Table 4, two flat whites' })
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/receipt/check', state: { qr: 'imrc1:x' } }]}>
+        <Routes>
+          <Route path="/receipt/check" element={<ReceiptCheckPage forStall={'aa'.repeat(32)} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect((await screen.findByTestId('receipt-memo')).textContent).toBe('Table 4, two flat whites')
+  })
+
+  it('a receipt for someone else still shows what it was for', async () => {
+    next = result({ mine: 'neither', memo: 'Rent, November' })
+    open({ qr: 'imrc1:x' })
+    expect((await screen.findByTestId('receipt-memo')).textContent).toBe('Rent, November')
+  })
+})

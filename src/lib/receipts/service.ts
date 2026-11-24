@@ -25,6 +25,7 @@ import {
   hashToCurveY,
   hexToBytes,
   makeSummary,
+  fitMemo,
   newEvidenceKey,
   paymentId as paymentIdOf,
   PRESENTER_REFRESH_SECONDS,
@@ -115,6 +116,8 @@ export interface CaptureInput {
   /** The payee: the recipient pubkey of the send (or the merchant for a payment request). */
   payeeKey: string
   reference?: string | null
+  /** FR-002a: the payer's memo on the payment, signed into the receipt (fitted to the QR). */
+  memo?: string | null
   /** Epoch seconds the payer sent it. */
   paidAt: number
   txId?: string
@@ -154,6 +157,7 @@ export async function captureSendEvidence(ports: ReceiptPorts, input: CaptureInp
       payeeKey: payee,
       unit: send.unit,
       reference: truncate(input.reference ?? ''),
+      ...(input.memo?.trim() ? { memo: input.memo.trim() } : {}),
       paidAt: input.paidAt,
       evidenceHex: bytesToHex(encodeEvidence(evidence)),
       lockedToPayee: locked,
@@ -276,7 +280,7 @@ export async function settle(ports: ReceiptPorts, paymentId: string, ack: Counte
 
   const evidence: PaymentEvidence = { rail: RAIL_CASHU, proofs: spent }
   const evidenceBytes = encodeEvidence(evidence)
-  const summary = makeSummary({
+  const bare = makeSummary({
     paymentId,
     rail: RAIL_CASHU,
     payer: signer.publicKey,
@@ -288,6 +292,9 @@ export async function settle(ports: ReceiptPorts, paymentId: string, ack: Counte
     reference: p.reference,
     evidenceDigest: evidenceDigest(evidenceBytes),
   })
+  // FR-002a: the payer's memo, signed, so a scanner shows what the payment was for. Not in the
+  // acknowledgement, so a countersignature made before it was known still verifies.
+  const summary = { ...bare, memo: fitMemo(bare, p.memo) }
   let signed: SignedReceipt
   try {
     signed = await signByPayer(summary, signer)

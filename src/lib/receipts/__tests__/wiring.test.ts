@@ -194,6 +194,26 @@ describe('service against the IndexedDB store', () => {
     expect(r?.receipt.showable).toBe(true)
   })
 
+  it('the payer’s memo is kept until settlement and signed into the receipt (FR-002a)', async () => {
+    const store = await openReceiptStore(`t-${Math.random()}`)
+    const p = ports(store, () => ['SPENT', 'SPENT'], [])
+    const input = { sendEvidence: send(payee), payeeKey: payee, paidAt: 1_800_000_000, txId: 'sent:m', memo: '  Two coffees  ' }
+    expect(await service.captureSendEvidence(p, input)).toBe('captured')
+    expect((await store.allPending())[0].memo).toBe('Two coffees')
+    expect((await service.settlePending(p)).built).toBe(1)
+    const r = await store.byTx('sent:m')
+    expect(decodeSummary(r!.receipt.receipt.summaryBytes).memo).toBe('Two coffees')
+  })
+
+  it('a pending row from before memos settles with none', async () => {
+    const store = await openReceiptStore(`t-${Math.random()}`)
+    const p = ports(store, () => ['SPENT', 'SPENT'], [])
+    expect(await service.captureSendEvidence(p, { sendEvidence: send(payee), payeeKey: payee, paidAt: 1_800_000_000, txId: 'sent:o' })).toBe('captured')
+    expect((await store.allPending())[0].memo).toBeUndefined()
+    expect((await service.settlePending(p)).built).toBe(1)
+    expect(decodeSummary((await store.byTx('sent:o'))!.receipt.receipt.summaryBytes).memo).toBe('')
+  })
+
   it('records no_dleq as payment:none and skips expired', async () => {
     const store = await openReceiptStore(`t-${Math.random()}`)
     const counted: string[] = []

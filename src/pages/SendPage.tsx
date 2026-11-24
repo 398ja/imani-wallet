@@ -620,6 +620,9 @@ export function SendPage({ pubkey }: { pubkey: string }) {
         <Input
           label="Note (optional)"
           placeholder="Thanks for lunch"
+          // Spec 049 FR-002a: the note is signed into the payment's receipt, so whoever is shown the
+          // receipt reads it. Said here, where it is typed, not after.
+          hint="Shown on the receipt for this payment."
           value={memo}
           onChange={(e) => setMemo(e.target.value)}
         />
