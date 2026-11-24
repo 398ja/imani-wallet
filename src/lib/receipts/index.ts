@@ -178,6 +178,25 @@ export async function setReceiptAcknowledgement(allow: boolean): Promise<void> {
     const ports = await portsOrNull()
     if (ports) await service.acknowledgeWaiting(ports).catch(() => 0)
   }
+  // The prompt and the settings switch both listen: either answer hides the prompt.
+  changed()
+}
+
+/**
+ * Whether acknowledgements are on now, and whether that is the owner's answer or the default
+ * (FR-017): on for a merchant wallet, off until asked for a personal one.
+ */
+export function receiptAcknowledgementState(): { on: boolean; answered: boolean } {
+  const setting = receiptAcknowledgementSetting()
+  if (setting !== null) return { on: setting, answered: true }
+  const me = myPubkey()
+  return { on: me !== null && hasStall(loadMerchant(me)), answered: false }
+}
+
+/** Received payments waiting on the owner's answer; 0 once answered or when locked. */
+export function receiptsAwaitingAnswer(): Promise<number> {
+  if (receiptAcknowledgementSetting() !== null) return Promise.resolve(0)
+  return withPorts(0, (p) => service.awaitingOwnerAnswer(p.store))
 }
 
 async function sendAck(recipient: string, envelope: service.AckEnvelope): Promise<void> {
