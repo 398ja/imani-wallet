@@ -23,6 +23,7 @@ import {
   type VerificationReport,
   type Verdict,
 } from '@imani/receipts'
+import { verifyVoucher, voucherOfSecret } from '../voucherToken'
 
 /**
  * Verifying a scanned receipt (spec 049 US2 to US4): the TypeScript port of wallet-core
@@ -57,7 +58,7 @@ export interface VerifyPorts {
    * The merchant's own record of this payment (FR-030), when this wallet is the payee. The face
    * value comes from the wallet's transaction row and is display only, never signed.
    */
-  ownRecord: (paymentId: string) => Promise<{ face?: { value: number; unit: string; decimals: number } } | null>
+  ownRecord: (paymentId: string) => Promise<{ face?: { value: number; unit: string; decimals: number } } | null | 'no_records'>
   /** Whether a mint URL may be contacted at all: only mints this build trusts. */
   mintAllowed: (mintUrl: string) => boolean
   /** Closed-set telemetry; never throws. */
@@ -338,7 +339,7 @@ function verdictOf(checks: Partial<Record<Check, CheckResult>>, evidenceChecked:
 }
 
 /** Full verification of a parsed payload (Java `verifyFull`). */
-export async function verifyPayload(ports: VerifyPorts, q: QrPayload): Promise<VerificationReport> {
+export async function verifyPayload(ports: VerifyPorts, q: QrPayload): Promise<VerificationReport & { evidence?: PaymentEvidence }> {
   const now = ports.now()
   // Offline part first: summary, signatures, presenter, timestamp.
   const base = verifySummary(q.receipt, q.presenter ? { kind: 'qr', proof: q.presenter } : { kind: 'none' }, { nowSeconds: now })
@@ -369,7 +370,36 @@ export async function verifyPayload(ports: VerifyPorts, q: QrPayload): Promise<V
   if (evidence && !payeeBound && countersigned && s.rail === RAIL_CASHU) {
     warnings.push('the payment was not locked to the payee; the payee binding rests on the countersignature')
   }
-  return { checks, verdict, warnings, presenter: base.presenter, summary: s }
+  return { checks, verdict, warnings, presenter: base.presenter, summary: s, ...(evidence ? { evidence } : {}) }
+}
+
+/**
+ * The voucher value of a payment, from its evidence: display only, never signed by the receipt.
+ *
+ * For a device with no record of the payment (a terminal checking for its stall). Every proof must
+ * carry the same voucher, issued by the payee, with a valid issuer signature; anything else is
+ * null rather than a guess. Value = sats x signed issuance ratio, capped at the signed face value,
+ * the same rule `creditableFaceValue` applies at redemption.
+ */
+export function faceOfEvidence(
+  evidence: PaymentEvidence | undefined,
+  payee: string,
+): { value: number; unit: string; decimals: number } | undefined {
+  if (!evidence || evidence.rail !== RAIL_CASHU || evidence.proofs.length === 0) return undefined
+  let first: ReturnType<typeof voucherOfSecret> = null
+  let sats = 0
+  for (const p of evidence.proofs) {
+    const v = voucherOfSecret(p.secret)
+    if (!v || !verifyVoucher(v).signatureValid) return undefined
+    if (xOnly(v.issuerId) !== xOnly(payee)) return undefined
+    if (first && v.voucherId !== first.voucherId) return undefined
+    first = first ?? v
+    sats += p.amount
+  }
+  if (!first || !(first.issuanceRatio > 0)) return undefined
+  const derived = Math.round(sats * first.issuanceRatio)
+  const value = first.faceValue > 0 ? Math.min(derived, first.faceValue) : derived
+  return { value, unit: first.unit.toUpperCase(), decimals: first.faceDecimals }
 }
 
 function toOk(c: CheckResult | undefined): boolean | null {
@@ -401,7 +431,7 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
     ports.count('verification', 'invalid')
     return INVALID
   }
-  let report: VerificationReport
+  let report: VerificationReport & { evidence?: PaymentEvidence }
   try {
     report = await verifyPayload(ports, q)
   } catch {
@@ -430,14 +460,20 @@ export async function verifyScannedWith(ports: VerifyPorts, qrText: string): Pro
   if (s && mine === 'payee' && report.verdict !== 'INVALID') {
     try {
       const own = await ports.ownRecord(s.paymentId)
-      records = own ? 'found_in_records' : 'not_in_records'
-      face = own?.face
+      // 'no_records': this device keeps none (a terminal); the mint alone answers.
+      if (own !== 'no_records') {
+        records = own ? 'found_in_records' : 'not_in_records'
+        face = own?.face
+      }
     } catch {
       records = undefined
     }
     if (records) ports.count('check', `records_${records}`)
     if (mint === 'confirmed') ports.count('check', 'mint_confirmed_by_mint')
     else if (mint === 'not_valid') ports.count('check', 'mint_not_valid')
+    // No record here (a terminal has none), or a record without a face value: read it from the
+    // vouchers the payment was made with.
+    face = face ?? faceOfEvidence(report.evidence, s.payee)
   }
 
   const verdict = VERDICT[report.verdict]

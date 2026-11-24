@@ -14,8 +14,9 @@ import type { VerifyResult } from '../../lib/receipts/verify'
 
 let next: VerifyResult
 const seen: string[] = []
+const stalls: (string | undefined)[] = []
 vi.mock('../../lib/receipts', () => ({
-  verifyScanned: async (qr: string) => (seen.push(qr), next),
+  verifyScanned: async (qr: string, forStall?: string) => (seen.push(qr), stalls.push(forStall), next),
 }))
 
 const { ReceiptCheckPage } = await import('../ReceiptCheckPage')
@@ -51,9 +52,32 @@ function open(state: unknown) {
 afterEach(() => {
   cleanup()
   seen.length = 0
+  stalls.length = 0
 })
 
 describe('the receipt check card', () => {
+  it('on a terminal: checks for the stall it acts for, and says "Paid to this stall"', async () => {
+    next = result({ mine: 'payee', mint: 'confirmed' })
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/receipt/check', state: { qr: 'imrc1:x' } }]}>
+        <Routes>
+          <Route path="/receipt/check" element={<ReceiptCheckPage forStall={'aa'.repeat(32)} scanPath="/receipts/scan" />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Paid to this stall')
+    expect(screen.getByText('The mint confirms the stall collected this payment.')).toBeTruthy()
+    expect(stalls).toEqual(['aa'.repeat(32)])
+    expect(screen.getByRole('link', { name: /Scan/ }).getAttribute('href')).toBe('/receipts/scan')
+  })
+
+  it('in the owner app: checks as itself', async () => {
+    next = result({ mine: 'payee', mint: 'confirmed' })
+    open({ qr: 'imrc1:x' })
+    expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Paid to you')
+    expect(stalls).toEqual([undefined])
+  })
+
   it('shows the face value and never the signed sat amount', async () => {
     next = result({ mine: 'payee', records: 'found_in_records', face: { value: 500, unit: 'GBP', decimals: 2 } })
     open({ qr: 'imrc1:x' })

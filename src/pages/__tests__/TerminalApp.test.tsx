@@ -59,6 +59,14 @@ vi.mock('../RedeemPage', () => ({ RedeemPage: () => <p>redeem-screen</p> }))
 // which tills reach their routes.
 vi.mock('../SellPage', () => ({ SellPage: () => <p>sell-screen</p> }))
 vi.mock('../CashbackIssuePage', () => ({ CashbackIssuePage: () => <p>cashback-screen</p> }))
+vi.mock('../TerminalReceiptScanPage', () => ({ TerminalReceiptScanPage: () => <p>receipt-scan-screen</p> }))
+vi.mock('../ReceiptCheckPage', () => ({
+  ReceiptCheckPage: ({ forStall, scanPath }: { forStall?: string; scanPath?: string }) => (
+    <p>
+      receipt-check-screen {forStall} {scanPath}
+    </p>
+  ),
+}))
 
 const { TerminalApp, TerminalUnlockPage } = await import('../TerminalApp')
 const { TERMINAL_ROLES, grantFor } = await import('../../lib/terminalRole')
@@ -268,6 +276,42 @@ describe('the routes a terminal has', () => {
     unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
     at('/redeem')
     expect(await screen.findByText('redeem-screen')).toBeTruthy()
+  })
+
+  // Receipt checks (spec 049): every role holds receipt:read, and checking moves nothing.
+  it.each([TERMINAL_ROLES.REDEEM_ONLY, TERMINAL_ROLES.ISSUE_AND_REDEEM])('%s: offers Check a receipt', async (role) => {
+    enrol(role)
+    unlockedAs(role)
+    at('/')
+    fireEvent.click(await screen.findByRole('button', { name: /Check a receipt/ }))
+    expect(await screen.findByText('receipt-scan-screen')).toBeTruthy()
+  })
+
+  it('offers Check a receipt while the stall is closed', async () => {
+    state.stallStatus = 'closed'
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
+    at('/')
+    expect(await screen.findByRole('button', { name: /Check a receipt/ })).toBeTruthy()
+  })
+
+  it('checks a scanned receipt for the stall this till acts for', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
+    at('/receipt/check')
+    expect((await screen.findByText(/receipt-check-screen/)).textContent).toBe(`receipt-check-screen ${STALL} /receipts/scan`)
+  })
+
+  it('keeps receipt checks from a credential without receipt:read', async () => {
+    enrol(TERMINAL_ROLES.REDEEM_ONLY)
+    unlockedAs(TERMINAL_ROLES.REDEEM_ONLY)
+    const till = state.till as { devicePubkey: string; actor: TerminalActor }
+    const actor: TerminalActor = { ...till.actor, permissions: [`voucher:redeem:${STALL}`] }
+    state.till = { ...till, actor, session: openSession(actor, SESSION_KIND.FULL) }
+    at('/receipts/scan')
+    expect(await screen.findByTestId('terminal-name')).toBeTruthy()
+    expect(screen.queryByText('receipt-scan-screen')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Check a receipt/ })).toBeNull()
   })
 
   // Settings → Security offers only taking the terminal out of service.

@@ -244,3 +244,74 @@ describe('verifyScannedWith', () => {
     expect(res.checks.find((c) => c.check === 'AMOUNT')?.detail).toMatch(/amount altered/)
   })
 })
+
+/**
+ * A locked voucher secret issued by `issuerSk`, signed over the canonical bytes the reader rebuilds
+ * (as canonicalNumericTags.test.ts does), so `verifyVoucher` accepts it.
+ */
+function voucherSecret(issuerSk: Uint8Array, i: number, opts: { voucherId?: string; face?: number; ratio?: string } = {}): string {
+  const pub = bytesToHex(schnorr.getPublicKey(issuerSk))
+  const nonce = String(i).padStart(64, '0')
+  const lockKey = '02' + payee
+  const tags: [string, string][] = [
+    ['voucher_id', opts.voucherId ?? '1d4410af-70f5-4c14-8606-519404684ea7'],
+    ['issuer', pub],
+    ['unit', 'GBP'],
+    ['face_value', String(opts.face ?? 500)],
+    ['face_decimals', '2'],
+    ['issuance_ratio', opts.ratio ?? '0.5'],
+  ]
+  const numeric = ['face_value', 'expires_at', 'face_decimals', 'issuance_ratio']
+  const render = (v: string, k: string) => (numeric.includes(k) ? String(Number(v)) : `"${v}"`)
+  const canonical = new TextEncoder().encode(
+    `["P2PK_VOUCHER","${lockKey}","${nonce}",[${tags.map(([k, v]) => `["${k}",${render(v, k)}]`).join(',')}]]`,
+  )
+  const sig = bytesToHex(schnorr.sign(sha256(canonical), issuerSk))
+  return JSON.stringify(['P2PK_VOUCHER', { nonce, data: lockKey, tags: [...tags, ['issuer_sig', sig], ['issuer_pubkey', pub]] }])
+}
+
+function voucherProof(i: number, amount: number, secret: string): CashuProofEvidence {
+  return { ...proof(i, amount), secret }
+}
+
+describe('a terminal checking for its stall (receipt:read)', () => {
+  it('keeps no records: paid to the stall on the mint\'s word, no records claim either way', async () => {
+    const { qr, blob } = await receipt({ proofs: [proof(1, 8)], countersign: true })
+    const p = ports({ blob, ownRecord: async () => 'no_records' })
+    const res = await verifyScannedWith(p, qr)
+    expect(res.mine).toBe('payee')
+    expect(res.mint).toBe('confirmed')
+    expect(res.records).toBeUndefined()
+    expect(p.counted.some((c) => c.startsWith('check:records_'))).toBe(false)
+  })
+
+  it('reads the voucher value from the payment itself when it has no record', async () => {
+    const secrets = [voucherSecret(payeeSk, 1), voucherSecret(payeeSk, 2)]
+    const { qr, blob } = await receipt({ proofs: [voucherProof(1, 512, secrets[0]), voucherProof(2, 256, secrets[1])], countersign: true })
+    const res = await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)
+    // 768 sats x 0.5 = 384, under the signed face value of 500.
+    expect(res.face).toEqual({ value: 384, unit: 'GBP', decimals: 2 })
+  })
+
+  it('caps the value at the signed face value', async () => {
+    const { qr, blob } = await receipt({ proofs: [voucherProof(1, 4096, voucherSecret(payeeSk, 1))], countersign: true })
+    const res = await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)
+    expect(res.face?.value).toBe(500)
+  })
+
+  it('shows no value for vouchers another stall issued, or a mix of vouchers', async () => {
+    const other = await receipt({ proofs: [voucherProof(1, 512, voucherSecret(strangerSk, 1))], countersign: true })
+    expect((await verifyScannedWith(ports({ blob: other.blob, ownRecord: async () => 'no_records' }), other.qr)).face).toBeUndefined()
+    const mixed = await receipt({
+      proofs: [voucherProof(1, 512, voucherSecret(payeeSk, 1)), voucherProof(2, 512, voucherSecret(payeeSk, 2, { voucherId: 'other' }))],
+      countersign: true,
+    })
+    expect((await verifyScannedWith(ports({ blob: mixed.blob, ownRecord: async () => 'no_records' }), mixed.qr)).face).toBeUndefined()
+  })
+
+  it('shows no value for a voucher whose issuer signature does not verify', async () => {
+    const forged = voucherSecret(payeeSk, 1).replace(/"issuer_sig","[0-9a-f]{128}"/, `"issuer_sig","${'00'.repeat(64)}"`)
+    const { qr, blob } = await receipt({ proofs: [voucherProof(1, 512, forged)], countersign: true })
+    expect((await verifyScannedWith(ports({ blob, ownRecord: async () => 'no_records' }), qr)).face).toBeUndefined()
+  })
+})
