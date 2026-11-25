@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PayPal payment references are checked with PayPal.** A sale's card reference is a Stripe PaymentIntent (`pi_…`) or a PayPal capture id (17 upper-case letters and digits). The transaction detail labels each by its processor ("Card payment reference", "Checked with PayPal") and asks `/api/v1/merchant/paypal/payments/{id}/verification`, with the same verdicts as Stripe. purchase-issuer's sale pull and the card-payment state accept either shape.
 - Dev proxy and edge auth route `/api/v1/merchant/paypal` to merchant-service, and the Docker build takes `VITE_PAYPAL`.
 
+### Fixed
+
+- **The wallet API spends the soonest-expiring coupons first, as the app does.** `planSpend` (`@imani/wallet-core`, behind wallet-api's spend planning) now asks `chooseSpend`, the rule the Pay and Send buttons have used since v0.63.0. Before, it took any single coupon that covered the amount, so a smaller coupon expiring sooner was never drawn through the API and lapsed: €2 expiring tomorrow and €10 next year, paying €5, planned €5 of the €10. It now plans €2 + €3. One coupon still wins when nothing usable expires sooner. The parity test that compares the API with the app was comparing against a copy of the app's old rule, which is why the drift went unseen. It now mirrors `deliverCounted`'s call. The app's own payments are unchanged. Redeploy wallet-api to take it.
+
 ## [0.78.0] - 2026-11-22
 
 ### Added
