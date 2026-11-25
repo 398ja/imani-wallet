@@ -6,7 +6,7 @@ import { Check, Cloud, Copy, Download } from 'lucide-react'
 
 import { Screen, BackLink, PageHeader, Panel, Button, Input, Alert } from '../components/ui'
 import { backupFilename, createBackup } from '../lib/backup'
-import { downloadText } from '../lib/download'
+import { saveBackupFile } from '../lib/backupFileStore'
 import { recordBackup } from '../lib/backupRecord'
 import { useDriveBackup } from '../lib/useDriveBackup'
 import { DriveOverwriteWarning } from '../components/DriveOverwriteWarning'
@@ -51,9 +51,11 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
     try {
       const name = backupFilename(profile)
       const json = createBackup(profile.pubkey)
-      await downloadText(name, json)
+      const fingerprint = backupFingerprint(json)
+      const { saved } = await saveBackupFile(profile.pubkey, fingerprint, name, json)
+      if (!saved) return
       recordBackup(profile.pubkey, 'file')
-      recordKeyBackup(profile.pubkey, 'file', { fileName: name, fingerprint: backupFingerprint(json) })
+      recordKeyBackup(profile.pubkey, 'file', { fileName: name, fingerprint })
       setFileName(name)
       setDownloaded(true)
     } catch (e) {

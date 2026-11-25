@@ -4,6 +4,9 @@ import {
   KEY_BACKUPS_CHANGED,
   backupsForCurrentKey,
   currentKeyFingerprint,
+  driveConfirmed,
+  foundMissing,
+  lastConfirmedAt,
   loadKeyBackups,
   syncKeyBackups,
   type KeyBackup,
@@ -55,15 +58,14 @@ export function deriveKeyBackupState(list: readonly KeyBackup[], options: Derive
     const current = backupsForCurrentKey(list, fingerprint)
     const remote = current.some(
       (b) =>
-        b.location === 'drive' &&
-        b.lastVerifiedAt !== undefined &&
+        driveConfirmed(b) &&
         (driveFingerprints ? driveFingerprints.has(b.keyFingerprint) : true),
     )
     if (remote) return 'verified'
     // A download counts from when it was made; a re-download or a re-check refreshes it.
     const local = current.some((b) => {
-      if (b.location !== 'file') return false
-      const at = Math.max(b.lastVerifiedAt ?? 0, b.lastSavedAt ?? 0, b.createdAt)
+      if (b.location !== 'file' || foundMissing(b)) return false
+      const at = lastConfirmedAt(b)
       return at <= now && now - at <= FILE_RECHECK_MAX_AGE_MS
     })
     return local ? 'local' : 'missing'

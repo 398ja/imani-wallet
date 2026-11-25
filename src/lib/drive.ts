@@ -114,6 +114,18 @@ export function putBackup(json: string): Promise<void> {
 }
 
 /**
+ * Read this account's backup straight from Drive, where `putAndVerifyBackup` put it: no listing to
+ * choose from, no location to ask for. Null when Drive holds none for this account.
+ */
+export function readAccountBackup(pubkey: string): Promise<string | null> {
+  return withDriveToken(async (token) => {
+    const id = await findAccountFile(token, hex(pubkey))
+    if (!id) return null
+    return (await call(token, `${FILES}/${id}?alt=media`)).text()
+  })
+}
+
+/**
  * #348: write this account's file, then read it BACK in the same token and check it holds this
  * key's envelope and pubkey. Resolves only when the read-back matches, so a Drive backup recorded
  * as verified is one Drive really holds. Logout then trusts the record and needs no network.

@@ -72,3 +72,9 @@ export function recordBackup(pubkey: string, kind: BackupKind, at = Date.now()):
  * record it extends, so the logout sweep's exemption needs no network module.
  */
 export const KEY_BACKUPS_PREFIX = 'imani-wallet:key-backups:'
+
+/**
+ * Where this device saved its backup files (Android document URIs), per account. Device-local:
+ * never published, a URI means nothing on another device. Kept across logout with the list.
+ */
+export const KEY_BACKUP_FILES_PREFIX = 'imani-wallet:key-backup-files:'

@@ -4,7 +4,7 @@ import { Copy, Check, Cloud, Download, Eye, EyeOff } from 'lucide-react'
 import { Button, Panel, Alert } from '../components/ui'
 import type { Profile } from '../lib/profile'
 import { backupFilename, createBackup } from '../lib/backup'
-import { downloadText } from '../lib/download'
+import { saveBackupFile } from '../lib/backupFileStore'
 import { recordBackup } from '../lib/backupRecord'
 import { backupFingerprint, recordKeyBackup } from '../lib/keyBackups'
 import { KeyBackupSaved } from '../components/KeyBackup'
@@ -48,9 +48,11 @@ export function WelcomePage({
     try {
       const name = backupFilename(profile)
       const json = createBackup(profile.pubkey)
-      await downloadText(name, json)
+      const fingerprint = backupFingerprint(json)
+      const { saved } = await saveBackupFile(profile.pubkey, fingerprint, name, json)
+      if (!saved) return
       recordBackup(profile.pubkey, 'file')
-      recordKeyBackup(profile.pubkey, 'file', { fileName: name, fingerprint: backupFingerprint(json) })
+      recordKeyBackup(profile.pubkey, 'file', { fileName: name, fingerprint })
       setFileName(name)
       setDownloaded(true)
     } catch (e) {
