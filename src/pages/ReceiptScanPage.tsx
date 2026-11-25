@@ -45,8 +45,9 @@ export function ReceiptScanPage({
         placeholder="imrc1:…"
         pasteSubmits
         onText={(text, source) => {
-          // A shared receipt arrives inside a message; the code is dug out of it.
-          const code = isReceiptQr(text) ? text.trim() : source === 'typed' ? extractReceiptCode(text) : null
+          // A shared receipt arrives inside a message; the code is dug out of it, so words after
+          // it never ride along. A scan is the bare code.
+          const code = source === 'typed' ? (extractReceiptCode(text) ?? (isReceiptQr(text) ? text.trim() : null)) : isReceiptQr(text) ? text.trim() : null
           if (!code) {
             setError('That is not a receipt. Ask the customer to tap Show receipt on the payment.')
             return true

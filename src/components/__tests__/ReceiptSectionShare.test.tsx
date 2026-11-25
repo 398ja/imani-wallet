@@ -72,16 +72,18 @@ describe('the receipt dialog', () => {
     expect(screen.queryByRole('button', { name: 'Done' })).toBeNull()
   })
 
-  it('shares a freshly signed code as text through the share sheet', async () => {
+  it('shares the code on screen as text through the share sheet, with no new round trip', async () => {
     // Arrange
     const share = await openDialog()
+    const signedBefore = signed
 
     // Act
     fireEvent.click(share)
 
     // Assert
     await waitFor(() => expect(shared).toHaveLength(1))
-    expect(shared[0]).toContain('imrc1:CODE2')
+    expect(shared[0]).toContain('imrc1:CODE1')
+    expect(signed).toBe(signedBefore)
     expect(copied).toEqual([])
   })
 
@@ -95,7 +97,7 @@ describe('the receipt dialog', () => {
 
     // Assert
     expect(await screen.findByText(/Receipt copied/)).toBeTruthy()
-    expect(copied[0]).toContain('imrc1:CODE2')
+    expect(copied[0]).toContain('imrc1:CODE1')
     expect(shared).toEqual([])
   })
 

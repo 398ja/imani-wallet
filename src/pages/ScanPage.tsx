@@ -68,15 +68,12 @@ export function ScanPage() {
         // round trip. Passed in router state, not the URL: it carries a payer signature and the
         // key to its evidence, and URLs end up in history.
         const { isReceiptQr, extractReceiptCode } = await import('../lib/receipts')
-        if (isReceiptQr(text)) {
-          navigate('/receipt/check', { state: { qr: text.trim(), ...(pasted ? { via: 'text' } : {}) } })
-          return
-        }
-        // A receipt the customer sent as text arrives inside their message. Scanning never
-        // yields that, so a code found here was pasted, and the check says so.
-        const shared = pasted ? extractReceiptCode(text) : null
-        if (shared) {
-          navigate('/receipt/check', { state: { qr: shared, via: 'text' } })
+        // A receipt the customer sent as text arrives inside their message, so a pasted one is dug
+        // out of it (words after the code never ride along) and the check says it came as text.
+        // Scanning yields the bare code.
+        const receipt = pasted ? (extractReceiptCode(text) ?? (isReceiptQr(text) ? text.trim() : null)) : isReceiptQr(text) ? text.trim() : null
+        if (receipt) {
+          navigate('/receipt/check', { state: { qr: receipt, ...(pasted ? { via: 'text' } : {}) } })
           return
         }
         // A terminal setup code (#160, owner report on wallet 0.19.0). It is scanned by the

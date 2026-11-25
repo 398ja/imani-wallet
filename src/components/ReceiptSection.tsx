@@ -134,13 +134,11 @@ function ReceiptQrDialog({ receipt, onClose }: { receipt: ReceiptView; onClose: 
 
   const share = async () => {
     setShareNote(null)
-    let text = code
-    try {
-      // Signed now, so the presenter proof is as fresh as it can be when it leaves the phone.
-      text = (await presentReceipt(receipt.paymentId)).qrText
-    } catch {
-      // Keep the code on screen.
-    }
+    // The code on screen, not a new signature: re-signing can fetch or publish the evidence, and
+    // waiting on the network before the share sheet loses the tap a browser needs to open it.
+    // It is re-signed every PRESENTER_REFRESH_SECONDS anyway, and a pasted receipt is checked
+    // as "sent as text", never as the payer's own phone.
+    const text = code
     if (!text) {
       setShareNote('Could not prepare the receipt just now. Try again in a moment.')
       return

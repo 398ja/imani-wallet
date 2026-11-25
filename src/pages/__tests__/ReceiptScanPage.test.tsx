@@ -91,6 +91,20 @@ describe('a receipt the customer sent as text', () => {
     expect((await screen.findByTestId('where')).textContent).toBe(`/receipt/check|${CODE}|text`)
   })
 
+  it('a bare code followed by a remark is checked without the remark', async () => {
+    // Arrange
+    mount()
+
+    // Act
+    fireEvent.change(await screen.findByLabelText('Or paste the receipt they sent you'), {
+      target: { value: `${CODE} thanks!` },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    // Assert
+    expect((await screen.findByTestId('where')).textContent).toBe(`/receipt/check|${CODE}|text`)
+  })
+
   it('a pasted message with no receipt in it is refused in place', async () => {
     // Arrange
     clipboard = 'see you tomorrow'
