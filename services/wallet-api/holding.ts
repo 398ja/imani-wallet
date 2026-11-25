@@ -210,6 +210,11 @@ export interface PlanBody {
    * question require the expensive answer.
    */
   recipientPubkey?: string
+  /**
+   * The most coupons one payment may draw, when the caller knows its gateway's
+   * `atomic_send_bundle_max_parts`. Optional: absent, the app's default (10) holds.
+   */
+  maxParts?: number
 }
 
 export function parsePlanRequest(body: unknown): Parsed<PlanBody> {
@@ -279,6 +284,16 @@ export function parsePlanRequest(body: unknown): Parsed<PlanBody> {
     }
   }
 
+  const maxParts = fields.maxParts
+  if (maxParts !== undefined && maxParts !== null) {
+    if (typeof maxParts !== 'number' || !Number.isInteger(maxParts) || maxParts <= 0) {
+      return {
+        ok: false,
+        error: { field: 'maxParts', detail: `expected a positive whole number, got ${describe(maxParts)}` },
+      }
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -287,6 +302,7 @@ export function parsePlanRequest(body: unknown): Parsed<PlanBody> {
       currency: fields.currency as string,
       amount,
       recipientPubkey: typeof recipient === 'string' ? recipient : undefined,
+      maxParts: typeof maxParts === 'number' ? maxParts : undefined,
     },
   }
 }

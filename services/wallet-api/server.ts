@@ -1271,6 +1271,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       stallId: request.value.stallId,
       currency: request.value.currency,
       amount: request.value.amount,
+      maxParts: request.value.maxParts,
     })
 
     // 200 even when there is an obstacle. The question "can this be spent?" was

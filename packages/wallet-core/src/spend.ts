@@ -224,6 +224,38 @@ export function chooseSpend(vouchers: Voucher[], amount: number): SpendChoice {
   return { kind: 'bundle', plan }
 }
 
+/**
+ * The most coupons one payment may draw when the gateway does not advertise its own cap
+ * (`gateway.atomic-send.bundle.max-parts`, served as `atomic_send_bundle_max_parts`, #552).
+ */
+export const DEFAULT_BUNDLE_MAX_PARTS = 10
+
+/**
+ * A bundle plan brought under the part cap, the one way both doors do it (#552).
+ *
+ * Soonest-expiring first can need many parts: twelve €1 coupons expiring next week beside a €50
+ * one, paying €12, is twelve parts, over a cap of 10. Planned again with the largest coupons first
+ * (`largestFirst`, fewest parts) it is one. The largest-first plan replaces the expiry plan only
+ * when it still covers the amount and has fewer parts, and only once the expiry plan is over the
+ * cap: under the cap, expiry order is the rule.
+ *
+ * May still be over the cap. That is the caller's to refuse, before anything is spent, with
+ * `tooManyPartsMessage`.
+ */
+export function withinPartCap(vouchers: Voucher[], amount: number, plan: SendPlan, maxParts: number): SendPlan {
+  if (plan.parts.length <= maxParts) return plan
+  const fewer = planParts(vouchers, amount, { largestFirst: true })
+  return fewer.remaining === 0 && fewer.parts.length < plan.parts.length ? fewer : plan
+}
+
+/** The refusal for a plan over the cap. Said before anything is spent. */
+export function tooManyPartsMessage(parts: number, max: number): string {
+  return (
+    `This amount needs ${parts} vouchers, and one payment can use at most ${max}. ` +
+    'Nothing was sent. Send a smaller amount, or send the rest as a second payment.'
+  )
+}
+
 /** One draw against one coupon. Several of them make a bundle. */
 export type SendPart = { voucher: Voucher; amount: number }
 

@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest'
 import type { VoucherRow } from '@imani/wallet-storage'
 import { eligibleCoupons, planSpend } from '@imani/wallet-core'
-import { chooseSpend } from '@imani/wallet-core'
+import { chooseSpend, withinPartCap, DEFAULT_BUNDLE_MAX_PARTS } from '@imani/wallet-core'
 
 import { couponsFor, toVoucher } from '../merchants'
 
@@ -61,8 +61,10 @@ function appPlan(rows: VoucherRow[], stallId: string, currency: string, amount: 
   const choice = chooseSpend(inUnit, amount)
   if (choice.kind === 'single') return { ids: [choice.candidates[0].voucher_id], amounts: [amount] }
 
-  const plan = choice.plan
-  if (plan.remaining > 0) return null
+  if (choice.plan.remaining > 0) return null
+  // #552: held to the gateway's part cap, and refused over it, before anything is spent.
+  const plan = withinPartCap(inUnit, amount, choice.plan, DEFAULT_BUNDLE_MAX_PARTS)
+  if (plan.parts.length > DEFAULT_BUNDLE_MAX_PARTS) return null
   return {
     ids: plan.parts.map((p) => p.voucher.voucher_id),
     amounts: plan.parts.map((p) => p.amount),
@@ -107,6 +109,21 @@ const HOLDINGS: Array<{ name: string; rows: VoucherRow[] }> = [
       row({ voucher_id: 'later', face_value: 500, expires_at: 1893456000 }),
       row({ voucher_id: 'sooner', face_value: 500, expires_at: 1801440000 }),
     ],
+  },
+  {
+    // #552: soonest-first needs twelve parts, over the cap; both doors plan the €50 instead.
+    name: 'more sooner coupons than one payment may draw',
+    rows: [
+      row({ voucher_id: 'big', face_value: 5000, token_amount: 5000, expires_at: 1893456000 }),
+      ...Array.from({ length: 12 }, (_, i) =>
+        row({ voucher_id: `s${String(i).padStart(2, '0')}`, token_id: `tid-s${i}`, face_value: 100, expires_at: 1801440000 }),
+      ),
+    ],
+  },
+  {
+    // #552: twelve parts however they are drawn, so both refuse 1200.
+    name: 'only small coupons',
+    rows: Array.from({ length: 12 }, (_, i) => row({ voucher_id: `s${String(i).padStart(2, '0')}`, token_id: `tid-s${i}`, face_value: 100 })),
   },
   {
     // Owner report 2026-11-17: the later coupon alone covers 500; the smaller sooner one goes first.
@@ -195,7 +212,7 @@ const HOLDINGS: Array<{ name: string; rows: VoucherRow[] }> = [
   },
 ]
 
-const AMOUNTS = [1, 100, 150, 200, 300, 400, 500, 700, 900, 1000, 1500, 5000, 9999]
+const AMOUNTS = [1, 100, 150, 200, 300, 400, 500, 700, 900, 1000, 1200, 1500, 5000, 9999]
 
 describe('the API plans what the app plans', () => {
   for (const { name, rows } of HOLDINGS) {
