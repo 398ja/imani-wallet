@@ -74,6 +74,7 @@ import { PaymentsSettingsPage } from './pages/PaymentsSettingsPage'
 import { NotificationSettingsPage } from './pages/NotificationSettingsPage'
 import { ReceiptSettingsPage } from './pages/ReceiptSettingsPage'
 import { ReceiptAckPrompt } from './components/ReceiptAckPrompt'
+import { FirstRunPrompts } from './components/FirstRunPrompts'
 import { SellPage } from './pages/SellPage'
 import { CashbackIssuePage } from './pages/CashbackIssuePage'
 import { MerchantDashboardPage } from './pages/MerchantDashboardPage'
@@ -599,6 +600,8 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
       <FinishProfilePrompt profile={profile} />
       {/* Spec 049 FR-017: asked once, at the first received payment it could confirm. Home only. */}
       <ReceiptAckPrompt />
+      {/* Asked once each on Home, like the receipt question: notifications, then health checks. Not on a till. */}
+      {terminal.actor === null && <FirstRunPrompts pubkey={pubkey} stall={merchant !== null} />}
       <Routes>
         {/*
           The role split. A merchant gets a different home and the two money

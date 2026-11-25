@@ -28,8 +28,8 @@ function fake(opts: { available?: boolean; state?: FleetState } = {}) {
   }
 }
 
-function draw(c: ReturnType<typeof fake>) {
-  render(<MemoryRouter><FleetSnapshotView controller={c as never} /></MemoryRouter>)
+function draw(c: ReturnType<typeof fake>, onAnswered?: (on: boolean) => void) {
+  render(<MemoryRouter><FleetSnapshotView controller={c as never} onAnswered={onAnswered} /></MemoryRouter>)
 }
 
 beforeEach(() => localStorage.clear())
@@ -70,6 +70,46 @@ describe('Help improve Imani', () => {
     draw(c)
     fireEvent.click(await screen.findByTestId('fleet-toggle'))
     await waitFor(() => expect(c.optOut).toHaveBeenCalledTimes(1))
+  })
+
+  it('turning it on here answers the first-run question with yes', async () => {
+    // Arrange
+    const c = fake()
+    const answered = vi.fn()
+    draw(c, answered)
+    fireEvent.click(await screen.findByTestId('fleet-toggle'))
+
+    // Act
+    fireEvent.click(await screen.findByTestId('fleet-agree'))
+
+    // Assert
+    await waitFor(() => expect(answered).toHaveBeenCalledWith(true))
+  })
+
+  it('turning it off here answers the first-run question with no', async () => {
+    // Arrange
+    const c = fake({ state: { ...empty, optIn: { consent_version: 1, install_nonce: 'ab'.repeat(32), opted_in_at: 1 } } })
+    const answered = vi.fn()
+    draw(c, answered)
+
+    // Act
+    fireEvent.click(await screen.findByTestId('fleet-toggle'))
+
+    // Assert
+    await waitFor(() => expect(answered).toHaveBeenCalledWith(false))
+  })
+
+  it('cancelling the consent screen answers nothing', async () => {
+    // Arrange
+    const answered = vi.fn()
+    draw(fake(), answered)
+    fireEvent.click(await screen.findByTestId('fleet-toggle'))
+
+    // Act
+    fireEvent.click(await screen.findByTestId('fleet-cancel'))
+
+    // Assert
+    expect(answered).not.toHaveBeenCalled()
   })
 
   it('criterion 12: lists fleet uploads in Snapshot history', async () => {
