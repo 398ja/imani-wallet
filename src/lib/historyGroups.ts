@@ -53,7 +53,7 @@ export type HistoryEntry =
  * are part of the key so different parties' money is never folded together.
  */
 function groupKey(tx: WalletTransaction): string | undefined {
-  const bundle = tx.bundleId ?? linkBundle(tx)
+  const bundle = tx.bundleId ?? linkBundle(tx) ?? returnBundle(tx)
   if (!bundle) return undefined
   return [
     bundle,
@@ -74,6 +74,16 @@ function groupKey(tx: WalletTransaction): string | undefined {
 function linkBundle(tx: WalletTransaction): string | undefined {
   if (tx.type !== 'sent' || !tx.link?.k) return undefined
   return 'link:' + bytesToHex(sha256(new TextEncoder().encode(tx.link.k))).slice(0, 32)
+}
+
+/**
+ * The coupons that came back off ONE debit fold into one entry, like a Cashlink take-back (#530):
+ * an expired checkout code or an unclaimed locked gift writes one `returned:` row per coupon, each
+ * naming the debit it reverses (`returnOf`, #643) and no bundle id. Read here rather than written,
+ * so rows already stored fold too. The debit's id is this wallet's own row id, nothing secret.
+ */
+function returnBundle(tx: WalletTransaction): string | undefined {
+  return tx.returnOf ? 'return:' + tx.returnOf : undefined
 }
 
 /** A stable, unique React key for any entry. */
