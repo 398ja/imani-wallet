@@ -153,3 +153,57 @@ describe('reconciling a stall’s card offer', () => {
     if (change.kind === 'republish') expect(change.reason).toMatch(/Stripe/)
   })
 })
+
+describe('a stall taking cards through PayPal', () => {
+  const paypal = { chargesEnabled: true, defaultCurrency: 'gbp', processor: 'paypal' as const }
+
+  it('publishes an offer that names PayPal', () => {
+    const change = reconcileCardOffer(stall(), paypal, 'included')
+    expect(change.kind).toBe('republish')
+    if (change.kind === 'republish') {
+      expect(change.merchant.acceptsCards).toBe(true)
+      expect(change.merchant.cardProcessor).toBe('paypal')
+      expect(change.reason).toMatch(/PayPal/)
+    }
+  })
+
+  it('is quiet when the offer already names PayPal', () => {
+    expect(reconcileCardOffer(stall({ acceptsCards: true, cardProcessor: 'paypal' }), paypal, 'included').kind).toBe('unchanged')
+  })
+
+  it('corrects an offer that still names Stripe, even with the plan unknown', () => {
+    // Buyers would be sent to a Stripe checkout the stall no longer uses. Correcting which
+    // processor an existing offer names is not a new offer, so an unknown plan does not hold it.
+    for (const plan of ['included', 'unknown'] as const) {
+      const change = reconcileCardOffer(stall({ acceptsCards: true }), paypal, plan)
+      expect(change.kind, plan).toBe('republish')
+      if (change.kind === 'republish') {
+        expect(change.merchant.acceptsCards).toBe(true)
+        expect(change.merchant.cardProcessor).toBe('paypal')
+      }
+    }
+  })
+
+  it('withdraws in PayPal’s words', () => {
+    const change = reconcileCardOffer(stall({ acceptsCards: true, cardProcessor: 'paypal' }), { chargesEnabled: false, processor: 'paypal' }, 'included')
+    expect(change.kind).toBe('republish')
+    if (change.kind === 'republish') {
+      expect(change.merchant.acceptsCards).toBe(false)
+      expect(change.reason).toBe('PayPal is not accepting charges for this stall yet')
+    }
+    const mismatch = reconcileCardOffer(stall({ acceptsCards: true, cardProcessor: 'paypal' }), { ...paypal, defaultCurrency: 'eur' }, 'included')
+    if (mismatch.kind === 'republish') expect(mismatch.reason).toMatch(/PayPal account presents in EUR/)
+  })
+
+  it('withdraws on Starter as for Stripe', () => {
+    const change = reconcileCardOffer(stall({ acceptsCards: true, cardProcessor: 'paypal' }), paypal, 'not-included')
+    expect(change.kind).toBe('republish')
+    if (change.kind === 'republish') expect(change.reason).toMatch(/Essentials/)
+  })
+
+  it('moves a Stripe offer back to Stripe when Stripe is the one connected', () => {
+    const change = reconcileCardOffer(stall({ acceptsCards: true, cardProcessor: 'paypal' }), { chargesEnabled: true, defaultCurrency: 'gbp' }, 'included')
+    expect(change.kind).toBe('republish')
+    if (change.kind === 'republish') expect(change.merchant.cardProcessor).toBe('stripe')
+  })
+})

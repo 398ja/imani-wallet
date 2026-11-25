@@ -83,6 +83,7 @@ describe('the dev proxy table', () => {
   it.each([
     ['/api/v1/checkout', 28087, 'payment-adapter'],
     ['/api/v1/merchant/stripe', 28088, 'merchant-service'],
+    ['/api/v1/merchant/paypal', 28088, 'merchant-service'],
     ['/api/v1/card-sales', 8791, 'purchase-issuer (npx tsx services/purchase-issuer/server.ts)'],
   ])('routes %s to %i, which is %s', (rule, port, service) => {
     const found = targets().find((t) => t.rule === rule)
@@ -98,7 +99,7 @@ describe('the dev proxy table', () => {
    * as a bad signature and nothing in that message mentions a proxy. The file's
    * own header comment warns about this, so it is asserted rather than trusted.
    */
-  it.each(['/api/v1/atomic-send', '/api/v1/atomic/fulfilment', '/api/v1/nip05', '/api/v1/merchant/stripe', '/api/v1/card-sales'])(
+  it.each(['/api/v1/atomic-send', '/api/v1/atomic/fulfilment', '/api/v1/nip05', '/api/v1/merchant/stripe', '/api/v1/merchant/paypal', '/api/v1/card-sales'])(
     'keeps changeOrigin off for the origin-sensitive route %s',
     (rule) => {
       const entry = (proxy as Record<string, { changeOrigin?: boolean }>)[rule]
@@ -197,7 +198,7 @@ describe('edge-authenticated routes', () => {
    * this went unnoticed). A rule here that the middleware does not cover is a
    * screen that cannot work.
    */
-  it.each(['/api/v1/portal', '/api/v1/merchant/stripe'])(
+  it.each(['/api/v1/portal', '/api/v1/merchant/stripe', '/api/v1/merchant/paypal'])(
     'runs the edge-auth middleware for the session-authenticated rule %s',
     (rule) => {
       expect(EDGE_AUTH_PREFIXES).toContain(rule)

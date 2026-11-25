@@ -20,6 +20,12 @@ vi.mock('../../lib/merchantStatus', async (orig) => ({
   fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
 }))
 vi.mock('../../lib/purchase', () => ({ startPurchase: (...a: unknown[]) => startPurchase(...a) }))
+// The stall's public record names its card processor; Stripe (no record) unless a test says otherwise.
+let stallRecord: { cardProcessor?: string } | null = null
+vi.mock('../../lib/merchant', async (orig) => ({
+  ...(await orig<typeof import('../../lib/merchant')>()),
+  fetchMerchantRecord: async () => stallRecord,
+}))
 vi.mock('../../hooks/useBranding', () => ({
   useBranding: (pubkey: string | undefined) => ({
     branding: pubkey ? { organizationName: 'Mama Ngozi Fruits' } : undefined,
@@ -55,6 +61,7 @@ afterEach(() => {
   startPurchase.mockReset()
   cardSalesReady = vi.fn(async () => true)
   readinessOverride = null
+  stallRecord = null
   sessionStorage.clear()
   vi.unstubAllEnvs()
 })
@@ -99,8 +106,20 @@ describe('Buy page, guest (#267 item 2, #410)', () => {
     await vi.waitFor(() => expect(pay.disabled).toBe(false))
     fireEvent.click(pay)
     await screen.findByText('stop here')
-    expect(startPurchase).toHaveBeenCalledWith({ stallPubkey: STALL, amountMinor: 2500, buyerPubkey: BUYER })
+    expect(startPurchase).toHaveBeenCalledWith({ stallPubkey: STALL, amountMinor: 2500, buyerPubkey: BUYER, processor: 'stripe' })
     expect(JSON.parse(sessionStorage.getItem(PENDING_PURCHASE_KEY) ?? '{}')).toEqual({ stallPubkey: STALL })
+  })
+
+  it('pays a PayPal stall through PayPal, as its record names', async () => {
+    stallRecord = { cardProcessor: 'paypal' }
+    startPurchase.mockResolvedValue({ kind: 'error', reason: 'stop here' })
+    buy(BUYER)
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '25.00' } })
+    const pay = screen.getByRole('button', { name: /pay by card/i }) as HTMLButtonElement
+    await vi.waitFor(() => expect(pay.disabled).toBe(false))
+    fireEvent.click(pay)
+    await screen.findByText('stop here')
+    expect(startPurchase).toHaveBeenCalledWith({ stallPubkey: STALL, amountMinor: 2500, buyerPubkey: BUYER, processor: 'paypal' })
   })
 })
 

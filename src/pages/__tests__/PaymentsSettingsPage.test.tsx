@@ -11,6 +11,7 @@ import { emptyMerchant, type MerchantProfile } from '../../lib/merchant'
 /** Settings › Card payments is Essentials and above: Starter sees the plan, not Connect Stripe. */
 
 const stripe = vi.hoisted(() => ({ status: { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } } as unknown, connect: undefined as unknown }))
+const paypal = vi.hoisted(() => ({ status: { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } } as unknown, connected: 0 }))
 const published = vi.hoisted(() => ({ events: [] as unknown[], ok: 1 }))
 
 vi.mock('../../lib/stripeAccount', () => ({
@@ -18,6 +19,15 @@ vi.mock('../../lib/stripeAccount', () => ({
   refreshStripe: async () => stripe.status,
   connectStripe: async () => stripe.connect ?? stripe.status,
   disconnectStripe: async () => stripe.status,
+}))
+vi.mock('../../lib/paypalAccount', () => ({
+  fetchPaypalStatus: async () => paypal.status,
+  refreshPaypal: async () => paypal.status,
+  connectPaypal: async () => {
+    paypal.connected++
+    return paypal.status
+  },
+  disconnectPaypal: async () => paypal.status,
 }))
 vi.mock('../../lib/nap', () => ({ getSigner: () => ({ signEvent: async (e: object) => ({ ...e, created_at: 1 }) }) }))
 vi.mock('../../lib/relay', () => ({
@@ -43,11 +53,11 @@ const essentials = async () =>
 
 const liveStripe = { kind: 'ok', status: { status: 'enabled', chargesEnabled: true, defaultCurrency: 'gbp', requirementsDue: [] } }
 
-function renderPage(status: () => Promise<LicenceStatus>, merchant: Partial<MerchantProfile> = {}) {
+function renderPage(status: () => Promise<LicenceStatus>, merchant: Partial<MerchantProfile> = {}, withPaypal = false) {
   const onSaved = vi.fn()
   render(
     <MemoryRouter>
-      <PaymentsSettingsPage merchant={{ ...emptyMerchant(STALL), issuanceCurrency: 'GBP', ...merchant }} onSaved={onSaved} status={status} />
+      <PaymentsSettingsPage merchant={{ ...emptyMerchant(STALL), issuanceCurrency: 'GBP', ...merchant }} onSaved={onSaved} status={status} paypal={withPaypal} />
     </MemoryRouter>,
   )
   return onSaved
@@ -59,8 +69,62 @@ beforeEach(() => {
   published.ok = 1
   stripe.connect = undefined
   stripe.status = { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } }
+  paypal.status = { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } }
+  paypal.connected = 0
 })
 afterEach(cleanup)
+
+describe('Card payments through Stripe or PayPal', () => {
+  const livePaypal = { kind: 'ok', status: { status: 'payouts_enabled', chargesEnabled: true, defaultCurrency: 'gbp', requirementsDue: [] } }
+
+  it('offers no choice when PayPal is off, exactly as before', async () => {
+    renderPage(essentials)
+    await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
+    expect(screen.queryByTestId('card-processor-choice')).toBeNull()
+  })
+
+  it('lets a stall pick PayPal before connecting, and connects PayPal', async () => {
+    renderPage(essentials, {}, true)
+    await waitFor(() => expect(screen.getByTestId('card-processor-choice')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('PayPal'))
+    const connect = await screen.findByRole('button', { name: /Connect PayPal/ })
+    expect(screen.getByText(/paid directly by PayPal/)).toBeTruthy()
+    await act(async () => {
+      fireEvent.click(connect)
+    })
+    expect(paypal.connected).toBe(1)
+  })
+
+  it('shows the connected PayPal account and publishes an offer naming PayPal', async () => {
+    paypal.status = livePaypal
+    const onSaved = renderPage(essentials, {}, true)
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(onSaved.mock.calls[0][0]).toMatchObject({ acceptsCards: true, cardProcessor: 'paypal' })
+    await waitFor(() => expect(published.events).toHaveLength(1))
+    expect(JSON.parse((published.events[0] as { content: string }).content)).toMatchObject({ acceptsCards: true, cardProcessor: 'paypal' })
+    expect(screen.getByText('Taking card payments')).toBeTruthy()
+    expect(screen.queryByTestId('card-processor-choice')).toBeNull()
+  })
+
+  it('does not withdraw a PayPal stall’s offer when PayPal cannot be asked', async () => {
+    paypal.status = { kind: 'unreachable', reason: 'Could not reach your account service. Nothing was changed.' }
+    const onSaved = renderPage(essentials, { acceptsCards: true, cardProcessor: 'paypal' }, true)
+    await waitFor(() => expect(screen.getByText(/Could not reach your account service/)).toBeTruthy())
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(published.events).toHaveLength(0)
+  })
+
+  it('keeps reading a PayPal stall through PayPal in a build with PayPal off', async () => {
+    // Turning the flag off must not reconcile a PayPal stall against Stripe (not connected) and
+    // withdraw its offer: the flag decides who may choose PayPal, not who is already on it.
+    paypal.status = livePaypal
+    const onSaved = renderPage(essentials, { acceptsCards: true, cardProcessor: 'paypal' }, false)
+    await waitFor(() => expect(screen.getByText('Taking card payments')).toBeTruthy())
+    expect(onSaved).not.toHaveBeenCalled()
+    expect(screen.getByText(/paid directly by PayPal/)).toBeTruthy()
+    expect(screen.queryByTestId('card-processor-choice')).toBeNull()
+  })
+})
 
 describe('Card payments by plan', () => {
   it('shows Starter the plan instead of Connect Stripe', async () => {

@@ -262,6 +262,21 @@ describe('canTrade', () => {
  * conservatively in every direction a record can be wrong.
  */
 describe('acceptsCards', () => {
+  it('names PayPal only for a PayPal stall that takes cards, and reads it back', () => {
+    // payment-adapter ADR 0002. A Stripe stall's record is unchanged (no field), so every record
+    // published before PayPal reads as Stripe.
+    const paypal = JSON.parse(buildMerchantEvent(base({ acceptsCards: true, cardProcessor: 'paypal' })).content)
+    expect(paypal.cardProcessor).toBe('paypal')
+    const stripe = JSON.parse(buildMerchantEvent(base({ acceptsCards: true, cardProcessor: 'stripe' })).content)
+    expect('cardProcessor' in stripe).toBe(false)
+    const off = JSON.parse(buildMerchantEvent(base({ acceptsCards: false, cardProcessor: 'paypal' })).content)
+    expect('cardProcessor' in off).toBe(false)
+
+    const now = Math.floor(Date.now() / 1000)
+    expect(mergeMerchantEvent(base(), JSON.stringify({ acceptsCards: true, cardProcessor: 'paypal' }), now).cardProcessor).toBe('paypal')
+    expect(mergeMerchantEvent(base({ cardProcessor: 'paypal' }), JSON.stringify({ acceptsCards: true }), now).cardProcessor).toBeUndefined()
+    expect(mergeMerchantEvent(base(), JSON.stringify({ acceptsCards: true, cardProcessor: 'PayPal!' }), now).cardProcessor).toBeUndefined()
+  })
   it('is published only when true', () => {
     const on = JSON.parse(buildMerchantEvent(base({ acceptsCards: true })).content)
     expect(on.acceptsCards).toBe(true)

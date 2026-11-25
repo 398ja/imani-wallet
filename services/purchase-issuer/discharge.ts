@@ -291,7 +291,7 @@ export async function discharge(
   if (!obligation.processorReference) {
     return {
       kind: 'blocked',
-      reason: 'card purchase has no processor reference (pi_…); refusing to mint an unreconcilable coupon',
+      reason: 'card purchase has no processor reference (pi_… or PayPal capture id); refusing to mint an unreconcilable coupon',
     }
   }
 

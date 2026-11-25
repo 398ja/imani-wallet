@@ -103,6 +103,12 @@ ENV VITE_CHECKOUT_CODES=$VITE_CHECKOUT_CODES
 ARG VITE_CHECKOUT_CODES_URL=
 ENV VITE_CHECKOUT_CODES_URL=$VITE_CHECKOUT_CODES_URL
 
+# PayPal card payments beside Stripe (src/lib/cardProcessor.ts, payment-adapter ADR 0002). "on" lets
+# a stall choose PayPal on Card payments; anything else ships the choice dark (the default). Not a
+# secret. imani-deploy's deploy-staging.sh and build-beta.sh pass it.
+ARG VITE_PAYPAL=
+ENV VITE_PAYPAL=$VITE_PAYPAL
+
 # The public website, without a trailing path (src/lib/terms.ts): every new account accepts the
 # Terms and Conditions at <this>/terms.html, today https://www.imani.casa/terms.html. Not a secret.
 # REQUIRED (#357): a bundle without it cannot link to the terms, so it refuses to create any

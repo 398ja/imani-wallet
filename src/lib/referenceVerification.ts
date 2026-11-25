@@ -1,12 +1,20 @@
 /**
  * Is a card coupon's payment reference a genuine payment to THIS stall's own
- * Stripe account?
+ * Stripe account, or its own PayPal seller account?
  *
- * The reference on a card warrant is the purchase's PaymentIntent id (`pi_…`).
+ * The reference on a card warrant is the processor's record of the purchase: a
+ * Stripe PaymentIntent id (`pi_…`) or a PayPal capture id (17 uppercase
+ * letters and digits, payment-adapter ADR 0002). Its shape says which processor
+ * to ask, and each is asked through merchant-service the same way:
+ * `/api/v1/merchant/stripe/payments/{pi}/verification` or
+ * `/api/v1/merchant/paypal/payments/{capture}/verification`, with the same
+ * verdict vocabulary.
+ *
  * The warrant's signature proves the reference was not edited after issuance,
- * not that the payment exists. Only Stripe knows that, and only the server may
+ * not that the payment exists. Only the processor knows that, and only the server may
  * ask: merchant-service reads the stall from the session, and payment-adapter
- * reads the PaymentIntent with that stall's `Stripe-Account` and compares it
+ * reads the payment as that stall's own account (`Stripe-Account`, or PayPal's
+ * `PayPal-Auth-Assertion`) and compares it
  * with the purchase record. The browser sends a reference and receives a verdict,
  * nothing more, and no key or account id.
  *
@@ -14,13 +22,14 @@
  *
  * - `verified`: on your account, succeeded, matching the purchase.
  * - `reversed`: it was genuine, but has since been refunded or disputed on
- *   Stripe (`refunded`, `disputed`). The voucher was still issued; nothing
+ *   the processor (`refunded`, `disputed`). The voucher was still issued; nothing
  *   reverses it automatically yet.
  * - `failed`: the server looked and it is not (`not_found`, `mismatch`).
  * - `unknown`: anything else, including unreachable, not yet succeeded, not
  *   connected, or a verdict this build does not know. Never a warning, because
  *   a stall accused of a fake payment by a network blip is worse than no tick.
  */
+import { processorOfReference } from './cardProcessor'
 
 export type ReferenceVerification =
   | { kind: 'verified' }
@@ -28,9 +37,11 @@ export type ReferenceVerification =
   | { kind: 'failed'; result: 'mismatch' | 'not_found'; detail?: string }
   | { kind: 'unknown'; reason: string }
 
-const PATH = '/api/v1/merchant/stripe/payments'
+const PATHS = {
+  stripe: '/api/v1/merchant/stripe/payments',
+  paypal: '/api/v1/merchant/paypal/payments',
+} as const
 const TIMEOUT_MS = 15000
-const PI_SHAPE = /^pi_[A-Za-z0-9_]{1,250}$/
 
 /** How long a final verdict is trusted. A refund or dispute can come later. */
 export const VERDICT_TTL_MS = 5 * 60 * 1000
@@ -73,13 +84,14 @@ export function __resetReferenceVerificationCache() {
 }
 
 export function verifyCardReference(reference: string): Promise<ReferenceVerification> {
-  if (!PI_SHAPE.test(reference)) {
-    return Promise.resolve({ kind: 'unknown', reason: 'not a Stripe payment reference' })
+  const processor = processorOfReference(reference)
+  if (!processor) {
+    return Promise.resolve({ kind: 'unknown', reason: 'not a card payment reference' })
   }
   const known = cache.get(reference)
   if (known && Date.now() < known.expiresAt) return known.answer
   const entry = { answer: undefined as unknown as Promise<ReferenceVerification>, expiresAt: Infinity }
-  entry.answer = limited(() => ask(reference)).then((answer) => {
+  entry.answer = limited(() => ask(PATHS[processor], reference)).then((answer) => {
     if (cache.get(reference) === entry) {
       if (answer.kind === 'unknown') cache.delete(reference)
       else entry.expiresAt = Date.now() + VERDICT_TTL_MS
@@ -90,11 +102,11 @@ export function verifyCardReference(reference: string): Promise<ReferenceVerific
   return entry.answer
 }
 
-async function ask(reference: string): Promise<ReferenceVerification> {
+async function ask(path: string, reference: string): Promise<ReferenceVerification> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {
-    const response = await fetch(`${PATH}/${encodeURIComponent(reference)}/verification`, {
+    const response = await fetch(`${path}/${encodeURIComponent(reference)}/verification`, {
       method: 'GET',
       credentials: 'include',
       headers: { Accept: 'application/json' },

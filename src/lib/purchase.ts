@@ -7,9 +7,11 @@
  * because a payment page that fails after somebody has typed their card number
  * is the worst place to learn a stall is misconfigured.
  */
+import type { CardProcessor } from './cardProcessor'
 
-/** Where the purchase endpoint lives, same-origin through the proxy. */
+/** Where the purchase endpoint lives, same-origin through the proxy. One per processor (ADR 0002). */
 const PURCHASE_PATH = '/api/v1/checkout/purchase'
+const PAYPAL_PURCHASE_PATH = '/api/v1/checkout/paypal/purchase'
 
 /** Long enough for a session to be created, short enough not to feel hung. */
 const TIMEOUT_MS = 15000
@@ -23,12 +25,17 @@ export async function startPurchase(params: {
   amountMinor: number
   /** Null for a buyer with no wallet, who takes delivery by claim link. */
   buyerPubkey: string | null
+  /**
+   * The processor the stall's record names. Both endpoints take the same body and answer the same
+   * shape; each refuses a stall it cannot charge for, so a stale record costs one failed tap.
+   */
+  processor?: CardProcessor
 }): Promise<PurchaseStart> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
   try {
-    const response = await fetch(PURCHASE_PATH, {
+    const response = await fetch(params.processor === 'paypal' ? PAYPAL_PURCHASE_PATH : PURCHASE_PATH, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
