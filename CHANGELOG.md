@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **An upright key icon left of your own avatar shows whether your key is backed up.** Green: a backup holds the key you hold now and was checked (a Drive copy read back, or a file re-checked within 90 days). Orange: a backup was made but cannot be confirmed to hold your current key (it predates a passphrase change, or the file was never or not recently re-checked). Red: no backup on record. Orange and red blink (steady under reduced motion) and open Settings › Backup with a recommendation saying why. Only in your own header, never on anyone else's identity, and not on a terminal. Drive is never asked just to colour the icon, since every Drive token costs a Google sign-in; the recorded check is used, and an error is never green.
 
+### Fixed
+
+- **The wallet API spends the soonest-expiring coupons first, as the app does.** `planSpend` (`@imani/wallet-core`, behind wallet-api's spend planning) now asks `chooseSpend`, the rule the Pay and Send buttons have used since v0.63.0. Before, it took any single coupon that covered the amount, so a smaller coupon expiring sooner was never drawn through the API and lapsed: €2 expiring tomorrow and €10 next year, paying €5, planned €5 of the €10. It now plans €2 + €3. One coupon still wins when nothing usable expires sooner. The parity test that compares the API with the app was comparing against a copy of the app's old rule, which is why the drift went unseen. It now mirrors `deliverCounted`'s call. The app's own payments are unchanged. Redeploy wallet-api to take it.
+
 ## [0.79.0] - 2026-11-25
 
 ### Added
