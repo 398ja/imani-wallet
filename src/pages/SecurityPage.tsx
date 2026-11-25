@@ -7,7 +7,7 @@ import { useDriveBackup } from '../lib/useDriveBackup'
 import { listBackups } from '../lib/drive'
 import { loadBackupRecord, recordBackup } from '../lib/backupRecord'
 import { backupFilename, createBackup } from '../lib/backup'
-import { downloadText } from '../lib/download'
+import { saveBackupFile } from '../lib/backupFileStore'
 import { loadProfile } from '../lib/profile'
 import { legacyApi } from '../lib/legacyBridge'
 import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommission'
@@ -283,9 +283,11 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
     try {
       const name = backupFilename(loadProfile(pubkey))
       const json = createBackup(pubkey)
-      await downloadText(name, json)
+      const fingerprint = backupFingerprint(json)
+      const { saved } = await saveBackupFile(pubkey, fingerprint, name, json)
+      if (!saved) return
       recordBackup(pubkey, 'file')
-      recordKeyBackup(pubkey, 'file', { fileName: name, fingerprint: backupFingerprint(json) })
+      recordKeyBackup(pubkey, 'file', { fileName: name, fingerprint })
       setFileSaved(true)
     } catch (e) {
       setFileError(userMessage(e))
