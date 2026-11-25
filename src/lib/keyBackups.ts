@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils'
-import { verifyEvent, type Event } from 'nostr-tools'
+import { nip19, verifyEvent, type Event } from 'nostr-tools'
 
 import { getSigner } from './nap'
 import { allEvents } from './relay'
@@ -45,8 +45,15 @@ export interface KeyBackup {
   lastVerifiedAt?: number
   /** Short sha256 of the key envelope the backup holds. */
   keyFingerprint: string
+  /** Epoch ms of the latest download of this file (a fresh copy, so the 90-day clock restarts). */
+  lastSavedAt?: number
   /** For a file: the name it was saved under. */
   fileName?: string
+  /**
+   * Epoch ms of the latest check that did NOT find this key where the backup was put (Drive held
+   * no file, or an older key). Counts against a `lastVerifiedAt` that is not newer, on every device.
+   */
+  lastMissingAt?: number
 }
 
 export const KEY_BACKUPS_KIND = 30078
@@ -171,7 +178,13 @@ function sanitise(value: unknown): KeyBackup | null {
   if (typeof v.lastVerifiedAt === 'number' && Number.isFinite(v.lastVerifiedAt) && v.lastVerifiedAt > 0) {
     out.lastVerifiedAt = v.lastVerifiedAt
   }
+  if (typeof v.lastSavedAt === 'number' && Number.isFinite(v.lastSavedAt) && v.lastSavedAt > 0) {
+    out.lastSavedAt = v.lastSavedAt
+  }
   if (typeof v.fileName === 'string' && v.fileName) out.fileName = v.fileName.slice(0, 200)
+  if (typeof v.lastMissingAt === 'number' && Number.isFinite(v.lastMissingAt) && v.lastMissingAt > 0) {
+    out.lastMissingAt = v.lastMissingAt
+  }
   return out
 }
 
@@ -190,12 +203,16 @@ export function mergeKeyBackups(...lists: ReadonlyArray<readonly KeyBackup[]>): 
         continue
       }
       const verified = Math.max(prior.lastVerifiedAt ?? 0, b.lastVerifiedAt ?? 0)
+      const saved = Math.max(prior.lastSavedAt ?? 0, b.lastSavedAt ?? 0)
+      const missing = Math.max(prior.lastMissingAt ?? 0, b.lastMissingAt ?? 0)
       const newer = (b.lastVerifiedAt ?? b.createdAt) >= (prior.lastVerifiedAt ?? prior.createdAt) ? b : prior
       byId.set(identity(b), {
         ...prior,
         createdAt: Math.min(prior.createdAt, b.createdAt),
         deviceName: newer.deviceName,
         ...(verified > 0 ? { lastVerifiedAt: verified } : {}),
+        ...(saved > 0 ? { lastSavedAt: saved } : {}),
+        ...(missing > 0 ? { lastMissingAt: missing } : {}),
         ...((newer.fileName ?? prior.fileName ?? b.fileName) ? { fileName: newer.fileName ?? prior.fileName ?? b.fileName } : {}),
       })
     }
@@ -243,6 +260,38 @@ export function backupsForCurrentKey(list: readonly KeyBackup[], fingerprint = c
 }
 
 /**
+ * A Drive backup confirmed by its latest check: read back at some point, and not found missing
+ * since. A failed check after the last read-back wins, so the record cannot vouch for a file
+ * that is gone.
+ */
+export function driveConfirmed(b: KeyBackup): boolean {
+  return b.location === 'drive' && b.lastVerifiedAt !== undefined && (b.lastMissingAt ?? 0) < b.lastVerifiedAt
+}
+
+/** When a backup last vouched for its key: read back, re-checked, or saved. */
+export function lastConfirmedAt(b: KeyBackup): number {
+  return Math.max(b.lastVerifiedAt ?? 0, b.lastSavedAt ?? 0, b.createdAt)
+}
+
+/** A check found this backup gone (or holding another key) after it last vouched for its key. */
+export function foundMissing(b: KeyBackup): boolean {
+  return (b.lastMissingAt ?? 0) >= (b.location === 'drive' ? (b.lastVerifiedAt ?? b.createdAt) : lastConfirmedAt(b))
+}
+
+/**
+ * Record that a check did not find `fingerprint`'s backup where it was put (`file`: only this
+ * device's, the one a check here can read). Publishes in the background.
+ */
+export function recordBackupMissing(pubkey: string, location: KeyBackupLocation, fingerprint: string, at = Date.now()): void {
+  const hit = loadKeyBackups(pubkey).filter(
+    (b) => b.location === location && b.keyFingerprint === fingerprint && (location === 'drive' || b.deviceId === deviceId()),
+  )
+  if (hit.length === 0) return
+  mergeLocalKeyBackups(pubkey, hit.map((b) => ({ ...b, lastMissingAt: at })))
+  void syncKeyBackups(pubkey)
+}
+
+/**
  * Remember a backup just made on this device. The fingerprint is of the envelope the backup was
  * made from (pass it when known, else the one stored now). Publishes in the background.
  */
@@ -261,6 +310,7 @@ export function recordKeyBackup(
     createdAt: at,
     keyFingerprint,
     ...(options.verified ? { lastVerifiedAt: at } : {}),
+    ...(location === 'file' ? { lastSavedAt: at } : {}),
     ...(options.fileName ? { fileName: options.fileName } : {}),
   }
   mergeLocalKeyBackups(pubkey, [entry])
@@ -397,7 +447,10 @@ export async function checkKeyBackup(
   } finally {
     clearTimeout(timer)
   }
-  const backups = backupsForCurrentKey(loadKeyBackups(pubkey))
+  const backups = backupsForCurrentKey(loadKeyBackups(pubkey)).filter(
+    // A backup a check found gone (or holding an older key) no longer vouches for the key.
+    (b) => !foundMissing(b),
+  )
   return backups.length > 0 ? { ok: true, backups } : { ok: false, backups: [] }
 }
 
@@ -428,7 +481,24 @@ export const KEY_BACKUP_COPY = {
     'Imani does not know of a backup of your key, so logging out stays off. Logging out without one would ' +
     'lock you out of your wallet for good. Back up your key to Google Drive or a file first. Nothing has been erased.',
   backUp: 'Back up my key',
-  check: 'Check a backup file',
+  check: 'Check my backups',
+  checking: 'Checking…',
+  checkDriveOk: 'Google Drive: OK',
+  checkDriveOld: 'Google Drive: old key. Back up again.',
+  checkDriveGone: 'Google Drive: missing. Back up again.',
+  checkDriveUnreachable: 'Google Drive: not reached. Try again later.',
+  checkDriveCancelled: 'Google Drive: not checked (sign-in closed).',
+  checkDriveNotSetUp: 'Google Drive: not available here.',
+  checkFileOk: (name: string) => `${name}: OK`,
+  checkFileGone: (name: string) => `${name}: missing. Back up again.`,
+  checkFileMismatch: (name: string) => `${name}: wrong key. Back up again.`,
+  checkFileUnreadable: (name: string) => `${name}: could not open. Try again later.`,
+  checkFileCounts: (name: string, until: string) => `${name}: location unknown. Counts until ${until}.`,
+  checkFileExpired: (name: string) => `${name}: location unknown, not confirmed in 90 days.`,
+  checkNone: 'No backup of your current key. Back up your key.',
+  lastChecked: (when: string) => `Last checked ${when}`,
+  neverChecked: 'Not checked yet',
+  pickFile: 'Confirm a backup file',
   checkOk: 'That file opens to this account. It is still a good backup.',
   checkStale: 'That file is for this account, but it was made before your passphrase changed. Back up again.',
   checkOther: 'That file is not a backup of this account.',
@@ -448,20 +518,44 @@ export function logoutBackupLines(backups: readonly KeyBackup[]): string {
 export type FileCheck = 'ok' | 'stale' | 'other-account' | 'not-a-backup'
 
 /**
- * Check a picked backup file opens to this account, and record it as a re-checked local backup.
- * Never stores the file.
+ * Whether a backup file's text is a good backup of this account's current key. No passphrase:
+ *
+ * - it is a wallet backup with a key envelope (else `not-a-backup`);
+ * - its `npub` and `pubkey` name this account, and agree with each other (else `other-account`);
+ * - its envelope is the one this device holds now, by fingerprint (else `stale`). That envelope
+ *   is what unlocks this signed-in account, so an identical one holds the key of this npub.
  */
-export function verifyBackupFile(pubkey: string, text: string, fileName?: string): FileCheck {
-  let parsed: { format?: unknown; pubkey?: unknown; key?: unknown }
+export function validateBackupText(pubkey: string, text: string): FileCheck {
+  let parsed: { format?: unknown; pubkey?: unknown; npub?: unknown; key?: unknown }
   try {
     parsed = JSON.parse(text) as typeof parsed
   } catch {
     return 'not-a-backup'
   }
-  if (parsed.format !== 'imani-wallet-backup' || !parsed.key || typeof parsed.key !== 'object') return 'not-a-backup'
+  if (!parsed || parsed.format !== 'imani-wallet-backup' || !parsed.key || typeof parsed.key !== 'object') return 'not-a-backup'
   if (parsed.pubkey !== pubkey) return 'other-account'
-  const fp = envelopeFingerprint(parsed.key)
-  if (fp !== currentKeyFingerprint()) return 'stale'
+  if (parsed.npub !== undefined) {
+    let named: string | null = null
+    try {
+      const d = typeof parsed.npub === 'string' ? nip19.decode(parsed.npub) : null
+      named = d && d.type === 'npub' ? d.data : null
+    } catch {
+      named = null
+    }
+    if (named !== pubkey) return 'other-account'
+  }
+  return envelopeFingerprint(parsed.key) === currentKeyFingerprint() ? 'ok' : 'stale'
+}
+
+/**
+ * Check a picked backup file opens to this account, and record it as a re-checked local backup.
+ * Never stores the file.
+ */
+export function verifyBackupFile(pubkey: string, text: string, fileName?: string): FileCheck {
+  const result = validateBackupText(pubkey, text)
+  if (result !== 'ok') return result
+  const fp = backupFingerprint(text)
+  if (!fp) return 'not-a-backup'
   recordKeyBackup(pubkey, 'file', { verified: true, fingerprint: fp, ...(fileName ? { fileName } : {}) })
   return 'ok'
 }

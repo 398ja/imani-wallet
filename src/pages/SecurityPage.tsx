@@ -7,7 +7,7 @@ import { useDriveBackup } from '../lib/useDriveBackup'
 import { listBackups } from '../lib/drive'
 import { loadBackupRecord, recordBackup } from '../lib/backupRecord'
 import { backupFilename, createBackup } from '../lib/backup'
-import { downloadText } from '../lib/download'
+import { rewriteSavedFile, saveBackupFile } from '../lib/backupFileStore'
 import { loadProfile } from '../lib/profile'
 import { legacyApi } from '../lib/legacyBridge'
 import { decommissionTerminal, DECOMMISSION_COPY } from '../lib/terminalDecommission'
@@ -16,7 +16,7 @@ import { userMessage } from '../lib/userMessage'
 import { ConnectedSites } from '../components/ConnectedSites'
 import { DriveOverwriteWarning } from '../components/DriveOverwriteWarning'
 import { KeyBackupSummary } from '../components/KeyBackup'
-import { backupFingerprint, recordKeyBackup } from '../lib/keyBackups'
+import { backupFingerprint, currentKeyFingerprint, loadKeyBackups, recordKeyBackup } from '../lib/keyBackups'
 import {
   passphraseStrength,
   validateConfirmation,
@@ -190,9 +190,10 @@ function DecommissionPanel({ pubkey }: { pubkey: string }) {
  * succeeded locally — and the message says exactly which copy is now stale
  * rather than reporting a failure that did not happen.
  *
- * A file downloaded earlier is stale in the same way and cannot be reached, so
- * the person is offered a new file right there. A file record that is missing
- * cannot be checked, so then the line is neutral ("If you saved...").
+ * A file this device's app saved (Android, through the save screen) is rewritten in place too,
+ * where it was saved, with no prompt. A file it cannot reach (a browser download, one saved
+ * elsewhere, one since deleted) is stale, so the person is offered a new file right there. A file
+ * record that is missing cannot be checked, so then the line is neutral ("If you saved...").
  */
 function ChangePassphrase({ pubkey }: { pubkey: string }) {
   const drive = useDriveBackup(pubkey)
@@ -202,6 +203,8 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
   const [fileStale, setFileStale] = useState(false)
   const [fileKnown, setFileKnown] = useState(false)
   const [driveUnchecked, setDriveUnchecked] = useState(false)
+  const [driveUnreachable, setDriveUnreachable] = useState(false)
+  const [fileRewritten, setFileRewritten] = useState(false)
   const [fileSaved, setFileSaved] = useState(false)
   const [fileError, setFileError] = useState<string | null>(null)
   const [current, setCurrent] = useState('')
@@ -221,11 +224,14 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
     setDone(false)
     setFileStale(false)
     setFileSaved(false)
+    setFileRewritten(false)
     setFileError(null)
     // Decided before the change: what existed then is what is now stale.
     let rewriteDrive = drive.configured && hasDrive
     const hadFile = record.file !== undefined
+    const oldFingerprint = currentKeyFingerprint()
     setDriveUnchecked(false)
+    setDriveUnreachable(false)
     try {
       // Decrypt with the old, re-encrypt with the new. nap owns the crypto —
       // this is not a second key-handling implementation, it is two calls to the
@@ -239,6 +245,26 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
       setConfirm('')
       setFileStale(true)
       setFileKnown(hadFile)
+      // A file this device saved where it can reopen it is rewritten in place. Anything else
+      // keeps the old envelope's fingerprint, so it stops counting for the key icon until the
+      // person saves a new file.
+      if (oldFingerprint) {
+        const json = createBackup(pubkey)
+        // The envelope just stored is the one the new backup holds.
+        const newFingerprint = currentKeyFingerprint()
+        if (newFingerprint && (await rewriteSavedFile(pubkey, oldFingerprint, newFingerprint, json)) === 'rewritten') {
+          const old = loadKeyBackups(pubkey).find((b) => b.location === 'file' && b.keyFingerprint === oldFingerprint)
+          recordKeyBackup(pubkey, 'file', {
+            verified: true,
+            fingerprint: newFingerprint,
+            ...(old?.fileName ? { fileName: old.fileName } : {}),
+          })
+          setFileRewritten(true)
+          setFileStale(false)
+        }
+      }
+      // A Drive backup on record that this deployment cannot reach stays on the old passphrase.
+      if (hasDrive && !drive.configured) setDriveUnreachable(true)
 
       // No Drive record (e.g. backed up before records existed): ask Drive
       // rather than assume. Rewrite only a file that is already there; never
@@ -276,9 +302,11 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
     try {
       const name = backupFilename(loadProfile(pubkey))
       const json = createBackup(pubkey)
-      await downloadText(name, json)
+      const fingerprint = backupFingerprint(json)
+      const { saved } = await saveBackupFile(pubkey, fingerprint, name, json)
+      if (!saved) return
       recordBackup(pubkey, 'file')
-      recordKeyBackup(pubkey, 'file', { fileName: name, fingerprint: backupFingerprint(json) })
+      recordKeyBackup(pubkey, 'file', { fileName: name, fingerprint })
       setFileSaved(true)
     } catch (e) {
       setFileError(userMessage(e))
@@ -331,11 +359,18 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
             <p className="text-sm text-green-700 dark:text-green-500">
               Passphrase changed.
               {drive.configured && drive.done && ' Your Google Drive backup was updated too.'}
+              {fileRewritten && ' Your backup file was updated too.'}
             </p>
             {drive.error && (
               <Alert>
                 Your passphrase changed, but the copy in Google Drive still opens with the old one.
                 Back up again under Settings → Backup.
+              </Alert>
+            )}
+            {driveUnreachable && (
+              <Alert>
+                Your Google Drive backup could not be updated from here, so it still opens with your old passphrase.
+                Back up to Google Drive again under Settings &gt; Backup.
               </Alert>
             )}
             {driveUnchecked && (
@@ -347,8 +382,8 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
                   {fileSaved
                     ? 'New backup file saved. It opens with your new passphrase.'
                     : fileKnown
-                      ? 'Your backup file still opens with your old passphrase.'
-                      : 'If you saved a backup file before, it still opens with your old passphrase.'}
+                      ? 'Your backup file could not be updated: it still opens with your old passphrase. Save a new one and delete the old one.'
+                      : 'If you saved a backup file before, it still opens with your old passphrase. Save a new one now.'}
                 </p>
                 {!fileSaved && (
                   <Button variant="secondary" className="w-full" onClick={() => void saveFile()}>

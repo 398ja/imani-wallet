@@ -14,6 +14,7 @@ import {
 import { Avatar } from './Avatar'
 import { ImaniMark } from './ImaniMark'
 import { NotificationBell } from './NotificationBell'
+import { KeyBackupIndicator } from './KeyBackupIndicator'
 import { SkeletonLine } from './Skeleton'
 import { profileHandle, profileName, profileUnknown, type Profile } from '../../lib/profile'
 
@@ -82,9 +83,16 @@ export function Header({
   return (
     <header className="material scroll-edge sticky top-0 z-10 pt-[env(safe-area-inset-top)]">
       <div className="mx-auto flex max-w-md items-center gap-3 p-4">
+        {/* The profile link and the key icon are siblings: the icon is a link of its own when it
+            asks for a backup, and a link inside a link is invalid HTML. */}
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+        {/* Left of the avatar, standing upright. This header is always the signed-in user, so the
+            icon is only ever theirs. Not on a terminal: its key is a disposable credential, not
+            one to back up. */}
+        {!loading && !terminal && <KeyBackupIndicator pubkey={profile.pubkey} className="shrink-0" />}
         <Link
           to="/profile"
-          className="pressable flex min-w-0 flex-1 items-center gap-3 rounded-full outline-none ring-mono-400 focus-visible:ring-2"
+          className="pressable flex min-w-0 items-center gap-3 rounded-full outline-none ring-mono-400 focus-visible:ring-2"
         >
           <Avatar
             src={loading ? undefined : profile.picture}
@@ -114,6 +122,7 @@ export function Header({
             )}
           </span>
         </Link>
+        </div>
 
         {/* The imani lockup, same construction as imani-www: mark.svg's one
             evenodd path plus live text, both currentColor so the theme carries

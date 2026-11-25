@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An upright key icon left of your own avatar shows whether your key is backed up.** Green: a backup holds the key you hold now and was checked (a Drive copy read back, or a file re-checked within 90 days). Orange: a backup was made but cannot be confirmed to hold your current key (it predates a passphrase change, or the file was never or not recently re-checked). Red: no backup on record. Orange and red blink (steady under reduced motion) and open Settings › Backup with a recommendation saying why. Only in your own header, never on anyone else's identity, and not on a terminal. Drive is never asked just to colour the icon, since every Drive token costs a Google sign-in; the recorded check is used, and an error is never green.
+
 ## [0.79.0] - 2026-11-25
 
 ### Added
