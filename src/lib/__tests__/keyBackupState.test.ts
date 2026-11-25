@@ -45,6 +45,15 @@ describe('deriveKeyBackupState', () => {
     expect(deriveKeyBackupState([f], { fingerprint: FP, now: NOW })).toBe('missing')
   })
 
+  it('a file re-check counts for 90 days, and not a day more', () => {
+    const DAY = 24 * 60 * 60 * 1000
+    expect(FILE_RECHECK_MAX_AGE_MS).toBe(90 * DAY)
+    const at = (age: number) => deriveKeyBackupState([b({ location: 'file', lastVerifiedAt: NOW - age })], { fingerprint: FP, now: NOW })
+    expect(at(89 * DAY)).toBe('verified')
+    expect(at(90 * DAY)).toBe('verified')
+    expect(at(91 * DAY)).toBe('missing')
+  })
+
   it('is missing when a live Drive listing no longer has the key', () => {
     const d = b({ lastVerifiedAt: NOW })
     expect(deriveKeyBackupState([d], { fingerprint: FP, now: NOW, driveFingerprints: new Set([OLD]) })).toBe('missing')

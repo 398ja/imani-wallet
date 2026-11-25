@@ -27,8 +27,11 @@ import {
  */
 export type KeyBackupState = 'verified' | 'missing' | 'none'
 
-/** A file nobody has re-opened in this long may have been moved, deleted or lost with a device. */
-export const FILE_RECHECK_MAX_AGE_MS = 180 * 24 * 60 * 60 * 1000
+/**
+ * A file nobody has re-opened in this long may have been moved, deleted or lost with a device.
+ * 90 days (owner decision, 2026-11-25).
+ */
+export const FILE_RECHECK_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
 
 export interface DeriveOptions {
   /** The fingerprint of the key held now. */

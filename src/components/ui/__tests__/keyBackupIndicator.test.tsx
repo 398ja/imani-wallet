@@ -104,4 +104,23 @@ describe('who sees the key', () => {
     )
     expect(document.querySelector('[data-state]')).toBeNull()
   })
+
+  it('only the signed-in user\u2019s own Header renders it (never a profile page or anyone else\u2019s identity)', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs')
+    const { join, relative } = await import('node:path')
+    const root = join(__dirname, '../../..')
+    const users: string[] = []
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name)
+        if (statSync(path).isDirectory()) {
+          if (name !== '__tests__') walk(path)
+        } else if (/\.tsx?$/.test(name) && !name.startsWith('KeyBackupIndicator') && readFileSync(path, 'utf8').includes('KeyBackupIndicator')) {
+          users.push(relative(root, path))
+        }
+      }
+    }
+    walk(root)
+    expect(users).toEqual(['components/ui/Header.tsx'])
+  })
 })
