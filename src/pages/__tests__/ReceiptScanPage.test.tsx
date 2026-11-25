@@ -13,7 +13,8 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
  */
 
 vi.mock('../../lib/scannerSupport', () => ({ scannerBlocked: async () => 'no camera in tests' }))
-vi.mock('../../lib/native', () => ({ readClipboard: async () => null }))
+let clipboard: string | null = null
+vi.mock('../../lib/native', () => ({ readClipboard: async () => clipboard }))
 const resolved: string[] = []
 vi.mock('../../lib/issue', () => ({
   toRecipientPubkey: async (t: string) => (resolved.push(t), null),
@@ -25,7 +26,7 @@ function Where() {
   const l = useLocation()
   return (
     <p data-testid="where">
-      {l.pathname + l.search}|{(l.state as { qr?: string } | null)?.qr ?? ''}
+      {l.pathname + l.search}|{(l.state as { qr?: string } | null)?.qr ?? ''}|{(l.state as { via?: string } | null)?.via ?? ''}
     </p>
   )
 }
@@ -39,20 +40,77 @@ async function scan(text: string) {
       </Routes>
     </MemoryRouter>,
   )
-  fireEvent.change(await screen.findByLabelText('Or paste the receipt code'), { target: { value: text } })
+  fireEvent.change(await screen.findByLabelText('Or paste the receipt they sent you'), { target: { value: text } })
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
 }
 
 afterEach(() => {
   cleanup()
   resolved.length = 0
+  clipboard = null
+})
+
+function mount() {
+  render(
+    <MemoryRouter initialEntries={['/receipts/scan']}>
+      <Routes>
+        <Route path="/receipts/scan" element={<ReceiptScanPage />} />
+        <Route path="*" element={<Where />} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
+describe('a receipt the customer sent as text', () => {
+  const CODE = 'imrc1:AAECAwQFBgcICQ#a2V5'
+
+  it('Paste checks the code inside the message straight away, marked as sent as text', async () => {
+    // Arrange
+    clipboard = `My Imani payment receipt. To check it, open Check a receipt and paste this code:\n\n${CODE}`
+    mount()
+
+    // Act
+    fireEvent.click(await screen.findByRole('button', { name: /Paste/ }))
+
+    // Assert
+    expect((await screen.findByTestId('where')).textContent).toBe(`/receipt/check|${CODE}|text`)
+    expect(resolved).toEqual([])
+  })
+
+  it('typing the whole message into the field works too', async () => {
+    // Arrange
+    mount()
+
+    // Act
+    fireEvent.change(await screen.findByLabelText('Or paste the receipt they sent you'), {
+      target: { value: `here: ${CODE} thanks` },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    // Assert
+    expect((await screen.findByTestId('where')).textContent).toBe(`/receipt/check|${CODE}|text`)
+  })
+
+  it('a pasted message with no receipt in it is refused in place', async () => {
+    // Arrange
+    clipboard = 'see you tomorrow'
+    mount()
+
+    // Act
+    fireEvent.click(await screen.findByRole('button', { name: /Paste/ }))
+
+    // Assert
+    expect(await screen.findByText(/That is not a receipt/)).toBeTruthy()
+    expect(screen.queryByTestId('where')).toBeNull()
+    expect(resolved).toEqual([])
+  })
 })
 
 describe('the till receipt scanner', () => {
   it('opens the check with the payload in router state, not the URL', async () => {
     const qr = 'imrc1:AAECAwQFBgcICQ'
     await scan(`  ${qr} `)
-    expect((await screen.findByTestId('where')).textContent).toBe(`/receipt/check|${qr}`)
+    expect((await screen.findByTestId('where')).textContent).toBe(`/receipt/check|${qr}|text`)
   })
 
   it('refuses anything that is not a receipt, in place, and resolves nothing', async () => {
@@ -71,7 +129,7 @@ describe('the till receipt scanner', () => {
         </Routes>
       </MemoryRouter>,
     )
-    fireEvent.change(await screen.findByLabelText('Or paste the receipt code'), { target: { value: 'imrc1:x' } })
+    fireEvent.change(await screen.findByLabelText('Or paste the receipt they sent you'), { target: { value: 'imrc1:x' } })
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     expect((await screen.findByTestId('from')).textContent).toBe('/receipts/scan')
   })

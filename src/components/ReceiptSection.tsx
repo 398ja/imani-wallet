@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { BadgeCheck, Clock, QrCode } from 'lucide-react'
+import { BadgeCheck, Clock, QrCode, Share2 } from 'lucide-react'
 
 import { DetailRow, ListSection } from './ui'
 import { formatFace } from '../lib/format'
+import { canShare, shareText, writeClipboard } from '../lib/native'
+import { receiptShareText } from '../lib/receipts/shareText'
 import {
   onReceiptsChanged,
   presentReceipt,
@@ -126,6 +128,31 @@ function ReceiptQrDialog({ receipt, onClose }: { receipt: ReceiptView; onClose: 
   const ref = useRef<HTMLDialogElement>(null)
   const [qr, setQr] = useState<{ url: string } | { error: string } | undefined>(undefined)
   const [deferred, setDeferred] = useState(false)
+  // What Share sends: the same code the QR shows, as text, for a stall that cannot scan it.
+  const [code, setCode] = useState<string | null>(null)
+  const [shareNote, setShareNote] = useState<string | null>(null)
+
+  const share = async () => {
+    setShareNote(null)
+    let text = code
+    try {
+      // Signed now, so the presenter proof is as fresh as it can be when it leaves the phone.
+      text = (await presentReceipt(receipt.paymentId)).qrText
+    } catch {
+      // Keep the code on screen.
+    }
+    if (!text) {
+      setShareNote('Could not prepare the receipt just now. Try again in a moment.')
+      return
+    }
+    const message = receiptShareText(text)
+    if (canShare() && (await shareText(message))) return
+    setShareNote(
+      (await writeClipboard(message))
+        ? 'Receipt copied. Paste it in a message to the stall.'
+        : 'Could not share or copy the receipt on this device.',
+    )
+  }
 
   useEffect(() => {
     ref.current?.showModal()
@@ -140,6 +167,7 @@ function ReceiptQrDialog({ receipt, onClose }: { receipt: ReceiptView; onClose: 
         const url = await QRCode.toDataURL(shown.qrText, { width: 640, margin: 1, errorCorrectionLevel: 'M' })
         if (!live) return
         setQr({ url })
+        setCode(shown.qrText)
         setDeferred(shown.evidence === 'deferred')
         timer = setTimeout(() => void draw(), Math.max(5_000, shown.refreshAt - Date.now()))
       } catch {
@@ -193,13 +221,29 @@ function ReceiptQrDialog({ receipt, onClose }: { receipt: ReceiptView; onClose: 
             : 'The code renews itself while it is on screen, so a screenshot cannot pass for this phone.'}
         </p>
 
-        <button
-          type="button"
-          onClick={() => ref.current?.close()}
-          className="pressable min-h-11 w-full rounded-2xl bg-mono-900 text-sm font-medium text-mono-50 outline-none ring-mono-400 focus-visible:ring-2 dark:bg-mono-50 dark:text-mono-900"
-        >
-          Done
-        </button>
+        {shareNote ? (
+          <p role="status" className="text-center text-[13px] leading-snug text-mono-700 dark:text-mono-300">
+            {shareNote}
+          </p>
+        ) : null}
+
+        <div className="flex w-full gap-3">
+          <button
+            type="button"
+            onClick={() => ref.current?.close()}
+            className="pressable min-h-11 flex-1 rounded-2xl bg-mono-100 text-sm font-medium text-mono-900 outline-none ring-mono-400 focus-visible:ring-2 dark:bg-mono-800 dark:text-mono-50"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={() => void share()}
+            disabled={!code}
+            className="pressable flex min-h-11 flex-1 items-center justify-center gap-2 rounded-2xl bg-mono-900 text-sm font-medium text-mono-50 outline-none ring-mono-400 focus-visible:ring-2 disabled:opacity-50 dark:bg-mono-50 dark:text-mono-900"
+          >
+            <Share2 className="h-4 w-4" aria-hidden /> Share
+          </button>
+        </div>
       </div>
     </dialog>
   )

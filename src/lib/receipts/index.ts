@@ -30,6 +30,7 @@ import * as service from './service'
 import { verifyScannedWith, type SpentState, type VerifyPorts, type VerifyResult } from './verify'
 
 export * from './verify'
+export { extractReceiptCode, receiptShareText } from './shareText'
 export type { CheckedBy, PriorCheck } from './checks'
 export { countReceiptEvent, flushReceiptTelemetry } from './telemetry'
 export { ReceiptNotReadyError, parseAckEnvelope, type AckEnvelope, type CaptureInput, type IncomingPayment } from './service'
