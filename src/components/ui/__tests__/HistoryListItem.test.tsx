@@ -98,4 +98,24 @@ describe('HistoryListItem, rows from the real builders', () => {
     expect(container.querySelectorAll('details')).toHaveLength(1)
     expect(screen.getAllByText(/9\.00/).length).toBeGreaterThan(0)
   })
+
+  it('the coupons back off an expired checkout code draw as ONE incoming line, with the expiry memo', async () => {
+    const { takenBackRow } = await import('../../../lib/cashlinkPorts')
+    const { toTransaction } = await import('../../../lib/transactions')
+    const { CHECKOUT_CODE_RETURNED_MEMO } = await import('../../../lib/checkoutCodeFlow')
+    const rows = [
+      { token_id: 't1', voucher_id: 'v1', face_value: 400 },
+      { token_id: 't2', voucher_id: 'v2', face_value: 200 },
+    ].map((r, i) =>
+      toTransaction(
+        takenBackRow({ ...r, face_unit: 'EUR', face_decimals: 2, issuer_id: 'ab'.repeat(32) } as never, 'cashuB', Date.UTC(2026, 8, 20, 12) + i, undefined, 'checkout:c1', CHECKOUT_CODE_RETURNED_MEMO) as never,
+      ),
+    )
+    const { container } = draw(rows)
+    const summary = container.querySelector('summary')!
+    expect(summary.getAttribute('aria-label')).toMatch(/Received, plus .*6\.00, 2 vouchers/)
+    expect(summary.textContent).toContain(CHECKOUT_CODE_RETURNED_MEMO)
+    fireEvent.click(summary)
+    expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).toEqual(['/transaction/returned%3At1', '/transaction/returned%3At2'])
+  })
 })
