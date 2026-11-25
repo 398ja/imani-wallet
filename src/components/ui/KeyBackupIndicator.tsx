@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { BACKUP_RECOMMEND_PARAM, useKeyBackupState, type KeyBackupState } from '../../lib/keyBackupState'
 
 /** The blink pace per state, a class in index.css. Steady green has none. */
-export const BLINK: Record<KeyBackupState, string | null> = {
+const BLINK: Record<KeyBackupState, string | null> = {
   verified: null,
   local: 'key-blink-green',
   missing: 'key-blink-orange',
