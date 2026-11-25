@@ -42,3 +42,14 @@ describe('the backup page opened from the key icon', () => {
     expect(screen.queryByTestId('backup-recommendation')).toBeNull()
   })
 })
+
+describe('the backup page opened from the blinking green key', () => {
+  it('offers a remote backup when only a local file exists', () => {
+    // Arrange
+    const url = '/settings/backup?recommend=local'
+    // Act
+    show(url)
+    // Assert
+    expect(screen.getByTestId('backup-recommendation').textContent).toMatch(/backed up to a file.*Add a Google Drive backup/)
+  })
+})

@@ -141,3 +141,31 @@ describe('re-checking a file', () => {
     expect(kb.loadKeyBackups(PK)).toEqual([])
   })
 })
+
+describe('local and remote records are independent', () => {
+  it('recording a Drive backup never clears the file backup, and the reverse', () => {
+    // Arrange
+    kb.recordKeyBackup(PK, 'file', { fileName: 'me.json', at: 1_000 })
+    // Act
+    kb.recordKeyBackup(PK, 'drive', { verified: true, at: 2_000 })
+    kb.recordKeyBackup(PK, 'file', { fileName: 'me.json', at: 3_000 })
+    // Assert
+    const list = kb.loadKeyBackups(PK)
+    const drive = list.find((b) => b.location === 'drive')
+    const file = list.find((b) => b.location === 'file')
+    expect(drive?.lastVerifiedAt).toBe(2_000)
+    expect(file?.createdAt).toBe(1_000)
+    expect(file?.lastSavedAt).toBe(3_000)
+    expect(list).toHaveLength(2)
+  })
+
+  it('both survive a reload from storage with their own timestamps', () => {
+    // Arrange
+    kb.recordKeyBackup(PK, 'drive', { verified: true, at: 5_000 })
+    kb.recordKeyBackup(PK, 'file', { at: 6_000 })
+    // Act
+    const raw = JSON.parse(localStorage.getItem(kb.KEY_BACKUPS_PREFIX + PK) ?? '[]') as Array<{ location: string }>
+    // Assert
+    expect(raw.map((b) => b.location).sort()).toEqual(['drive', 'file'])
+  })
+})

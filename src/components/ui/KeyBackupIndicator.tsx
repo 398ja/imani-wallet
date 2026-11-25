@@ -5,6 +5,10 @@ import { BACKUP_RECOMMEND_PARAM, useKeyBackupState, type KeyBackupState } from '
 
 const LOOK: Record<KeyBackupState, { colour: string; label: string }> = {
   verified: { colour: 'text-green-600 dark:text-green-400', label: 'Key backed up and checked' },
+  local: {
+    colour: 'text-green-600 dark:text-green-400',
+    label: 'Key backed up to a file on this device. Add a Google Drive backup',
+  },
   missing: {
     colour: 'text-orange-500 dark:text-orange-400',
     label: 'Key backup could not be confirmed. Back up your key',
@@ -13,7 +17,7 @@ const LOOK: Record<KeyBackupState, { colour: string; label: string }> = {
 }
 
 /**
- * A small upright key left of the signed-in user's own avatar: green, orange or red by `KeyBackupState`.
+ * A small upright key left of the signed-in user's own avatar: steady green, blinking green, orange or red by `KeyBackupState`.
  * Render it only for the current user. It reads this device's key and backup list, so it says
  * nothing true about anyone else.
  */
@@ -23,7 +27,7 @@ export function KeyBackupIndicator({ pubkey, className = '' }: { pubkey: string;
 }
 
 /**
- * Green is a quiet glyph. Orange and red blink (`key-blink`, still under prefers-reduced-motion)
+ * Steady green (a remote backup) is a quiet glyph. Blinking green (a local file only), orange and red blink (`key-blink`, still under prefers-reduced-motion)
  * and are a link of their own to the backup page, with the reason in the query so the page can
  * say why it was opened. A sibling of the profile link, never inside it: a link in a link is
  * invalid and the tap would go to whichever the browser picks.
