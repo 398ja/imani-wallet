@@ -419,6 +419,7 @@
  "key_prefixes": [
   "imani-device-id",
   "imani-device-name",
+  "imani-first-run:",
   "imani-receipts-",
   "imani-receipts-ack:",
   "imani-subscription",
@@ -456,6 +457,8 @@
   "imani-wallet:held-coupons:",
   "imani-wallet:identity:",
   "imani-wallet:incoming-seen:",
+  "imani-wallet:key-backup-check:",
+  "imani-wallet:key-backup-files:",
   "imani-wallet:key-backups:",
   "imani-wallet:logout",
   "imani-wallet:merchant:",

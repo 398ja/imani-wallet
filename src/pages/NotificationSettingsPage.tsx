@@ -9,6 +9,7 @@ import {
   setPreferences,
   type NotificationStatus,
 } from '../lib/notifications/manager'
+import { recordFirstRunAnswer } from '../lib/firstRunPrompts'
 import type { NotificationPreferences } from '../lib/notifications/types'
 
 /**
@@ -58,6 +59,8 @@ export function NotificationSettingsPage({ pubkey }: { pubkey: string }) {
       } else {
         setStatus(await disableNotifications(pubkey))
       }
+      // A choice made here answers the first-run question too, so Home never asks it again.
+      recordFirstRunAnswer('notifications', pubkey, next)
     } finally {
       setBusy(false)
     }

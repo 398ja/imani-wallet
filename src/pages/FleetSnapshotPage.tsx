@@ -4,6 +4,7 @@ import { Alert, BackLink, Button, PageHeader, Panel, Screen } from '../component
 import { fleetController } from '../lib/fleet/app'
 import { fleetHistoryLines, type FleetController } from '../lib/fleet/controller'
 import type { FleetState } from '../lib/fleet/state'
+import { recordFirstRunAnswer } from '../lib/firstRunPrompts'
 
 /**
  * Settings > Help > Help improve Imani (#591 section 3). Off by default. One consent screen:
@@ -17,7 +18,7 @@ export const FLEET_CONSENT_TEXT =
 
 type Controller = Pick<FleetController, 'available' | 'status' | 'optIn' | 'optOut'>
 
-export function FleetSnapshotView({ controller }: { controller: Controller }) {
+export function FleetSnapshotView({ controller, onAnswered }: { controller: Controller; onAnswered?: (on: boolean) => void }) {
   const [available, setAvailable] = useState<boolean | undefined>(undefined)
   const [state, setState] = useState<{ optedIn: boolean; state: FleetState }>(() => controller.status())
   const [asking, setAsking] = useState(false)
@@ -74,7 +75,10 @@ export function FleetSnapshotView({ controller }: { controller: Controller }) {
             variant={state.optedIn ? 'secondary' : 'primary'}
             data-testid="fleet-toggle"
             disabled={busy}
-            onClick={() => (state.optedIn ? run(() => controller.optOut()) : setAsking(true))}
+            onClick={() => (state.optedIn ? run(async () => {
+              await controller.optOut()
+              onAnswered?.(false)
+            }) : setAsking(true))}
           >
             {state.optedIn ? 'Turn off' : 'Turn on'}
           </Button>
@@ -93,6 +97,7 @@ export function FleetSnapshotView({ controller }: { controller: Controller }) {
               disabled={busy}
               onClick={() => run(async () => {
                 await controller.optIn()
+                onAnswered?.(true)
                 setAsking(false)
               })}
             >
@@ -116,5 +121,5 @@ export function FleetSnapshotView({ controller }: { controller: Controller }) {
 
 export function FleetSnapshotPage({ pubkey, stall }: { pubkey: string; stall: boolean }) {
   const controller = useMemo(() => fleetController(pubkey, stall), [pubkey, stall])
-  return <FleetSnapshotView controller={controller} />
+  return <FleetSnapshotView controller={controller} onAnswered={(on) => recordFirstRunAnswer('health', pubkey, on)} />
 }
