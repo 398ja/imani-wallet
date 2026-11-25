@@ -12,20 +12,23 @@ import {
 /**
  * How safe the signed-in user's key is, for the key icon beside their handle.
  *
- * - `verified` (green): a recorded backup holds the key this browser holds now, and that copy
- *   was confirmed: a Drive backup read back after writing, or a file re-checked with
- *   `verifyBackupFile` within `FILE_RECHECK_MAX_AGE_MS`.
+ * - `verified` (steady green): a remote (Google Drive) backup holds the key this browser holds
+ *   now, and was read back after writing. Remote wins: a local file, stale or not, changes nothing.
+ * - `local` (blinking green): no confirmed remote backup, but a local file holds the current key
+ *   and was downloaded or re-checked (`verifyBackupFile`) within `FILE_RECHECK_MAX_AGE_MS`. Safe
+ *   for now, and the icon nudges toward a remote copy.
  * - `missing` (orange): a backup was made, but it cannot be confirmed to hold the current key
  *   where it was put. The only backups hold an older key (the passphrase changed since), a file
- *   was downloaded but never re-checked or not re-checked recently, or a live Drive listing (when
- *   one is passed in) no longer has this key.
+ *   was not downloaded or re-checked recently, or a live Drive listing (when one is passed in) no
+ *   longer has this key.
  * - `none` (red): no backup was ever recorded for this account.
  *
  * Drive cannot be asked silently on the web (every token costs a Google chooser), so the icon
  * never asks: it reads the recorded `lastVerifiedAt`. Any failure answers `missing`, never
- * `verified`.
+ * `verified` or `local`. Local and remote are separate entries in the list (keyed by location),
+ * so recording one never clears the other.
  */
-export type KeyBackupState = 'verified' | 'missing' | 'none'
+export type KeyBackupState = 'verified' | 'local' | 'missing' | 'none'
 
 /**
  * A file nobody has re-opened in this long may have been moved, deleted or lost with a device.
@@ -49,12 +52,21 @@ export function deriveKeyBackupState(list: readonly KeyBackup[], options: Derive
     if (list.length === 0) return 'none'
     const { fingerprint, now = Date.now(), driveFingerprints } = options
     if (!fingerprint) return 'missing'
-    const confirmed = backupsForCurrentKey(list, fingerprint).some((b) => {
-      if (!b.lastVerifiedAt) return false
-      if (b.location === 'drive') return driveFingerprints ? driveFingerprints.has(b.keyFingerprint) : true
-      return now - b.lastVerifiedAt <= FILE_RECHECK_MAX_AGE_MS
+    const current = backupsForCurrentKey(list, fingerprint)
+    const remote = current.some(
+      (b) =>
+        b.location === 'drive' &&
+        b.lastVerifiedAt !== undefined &&
+        (driveFingerprints ? driveFingerprints.has(b.keyFingerprint) : true),
+    )
+    if (remote) return 'verified'
+    // A download counts from when it was made; a re-download or a re-check refreshes it.
+    const local = current.some((b) => {
+      if (b.location !== 'file') return false
+      const at = Math.max(b.lastVerifiedAt ?? 0, b.lastSavedAt ?? 0, b.createdAt)
+      return at <= now && now - at <= FILE_RECHECK_MAX_AGE_MS
     })
-    return confirmed ? 'verified' : 'missing'
+    return local ? 'local' : 'missing'
   } catch {
     return 'missing'
   }

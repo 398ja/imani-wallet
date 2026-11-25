@@ -45,6 +45,8 @@ export interface KeyBackup {
   lastVerifiedAt?: number
   /** Short sha256 of the key envelope the backup holds. */
   keyFingerprint: string
+  /** Epoch ms of the latest download of this file (a fresh copy, so the 90-day clock restarts). */
+  lastSavedAt?: number
   /** For a file: the name it was saved under. */
   fileName?: string
 }
@@ -171,6 +173,9 @@ function sanitise(value: unknown): KeyBackup | null {
   if (typeof v.lastVerifiedAt === 'number' && Number.isFinite(v.lastVerifiedAt) && v.lastVerifiedAt > 0) {
     out.lastVerifiedAt = v.lastVerifiedAt
   }
+  if (typeof v.lastSavedAt === 'number' && Number.isFinite(v.lastSavedAt) && v.lastSavedAt > 0) {
+    out.lastSavedAt = v.lastSavedAt
+  }
   if (typeof v.fileName === 'string' && v.fileName) out.fileName = v.fileName.slice(0, 200)
   return out
 }
@@ -190,12 +195,14 @@ export function mergeKeyBackups(...lists: ReadonlyArray<readonly KeyBackup[]>): 
         continue
       }
       const verified = Math.max(prior.lastVerifiedAt ?? 0, b.lastVerifiedAt ?? 0)
+      const saved = Math.max(prior.lastSavedAt ?? 0, b.lastSavedAt ?? 0)
       const newer = (b.lastVerifiedAt ?? b.createdAt) >= (prior.lastVerifiedAt ?? prior.createdAt) ? b : prior
       byId.set(identity(b), {
         ...prior,
         createdAt: Math.min(prior.createdAt, b.createdAt),
         deviceName: newer.deviceName,
         ...(verified > 0 ? { lastVerifiedAt: verified } : {}),
+        ...(saved > 0 ? { lastSavedAt: saved } : {}),
         ...((newer.fileName ?? prior.fileName ?? b.fileName) ? { fileName: newer.fileName ?? prior.fileName ?? b.fileName } : {}),
       })
     }
@@ -261,6 +268,7 @@ export function recordKeyBackup(
     createdAt: at,
     keyFingerprint,
     ...(options.verified ? { lastVerifiedAt: at } : {}),
+    ...(location === 'file' ? { lastSavedAt: at } : {}),
     ...(options.fileName ? { fileName: options.fileName } : {}),
   }
   mergeLocalKeyBackups(pubkey, [entry])

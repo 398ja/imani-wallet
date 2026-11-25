@@ -35,6 +35,7 @@ afterEach(cleanup)
 describe('KeyBackupIcon', () => {
   it.each([
     ['verified', 'text-green-600', false],
+    ['local', 'text-green-600', true],
     ['missing', 'text-orange-500', true],
     ['none', 'text-red-600', true],
   ] as const)('%s is %s, blinking %s', (s, colour, blinks) => {
@@ -50,7 +51,7 @@ describe('KeyBackupIcon', () => {
     expect(el.getAttribute('title')).toBe(el.getAttribute('aria-label'))
   })
 
-  it.each(['missing', 'none'] as const)('%s goes to the backup page with a recommendation', (s) => {
+  it.each(['local', 'missing', 'none'] as const)('%s goes to the backup page with a recommendation', (s) => {
     render(
       <MemoryRouter initialEntries={['/']}>
         <Routes>

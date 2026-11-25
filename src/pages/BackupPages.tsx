@@ -21,6 +21,8 @@ import { BACKUP_RECOMMEND_PARAM } from '../lib/keyBackupState'
 const RECOMMENDATION: Record<string, string> = {
   none:
     'Back up your key. There is no backup of it yet, and if this device is lost or wiped, your account and vouchers go with it.',
+  local:
+    'Your key is backed up to a file, which is good. Add a Google Drive backup too: a file on this device is lost with the device, while a Drive copy is not.',
   missing:
     'Back up your key again. The backup on record could not be confirmed to hold your current key: it may be from before a passphrase change, or a file that has not been checked in a while.',
 }
