@@ -73,7 +73,7 @@ describe('KeyBackupIcon', () => {
 })
 
 describe('who sees the key', () => {
-  it('the signed-in user sees it beside their handle', () => {
+  it('the signed-in user sees it upright, left of their avatar', () => {
     state.value = 'none'
     render(
       <MemoryRouter>
@@ -85,6 +85,10 @@ describe('who sees the key', () => {
     expect(document.body.textContent).toContain('@song')
     // A sibling of the profile link, never nested in it.
     expect(icon.closest('a[href="/profile"]')).toBeNull()
+    // Before the profile link (so left of the avatar), and the glyph turned upright.
+    const profileLink = document.querySelector('a[href="/profile"]') as HTMLElement
+    expect(icon.nextElementSibling).toBe(profileLink)
+    expect(icon.querySelector('svg')?.getAttribute('class')).toContain('-rotate-45')
   })
 
   it('a terminal does not', () => {

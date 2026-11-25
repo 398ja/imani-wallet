@@ -86,6 +86,10 @@ export function Header({
         {/* The profile link and the key icon are siblings: the icon is a link of its own when it
             asks for a backup, and a link inside a link is invalid HTML. */}
         <div className="flex min-w-0 flex-1 items-center gap-1">
+        {/* Left of the avatar, standing upright. This header is always the signed-in user, so the
+            icon is only ever theirs. Not on a terminal: its key is a disposable credential, not
+            one to back up. */}
+        {!loading && !terminal && <KeyBackupIndicator pubkey={profile.pubkey} className="shrink-0" />}
         <Link
           to="/profile"
           className="pressable flex min-w-0 items-center gap-3 rounded-full outline-none ring-mono-400 focus-visible:ring-2"
@@ -118,12 +122,6 @@ export function Header({
             )}
           </span>
         </Link>
-        {/* Beside the handle (bottom line), or the name when there is no handle line. This
-            header is always the signed-in user, so the icon is only ever theirs. Not on a
-            terminal: its key is a disposable credential, not one to back up. */}
-        {!loading && !terminal && (
-          <KeyBackupIndicator pubkey={profile.pubkey} className={`shrink-0 ${handle ? 'self-end' : ''}`} />
-        )}
         </div>
 
         {/* The imani lockup, same construction as imani-www: mark.svg's one
