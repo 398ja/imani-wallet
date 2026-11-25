@@ -374,7 +374,8 @@ export function TerminalSetupPage({
               const parsed = parseSetupCode(text)
               if (!parsed) {
                 setCodeError('That is not a terminal setup code. Scan the code on the owner’s phone.')
-                return false
+                // Consumed: the refusal above is the answer, never an account lookup.
+                return true
               }
               setCodeError(null)
               setExpected(parsed)

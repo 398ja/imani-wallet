@@ -35,6 +35,18 @@ const BASE_PARSERS = [
 const NAMED_WRAPPERS = ['licenceFromToken', 'terminalCredentialFromToken', 'readable', 'hasUnlockableProof']
 
 const AUDITED = new Set<string>([
+  // Spec 049 receipts: none of these credits anything. A receipt that cannot be read is skipped,
+  // left pending, counted unreadable or not recorded; the money path never waits on them.
+  'src/lib/dmPoll.ts#noteReceiptClaim#5acd1114924c',
+  'src/lib/receipts/index.ts#allViews#d4b5db5323c2',
+  'src/lib/receipts/index.ts#allViews#f5871b21f065',
+  'src/lib/receipts/service.ts#captureSendEvidence#039e67006168',
+  'src/lib/receipts/service.ts#restoreReceipts#91330cd97163',
+  'src/lib/receipts/service.ts#saveBackup#c7b631faa995',
+  'src/lib/receipts/service.ts#settlePending#05fe8f201e1c',
+  'src/lib/receipts/telemetry.ts#countReceiptEvent#e56f37c977e3',
+  // FR-027a-d: a failed check memory drops only the "already checked" history; the verdict stands.
+  'src/lib/receipts/verify.ts#verifyScannedWith#1574ca1faf0f',
   // Each fails safe: no claim, zero credit, not lockable, unreadable, pending or retried.
   // The NGN overcharge: sendFaceOf answers undefined and debitFor the request on any failure, so an
   // unverifiable voucher gets no prediction; the screen and the history keep the request, and the

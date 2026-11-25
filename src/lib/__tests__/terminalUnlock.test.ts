@@ -339,3 +339,41 @@ describe('a renewal adopted within the session', () => {
     expect(requestCredential()?.voucherId).toBe('renewed-1')
   })
 })
+
+/**
+ * Spec 049 FR-027d: the open till's authority for a receipt check, read from the credential it
+ * unlocked with. End to end: a check signed with it is one every device of the stall accepts.
+ */
+describe('tillCheckProof (spec 049 FR-027d)', () => {
+  afterEach(() => forgetTerminalSession())
+  const unlockNow = () => unlockTerminal(PASSPHRASE, { mint: mint('UNSPENT'), now: Date.now() })
+
+  it('an attested till: a proof the stall’s other devices accept', async () => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM, { token: buildAttestedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE }) })
+    const out = await unlockNow()
+    if (!out.unlocked) throw new Error(out.message)
+    const { tillCheckProof } = await import('../terminalUnlock')
+    const proof = tillCheckProof()
+    expect(proof).toMatchObject({ stall_pubkey: STALL, lock_key: DEVICE })
+    const { buildCheckEvent, readChecks } = await import('../receipts/checks')
+    const at = Math.floor(Date.now() / 1000)
+    const e = buildCheckEvent({ payee: STALL, paymentId: 'ab'.repeat(32), at, device: DEVICE, deviceId: '11'.repeat(16), terminal: proof! }, (use) => use(DEVICE_KEY))
+    expect(readChecks([e], STALL, 'ab'.repeat(32))).toMatchObject([{ at, device: DEVICE }])
+  })
+
+  it('a legacy till (no attestation): none, so other tills do not trust its checks', async () => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM)
+    const out = await unlockNow()
+    if (!out.unlocked) throw new Error(out.message)
+    const { tillCheckProof } = await import('../terminalUnlock')
+    expect(tillCheckProof()).toBeNull()
+  })
+
+  it('locked: none', async () => {
+    enrol(TERMINAL_ROLES.ISSUE_AND_REDEEM, { token: buildAttestedCredentialToken({ stallKey: STALL_KEY, devicePubkey: DEVICE }) })
+    await unlockNow()
+    lockTerminal()
+    const { tillCheckProof } = await import('../terminalUnlock')
+    expect(tillCheckProof()).toBeNull()
+  })
+})

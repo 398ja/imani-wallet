@@ -209,6 +209,8 @@ function RequestForm({
       <Input
         label="Note (optional)"
         placeholder="Flat white and a pastry"
+        // Spec 049 FR-002a: the customer's wallet signs this into the payment's receipt.
+        hint="Shown on the customer’s receipt."
         value={memo}
         onChange={(e) => setMemo(e.target.value)}
       />

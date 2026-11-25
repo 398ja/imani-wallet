@@ -50,6 +50,7 @@
          only the unresolved import wearing a disguise. */
       "@imani/reports": ["./packages/reports/src/index.ts"],
       "@imani/payment-requests": ["./packages/payment-requests/src/index.ts"],
+      "@imani/receipts": ["./packages/receipts/src/index.ts"],
       "@imani/redemption": ["./packages/redemption/src/index.ts"],
       "@imani/licence": ["./packages/licence/src/index.ts"],
       "@imani/merchant-record": ["./packages/merchant-record/src/index.ts"],

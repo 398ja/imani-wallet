@@ -50,7 +50,7 @@ export function ScanPage() {
 
   /** The one router, so a pasted code goes exactly where a scanned one does. */
   const accept = useCallback(
-    async (text: string) => {
+    async (text: string, pasted = false) => {
       if (resolving.current) return
       resolving.current = true
       try {
@@ -62,6 +62,18 @@ export function ScanPage() {
         }
         if (new PaymentRequestHandler().validate(text)) {
           navigate(`/pay?paymentRequest=${encodeURIComponent(text.trim())}`)
+          return
+        }
+        // A payment receipt (spec 049, `imrc1:`). Checked locally, before anything that costs a
+        // round trip. Passed in router state, not the URL: it carries a payer signature and the
+        // key to its evidence, and URLs end up in history.
+        const { isReceiptQr, extractReceiptCode } = await import('../lib/receipts')
+        // A receipt the customer sent as text arrives inside their message, so a pasted one is dug
+        // out of it (words after the code never ride along) and the check says it came as text.
+        // Scanning yields the bare code.
+        const receipt = pasted ? (extractReceiptCode(text) ?? (isReceiptQr(text) ? text.trim() : null)) : isReceiptQr(text) ? text.trim() : null
+        if (receipt) {
+          navigate('/receipt/check', { state: { qr: receipt, ...(pasted ? { via: 'text' } : {}) } })
           return
         }
         // A terminal setup code (#160, owner report on wallet 0.19.0). It is scanned by the
@@ -93,7 +105,7 @@ export function ScanPage() {
         // A stall's own QR opens its profile, where Buy and Pay live (#280);
         // anyone else keeps the send flow.
         if (hex) navigate(await routeForAddress(hex))
-        else setError('That is not a payment request, a voucher, or an account we can find.')
+        else setError('That is not a payment request, a receipt, a voucher, or an account we can find.')
       } finally {
         resolving.current = false
       }
@@ -145,7 +157,7 @@ export function ScanPage() {
   return (
     <Screen>
       <BackLink to="/" label="Back" />
-      <PageHeader title="Scan" subtitle="A payment request, or someone's code" />
+      <PageHeader title="Scan" subtitle="A payment request, a receipt, or someone's code" />
 
       <div className="overflow-hidden rounded-2xl bg-mono-900">
         <video ref={videoRef} className="aspect-square w-full object-cover" />
@@ -168,7 +180,7 @@ export function ScanPage() {
           if (text === null) {
             setError('Could not read the clipboard. Paste the code below instead.')
             setTyped('')
-          } else await accept(text)
+          } else await accept(text, true)
         }}
       >
         <ClipboardPaste className="mr-2 h-4 w-4" /> Paste code
@@ -185,7 +197,7 @@ export function ScanPage() {
           <Button
             className="mt-3 w-full"
             disabled={typed.trim() === ''}
-            onClick={() => void accept(typed.trim())}
+            onClick={() => void accept(typed.trim(), true)}
           >
             Continue
           </Button>

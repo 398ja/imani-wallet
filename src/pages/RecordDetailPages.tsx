@@ -50,6 +50,7 @@ import { fetchCashbackLink, useCashbackStatus } from '../lib/cashback'
 import { formatCashbackLink } from '../lib/claimLink'
 import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
 import { GiftLinkSection } from '../components/GiftLinkSection'
+import { ReceiptSection } from '../components/ReceiptSection'
 import { CardPaymentNotice } from '../components/CardPaymentBadge'
 import { useHolderCardPaymentState } from '../hooks/useCardPaymentState'
 import { cardReferenceOfRow } from '../lib/cardVoucherRef'
@@ -818,6 +819,10 @@ export function TransactionPage({
       </ListSection>
 
       <CashbackSection tx={tx} />
+
+      {/* Spec 049: the proof of this payment, beside the payment it proves. Outgoing only: the
+          payer holds the receipt; the stall checks it by scanning. */}
+      {outgoing ? <ReceiptSection txId={tx.id} /> : null}
 
       {/* #402 traceability: an incoming coupon of the stall's own, linked to the sale that issued
           it. The voucher id is the same from sale to spend, so the voucher's own record (what was

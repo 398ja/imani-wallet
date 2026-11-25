@@ -24,6 +24,7 @@ export function ScanRecipient({
   manualLabel = 'Or enter their handle',
   onText,
   placeholder = 'name',
+  pasteSubmits = false,
 }: {
   /**
    * The second argument is the NIP-05 the person was reached THROUGH, when they
@@ -38,11 +39,18 @@ export function ScanRecipient({
   /**
    * Sees the raw scanned or typed text first. Return true to consume it, so it is not
    * resolved as an account (the terminal setup code, #160). Its own error copy is the
-   * caller's to show.
+   * caller's to show. Return false to let it through to the account lookup (Sell, which
+   * consumes a receipt and sells to anyone else, spec 049). `source` says whether it was
+   * scanned or pasted/typed, for a caller that words the two differently (a receipt sent as text).
    */
-  onText?: (text: string) => boolean
+  onText?: (text: string, source: 'camera' | 'typed') => boolean
   /** The paste field's placeholder. */
   placeholder?: string
+  /**
+   * Paste goes straight to `onText` instead of into the field. For a code nobody reads or edits
+   * (a receipt), so a pasted message does not sit in a one-line box waiting for Continue.
+   */
+  pasteSubmits?: boolean
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string | null>(null)
@@ -69,10 +77,7 @@ export function ScanRecipient({
 
     const accept = async (text: string) => {
       if (resolving) return
-      if (onText) {
-        onText(text)
-        return
-      }
+      if (onText?.(text, 'camera')) return
       resolving = true
       try {
         const found = await resolveRecipient(text)
@@ -131,10 +136,7 @@ export function ScanRecipient({
 
   const submitManual = async () => {
     setError(null)
-    if (onText) {
-      onText(manual.trim())
-      return
-    }
+    if (onText?.(manual.trim(), 'typed')) return
     setLooking(true)
     const found = await resolveRecipient(manual)
     setLooking(false)
@@ -187,6 +189,7 @@ export function ScanRecipient({
           onClick={async () => {
             const text = await readClipboard()
             if (text === null) setError('Could not read the clipboard.')
+            else if (pasteSubmits && onText?.(text.trim(), 'typed')) setManual('')
             else setManual(text.trim())
           }}
         >

@@ -202,6 +202,13 @@ const R = (prefix: string, reduce: InventoryRule['reduce'], why: string, extra: 
 export const RULES: InventoryRule[] = [
   // Keys, sessions, credentials: never.
   X('imani-wallet-key', 'nap encrypted key envelope'),
+  // Spec 049: receipts hold spendable-until-claimed evidence and its keys; the ack setting is a choice.
+  X('imani-receipts-', 'payment receipts with evidence and evidence keys'),
+  X('imani-receipts-ack:', 'the owner answer to acknowledging payments'),
+  // Spec 049 FR-027a-c: which payments this device checked, and signed checks not yet sent.
+  X('imani:receipt-checks:', 'locators of payments this device checked'),
+  X('imani:receipt-check-outbox:', 'signed receipt checks waiting to be sent'),
+  X('imani:receipt-check-device', 'random install id that signs receipt checks'),
   // #348: where the key is backed up, the install id, and the event/record names. Not support data.
   X('imani-wallet:key-backups:', 'key backup locations, key fingerprints and device ids'),
   X('imani:key-backups', 'key backup record tag and change event'),

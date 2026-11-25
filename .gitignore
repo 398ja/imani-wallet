@@ -82,3 +82,6 @@ docs/*/
 
 # Local scratch notes and probes.
 .scratch/
+
+# Screenshots a failed e2e/receipts-local.e2e.mts run leaves behind.
+e2e/.receipts-local/

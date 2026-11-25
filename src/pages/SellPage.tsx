@@ -26,6 +26,7 @@ import { NOTE_MAX_CHARS, clampNote } from '../lib/note'
 import { userMessage } from '../lib/userMessage'
 import { SalesLimitError } from '../lib/entitlement'
 import { UPGRADE_PATH, salesAllowance } from '../lib/salesAllowance'
+import { isReceiptQr } from '../lib/receipts/verify'
 
 /**
  * Sell: issue a coupon to a customer standing in front of you.
@@ -76,6 +77,22 @@ export function SellPage({
   const navigate = useNavigate()
   const [customer, setCustomer] = useState<string | null>(null)
   const isOwner = (actor?.kind ?? 'owner') === 'owner'
+  // Spec 049: Sell's scanner is for the customer. A receipt has its own scanner (owner: Transactions;
+  // till: its home), so checking never depends on whether this stall may sell (a used-up Free plan
+  // sends the owner to Upgrade on arrival). A receipt scanned here is never sold to: say where to go.
+  const [scanError, setScanError] = useState<string | null>(null)
+  const onScanned = (text: string): boolean => {
+    if (!isReceiptQr(text)) {
+      setScanError(null)
+      return false
+    }
+    setScanError(
+      isOwner
+        ? 'That is a payment receipt, not a customer. To check it, use Check a receipt on Transactions.'
+        : 'That is a payment receipt, not a customer. To check it, use Check a receipt on the till.',
+    )
+    return true
+  }
   // Review of gc#317: a stall whose Free plan is used up does not start a sale. The owner is taken
   // to the upgrade screen; a till is told to ask the owner (only the owner can buy a plan, ADR 0007).
   // `null` while asking; an unreadable answer lets the sale go ahead, since the mint still refuses.
@@ -142,7 +159,12 @@ export function SellPage({
 
       {customer === null ? (
         <>
-          <ScanRecipient onFound={setCustomer} selfPubkey={pubkey} />
+          {scanError ? (
+            <div className="mb-3">
+              <Alert>{scanError}</Alert>
+            </div>
+          ) : null}
+          <ScanRecipient onFound={setCustomer} onText={onScanned} selfPubkey={pubkey} />
           <CashbackLink />
         </>
       ) : (

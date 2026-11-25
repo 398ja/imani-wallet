@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
-import { Lock, QrCode, Send, Settings } from 'lucide-react'
+import { Lock, QrCode, ReceiptText, Send, Settings } from 'lucide-react'
 
 import { Alert, Button, Centered, Input, PageHeader, Panel, Screen, ListSection, BackLink } from '../components/ui'
 import { AboutRow } from './SettingsPage'
@@ -25,7 +25,7 @@ import {
 } from '../lib/terminalUnlock'
 import { LOGIN_REFUSAL, UNATTESTED_TILL_NOTICE, expiryNotice } from '../lib/terminalLogin'
 import { mayAct, TERMINAL_ACTIONS } from '../lib/terminalRole'
-import { canIssueNow, canRedeemNow, sessionState, type TerminalSession } from '../lib/terminalSession'
+import { canIssueNow, canReadReceiptsNow, canRedeemNow, sessionState, type TerminalSession } from '../lib/terminalSession'
 import { mayWarrantSale } from '../lib/warrantSigner'
 import {
   fulfilmentOf,
@@ -40,6 +40,8 @@ import type { TerminalActor } from '../lib/actor'
 import { RedeemPage } from './RedeemPage'
 import { SellPage } from './SellPage'
 import { CashbackIssuePage } from './CashbackIssuePage'
+import { ReceiptCheckPage } from './ReceiptCheckPage'
+import { ReceiptScanPage } from './ReceiptScanPage'
 import { NotTrading } from './MerchantHomePage'
 import { LAPSE } from '../lib/terminalSession'
 import { getSigner } from '../lib/nap'
@@ -143,6 +145,21 @@ export function TerminalApp() {
     )
   }, [till])
 
+  // Spec 049 FR-027c: receipt checks made while this till was offline go out when it unlocks and
+  // whenever it is back online. The key is the till's own, so only while it is open.
+  useEffect(() => {
+    if (!till) return
+    let stop: (() => void) | undefined
+    let live = true
+    void import('../lib/receipts').then((r) => {
+      if (live) stop = r.installReceiptCheckFlush(till.actor.stallPubkey)
+    })
+    return () => {
+      live = false
+      stop?.()
+    }
+  }, [till])
+
   // Renewal (#160 phase 6, plan 2.3): at every unlock and every five minutes while open, look for
   // the owner's renewal of this till's credential, adopt it, and re-derive the till from it so a
   // renewed till sells with no reload. A failed spend of the old credential is retried here too.
@@ -232,6 +249,23 @@ export function TerminalApp() {
       />
       <Route path="/settings" element={<TerminalSettings />} />
       <Route path="/settings/about" element={<AboutPage />} />
+      {/* Receipt checks (spec 049): `receipt:read`, held by every role, in a live session. The
+          check is for the STALL this till acts for, confirmed by the mint: the payment records
+          are the owner's, not this device's. */}
+      <Route
+        path="/receipts/scan"
+        element={canReadReceiptsNow(till.actor, till.session) ? <ReceiptScanPage /> : <Navigate to="/" replace />}
+      />
+      <Route
+        path="/receipt/check"
+        element={
+          canReadReceiptsNow(till.actor, till.session) ? (
+            <ReceiptCheckPage forStall={till.actor.stallPubkey} scanPath="/receipts/scan" />
+          ) : (
+            <Navigate to="/" replace />
+          )
+        }
+      />
       {/* Sell and cashback (#160 phase 5): only for a selling role in a live FULL session, the
           same question `issueAndDeliver` asks before minting. A redeem-only or REDUCED till
           lands on the till instead. The terminal warrant is signed with K and the credential
@@ -508,6 +542,12 @@ function TerminalHome({
             </Button>
           ) : null}
         </div>
+        {/* Checking a receipt moves nothing, so it stays available while the stall is closed. */}
+        {canReadReceiptsNow(till.actor, till.session) ? (
+          <Button variant="outline" className="mt-3 w-full" onClick={() => navigate('/receipts/scan')}>
+            <ReceiptText className="mr-2 h-5 w-5" aria-hidden /> Check a receipt
+          </Button>
+        ) : null}
         {closed && stall !== null && <ClosedNote owner={false} />}
         {!closed && stall?.salesClosed === true && <SalesClosedNote />}
         {/* A selling role the stall never attested (spec 4.6.5): Redeem only, and the owner's

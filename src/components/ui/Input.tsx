@@ -4,10 +4,12 @@ import { cn } from '../../lib/utils';
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   error?: string;
+  /** A quiet line under the field, read out with it (`aria-describedby`). Hidden while an error shows. */
+  hint?: string;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ className, label, error, type = 'text', id, ...props }, ref) => {
+  ({ className, label, error, hint, type = 'text', id, ...props }, ref) => {
     /**
      * The label must actually point at the field.
      *
@@ -21,6 +23,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
      */
     const generatedId = useId();
     const inputId = id ?? generatedId;
+    const hintId = hint && !error ? `${inputId}-hint` : undefined;
 
     return (
       <div className="w-full">
@@ -46,9 +49,13 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             className
           )}
           {...props}
+          aria-describedby={[props['aria-describedby'], hintId].filter(Boolean).join(' ') || undefined}
         />
         {error && (
           <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">{error}</p>
+        )}
+        {hintId && (
+          <p id={hintId} className="mt-1.5 text-sm text-mono-500 dark:text-mono-400">{hint}</p>
         )}
       </div>
     );

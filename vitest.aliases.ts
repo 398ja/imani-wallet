@@ -43,6 +43,7 @@ export const imaniAliases = {
   '@imani/redemption': src('redemption'),
   '@imani/reports': src('reports'),
   '@imani/payment-requests': src('payment-requests'),
+  '@imani/receipts': src('receipts'),
   // Unscoped on purpose: this package is published as `imani-qr`, not
   // `@imani/qr`, and that is the specifier the app imports.
   'imani-qr': src('imani-qr'),
