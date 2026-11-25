@@ -20,14 +20,11 @@
  * Every step derives from `R_i`, the wallet key and the intent, so `finishCashlinkIntents` finishes
  * a page that died anywhere (spec section 5).
  */
-import type { VoucherRow } from '@imani/wallet-storage'
-
 import { armGift, armPreflight, inParallel, retryDeposit, type ArmContext, type ArmOutcome, type CashlinkPorts, type UnarmedReason } from './cashlinkFlow'
 import { deriveRefundSecret } from './cashlinkLock'
 import { forgetCashlinkIntent, loadCashlinkIntents, saveCashlinkIntent, type CashlinkIntent, type CashlinkIntentPart } from './cashlinkIntents'
 import { carveProofs } from './checkoutCarve'
-import { checkoutPlan, type CheckoutPart } from './checkoutPlan'
-import { deriveLinkSecret, giftExclusion, secretFromText, secretToText } from './giftLink'
+import { deriveLinkSecret, secretFromText, secretToText } from './giftLink'
 import type { GiftLinkArm } from './transactions'
 import { creditableFaceValue, parseVoucherToken } from './voucherToken'
 import { withQueuedLock } from './webLock'
@@ -76,15 +73,8 @@ export function legacyReasonOf(out: ArmOutcome): LegacyReason {
 
 // --- 1. The plan ----------------------------------------------------------------
 
-/**
- * The parts of a Cashlink for `amount` of `stall`'s `unit`, by the checkout planner, over the coupons
- * a gift may carry (`giftExclusion`). Null when no plan meets it: the legacy path then decides.
- */
-export function planDirectParts(req: { rows: VoucherRow[]; payer: string; stall: string; unit: string; amount: number; x: number; nowS: number }): CheckoutPart[] | null {
-  const giftable = req.rows.filter((r) => giftExclusion(r.token, r.issuer_id, req.payer, req.nowS * 1000) === null)
-  const plan = checkoutPlan({ rows: giftable, payer: req.payer, stallId: req.stall, unit: req.unit, amount: req.amount, x: req.x, nowS: req.nowS })
-  return plan.plan ?? null
-}
+// In `cashlinkDebit.ts`, which the Send screen loads without the rest of this module.
+export { planDirectParts } from './cashlinkDebit'
 
 /** A part of the intent, carved when it draws less than its coupon. Null when it cannot be carved. */
 export function intentPart(p: { tokenId: string; token: string; amount: number; faceValue: number }): CashlinkIntentPart | null {
