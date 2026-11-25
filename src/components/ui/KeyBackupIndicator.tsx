@@ -13,7 +13,7 @@ const LOOK: Record<KeyBackupState, { colour: string; label: string }> = {
 }
 
 /**
- * A small key beside the signed-in user's own handle: green, orange or red by `KeyBackupState`.
+ * A small upright key left of the signed-in user's own avatar: green, orange or red by `KeyBackupState`.
  * Render it only for the current user. It reads this device's key and backup list, so it says
  * nothing true about anyone else.
  */
@@ -30,7 +30,9 @@ export function KeyBackupIndicator({ pubkey, className = '' }: { pubkey: string;
  */
 export function KeyBackupIcon({ state, className = '' }: { state: KeyBackupState; className?: string }) {
   const { colour, label } = LOOK[state]
-  const icon = <KeyRound aria-hidden="true" className="h-3.5 w-3.5" strokeWidth={2.25} />
+  // KeyRound is drawn on the diagonal (bow top right, blade bottom left). A quarter turn of 45
+  // degrees stands it upright: bow on top, blade pointing down.
+  const icon = <KeyRound aria-hidden="true" className="h-3.5 w-3.5 -rotate-45" strokeWidth={2.25} />
 
   if (state === 'verified') {
     return (
@@ -45,7 +47,7 @@ export function KeyBackupIcon({ state, className = '' }: { state: KeyBackupState
       aria-label={label}
       title={label}
       data-state={state}
-      // 32px of target around a 14px glyph, pulled in so it still sits beside the handle.
+      // 32px of target around a 14px glyph, pulled in so it still sits close to the avatar.
       className={`key-blink -m-2 inline-flex rounded-full p-2 outline-none ring-mono-400 focus-visible:ring-2 ${colour} ${className}`}
     >
       {icon}
