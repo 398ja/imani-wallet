@@ -22,6 +22,7 @@ import {
   type PaymentEvidence,
 } from '@imani/receipts'
 import { isPaidToMe, isReceiptQr, p2pkLock, verifyScannedWith, witnessSignedBy, type SpentState, type VerifyPorts } from '../verify'
+import { extractReceiptCode, receiptShareText } from '../shareText'
 
 const MINT = 'https://mint.test'
 const payerSk = new Uint8Array(32).fill(1)
@@ -506,5 +507,23 @@ describe('remembered checks and the memo (FR-027a-f)', () => {
     expect(isPaidToMe({ ...base, mine: 'neither', records: 'found_in_records' })).toBe(false)
     expect(isPaidToMe({ ...base, verdict: 'invalid', records: 'found_in_records' })).toBe(false)
     expect(isPaidToMe({ ...base, mint: 'not_valid', records: 'found_in_records' })).toBe(false)
+  })
+})
+
+describe('a receipt sent as text (Share on the receipt dialog)', () => {
+  it('pasted out of the shared message, verifies exactly as the scanned code does', async () => {
+    // Arrange
+    const { qr, blob } = await receipt({ proofs: [proof(1, 8), proof(2, 2)], countersign: true, presenterAt: NOW - 5 })
+    const message = `Forwarded: ${receiptShareText(qr)}\nthanks!`
+
+    // Act
+    const pasted = extractReceiptCode(message)
+    const viaText = await verifyScannedWith(ports({ blob }), pasted ?? '')
+    const viaScan = await verifyScannedWith(ports({ blob }), qr)
+
+    // Assert
+    expect(pasted).toBe(qr)
+    expect(viaText.verdict).toBe('verified_offline')
+    expect({ ...viaText, priorChecks: undefined }).toEqual({ ...viaScan, priorChecks: undefined })
   })
 })
