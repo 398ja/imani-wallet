@@ -189,6 +189,17 @@
       opacity: 0;
     }
   }
+
+  /* The key backup icon asking for attention: a slow fade, not a flash. */
+  .key-blink {
+    animation: key-blink 1.6s ease-in-out infinite;
+  }
+
+  @keyframes key-blink {
+    50% {
+      opacity: 0.25;
+    }
+  }
 }
 
 /* Hide scrollbar but keep functionality */
@@ -215,7 +226,8 @@
   }
 
   .materialize,
-  .expand-row {
+  .expand-row,
+  .key-blink {
     animation: none;
   }
 

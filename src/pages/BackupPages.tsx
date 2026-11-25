@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { nip19 } from 'nostr-tools'
 import { hexToBytes } from '@noble/hashes/utils'
 import { Check, Cloud, Copy, Download } from 'lucide-react'
@@ -15,6 +16,14 @@ import { handleOf } from '../lib/format'
 import { keyStore } from '../lib/nap'
 import { type Profile } from '../lib/profile'
 import { userMessage } from '../lib/userMessage'
+import { BACKUP_RECOMMEND_PARAM } from '../lib/keyBackupState'
+
+const RECOMMENDATION: Record<string, string> = {
+  none:
+    'Back up your key. There is no backup of it yet, and if this device is lost or wiped, your account and vouchers go with it.',
+  missing:
+    'Back up your key again. The backup on record could not be confirmed to hold your current key: it may be from before a passphrase change, or a file that has not been checked in a while.',
+}
 
 /**
  * Save a copy of the account.
@@ -25,6 +34,8 @@ import { userMessage } from '../lib/userMessage'
  */
 export function BackupPage({ profile, terminal }: { profile: Profile; terminal?: boolean }) {
   const drive = useDriveBackup(profile.pubkey)
+  const [params] = useSearchParams()
+  const recommendation = RECOMMENDATION[params.get(BACKUP_RECOMMEND_PARAM) ?? '']
   const [passphrase, setPassphrase] = useState('')
   const [nsec, setNsec] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -90,6 +101,12 @@ export function BackupPage({ profile, terminal }: { profile: Profile; terminal?:
     <Screen>
       <BackLink to="/settings" label="Settings" />
       <PageHeader title="Backup" subtitle="Keep a copy of your account somewhere safe." />
+
+      {recommendation && (
+        <div className="mb-4" data-testid="backup-recommendation">
+          <Alert>{recommendation}</Alert>
+        </div>
+      )}
 
       <Panel className="mb-4 p-4">
         <p className="text-sm text-mono-600 dark:text-mono-300">
