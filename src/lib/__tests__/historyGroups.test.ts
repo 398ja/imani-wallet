@@ -66,6 +66,49 @@ describe('groupHistory', () => {
   })
 })
 
+describe('coupons back off one debit (an expired checkout code, an unclaimed gift)', () => {
+  const back = (id: string, returnOf: string, over: Partial<WalletTransaction> = {}) =>
+    tx(id, { returnOf, memo: 'Checkout code expired, returned', merchantId: 'm1', ...over })
+
+  it('fold into one entry, summed, though the rows carry no bundle id', () => {
+    // Arrange
+    const rows = [back('returned:a', 'checkout:c1', { at: 3_000 }), back('returned:b', 'checkout:c1', { at: 2_000, amount: 150 })]
+
+    // Act
+    const entries = groupHistory(rows)
+
+    // Assert
+    expect(entries).toEqual([expect.objectContaining({ kind: 'bundle', amount: 450, at: 3_000 })])
+  })
+
+  it('keep two codes apart', () => {
+    // Act
+    const entries = groupHistory([back('returned:a', 'checkout:c1'), back('returned:b', 'checkout:c2')])
+
+    // Assert
+    expect(entries.map((e) => e.kind)).toEqual(['single', 'single'])
+  })
+
+  it('never fold in the debit itself, or another stall\u2019s coupons back off it', () => {
+    // Arrange
+    const debit = tx('checkout:c1', { type: 'checkout_code', direction: 'out', merchantId: 'm1' })
+
+    // Act
+    const entries = groupHistory([debit, back('returned:a', 'checkout:c1'), back('returned:b', 'checkout:c1', { merchantId: 'm2' })])
+
+    // Assert
+    expect(entries.map((e) => e.kind)).toEqual(['single', 'single', 'single'])
+  })
+
+  it('a bundle id on the row still wins (a Cashlink take-back keeps its link bundle)', () => {
+    // Act
+    const entries = groupHistory([back('returned:a', 'sent:t1', { bundleId: 'L' }), back('returned:b', 'sent:t2', { bundleId: 'L' })])
+
+    // Assert
+    expect(entries).toEqual([expect.objectContaining({ kind: 'bundle', amount: 600 })])
+  })
+})
+
 describe('review fixes', () => {
   it('never folds together rows from different counterparties under one bundle id', () => {
     const entries = groupHistory([
