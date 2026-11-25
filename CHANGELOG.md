@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.79.0] - 2026-11-25
+
+### Added
+
+- **Settings › Online shop accepts PrestaShop shops** (#414, #684): `prestashop` joins the online shop platforms with its setup steps, so the wallet reads the enrolment code the imani-checkout-prestashop module shows.
+
+### Fixed
+
+- **The coupons back from an expired coupon code are one History entry** (#686), the way a Cashlink take-back folds. Each coupon that comes back writes its own `returned:` row naming the code it reverses (`returnOf`, #643) but no bundle id, so a code made of several coupons showed one line per coupon. History now folds rows that name the same debit, summed, with the coupons underneath. Display only, so rows already stored fold too; the code's own row and other stalls' rows are never folded in, and a row's own bundle id still wins. Unclaimed locked gifts that come back fold the same way.
+
 ## [0.78.0] - 2026-11-22
 
 ### Added
