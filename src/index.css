@@ -192,7 +192,20 @@
 
   /* The key backup icon asking for attention: a slow fade, not a flash. */
   .key-blink {
-    animation: key-blink 1.6s ease-in-out infinite;
+    animation: key-blink var(--key-blink-period, 1.6s) ease-in-out infinite;
+  }
+
+  /* Urgency sets the pace: red faster than orange, orange faster than the local-only green. */
+  .key-blink-red {
+    --key-blink-period: 1s;
+  }
+
+  .key-blink-orange {
+    --key-blink-period: 1.4s;
+  }
+
+  .key-blink-green {
+    --key-blink-period: 1.8s;
   }
 
   @keyframes key-blink {
