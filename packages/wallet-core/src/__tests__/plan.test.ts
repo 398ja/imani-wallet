@@ -108,6 +108,40 @@ describe('a satisfiable amount', () => {
 
     expect(result.parts[0].couponId).toBe('sooner')
   })
+
+  /**
+   * Owner report 2026-11-17, on the API's door. A smaller coupon expiring sooner is drawn first,
+   * with the rest from the next, even though the later coupon alone covers the amount. Before,
+   * `planSpend` took any single coupon that covered it, so the €2 was never spent and lapsed.
+   */
+  it('draws a smaller, sooner coupon first even when a later one covers the amount alone', () => {
+    const result = plan(
+      [
+        coupon({ voucher_id: 'later', face_value: 1000, expires_at: '2027-01-01T00:00:00Z' }),
+        coupon({ voucher_id: 'sooner', face_value: 200, expires_at: '2026-01-04T00:00:00Z' }),
+      ],
+      500,
+    )
+
+    expect(result.obstacle).toBeNull()
+    expect(result.parts).toEqual([
+      { couponId: 'sooner', amount: 200, faceValue: 200, whole: true },
+      { couponId: 'later', amount: 300, faceValue: 1000, whole: false },
+    ])
+  })
+
+  /** One coupon still wins when nothing usable expires sooner: fewer splits, one DM. */
+  it('keeps one coupon when the smaller one expires later', () => {
+    const result = plan(
+      [
+        coupon({ voucher_id: 'big', face_value: 1000, expires_at: '2026-01-04T00:00:00Z' }),
+        coupon({ voucher_id: 'small', face_value: 200, expires_at: '2027-01-01T00:00:00Z' }),
+      ],
+      500,
+    )
+
+    expect(result.parts).toEqual([{ couponId: 'big', amount: 500, faceValue: 1000, whole: false }])
+  })
 })
 
 describe('narrowing', () => {
