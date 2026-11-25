@@ -35,7 +35,8 @@ export function KeyBackupIndicator({ pubkey, className = '' }: { pubkey: string;
 }
 
 /**
- * Steady green (a remote backup) is a quiet glyph. Blinking green (a local file only), orange and red blink (`key-blink`, still under prefers-reduced-motion)
+ * Steady green (a remote backup) is a quiet glyph. Blinking green (a local file only), orange and red blink (`key-blink`;
+ * under prefers-reduced-motion the blink stops and the colour stays)
  * and are a link of their own to the backup page, with the reason in the query so the page can
  * say why it was opened. A sibling of the profile link, never inside it: a link in a link is
  * invalid and the tap would go to whichever the browser picks.
