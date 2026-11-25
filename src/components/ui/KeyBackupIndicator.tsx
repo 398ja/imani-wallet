@@ -3,6 +3,14 @@ import { Link } from 'react-router-dom'
 
 import { BACKUP_RECOMMEND_PARAM, useKeyBackupState, type KeyBackupState } from '../../lib/keyBackupState'
 
+/** The blink pace per state, a class in index.css. Steady green has none. */
+export const BLINK: Record<KeyBackupState, string | null> = {
+  verified: null,
+  local: 'key-blink-green',
+  missing: 'key-blink-orange',
+  none: 'key-blink-red',
+}
+
 const LOOK: Record<KeyBackupState, { colour: string; label: string }> = {
   verified: { colour: 'text-green-600 dark:text-green-400', label: 'Key backed up and checked' },
   local: {
@@ -52,7 +60,7 @@ export function KeyBackupIcon({ state, className = '' }: { state: KeyBackupState
       title={label}
       data-state={state}
       // 32px of target around a 14px glyph, pulled in so it still sits close to the avatar.
-      className={`key-blink -m-2 inline-flex rounded-full p-2 outline-none ring-mono-400 focus-visible:ring-2 ${colour} ${className}`}
+      className={`key-blink ${BLINK[state] ?? ''} -m-2 inline-flex rounded-full p-2 outline-none ring-mono-400 focus-visible:ring-2 ${colour} ${className}`}
     >
       {icon}
     </Link>

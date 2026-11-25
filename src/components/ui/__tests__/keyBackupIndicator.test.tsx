@@ -63,6 +63,39 @@ describe('KeyBackupIcon', () => {
     expect(screen.getByTestId('where').textContent).toBe(`/settings/backup?recommend=${s}`)
   })
 
+  it('each blinking state has its own pace, red faster than orange faster than green', async () => {
+    // Arrange
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const css = readFileSync(join(__dirname, '../../../index.css'), 'utf8')
+    const period = (cls: string) => {
+      const m = new RegExp(`\\.${cls}\\s*\\{[^}]*--key-blink-period:\\s*([\\d.]+)s`).exec(css)
+      return m ? Number(m[1]) : NaN
+    }
+    const classOf = (s: KeyBackupState) => {
+      render(
+        <MemoryRouter>
+          <KeyBackupIcon state={s} />
+        </MemoryRouter>,
+      )
+      const el = document.querySelector(`[data-state="${s}"]`) as HTMLElement
+      const found = [...el.classList].find((c) => c.startsWith('key-blink-')) ?? null
+      cleanup()
+      return found
+    }
+    // Act
+    const red = classOf('none')
+    const orange = classOf('missing')
+    const green = classOf('local')
+    const steady = classOf('verified')
+    // Assert
+    expect([red, orange, green]).toEqual(['key-blink-red', 'key-blink-orange', 'key-blink-green'])
+    expect(steady).toBeNull()
+    expect(period('key-blink-red')).toBeLessThan(period('key-blink-orange'))
+    expect(period('key-blink-orange')).toBeLessThan(period('key-blink-green'))
+    expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.key-blink\s*\{\s*animation: none/)
+  })
+
   it('green is not a link', () => {
     render(
       <MemoryRouter>
