@@ -202,6 +202,7 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
   const [fileStale, setFileStale] = useState(false)
   const [fileKnown, setFileKnown] = useState(false)
   const [driveUnchecked, setDriveUnchecked] = useState(false)
+  const [driveUnreachable, setDriveUnreachable] = useState(false)
   const [fileSaved, setFileSaved] = useState(false)
   const [fileError, setFileError] = useState<string | null>(null)
   const [current, setCurrent] = useState('')
@@ -226,6 +227,7 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
     let rewriteDrive = drive.configured && hasDrive
     const hadFile = record.file !== undefined
     setDriveUnchecked(false)
+    setDriveUnreachable(false)
     try {
       // Decrypt with the old, re-encrypt with the new. nap owns the crypto —
       // this is not a second key-handling implementation, it is two calls to the
@@ -239,6 +241,11 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
       setConfirm('')
       setFileStale(true)
       setFileKnown(hadFile)
+      // A Drive backup on record that this deployment cannot reach stays on the old passphrase.
+      if (hasDrive && !drive.configured) setDriveUnreachable(true)
+      // A downloaded file cannot be rewritten. Its key backup entry holds the old envelope's
+      // fingerprint, so from here it no longer counts for the key icon (orange unless Drive was
+      // updated) until the person downloads a new file.
 
       // No Drive record (e.g. backed up before records existed): ask Drive
       // rather than assume. Rewrite only a file that is already there; never
@@ -338,6 +345,12 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
                 Back up again under Settings → Backup.
               </Alert>
             )}
+            {driveUnreachable && (
+              <Alert>
+                Your Google Drive backup could not be updated from here, so it still opens with your old passphrase.
+                Back up to Google Drive again under Settings &gt; Backup.
+              </Alert>
+            )}
             {driveUnchecked && (
               <Alert>We could not check Google Drive. If you backed up there, back up again under Settings &gt; Backup.</Alert>
             )}
@@ -347,8 +360,8 @@ function ChangePassphrase({ pubkey }: { pubkey: string }) {
                   {fileSaved
                     ? 'New backup file saved. It opens with your new passphrase.'
                     : fileKnown
-                      ? 'Your backup file still opens with your old passphrase.'
-                      : 'If you saved a backup file before, it still opens with your old passphrase.'}
+                      ? 'Your downloaded backup file could not be updated: it still opens with your old passphrase. Download a new one now and delete the old one.'
+                      : 'If you saved a backup file before, it still opens with your old passphrase. Download a new one now.'}
                 </p>
                 {!fileSaved && (
                   <Button variant="secondary" className="w-full" onClick={() => void saveFile()}>
