@@ -43,19 +43,19 @@ import { userMessage } from '../lib/userMessage'
 const PLATFORM_LABELS: Record<OnlineShopPlatform, { name: string; steps: string[] }> = {
   woocommerce: {
     name: 'WooCommerce',
-    steps: ['In WordPress, install the Imani plugin for WooCommerce.', "Open the plugin's Imani settings and choose Connect to Imani."],
+    steps: ['In WordPress, install the Imani plugin for WooCommerce.', 'Open Settings → Imani checkout. Your shop\'s code is under "1. Enrol this shop".'],
   },
   wordpress: {
     name: 'WordPress',
-    steps: ['In WordPress, install the Imani plugin.', "Open the plugin's Imani settings and choose Connect to Imani."],
+    steps: ['In WordPress, install the Imani plugin.', 'Open Settings → Imani checkout. Your shop\'s code is under "1. Enrol this shop".'],
   },
   magento: {
     name: 'Magento',
-    steps: ['In your Magento admin, install the Imani extension.', "Open the extension's Imani settings and choose Connect to Imani."],
+    steps: ['In your Magento admin, install the Imani extension.', 'Open Stores → Configuration → Imani → Imani checkout codes. Your shop\'s code is under Enrolment.'],
   },
   shopify: {
     name: 'Shopify',
-    steps: ['In your Shopify admin, add the Imani checkout app.', "Open the app's Imani settings and choose Connect to Imani."],
+    steps: ['In your Shopify admin, add the Imani checkout app.', 'Open the app. Once your store is connected, it shows your shop\'s code.'],
   },
   prestashop: {
     name: 'PrestaShop',
