@@ -82,3 +82,29 @@ export async function readSavedFile(pubkey: string, fingerprint: string): Promis
     return (e as { code?: string } | null)?.code === 'gone' ? { kind: 'gone' } : { kind: 'unreadable' }
   }
 }
+
+export type Rewrite = 'rewritten' | 'none' | 'failed'
+
+/**
+ * After a passphrase change: write the new backup over the file this device saved for the old key,
+ * where it saved it, and file it under the new key's fingerprint. `none` when this device knows of
+ * no such file (a browser download, or one saved before the app could reopen files). `failed` when
+ * it is known but could not be written (gone, grant revoked), so the person must save a new one.
+ * Never throws.
+ */
+export async function rewriteSavedFile(
+  pubkey: string,
+  oldFingerprint: string,
+  newFingerprint: string,
+  text: string,
+): Promise<Rewrite> {
+  const uri = fileLocation(pubkey, oldFingerprint)
+  if (!uri || !Capacitor.isNativePlatform()) return 'none'
+  try {
+    await BackupFile.write({ uri, text })
+  } catch {
+    return 'failed'
+  }
+  rememberFileLocation(pubkey, newFingerprint, uri)
+  return 'rewritten'
+}

@@ -33,6 +33,13 @@ vi.mock('../../lib/backup', async (importOriginal) => ({
 const downloadText = vi.fn<(name: string, text: string) => Promise<void>>(async () => {})
 vi.mock('../../lib/download', () => ({ downloadText }))
 
+// The real file store, except where it would reach the Android plugin.
+const rewriteSavedFile = vi.fn<(...a: unknown[]) => Promise<'rewritten' | 'none' | 'failed'>>(async () => 'none')
+vi.mock('../../lib/backupFileStore', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/backupFileStore')>()),
+  rewriteSavedFile: (...a: unknown[]) => rewriteSavedFile(...a),
+}))
+
 const { SecurityPage } = await import('../SecurityPage')
 const { recordBackup, loadBackupRecord } = await import('../../lib/backupRecord')
 const PUBKEY = 'a'.repeat(64)
@@ -138,7 +145,7 @@ describe('changing the passphrase touches only the backups that exist', () => {
   it('with a file backup recorded, offers a new file and records it once saved', async () => {
     recordBackup(PUBKEY, 'file', 1)
     await rotate()
-    expect(await screen.findByText(/Your downloaded backup file could not be updated: it still opens with your old passphrase\. Download a new one/)).toBeTruthy()
+    expect(await screen.findByText(/Your backup file could not be updated: it still opens with your old passphrase\. Save a new one/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Save new backup file' }))
     await waitFor(() => expect(downloadText).toHaveBeenCalledTimes(1))
@@ -152,7 +159,7 @@ describe('changing the passphrase touches only the backups that exist', () => {
     await rotate()
     expect(await screen.findByText(/Passphrase changed/)).toBeTruthy()
     expect(
-      await screen.findByText(/If you saved a backup file before, it still opens with your old passphrase\. Download a new one/),
+      await screen.findByText(/If you saved a backup file before, it still opens with your old passphrase\. Save a new one/),
     ).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Save new backup file' })).toBeTruthy()
     const panel = screen.getByRole('button', { name: 'Change passphrase' }).parentElement!
@@ -230,7 +237,7 @@ describe('after a passphrase change, every backup is updated or flagged', () => 
     await rotate()
     // Assert
     expect(await screen.findByText(/Google Drive backup was updated/)).toBeTruthy()
-    expect(screen.getByText(/downloaded backup file could not be updated.*Download a new one/)).toBeTruthy()
+    expect(screen.getByText(/backup file could not be updated.*Save a new one/)).toBeTruthy()
     const newFp = currentKeyFingerprint()
     expect(newFp).not.toBe(oldFp)
     const list = loadKeyBackups(PUBKEY)
@@ -278,6 +285,51 @@ describe('after a passphrase change, every backup is updated or flagged', () => 
     await rotate()
     // Assert
     expect(await screen.findByText(/still opens with the old one/)).toBeTruthy()
+    expect(currentKeyBackupState(PUBKEY)).toBe('missing')
+  })
+})
+
+describe('after a passphrase change, a file the app can reach is rewritten in place', () => {
+  const OLD_ENVELOPE = { ciphertext: 'old', iv: 'i', kdf: 'k' }
+  beforeEach(() => {
+    driveConfigured.mockReturnValue(true)
+    localStorage.setItem('imani-wallet-key', JSON.stringify(OLD_ENVELOPE))
+    rewriteSavedFile.mockResolvedValue('none')
+  })
+
+  it('rewrites the saved file, says so, offers no new file, and keeps the key green', async () => {
+    // Arrange
+    recordBackup(PUBKEY, 'file', 1)
+    recordKeyBackup(PUBKEY, 'file', { fileName: 'me.json' })
+    const oldFp = currentKeyFingerprint()
+    rewriteSavedFile.mockResolvedValue('rewritten')
+
+    // Act
+    await rotate()
+
+    // Assert
+    expect(await screen.findByText(/Your backup file was updated too/)).toBeTruthy()
+    expect(rewriteSavedFile).toHaveBeenCalledTimes(1)
+    expect(rewriteSavedFile.mock.calls[0][1]).toBe(oldFp)
+    expect(screen.queryByRole('button', { name: 'Save new backup file' })).toBeNull()
+    const newFp = currentKeyFingerprint()
+    expect(loadKeyBackups(PUBKEY).some((b) => b.location === 'file' && b.keyFingerprint === newFp && b.fileName === 'me.json')).toBe(true)
+    expect(currentKeyBackupState(PUBKEY)).toBe('local')
+  })
+
+  it('a saved file that could not be written: told to save a new one, key not green', async () => {
+    // Arrange
+    recordBackup(PUBKEY, 'file', 1)
+    recordKeyBackup(PUBKEY, 'file', { fileName: 'me.json' })
+    rewriteSavedFile.mockResolvedValue('failed')
+
+    // Act
+    await rotate()
+
+    // Assert
+    expect(await screen.findByText(/Your backup file could not be updated/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Save new backup file' })).toBeTruthy()
+    expect(screen.queryByText(/Your backup file was updated too/)).toBeNull()
     expect(currentKeyBackupState(PUBKEY)).toBe('missing')
   })
 })

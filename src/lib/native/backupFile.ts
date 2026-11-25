@@ -11,6 +11,8 @@ import { registerPlugin } from '@capacitor/core'
 export interface BackupFilePlugin {
   create(options: { fileName: string; text: string }): Promise<{ uri: string }>
   read(options: { uri: string }): Promise<{ text: string }>
+  /** Replace the document's contents (a passphrase change). */
+  write(options: { uri: string; text: string }): Promise<void>
 }
 
 export const BackupFile = registerPlugin<BackupFilePlugin>('BackupFile')

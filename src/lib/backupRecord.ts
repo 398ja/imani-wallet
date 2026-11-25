@@ -78,3 +78,6 @@ export const KEY_BACKUPS_PREFIX = 'imani-wallet:key-backups:'
  * never published, a URI means nothing on another device. Kept across logout with the list.
  */
 export const KEY_BACKUP_FILES_PREFIX = 'imani-wallet:key-backup-files:'
+
+/** The latest "Check my backups" result on this device, per account. Kept across logout. */
+export const KEY_BACKUP_CHECK_PREFIX = 'imani-wallet:key-backup-check:'
