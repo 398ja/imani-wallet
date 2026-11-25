@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 
-import { BACKUP_RECORD_PREFIX, KEY_BACKUP_FILES_PREFIX, KEY_BACKUPS_PREFIX } from './backupRecord'
+import { BACKUP_RECORD_PREFIX, KEY_BACKUP_CHECK_PREFIX, KEY_BACKUP_FILES_PREFIX, KEY_BACKUPS_PREFIX } from './backupRecord'
 import { removeNotification, upsertNotification } from './notifications/inbox'
 
 /**
@@ -54,7 +54,7 @@ const LIMIT = 50
 
 const storageKey = (pubkey: string) => UNSAVED_RECEIPTS_PREFIX + pubkey
 
-const KEPT_PREFIXES = [UNSAVED_RECEIPTS_PREFIX, BACKUP_RECORD_PREFIX, KEY_BACKUPS_PREFIX, KEY_BACKUP_FILES_PREFIX]
+const KEPT_PREFIXES = [UNSAVED_RECEIPTS_PREFIX, BACKUP_RECORD_PREFIX, KEY_BACKUPS_PREFIX, KEY_BACKUP_FILES_PREFIX, KEY_BACKUP_CHECK_PREFIX]
 
 /**
  * The logout sweep's exemption. Only this ledger and the backup record

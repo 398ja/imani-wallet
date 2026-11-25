@@ -64,8 +64,29 @@ describe('Check my backups', () => {
     const lines = await screen.findByTestId('key-backup-check-result')
     expect(io).toMatchObject({ drive: 1, file: 1 })
     expect(opened).not.toHaveBeenCalled()
-    expect(lines.textContent).toContain('Google Drive: the backup is no longer there')
-    expect(lines.textContent).toContain('b.json: no longer where it was saved')
+    expect(lines.textContent).toContain('Google Drive: missing. Back up again.')
+    expect(lines.textContent).toContain('b.json: missing. Back up again.')
+    expect(lines.textContent).toMatch(/Last checked/)
+  })
+
+  it('shows only the last check, and keeps it after leaving and coming back', async () => {
+    // Arrange
+    kb.recordKeyBackup(PK, 'drive', { verified: true })
+    kb.recordKeyBackup(PK, 'file', { fileName: 'b.json' })
+    const first = render(<YourKeyBackup pubkey={PK} />)
+    expect(screen.getByText('Not checked yet')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Check my backups' }))
+    await screen.findByText(/Last checked/)
+    first.unmount()
+
+    // Act
+    render(<YourKeyBackup pubkey={PK} />)
+
+    // Assert
+    const lines = screen.getByTestId('key-backup-check-result')
+    expect(lines.querySelectorAll('li')).toHaveLength(2)
+    expect(lines.textContent).toMatch(/Last checked/)
+    expect(screen.queryByText(/Your Google Drive \(in the app/)).toBeNull()
   })
 
   it('is off when there is no backup to check', () => {

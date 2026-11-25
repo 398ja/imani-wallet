@@ -23,9 +23,10 @@ import java.nio.charset.StandardCharsets;
  *
  * {@code create} opens the system "save as" screen (Storage Access Framework,
  * ACTION_CREATE_DOCUMENT), writes the backup to the document the person picked, and keeps a
- * persistable read grant on it. {@code read} opens that same document again through the grant:
- * no picker, no storage permission (SAF grants are per document, so the manifest needs none).
- * A document deleted or moved since rejects with code {@code gone}.
+ * persistable read and write grant on it. {@code read} opens that same document again through the
+ * grant: no picker, no storage permission (SAF grants are per document, so the manifest needs
+ * none). {@code write} replaces its contents, for a passphrase change. A document deleted or moved
+ * since rejects with code {@code gone}.
  */
 @CapacitorPlugin(name = "BackupFile")
 public class BackupFilePlugin extends Plugin {
@@ -59,7 +60,11 @@ public class BackupFilePlugin extends Plugin {
         Uri uri = data.getData();
         ContentResolver resolver = getContext().getContentResolver();
         try {
-            resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            resolver.takePersistableUriPermission(
+                uri,
+                // Read to check it later, write to re-encrypt it after a passphrase change.
+                Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            );
         } catch (SecurityException e) {
             // The provider offers no lasting grant. The file is still written; a later check
             // reports it cannot be opened, and the person can confirm it by picking it.
@@ -75,6 +80,32 @@ public class BackupFilePlugin extends Plugin {
         JSObject ret = new JSObject();
         ret.put("uri", uri.toString());
         call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void write(PluginCall call) {
+        String raw = call.getString("uri");
+        String text = call.getString("text");
+        if (raw == null || raw.isEmpty() || text == null) {
+            call.reject("uri and text are required", "invalid");
+            return;
+        }
+        Uri uri = Uri.parse(raw);
+        // "wt": truncate, so a shorter backup never leaves the tail of the old one behind.
+        try (OutputStream out = getContext().getContentResolver().openOutputStream(uri, "wt")) {
+            if (out == null) {
+                call.reject("the file is gone", "gone");
+                return;
+            }
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+            call.resolve();
+        } catch (FileNotFoundException e) {
+            call.reject("the file is gone", "gone");
+        } catch (SecurityException e) {
+            call.reject("no longer allowed to write the file", "denied");
+        } catch (IOException e) {
+            call.reject("could not write the file", "failed");
+        }
     }
 
     @PluginMethod

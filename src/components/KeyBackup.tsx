@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Capacitor } from '@capacitor/core'
-import { Cloud, FileText } from 'lucide-react'
+import { AlertCircle, CheckCircle2 } from 'lucide-react'
 
 import { Alert, Button, ListSection } from './ui'
 import { backupFileAccept } from '../lib/backupFileAccept'
@@ -16,7 +16,7 @@ import {
   type FileCheck,
   type KeyBackup,
 } from '../lib/keyBackups'
-import { checkKeyBackups, type BackupsCheck, type DriveCheck } from '../lib/keyBackupCheck'
+import { checkKeyBackups, loadLastCheck, type BackupsCheck, type DriveCheck, type LastCheck } from '../lib/keyBackupCheck'
 import { driveConfigured, readAccountBackup } from '../lib/drive'
 import { readSavedFile } from '../lib/backupFileStore'
 
@@ -92,6 +92,7 @@ const DRIVE_COPY: Record<DriveCheck, string> = {
 }
 
 const day = (ms: number) => new Date(ms).toLocaleDateString(undefined, { dateStyle: 'medium' })
+const when = (ms: number) => new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
 /** One line per backup the check looked at, in the order the card lists them. */
 function checkLines(result: BackupsCheck): { text: string; good: boolean }[] {
@@ -112,21 +113,18 @@ function checkLines(result: BackupsCheck): { text: string; good: boolean }[] {
 }
 
 /**
- * Settings, "Your key backup": every known backup of this key across devices, where it is, and the
- * reminder. "Check my backups" checks each one where it is, without asking where: that it is still
- * there, and that the key in it is this npub's. Drive is read back; a file this device's app saved
- * is opened where it was saved. A file whose location this device never learnt (a browser
- * download) is reported from its record, and can be confirmed by picking it. Nothing here needs
- * the passphrase.
+ * Settings, "Your key backup": the last "Check my backups" and when it ran, nothing older. The check
+ * looks at each backup of this key where it is, without asking where: that it is still there, and
+ * that the key in it is this npub's. A file whose location this device never learnt (a browser
+ * download) can be confirmed by picking it. Nothing here needs the passphrase.
  */
 export function YourKeyBackup({ pubkey }: { pubkey: string }) {
   const all = useKeyBackups(pubkey)
   const current = backupsForCurrentKey(all, currentKeyFingerprint())
-  const stale = all.length > current.length
   const hasFile = current.some((b) => b.location === 'file')
   const input = useRef<HTMLInputElement>(null)
   const [check, setCheck] = useState<FileCheck | null>(null)
-  const [result, setResult] = useState<BackupsCheck | null>(null)
+  const [result, setResult] = useState<LastCheck | null>(() => loadLastCheck(pubkey))
   const [checking, setChecking] = useState(false)
 
   const pick = async (file: File | undefined) => {
@@ -137,9 +135,9 @@ export function YourKeyBackup({ pubkey }: { pubkey: string }) {
   const checkAll = async () => {
     setChecking(true)
     setCheck(null)
-    setResult(null)
     try {
-      setResult(await checkKeyBackups(pubkey, { readDrive: readAccountBackup, driveConfigured, readFile: readSavedFile }))
+      await checkKeyBackups(pubkey, { readDrive: readAccountBackup, driveConfigured, readFile: readSavedFile })
+      setResult(loadLastCheck(pubkey))
     } finally {
       setChecking(false)
     }
@@ -148,31 +146,26 @@ export function YourKeyBackup({ pubkey }: { pubkey: string }) {
   return (
     <ListSection title={KEY_BACKUP_COPY.title}>
       <div className="space-y-3 p-4" data-testid="your-key-backup">
-        {current.length === 0 ? (
-          <Alert>{KEY_BACKUP_COPY.none}</Alert>
-        ) : (
-          <>
-            <ul className="space-y-2">
-              {current.map((b) => (
-                <li key={`${b.location}|${b.deviceId}`} className="flex gap-2 text-sm text-mono-700 dark:text-mono-200">
-                  {b.location === 'drive' ? (
-                    <Cloud className="mt-0.5 h-4 w-4 shrink-0 text-mono-400" aria-hidden />
+        {current.length === 0 && <Alert>{KEY_BACKUP_COPY.none}</Alert>}
+        <div data-testid="key-backup-check-result" role="status">
+          <p className="text-xs text-mono-500">
+            {result ? KEY_BACKUP_COPY.lastChecked(when(result.at)) : KEY_BACKUP_COPY.neverChecked}
+          </p>
+          {result && (
+            <ul className="mt-1 space-y-1">
+              {checkLines(result).map((l) => (
+                <li key={l.text} className="flex items-center gap-2 text-sm text-mono-700 dark:text-mono-200">
+                  {l.good ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-label="OK" />
                   ) : (
-                    <FileText className="mt-0.5 h-4 w-4 shrink-0 text-mono-400" aria-hidden />
+                    <AlertCircle className="h-4 w-4 shrink-0 text-red-500" aria-label="Needs attention" />
                   )}
-                  <span>
-                    {describeKeyBackup(b)}
-                    <span className="block text-xs text-mono-500">
-                      {b.lastVerifiedAt ? 'Checked' : 'Saved'} {day(b.lastVerifiedAt ?? b.createdAt)}
-                    </span>
-                  </span>
+                  {l.text}
                 </li>
               ))}
             </ul>
-            <p className="text-xs font-medium text-mono-700 dark:text-mono-200">{KEY_BACKUP_COPY.keep}</p>
-          </>
-        )}
-        {stale && <p className="text-xs text-mono-500">{KEY_BACKUP_COPY.stale}</p>}
+          )}
+        </div>
         <div className="flex gap-2">
           <a
             href="/settings/backup"
@@ -184,15 +177,6 @@ export function YourKeyBackup({ pubkey }: { pubkey: string }) {
             {checking ? KEY_BACKUP_COPY.checking : KEY_BACKUP_COPY.check}
           </Button>
         </div>
-        {result && (
-          <ul role="status" className="space-y-1" data-testid="key-backup-check-result">
-            {checkLines(result).map((l) => (
-              <li key={l.text} className={`text-xs ${l.good ? 'text-green-700 dark:text-green-500' : 'text-red-600 dark:text-red-400'}`}>
-                {l.text}
-              </li>
-            ))}
-          </ul>
-        )}
         {hasFile && (
           <>
             <button

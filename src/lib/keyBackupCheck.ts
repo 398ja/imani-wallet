@@ -14,6 +14,7 @@ import {
 } from './keyBackups'
 import { FILE_RECHECK_MAX_AGE_MS } from './keyBackupState'
 import { CANCELLED, DriveError } from './googleToken'
+import { KEY_BACKUP_CHECK_PREFIX } from './backupRecord'
 import type { ReadSaved } from './backupFileStore'
 
 /**
@@ -132,7 +133,7 @@ async function checkFile(pubkey: string, b: KeyBackup, ports: CheckPorts, now: n
   }
 }
 
-/** Check every known backup of the current key, where it is. Never throws. */
+/** Check every known backup of the current key, where it is, and remember it as the last check. Never throws. */
 export async function checkKeyBackups(pubkey: string, ports: CheckPorts): Promise<BackupsCheck> {
   const now = ports.now?.() ?? Date.now()
   const fingerprint = currentKeyFingerprint()
@@ -143,5 +144,33 @@ export async function checkKeyBackups(pubkey: string, ports: CheckPorts): Promis
   for (const b of current.filter((x) => x.location === 'file')) {
     files.push({ backup: b, result: await checkFile(pubkey, b, ports, now) })
   }
-  return { drive, files, none: current.length === 0 }
+  const result: BackupsCheck = { drive, files, none: current.length === 0 }
+  saveLastCheck(pubkey, { at: now, ...result })
+  return result
+}
+
+// ---------------------------------------------------------------------------
+// The last check, for Settings
+
+export type LastCheck = BackupsCheck & { at: number }
+
+const LAST_CHECK_PREFIX = KEY_BACKUP_CHECK_PREFIX
+
+function saveLastCheck(pubkey: string, check: LastCheck): void {
+  try {
+    localStorage.setItem(LAST_CHECK_PREFIX + pubkey, JSON.stringify(check))
+  } catch {
+    // Storage full or blocked: Settings shows this check until it is left.
+  }
+}
+
+/** The latest "Check my backups" on this device, or null before the first. */
+export function loadLastCheck(pubkey: string): LastCheck | null {
+  try {
+    const raw = localStorage.getItem(LAST_CHECK_PREFIX + pubkey)
+    const v = raw ? (JSON.parse(raw) as LastCheck) : null
+    return v && typeof v.at === 'number' && Array.isArray(v.files) ? v : null
+  } catch {
+    return null
+  }
 }
