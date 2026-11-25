@@ -209,6 +209,13 @@ silently flooring it would plan the wrong spend.
 }
 ```
 
+The soonest-expiring coupons are drawn first, as the app's Pay button draws them:
+one coupon only when no usable coupon expires sooner than it, otherwise several,
+starting from the soonest. A payment draws at most `maxParts` coupons (optional,
+a positive whole number; pass your gateway's `atomic_send_bundle_max_parts` when
+you know it, otherwise 10). A plan over that is planned again largest-first, which
+needs fewer coupons, and only refused as `too-many-parts` if it is still over.
+
 Only coupons from that stall, in that currency, unspent and unexpired take part.
 A coupon from another stall is never drawn in, however conveniently sized: a
 stall cannot honour what it did not issue, and a coupon sent to one that cannot
@@ -277,12 +284,14 @@ successfully; the answer being "no" is a normal result, not a failed request.
 }
 ```
 
-Two kinds, and the difference is what you should do about it:
+Three kinds, and the difference is what you should do about it. Treat a `kind`
+you do not recognise as "cannot be planned": kinds may be added.
 
 | `kind` | meaning | what helps |
 |---|---|---|
 | `insufficient-value` | the eligible coupons do not add up | more coupons from that stall in that currency |
 | `not-splittable` | they add up, but no combination divides to exactly this amount | a different amount — more coupons of the same shape will not help |
+| `too-many-parts` | they cover it, but only across more than `maxParts` coupons, even largest-first. `maxParts` is in the obstacle | a smaller amount, or the rest as a second payment |
 
 `not-splittable` is the one worth handling properly. A coupon divides only in
 steps of `minimumStep`, so some amounts are unreachable from a holding that is

@@ -6,7 +6,7 @@
  * This is the acceptance criterion that cannot be met by inspection. The app
  * narrows a holding through `couponsFor` (stored rows: drops redeemed, drops
  * expired, filters to one stall) and then a currency filter in `payRequest`,
- * before handing what is left to `selectVouchers`/`planParts`. The API narrows
+ * before handing what is left to `chooseSpend`. The API narrows
  * through `eligibleCoupons` in `@imani/wallet-core`.
  *
  * Two implementations of "which coupons may take part" is exactly the drift the
@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest'
 import type { VoucherRow } from '@imani/wallet-storage'
 import { eligibleCoupons, planSpend } from '@imani/wallet-core'
-import { selectVouchers, planParts } from '@imani/wallet-core'
+import { chooseSpend, withinPartCap, DEFAULT_BUNDLE_MAX_PARTS } from '@imani/wallet-core'
 
 import { couponsFor, toVoucher } from '../merchants'
 
@@ -48,18 +48,23 @@ const row = (over: Partial<VoucherRow> = {}): VoucherRow =>
 
 /**
  * The app's own path to a plan, reproduced exactly: narrow the rows, convert,
- * filter to one currency, then ask the same two functions `deliver` asks.
+ * filter to one currency, then ask what `deliverCounted` asks: `chooseSpend`.
+ *
+ * This copied `deliver`'s old "one coupon if one will do" rule, so when the app moved to
+ * soonest-expiring first (2026-11-17) both sides of the comparison stayed on the old rule and the
+ * API's drift went unseen. Mirror the call, not a restatement of it.
  */
 function appPlan(rows: VoucherRow[], stallId: string, currency: string, amount: number) {
   const mine = couponsFor(rows, stallId).map(toVoucher)
   const inUnit = mine.filter((v) => (v.face_unit ?? '').toUpperCase() === currency.toUpperCase())
 
-  // `deliver`: one coupon if one will do, a bundle otherwise.
-  const single = selectVouchers(inUnit, amount)
-  if (single.length > 0) return { ids: [single[0].voucher_id], amounts: [amount] }
+  const choice = chooseSpend(inUnit, amount)
+  if (choice.kind === 'single') return { ids: [choice.candidates[0].voucher_id], amounts: [amount] }
 
-  const plan = planParts(inUnit, amount)
-  if (plan.remaining > 0) return null
+  if (choice.plan.remaining > 0) return null
+  // #552: held to the gateway's part cap, and refused over it, before anything is spent.
+  const plan = withinPartCap(inUnit, amount, choice.plan, DEFAULT_BUNDLE_MAX_PARTS)
+  if (plan.parts.length > DEFAULT_BUNDLE_MAX_PARTS) return null
   return {
     ids: plan.parts.map((p) => p.voucher.voucher_id),
     amounts: plan.parts.map((p) => p.amount),
@@ -103,6 +108,29 @@ const HOLDINGS: Array<{ name: string; rows: VoucherRow[] }> = [
     rows: [
       row({ voucher_id: 'later', face_value: 500, expires_at: 1893456000 }),
       row({ voucher_id: 'sooner', face_value: 500, expires_at: 1801440000 }),
+    ],
+  },
+  {
+    // #552: soonest-first needs twelve parts, over the cap; both doors plan the €50 instead.
+    name: 'more sooner coupons than one payment may draw',
+    rows: [
+      row({ voucher_id: 'big', face_value: 5000, token_amount: 5000, expires_at: 1893456000 }),
+      ...Array.from({ length: 12 }, (_, i) =>
+        row({ voucher_id: `s${String(i).padStart(2, '0')}`, token_id: `tid-s${i}`, face_value: 100, expires_at: 1801440000 }),
+      ),
+    ],
+  },
+  {
+    // #552: twelve parts however they are drawn, so both refuse 1200.
+    name: 'only small coupons',
+    rows: Array.from({ length: 12 }, (_, i) => row({ voucher_id: `s${String(i).padStart(2, '0')}`, token_id: `tid-s${i}`, face_value: 100 })),
+  },
+  {
+    // Owner report 2026-11-17: the later coupon alone covers 500; the smaller sooner one goes first.
+    name: 'a smaller coupon expiring sooner',
+    rows: [
+      row({ voucher_id: 'later', face_value: 1000, expires_at: 1893456000 }),
+      row({ voucher_id: 'sooner', face_value: 200, expires_at: 1801440000 }),
     ],
   },
   {
@@ -184,7 +212,7 @@ const HOLDINGS: Array<{ name: string; rows: VoucherRow[] }> = [
   },
 ]
 
-const AMOUNTS = [1, 100, 150, 200, 300, 400, 500, 700, 900, 1000, 1500, 5000, 9999]
+const AMOUNTS = [1, 100, 150, 200, 300, 400, 500, 700, 900, 1000, 1200, 1500, 5000, 9999]
 
 describe('the API plans what the app plans', () => {
   for (const { name, rows } of HOLDINGS) {

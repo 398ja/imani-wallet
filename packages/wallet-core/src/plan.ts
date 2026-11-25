@@ -28,7 +28,15 @@
 
 import type { Voucher } from '@imani/voucher-send'
 
-import { planParts, selectVouchers, splitObstacle, checkSplittable, minSplitStep } from './spend'
+import {
+  chooseSpend,
+  splitObstacle,
+  checkSplittable,
+  minSplitStep,
+  withinPartCap,
+  tooManyPartsMessage,
+  DEFAULT_BUNDLE_MAX_PARTS,
+} from './spend'
 import { stallKey } from './holding'
 import { toEpochMs } from './expiry'
 
@@ -41,6 +49,11 @@ export type ObstacleKind =
    * coupons of the same shape would NOT help; a different amount would.
    */
   | 'not-splittable'
+  /**
+   * They add up and divide, but only across more coupons than one payment may draw (#552), even
+   * planned largest-first. A smaller amount would; so would a second payment for the rest.
+   */
+  | 'too-many-parts'
 
 export interface PlanObstacle {
   kind: ObstacleKind
@@ -55,6 +68,8 @@ export interface PlanObstacle {
    * what blocks. Absent for `insufficient-value`, where it is not the issue.
    */
   minimumStep?: number
+  /** For `too-many-parts`: the cap the plan was held to. */
+  maxParts?: number
 }
 
 /** One coupon's contribution to a plan. */
@@ -90,6 +105,11 @@ export interface PlanRequest {
   amount: number
   /** Injected so expiry is testable at an instant. */
   now?: number
+  /**
+   * The most coupons one payment may draw: the gateway's `atomic_send_bundle_max_parts` when the
+   * caller knows it, else `DEFAULT_BUNDLE_MAX_PARTS`, the app's own default.
+   */
+  maxParts?: number
 }
 
 /**
@@ -156,6 +176,7 @@ export function planSpend({
   currency,
   amount,
   now = Date.now(),
+  maxParts = DEFAULT_BUNDLE_MAX_PARTS,
 }: PlanRequest): SpendPlan {
   const eligible = eligibleCoupons(coupons, stallId, currency, now)
   const available = eligible.reduce((sum, c) => sum + (c.face_value ?? 0), 0)
@@ -163,15 +184,17 @@ export function planSpend({
   const base = { available, eligibleCount: eligible.length }
 
   /**
-   * One coupon first, exactly as `deliver` does.
+   * The app's one rule, `chooseSpend`, so the API and the Pay button draw the same coupons.
    *
-   * Fewer mint splits and one DM, and `selectVouchers` already prefers an exact
-   * match over splitting a larger coupon — so this is not merely an
-   * optimisation, it is the rule that keeps big coupons whole for big payments.
+   * Soonest-expiring first: one coupon only when no usable coupon expires sooner than it, else the
+   * bundle that starts at the soonest. This was its own "any single coupon that covers it wins"
+   * check, which `deliver` dropped on 2026-11-17 and this kept: €2 expiring tomorrow and €10
+   * expiring next year, paying €5, planned €5 of the €10 here while the app spent the €2 first,
+   * and the €2 lapsed for any program paying through the API.
    */
-  const single = selectVouchers(eligible, amount)
-  if (single.length > 0) {
-    const coupon = single[0]
+  const choice = chooseSpend(eligible, amount)
+  if (choice.kind === 'single') {
+    const coupon = choice.candidates[0]
     const face = coupon.face_value ?? 0
     return {
       ...base,
@@ -187,7 +210,22 @@ export function planSpend({
     }
   }
 
-  const plan = planParts(eligible, amount)
+  // #552: over the part cap, planned again largest-first, as `deliverCounted` does. Still over is
+  // an obstacle: the app refuses that payment before anything is spent, so the API must not plan it.
+  const plan = withinPartCap(eligible, amount, choice.plan, maxParts)
+  if (plan.remaining === 0 && plan.parts.length > maxParts) {
+    return {
+      ...base,
+      parts: [],
+      obstacle: {
+        kind: 'too-many-parts',
+        detail: tooManyPartsMessage(plan.parts.length, maxParts),
+        available,
+        requested: amount,
+        maxParts,
+      },
+    }
+  }
   if (plan.remaining === 0) {
     return {
       ...base,

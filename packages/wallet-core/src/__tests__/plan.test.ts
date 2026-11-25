@@ -108,6 +108,92 @@ describe('a satisfiable amount', () => {
 
     expect(result.parts[0].couponId).toBe('sooner')
   })
+
+  /**
+   * Owner report 2026-11-17, on the API's door. A smaller coupon expiring sooner is drawn first,
+   * with the rest from the next, even though the later coupon alone covers the amount. Before,
+   * `planSpend` took any single coupon that covered it, so the €2 was never spent and lapsed.
+   */
+  it('draws a smaller, sooner coupon first even when a later one covers the amount alone', () => {
+    const result = plan(
+      [
+        coupon({ voucher_id: 'later', face_value: 1000, expires_at: '2027-01-01T00:00:00Z' }),
+        coupon({ voucher_id: 'sooner', face_value: 200, expires_at: '2026-01-04T00:00:00Z' }),
+      ],
+      500,
+    )
+
+    expect(result.obstacle).toBeNull()
+    expect(result.parts).toEqual([
+      { couponId: 'sooner', amount: 200, faceValue: 200, whole: true },
+      { couponId: 'later', amount: 300, faceValue: 1000, whole: false },
+    ])
+  })
+
+  /** One coupon still wins when nothing usable expires sooner: fewer splits, one DM. */
+  it('keeps one coupon when the smaller one expires later', () => {
+    const result = plan(
+      [
+        coupon({ voucher_id: 'big', face_value: 1000, expires_at: '2026-01-04T00:00:00Z' }),
+        coupon({ voucher_id: 'small', face_value: 200, expires_at: '2027-01-01T00:00:00Z' }),
+      ],
+      500,
+    )
+
+    expect(result.parts).toEqual([{ couponId: 'big', amount: 500, faceValue: 1000, whole: false }])
+  })
+})
+
+/**
+ * #552: one payment draws at most `maxParts` coupons, as `deliverCounted` holds the app to.
+ * Soonest-first can need many parts, so over the cap the plan is redone largest-first, and only
+ * still over is it refused. Before soonest-first this rarely bit: one covering coupon always won.
+ */
+describe('the part cap', () => {
+  const holding = (smalls: number) => [
+    coupon({ voucher_id: 'big', face_value: 5000, token_amount: 5000, expires_at: '2027-06-01T00:00:00Z' }),
+    ...Array.from({ length: smalls }, (_, i) =>
+      coupon({ voucher_id: `s${String(i).padStart(2, '0')}`, face_value: 100, expires_at: '2026-02-01T00:00:00Z' }),
+    ),
+  ]
+
+  it('plans largest-first when soonest-first needs more coupons than the cap', () => {
+    const result = plan(holding(12), 1200)
+
+    expect(result.obstacle).toBeNull()
+    expect(result.parts).toEqual([{ couponId: 'big', amount: 1200, faceValue: 5000, whole: false }])
+  })
+
+  it('keeps soonest-first at exactly the cap', () => {
+    const result = plan(holding(10), 1000)
+
+    expect(result.parts).toHaveLength(10)
+    expect(result.parts.every((p) => p.couponId?.startsWith('s'))).toBe(true)
+  })
+
+  it('takes the cap the caller passes', () => {
+    const result = plan(holding(12), 1200, { maxParts: 12 })
+
+    expect(result.parts).toHaveLength(12)
+    expect(result.parts.every((p) => p.couponId?.startsWith('s'))).toBe(true)
+  })
+
+  it('refuses as too-many-parts when largest-first is still over the cap', () => {
+    const smalls = Array.from({ length: 12 }, (_, i) => coupon({ voucher_id: `s${i}`, face_value: 100 }))
+
+    const result = plan(smalls, 1200)
+
+    expect(result.parts).toEqual([])
+    expect(result.obstacle).toEqual({
+      kind: 'too-many-parts',
+      detail:
+        'This amount needs 12 vouchers, and one payment can use at most 10. ' +
+        'Nothing was sent. Send a smaller amount, or send the rest as a second payment.',
+      available: 1200,
+      requested: 1200,
+      maxParts: 10,
+    })
+  })
 })
 
 describe('narrowing', () => {

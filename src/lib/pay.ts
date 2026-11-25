@@ -64,8 +64,11 @@ export {
   type SendPart,
   type SendPlan,
 } from '@imani/wallet-core'
-import { chooseSpend, passedOver, planParts, splitObstacle, type SendPart } from '@imani/wallet-core'
+import { chooseSpend, passedOver, splitObstacle, withinPartCap, tooManyPartsMessage, DEFAULT_BUNDLE_MAX_PARTS, type SendPart } from '@imani/wallet-core'
 import type { SendEvidence } from '@imani/receipts'
+
+// #552: the cap and its refusal live in wallet-core, so the API's `planSpend` applies the same rule.
+export { tooManyPartsMessage, DEFAULT_BUNDLE_MAX_PARTS }
 
 /** Why a bundle was refused for a card voucher, in the badge's terms (gateway-core#221). */
 function refundedReason(status: 'refunded' | 'partly_refunded' | 'disputed'): string {
@@ -2301,11 +2304,8 @@ async function deliverCounted(
   // #552: one payment is at most the gateway's part cap. Over it, plan again with the largest
   // coupons first (fewer, larger parts), and refuse before anything is spent if that is still over.
   const maxParts = await bundleMaxParts(ctx.api as unknown as BundleApi)
-  if (plan.parts.length > maxParts) {
-    const fewer = planParts(vouchers, amount, { largestFirst: true })
-    if (fewer.remaining === 0 && fewer.parts.length < plan.parts.length) plan = fewer
-    if (plan.parts.length > maxParts) throw new Error(tooManyPartsMessage(plan.parts.length, maxParts))
-  }
+  plan = withinPartCap(vouchers, amount, plan, maxParts)
+  if (plan.parts.length > maxParts) throw new Error(tooManyPartsMessage(plan.parts.length, maxParts))
 
   // #552: one atomic bundle request. `null` means an older gateway without the endpoint, which
   // keeps the per-part loop below.
@@ -2407,8 +2407,6 @@ export interface PendingBundle {
   parts: PendingBundlePart[]
 }
 
-/** The cap when the gateway does not advertise one (`gateway.atomic-send.bundle.max-parts`). */
-export const DEFAULT_BUNDLE_MAX_PARTS = 10
 /** How long the live wait follows a bundle: the 60 s prepare deadline plus the DM retry sweep. */
 export const BUNDLE_WAIT_MS = 180_000
 export const BUNDLE_POLL_INTERVAL_MS = 1_000
@@ -2461,14 +2459,6 @@ export async function bundleMaxParts(api: Pick<BundleApi, 'getConfig'>): Promise
   } catch {
     return DEFAULT_BUNDLE_MAX_PARTS
   }
-}
-
-/** The copy for a plan over the cap. Said before anything is spent. */
-export function tooManyPartsMessage(parts: number, max: number): string {
-  return (
-    `This amount needs ${parts} vouchers, and one payment can use at most ${max}. ` +
-    'Nothing was sent. Send a smaller amount, or send the rest as a second payment.'
-  )
 }
 
 /** Whether the gateway has no bundle endpoint (an older gateway): 404 or 405 on the POST. */

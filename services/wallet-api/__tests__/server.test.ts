@@ -1121,6 +1121,33 @@ describe('planning a spend', () => {
     ])
   })
 
+  /**
+   * #552 over HTTP: `maxParts` reaches the planner. Twelve €1 coupons expiring sooner beside a €50
+   * one, paying €12, is twelve parts soonest-first; held to 10 it is planned largest-first instead,
+   * one part; held to 0 parts it is refused as malformed, since no payment draws none.
+   */
+  it('holds a plan to maxParts, and refuses a maxParts that is not a positive whole number', async () => {
+    const coupons = [
+      coupon({ voucher_id: 'big', face_value: 5000, token_amount: 5000, expires_at: '2099-01-01T00:00:00Z' }),
+      ...Array.from({ length: 12 }, (_, i) =>
+        coupon({ voucher_id: `small-${String(i).padStart(2, '0')}`, face_value: 100, expires_at: '2098-01-01T00:00:00Z' }),
+      ),
+    ]
+
+    const capped = await plan(request({ coupons, amount: 1200 }))
+    const roomy = await plan(request({ coupons, amount: 1200, maxParts: 12 }))
+    const zero = await plan(request({ coupons, amount: 1200, maxParts: 0 }))
+    const fraction = await plan(request({ coupons, amount: 1200, maxParts: 2.5 }))
+
+    expect(capped.status).toBe(200)
+    expect(capped.body.parts).toEqual([{ couponId: 'big', amount: 1200, faceValue: 5000, whole: false }])
+    expect(roomy.body.parts).toHaveLength(12)
+    expect(zero.status).toBe(400)
+    expect(zero.body.field).toBe('maxParts')
+    expect(fraction.status).toBe(400)
+    expect(fraction.body.field).toBe('maxParts')
+  })
+
   it('prefers an exact match over splitting a larger coupon', async () => {
     const res = await plan(
       request({
