@@ -29,8 +29,10 @@ export function ReceiptCheckPage({
 } = {}) {
   const location = useLocation()
   const navigate = useNavigate()
-  const routed = location.state as { qr?: string; from?: string } | null
+  const routed = location.state as { qr?: string; from?: string; via?: 'text' } | null
   const qrText = routed?.qr
+  // Pasted rather than scanned: nothing was shown on a phone, whatever the presenter proof says.
+  const asText = routed?.via === 'text'
   // Back and Scan another return to the scanner that opened the check (the receipt scanner, or the
   // owner's general Scan). Only an in-app path is honoured.
   if (routed?.from?.startsWith('/') && !routed.from.startsWith('//')) scanPath = routed.from
@@ -61,7 +63,7 @@ export function ReceiptCheckPage({
       {result && isPaidToMe(result) ? (
         <EarlierChecks prior={result.priorChecks ?? []} forStall={forStall !== undefined} />
       ) : null}
-      {result ? <Details result={result} /> : null}
+      {result ? <Details result={result} asText={asText} /> : null}
       <Button variant="outline" className="mt-2 w-full" onClick={() => navigate(scanPath, { replace: true })}>
         <ScanLine className="mr-2 h-4 w-4" aria-hidden /> Scan another
       </Button>
@@ -212,6 +214,12 @@ const PRESENTER_LINE: Record<VerifyResult['presenter'], string> = {
   NOT_CHECKED: 'Not checked',
 }
 
+/**
+ * A pasted receipt. The presenter proof only says a phone signed it recently, and a text can be
+ * forwarded within that window, so it is never read as "the payer's own phone".
+ */
+const SENT_AS_TEXT = 'Sent as text, not shown in person'
+
 const MINT_LINE: Record<VerifyResult['mint'], string> = {
   confirmed: 'Collected',
   not_valid: 'No record of collection',
@@ -239,7 +247,7 @@ function CheckMark({ ok }: { ok: boolean | null }) {
   return <HelpCircle className="h-[1em] w-[1em] shrink-0 text-mono-500" role="img" aria-label="Not checked" />
 }
 
-function Details({ result }: { result: VerifyResult }) {
+function Details({ result, asText = false }: { result: VerifyResult; asText?: boolean }) {
   const s = result.summary
   return (
     <>
@@ -249,7 +257,7 @@ function Details({ result }: { result: VerifyResult }) {
           {s.payer ? <DetailRow label="Paid by" value={<IdentityInline pubkey={s.payer} />} /> : null}
           <DetailRow label="Date" value={formatDate(s.paidAt * 1000)} />
           {s.reference ? <DetailRow label="Reference" value={s.reference} /> : null}
-          <DetailRow label="Shown on" value={PRESENTER_LINE[result.presenter]} />
+          <DetailRow label="Shown on" value={asText ? SENT_AS_TEXT : PRESENTER_LINE[result.presenter]} />
           <DetailRow label="Mint" value={MINT_LINE[result.mint]} />
         </ListSection>
       ) : null}

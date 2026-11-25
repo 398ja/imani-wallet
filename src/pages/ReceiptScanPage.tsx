@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { Alert, BackLink, PageHeader, Screen } from '../components/ui'
 import { ScanRecipient } from '../components/ScanRecipient'
 import { isReceiptQr } from '../lib/receipts/verify'
+import { extractReceiptCode } from '../lib/receipts/shareText'
 
 /**
  * The receipt scanner (spec 049): the customer shows the receipt on their phone, the stall points
@@ -32,7 +33,7 @@ export function ReceiptScanPage({
   return (
     <Screen>
       <BackLink to={back.to} label={back.label} />
-      <PageHeader title="Check a receipt" subtitle="Scan the receipt on the customer’s phone" />
+      <PageHeader title="Check a receipt" subtitle="Scan the receipt on the customer’s phone, or paste one they sent" />
       {error ? (
         <div className="mb-3">
           <Alert>{error}</Alert>
@@ -40,14 +41,20 @@ export function ReceiptScanPage({
       ) : null}
       <ScanRecipient
         onFound={() => undefined}
-        manualLabel="Or paste the receipt code"
+        manualLabel="Or paste the receipt they sent you"
         placeholder="imrc1:…"
-        onText={(text) => {
-          if (!isReceiptQr(text)) {
+        pasteSubmits
+        onText={(text, source) => {
+          // A shared receipt arrives inside a message; the code is dug out of it.
+          const code = isReceiptQr(text) ? text.trim() : source === 'typed' ? extractReceiptCode(text) : null
+          if (!code) {
             setError('That is not a receipt. Ask the customer to tap Show receipt on the payment.')
             return true
           }
-          navigate('/receipt/check', { state: { qr: text.trim(), from: scanPath } })
+          setError(null)
+          navigate('/receipt/check', {
+            state: { qr: code, from: scanPath, ...(source === 'typed' ? { via: 'text' } : {}) },
+          })
           return true
         }}
       />

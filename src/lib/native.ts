@@ -82,6 +82,24 @@ export async function readClipboard(): Promise<string | null> {
 }
 
 /**
+ * Write text to the clipboard. The native plugin on device (the WebView's `navigator.clipboard`
+ * is not reliable there, see `readClipboard`), the web API elsewhere. False when neither worked.
+ */
+export async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    if (Capacitor.isNativePlatform()) {
+      const { Clipboard } = await import('@capacitor/clipboard')
+      await Clipboard.write({ string: text })
+      return true
+    }
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Whether a share sheet can be opened at all.
  *
  * Android's WebView does not implement the Web Share API, so `navigator.share`

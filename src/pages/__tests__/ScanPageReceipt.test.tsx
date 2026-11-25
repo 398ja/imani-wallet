@@ -13,7 +13,8 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 
 vi.mock('../../lib/scannerSupport', () => ({ scannerBlocked: async () => 'no camera in tests' }))
 vi.mock('imani-qr', async () => import('../../../packages/imani-qr/src/handlers'))
-vi.mock('../../lib/native', () => ({ readClipboard: async () => null }))
+let clipboard: string | null = null
+vi.mock('../../lib/native', () => ({ readClipboard: async () => clipboard }))
 const resolved: string[] = []
 vi.mock('../../lib/issue', () => ({
   toRecipientPubkey: async (t: string) => (resolved.push(t), null),
@@ -21,7 +22,8 @@ vi.mock('../../lib/issue', () => ({
 // Only the cheap prefix check is needed; the real one, so a change of prefix is caught here.
 vi.mock('../../lib/receipts', async () => {
   const { isReceiptQr } = await import('../../lib/receipts/verify')
-  return { isReceiptQr }
+  const { extractReceiptCode } = await import('../../lib/receipts/shareText')
+  return { isReceiptQr, extractReceiptCode }
 })
 
 const { ScanPage } = await import('../ScanPage')
@@ -31,6 +33,7 @@ function Where() {
   return (
     <p data-testid="where">
       {l.pathname + l.search}|{(l.state as { qr?: string } | null)?.qr ?? ''}
+      {(l.state as { via?: string } | null)?.via ? `|${(l.state as { via: string }).via}` : ''}
     </p>
   )
 }
@@ -51,13 +54,38 @@ async function scan(text: string) {
 afterEach(() => {
   cleanup()
   resolved.length = 0
+  clipboard = null
+})
+
+describe('a receipt sent as text, pasted on the Scan screen', () => {
+  it('opens the check with the code from inside the message, marked as sent as text', async () => {
+    // Arrange
+    const code = 'imrc1:AAECAwQFBgcICQ#a2V5'
+    clipboard = `My Imani payment receipt. Paste this code:\n\n${code}`
+    render(
+      <MemoryRouter initialEntries={['/scan']}>
+        <Routes>
+          <Route path="/scan" element={<ScanPage />} />
+          <Route path="*" element={<Where />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    // Act
+    fireEvent.click(await screen.findByRole('button', { name: /Paste code/ }))
+
+    // Assert
+    expect((await screen.findByTestId('where')).textContent).toBe(`/receipt/check|${code}|text`)
+    expect(resolved).toEqual([])
+  })
 })
 
 describe('a receipt on the Scan screen', () => {
   it('opens the receipt check with the payload in router state, not the URL', async () => {
     const qr = 'imrc1:AAECAwQFBgcICQ'
     await scan(`  ${qr} `)
-    expect((await screen.findByTestId('where')).textContent).toBe(`/receipt/check|${qr}`)
+    // Typed in, so the check is told it came as text rather than off a phone screen.
+    expect((await screen.findByTestId('where')).textContent).toBe(`/receipt/check|${qr}|text`)
     expect(resolved).toEqual([])
   })
 

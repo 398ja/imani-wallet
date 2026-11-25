@@ -344,3 +344,40 @@ describe('the memo on the card (FR-002a)', () => {
     expect((await screen.findByTestId('receipt-memo')).textContent).toBe('Rent, November')
   })
 })
+
+describe('a receipt sent as text', () => {
+  it('never says the payer’s own phone, even with a fresh presenter proof', async () => {
+    // Arrange
+    next = result({ mine: 'payee', mint: 'confirmed', presenter: 'PRESENTER_IS_PAYER' })
+
+    // Act
+    open({ qr: 'imrc1:x', via: 'text' })
+
+    // Assert
+    expect(await screen.findByText('Sent as text, not shown in person')).toBeTruthy()
+    expect(screen.queryByText('The payer’s own phone')).toBeNull()
+  })
+
+  it('is still checked in full: the verdict is the same as for a scan', async () => {
+    // Arrange
+    next = result({ mine: 'payee', mint: 'confirmed' })
+
+    // Act
+    open({ qr: 'imrc1:x', via: 'text' })
+
+    // Assert
+    expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('Paid to you')
+    expect(seen).toEqual(['imrc1:x'])
+  })
+
+  it('a scanned receipt keeps its presenter line', async () => {
+    // Arrange
+    next = result({ mine: 'payee', mint: 'confirmed', presenter: 'PRESENTER_IS_PAYER' })
+
+    // Act
+    open({ qr: 'imrc1:x' })
+
+    // Assert
+    expect(await screen.findByText('The payer’s own phone')).toBeTruthy()
+  })
+})
