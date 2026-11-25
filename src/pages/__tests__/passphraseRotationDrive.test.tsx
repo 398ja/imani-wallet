@@ -7,14 +7,18 @@ import { MemoryRouter } from 'react-router-dom'
 import { nip19 } from 'nostr-tools'
 
 const loadKey = vi.fn(async () => 'ab'.repeat(32))
-const save = vi.fn(async () => {})
+// Like nap: re-encrypting writes a new envelope, so the stored key's fingerprint changes.
+const save = vi.fn(async () => {
+  localStorage.setItem('imani-wallet-key', JSON.stringify({ ciphertext: 'new', iv: 'i', kdf: 'k' }))
+})
 vi.mock('../../lib/nap', () => ({ keyStore: { loadKey, save } }))
 vi.mock('../../lib/legacyBridge', () => ({ legacyApi: async () => ({}) }))
 
 const listBackups = vi.fn<() => Promise<unknown[]>>(async () => [])
 const putBackup = vi.fn<(json: string) => Promise<void>>(async () => {})
+const driveConfigured = vi.fn(() => true)
 vi.mock('../../lib/drive', () => ({
-  driveConfigured: () => true,
+  driveConfigured: () => driveConfigured(),
   putBackup,
   // #348: the hook writes through the read-back variant.
   putAndVerifyBackup: putBackup,
@@ -134,7 +138,7 @@ describe('changing the passphrase touches only the backups that exist', () => {
   it('with a file backup recorded, offers a new file and records it once saved', async () => {
     recordBackup(PUBKEY, 'file', 1)
     await rotate()
-    expect(await screen.findByText('Your backup file still opens with your old passphrase.')).toBeTruthy()
+    expect(await screen.findByText(/Your downloaded backup file could not be updated: it still opens with your old passphrase\. Download a new one/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Save new backup file' }))
     await waitFor(() => expect(downloadText).toHaveBeenCalledTimes(1))
@@ -148,7 +152,7 @@ describe('changing the passphrase touches only the backups that exist', () => {
     await rotate()
     expect(await screen.findByText(/Passphrase changed/)).toBeTruthy()
     expect(
-      await screen.findByText('If you saved a backup file before, it still opens with your old passphrase.'),
+      await screen.findByText(/If you saved a backup file before, it still opens with your old passphrase\. Download a new one/),
     ).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Save new backup file' })).toBeTruthy()
     const panel = screen.getByRole('button', { name: 'Change passphrase' }).parentElement!
@@ -202,5 +206,78 @@ describe('changing the passphrase with no Drive record asks Drive', () => {
       await screen.findByText('We could not check Google Drive. If you backed up there, back up again under Settings > Backup.'),
     ).toBeTruthy()
     expect(putBackup).not.toHaveBeenCalled()
+  })
+})
+
+const { recordKeyBackup, loadKeyBackups, currentKeyFingerprint } = await import('../../lib/keyBackups')
+const { currentKeyBackupState } = await import('../../lib/keyBackupState')
+
+describe('after a passphrase change, every backup is updated or flagged', () => {
+  const OLD_ENVELOPE = { ciphertext: 'old', iv: 'i', kdf: 'k' }
+  beforeEach(() => {
+    driveConfigured.mockReturnValue(true)
+    localStorage.setItem('imani-wallet-key', JSON.stringify(OLD_ENVELOPE))
+  })
+
+  it('with Drive and a file: Drive is rewritten (steady green), the file is stale and the user told to re-download', async () => {
+    // Arrange
+    recordBackup(PUBKEY, 'drive', 1)
+    recordBackup(PUBKEY, 'file', 1)
+    recordKeyBackup(PUBKEY, 'drive', { verified: true })
+    recordKeyBackup(PUBKEY, 'file', { fileName: 'me.json' })
+    const oldFp = currentKeyFingerprint()
+    // Act
+    await rotate()
+    // Assert
+    expect(await screen.findByText(/Google Drive backup was updated/)).toBeTruthy()
+    expect(screen.getByText(/downloaded backup file could not be updated.*Download a new one/)).toBeTruthy()
+    const newFp = currentKeyFingerprint()
+    expect(newFp).not.toBe(oldFp)
+    const list = loadKeyBackups(PUBKEY)
+    expect(list.some((b) => b.location === 'drive' && b.keyFingerprint === newFp)).toBe(true)
+    expect(list.some((b) => b.location === 'file' && b.keyFingerprint === newFp)).toBe(false)
+    expect(currentKeyBackupState(PUBKEY)).toBe('verified')
+  })
+
+  it('with only a file: the key turns orange until a new file is downloaded, then blinking green', async () => {
+    // Arrange
+    recordBackup(PUBKEY, 'file', 1)
+    recordKeyBackup(PUBKEY, 'file', { fileName: 'me.json' })
+    expect(currentKeyBackupState(PUBKEY)).toBe('local')
+    // Act
+    await rotate()
+    await screen.findByText(/Passphrase changed/)
+    const afterChange = currentKeyBackupState(PUBKEY)
+    fireEvent.click(screen.getByRole('button', { name: 'Save new backup file' }))
+    await screen.findByText(/New backup file saved/)
+    // Assert
+    expect(afterChange).toBe('missing')
+    expect(currentKeyBackupState(PUBKEY)).toBe('local')
+    expect(putBackup).not.toHaveBeenCalled()
+  })
+
+  it('with a Drive record this deployment cannot reach: says Drive still has the old passphrase', async () => {
+    // Arrange
+    driveConfigured.mockReturnValue(false)
+    recordBackup(PUBKEY, 'drive', 1)
+    recordKeyBackup(PUBKEY, 'drive', { verified: true })
+    // Act
+    await rotate()
+    // Assert
+    expect(await screen.findByText(/Google Drive backup could not be updated from here/)).toBeTruthy()
+    expect(putBackup).not.toHaveBeenCalled()
+    expect(currentKeyBackupState(PUBKEY)).toBe('missing')
+  })
+
+  it('when the Drive rewrite fails, the key does not stay green', async () => {
+    // Arrange
+    recordBackup(PUBKEY, 'drive', 1)
+    recordKeyBackup(PUBKEY, 'drive', { verified: true })
+    putBackup.mockRejectedValueOnce(new Error('403'))
+    // Act
+    await rotate()
+    // Assert
+    expect(await screen.findByText(/still opens with the old one/)).toBeTruthy()
+    expect(currentKeyBackupState(PUBKEY)).toBe('missing')
   })
 })
