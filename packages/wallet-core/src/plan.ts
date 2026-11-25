@@ -28,7 +28,7 @@
 
 import type { Voucher } from '@imani/voucher-send'
 
-import { planParts, selectVouchers, splitObstacle, checkSplittable, minSplitStep } from './spend'
+import { chooseSpend, splitObstacle, checkSplittable, minSplitStep } from './spend'
 import { stallKey } from './holding'
 import { toEpochMs } from './expiry'
 
@@ -163,15 +163,17 @@ export function planSpend({
   const base = { available, eligibleCount: eligible.length }
 
   /**
-   * One coupon first, exactly as `deliver` does.
+   * The app's one rule, `chooseSpend`, so the API and the Pay button draw the same coupons.
    *
-   * Fewer mint splits and one DM, and `selectVouchers` already prefers an exact
-   * match over splitting a larger coupon — so this is not merely an
-   * optimisation, it is the rule that keeps big coupons whole for big payments.
+   * Soonest-expiring first: one coupon only when no usable coupon expires sooner than it, else the
+   * bundle that starts at the soonest. This was its own "any single coupon that covers it wins"
+   * check, which `deliver` dropped on 2026-11-17 and this kept: €2 expiring tomorrow and €10
+   * expiring next year, paying €5, planned €5 of the €10 here while the app spent the €2 first,
+   * and the €2 lapsed for any program paying through the API.
    */
-  const single = selectVouchers(eligible, amount)
-  if (single.length > 0) {
-    const coupon = single[0]
+  const choice = chooseSpend(eligible, amount)
+  if (choice.kind === 'single') {
+    const coupon = choice.candidates[0]
     const face = coupon.face_value ?? 0
     return {
       ...base,
@@ -187,7 +189,7 @@ export function planSpend({
     }
   }
 
-  const plan = planParts(eligible, amount)
+  const plan = choice.plan
   if (plan.remaining === 0) {
     return {
       ...base,
