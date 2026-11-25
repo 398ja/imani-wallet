@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChevronRight, Link2 } from 'lucide-react'
 import type { Voucher } from '@imani/voucher-send'
+import type { VoucherRow } from '@imani/wallet-storage'
 
 import { Alert, BackLink, Button, Centered, Input, Notice, PageHeader, Panel, Screen } from '../components/ui'
 import { ClaimLinkPanel } from '../components/CashbackClaimLink'
@@ -19,7 +20,9 @@ import {
   giftExpiry,
   type GiftExclusion,
 } from '../lib/giftLink'
-import { linkLimitMessage, sendGift, settleAndCountLinks, warmCashlinkPath, type LinkCounts } from '../lib/giftLinks'
+import { cashlinkDirectOpen, linkLimitMessage, sendGift, settleAndCountLinks, warmCashlinkPath, type LinkCounts } from '../lib/giftLinks'
+import { cashlinkDebit } from '../lib/cashlinkDebit'
+import { debitNote } from '../lib/sendFace'
 import { useMerchantLabel } from '../lib/identity'
 import { toMerchants, type Merchant } from '../lib/merchants'
 import { SendOutcomeUnknownError, splitObstacle, withoutInFlight } from '../lib/pay'
@@ -100,6 +103,8 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const unit = params.get('unit')
   const back = params.get('from') ? `/send?from=${encodeURIComponent(params.get('from')!)}` : '/send'
   const [merchants, setMerchants] = useState<Merchant[] | null>(null)
+  /** The rows the Cashlink is planned from, so the confirm screen's figure follows `sendGift`. */
+  const [rows, setRows] = useState<VoucherRow[]>([])
   const [counts, setCounts] = useState<LinkCounts | null>(null)
   /** When the screen opened, ms: what "about to expire" is measured from on the picker. */
   const [openedAt] = useState(() => Date.now())
@@ -114,7 +119,10 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const [sent, setSent] = useState<{ link: string; x: number; face: string; delivered: boolean; onItsOwn: boolean } | null>(null)
 
   useEffect(() => {
-    listVouchers().then((rows) => setMerchants(toMerchants(withoutInFlight(rows, pubkey))))
+    listVouchers().then((all) => {
+      setRows(all)
+      setMerchants(toMerchants(withoutInFlight(all, pubkey)))
+    })
     // #295 phase 0: take back expired links and mark claimed ones BEFORE counting, so links that
     // have expired never block a new one.
     void settleAndCountLinks().then(setCounts, () => setCounts({ waiting: 0, expiredUnreturned: 0 }))
@@ -252,13 +260,29 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
   const x = giftExpiry(confirmedAt ?? 0, effectiveDays, expiries)
 
   if (confirming && minor !== null) {
-    const face = formatFace(minor, chosen)
+    // #635: what really leaves. Exact on the locked path; on the ordinary send an NGN coupon sends
+    // the fewest sats worth the request, up to a sat more, as Send and Pay already say.
+    const debit = cashlinkDebit({
+      rows,
+      vouchers: chosen.vouchers,
+      payer: pubkey,
+      stall: chosen.merchant.pubkey,
+      unit: chosen.unit,
+      amount: minor,
+      x,
+      nowS: Math.floor((confirmedAt ?? openedAt) / 1000),
+      direct: cashlinkDirectOpen(pubkey),
+    })
+    const overNote = debitNote(minor, debit, (v) => formatFace(v, chosen))
+    const face = formatFace(overNote ? debit : minor, chosen)
     return (
       <Screen>
         <BackLink to="/" label="Cancel" />
         <PageHeader title="Confirm send" />
         <Panel className="mb-6 p-5">
+          {/* #635: the headline is what really leaves; the asked amount, when it differs, under it. */}
           <p className="text-amount text-mono-900 dark:text-mono-50">{face}</p>
+          {overNote && <p className="mt-1 text-xs text-mono-500">You asked to send {formatFace(minor, chosen)}.</p>}
           <p className="mt-3 text-sm text-mono-700 dark:text-mono-200">
             Anyone with the link can claim {face} from <MerchantText merchant={chosen.merchant} />. You can take it back until it is
             claimed.
@@ -266,6 +290,7 @@ export function SendLinkPage({ pubkey }: { pubkey: string }) {
           <p className="mt-2 text-sm text-mono-500">
             The link expires on {formatDate(x * 1000)}. {RETURN_PROMISE_COPY}
           </p>
+          {overNote && <p className="mt-3 text-xs text-mono-500">{overNote}</p>}
         </Panel>
         {/* Spec 5.4: a handle binds the voucher to its recipient, a link does not. */}
         <p className="mb-4 text-sm text-mono-500 dark:text-mono-400">

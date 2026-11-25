@@ -918,11 +918,24 @@ type DirectTry =
   | { kind: 'legacy'; why: string }
 
 /**
+ * Whether `sendGift` will try the locked path (#543) for this payer, as `tryDirect` decides: not a
+ * merchant, and a key this wallet can read (a derived link index). For the confirm screen's figure.
+ */
+export function cashlinkDirectOpen(payer: string): boolean {
+  if (cashlinkSeam.isMerchant(payer)) return false
+  const id = identitySecret()
+  if (!id) return false
+  id.fill(0)
+  return true
+}
+
+/**
  * #543: make the Cashlink locked from the start (`cashlinkDirect.ts`), or say why not while nothing
  * has moved, so the caller takes the legacy path. Throws only once value has moved and no link can
  * be shown (all of it kept as sats, or part way: the next start finishes it).
  */
 async function tryDirect(req: { payer: string; merchant: Merchant; unit: string; amount: number; memo?: string; x: number; i: number | undefined; nowMs: number }): Promise<DirectTry> {
+  // Keep in step with `cashlinkDirectOpen`, which tells the confirm screen which path this takes.
   if (cashlinkSeam.isMerchant(req.payer)) return { kind: 'legacy', why: 'merchant' }
   if (req.i === undefined) return { kind: 'legacy', why: 'remote_signer' }
   let rows: import('@imani/wallet-storage').VoucherRow[]
