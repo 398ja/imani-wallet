@@ -4,8 +4,8 @@
 /**
  * #265: what the coupon screens say about expiry.
  *
- *  - the detail page: absolute date plus a countdown, "Use it before …" inside the week, and an
- *    expired coupon that no longer reads "Status active" over a live QR code;
+ *  - the opened row (the detail page until the voucher-rows change): absolute date plus a
+ *    countdown, and an expired coupon that never reads "Ready to use";
  *  - the list: badges by tone with text and an accessible label, soonest first by default with
  *    "Newest" kept as an option, and an "Expired (N)" group instead of silent removal.
  */
@@ -33,9 +33,10 @@ vi.mock('../../lib/nap', async (importOriginal) => ({
   getSigner: () => ({ pubkey: 'e'.repeat(64) }),
 }))
 
-const { CouponPage } = await import('../RecordDetailPages')
+const { CouponRedirect } = await import('../RecordDetailPages')
 const { CouponsPage } = await import('../RecordListPages')
 const { formatDate } = await import('../../lib/format')
+const { voucherStatusKind } = await import('../../lib/voucherStatus')
 
 function row(token_id: string, expiresInMs: number | undefined, over: Partial<VoucherRow> = {}): VoucherRow {
   return {
@@ -55,14 +56,26 @@ function row(token_id: string, expiresInMs: number | undefined, over: Partial<Vo
   }
 }
 
-const openCoupon = (id: string) =>
+/**
+ * Open one voucher the way an old link does: `/coupon/:id` redirects to the stall's list with
+ * that voucher open. Resolves to the opened row's panel.
+ */
+const openCoupon = async (id: string) => {
   render(
     <MemoryRouter initialEntries={[`/coupon/${id}`]}>
       <Routes>
-        <Route path="/coupon/:tokenId" element={<CouponPage />} />
+        <Route path="/coupon/:tokenId" element={<CouponRedirect />} />
+        <Route path="/merchants/:pubkey/vouchers" element={<CouponsPage />} />
       </Routes>
     </MemoryRouter>,
   )
+  const button = await waitFor(() => {
+    const open = screen.getAllByRole('button', { expanded: true })
+    expect(open).toHaveLength(1)
+    return open[0]!
+  })
+  return document.getElementById(button.getAttribute('aria-controls')!)!
+}
 
 const openList = () =>
   render(
@@ -73,12 +86,9 @@ const openList = () =>
     </MemoryRouter>,
   )
 
-/** The coupon rows' targets, in order. The back link is a link too, and is not a coupon. */
-const couponLinks = () =>
-  screen
-    .getAllByRole('link')
-    .map((a) => a.getAttribute('href') ?? '')
-    .filter((href) => href.startsWith('/coupon/'))
+/** The voucher rows, in order, by token id. Each is a disclosure button, not a link. */
+const couponLinks = (root: ParentNode = document) =>
+  [...root.querySelectorAll('[data-voucher-row]')].map((el) => `/coupon/${el.getAttribute('data-voucher-row')}`)
 
 beforeEach(() => {
   localStorage.clear()
@@ -86,61 +96,65 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-describe('coupon detail (#265)', () => {
-  it('a live coupon inside the week: date plus countdown, "Use it before", and no QR (#419)', async () => {
+describe('the opened row (was the coupon detail screen, #265)', () => {
+  it('a live coupon inside the week: date plus countdown, a ready badge, and no QR (#419)', async () => {
     h.rows = [row('live', 3 * DAY + 3_600_000)]
-    openCoupon('live')
+    const panel = await openCoupon('live')
     const expires = h.rows[0]!.expires_at!
-    await screen.findByText(`${formatDate(expires)} · in 3 days`)
-    expect(screen.getByText(`Use it before ${formatDate(expires)}`)).toBeTruthy()
-    expect(screen.getByText('active')).toBeTruthy()
-    // The code used to render asynchronously (qrcode): give it the chance before saying it did not.
+    expect(within(panel).getByText(`${formatDate(expires)} · in 3 days`)).toBeTruthy()
+    expect(within(panel).getByText('Ready to use')).toBeTruthy()
+    // The row's own badge carries the urgency the old "Use it before" callout did.
+    expect(screen.getByRole('img', { name: /^Expires in 3 days, on / })).toBeTruthy()
     await new Promise((r) => setTimeout(r, 50))
     expect(screen.queryByRole('img', { name: /^Redemption code/i })).toBeNull()
   })
 
-  it('beyond the week: the countdown, but no callout', async () => {
+  it('beyond the week: the countdown, but no badge', async () => {
     h.rows = [row('far', 30 * DAY + 3_600_000)]
-    openCoupon('far')
-    await screen.findByText(/· in 30 days$/)
-    expect(screen.queryByText(/^Use it before/)).toBeNull()
+    const panel = await openCoupon('far')
+    expect(within(panel).getByText(/· in 30 days$/)).toBeTruthy()
+    expect(screen.queryByRole('img', { name: /^Expires in/ })).toBeNull()
   })
 
-  it('an expired coupon: "Expired", no QR code, and why', async () => {
+  it('an expired coupon: "Expired", never "Ready to use", opened inside the Expired group', async () => {
     h.rows = [row('gone', -3_600_000)]
-    openCoupon('gone')
+    const panel = await openCoupon('gone')
     const expires = h.rows[0]!.expires_at!
-    await screen.findByText(`This voucher expired on ${formatDate(expires)}. It can no longer be spent.`)
-    expect(screen.queryByText('active')).toBeNull()
-    expect(screen.getByText('Expired')).toBeTruthy()
-    expect(screen.getByText(`Expired on ${formatDate(expires)}`)).toBeTruthy()
-    // The code renders asynchronously (qrcode), so give it the chance to appear before saying it did not.
+    expect(within(panel).queryByText('Ready to use')).toBeNull()
+    expect(within(panel).getByText('Expired')).toBeTruthy()
+    expect(within(panel).getByText(`Expired on ${formatDate(expires)}`)).toBeTruthy()
+    expect(panel.closest('details')?.hasAttribute('open')).toBe(true)
     await new Promise((r) => setTimeout(r, 50))
     expect(screen.queryByRole('img', { name: /^Redemption code/i })).toBeNull()
-    expect(screen.queryByText(/^Use it before/)).toBeNull()
   })
 
-  it('a coupon already spent another way (swapped back, spent) gets no "Use it before" and keeps its status', async () => {
-    // Review of #269: the gate was `isRedeemed`, which only knows 'redeemed', so a swapped-back or
-    // spent coupon (reachable from an older bell entry) was told to "use it before" a date, and
-    // once past it read "Expired / It can no longer be spent" instead of what happened to it.
-    h.rows = [
-      row('swapped', 3 * DAY, { status: 'swapped_to_sats' }),
-      row('spentOld', -3_600_000, { status: 'spent' }),
-    ]
-    openCoupon('swapped')
-    await screen.findByText('swapped_to_sats')
-    expect(screen.queryByText(/^Use it before/)).toBeNull()
-    cleanup()
-    openCoupon('spentOld')
-    await screen.findByText('spent')
-    expect(screen.queryByText(/It can no longer be spent\.$/)).toBeNull()
+  it('a coupon already spent another way keeps what happened to it, and is not "Expired"', async () => {
+    // Review of #269: a swapped-back or spent coupon must read as what happened to it, never as
+    // live or expired.
+    expect(voucherStatusKind(row('swapped', 3 * DAY, { status: 'swapped_to_sats' }))).toBe('swapped')
+    expect(voucherStatusKind(row('spentOld', -3_600_000, { status: 'spent' }))).toBe('spent')
+    expect(voucherStatusKind(row('p', DAY, { status: 'pending' }))).toBe('pending')
+    expect(voucherStatusKind(row('r', -DAY, { status: 'redeemed' }))).toBe('redeemed')
+    expect(voucherStatusKind(row('x', -DAY))).toBe('expired')
   })
 
-  it('a coupon with no expiry still says so, on the card (#419) and in the list', async () => {
+  it('a coupon with no expiry says so in the opened row', async () => {
     h.rows = [row('never', undefined)]
-    openCoupon('never')
-    expect(await screen.findAllByText('No expiry')).toHaveLength(2)
+    const panel = await openCoupon('never')
+    expect(within(panel).getByText('No expiry')).toBeTruthy()
+  })
+
+  it('a link to a voucher no longer held says so, with a way home', async () => {
+    h.rows = []
+    render(
+      <MemoryRouter initialEntries={['/coupon/missing']}>
+        <Routes>
+          <Route path="/coupon/:tokenId" element={<CouponRedirect />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('This voucher is no longer in your wallet.')
+    expect(screen.getByRole('link', { name: /Back to Home/ }).getAttribute('href')).toBe('/')
   })
 })
 
@@ -152,7 +166,7 @@ describe('coupon list (#265)', () => {
       row('day', 12 * 3_600_000 + 60_000, { created_at: '2026-10-05T00:00:00Z' }),
     ]
     openList()
-    await screen.findAllByRole('link')
+    await screen.findByText('3 vouchers')
     const order = couponLinks()
     expect(order).toEqual(['/coupon/day', '/coupon/week', '/coupon/far'])
 
@@ -171,7 +185,7 @@ describe('coupon list (#265)', () => {
       row('week', 5 * DAY, { created_at: '2026-10-01T00:00:00Z' }),
     ]
     openList()
-    await screen.findAllByRole('link')
+    await screen.findByText('2 vouchers')
     fireEvent.click(screen.getByRole('button', { name: 'Newest' }))
     await waitFor(() =>
       expect(couponLinks()).toEqual(['/coupon/far', '/coupon/week']),
@@ -186,8 +200,7 @@ describe('coupon list (#265)', () => {
     const summary = screen.getByText('Expired (2)')
     const group = summary.closest('details')!
     expect(group.hasAttribute('open')).toBe(false)
-    const rows = within(group).getAllByRole('link')
-    expect(rows.map((a) => a.getAttribute('href'))).toEqual(['/coupon/x1', '/coupon/x2'])
+    expect(couponLinks(group)).toEqual(['/coupon/x1', '/coupon/x2'])
     expect(within(group).getAllByText(/^Expired /).length).toBeGreaterThanOrEqual(2)
   })
 
@@ -222,9 +235,9 @@ describe('one voucher held as several rows reads as ONE voucher', () => {
     expect(couponLinks()).toHaveLength(2)
   })
 
-  it('the detail screen shows the whole voucher, opened from any of its rows', async () => {
+  it('a link to any of its rows opens the one row, at the whole value', async () => {
     h.rows = sixPieces()
-    openCoupon('piece-3')
-    await waitFor(() => expect(screen.getAllByText('€8.98').length).toBeGreaterThan(0))
+    const panel = await openCoupon('piece-3')
+    expect(panel.getAttribute('aria-label')).toBe('€8.98')
   })
 })

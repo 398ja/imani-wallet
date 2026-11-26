@@ -61,6 +61,14 @@ interface PassProps {
    * nothing to wait for.
    */
   loadingIssuer?: boolean
+  /**
+   * The customer home deck's card: one and a half times its natural height (150px to 225px), width
+   * unchanged, so the stall's banner has room to be seen. The extra height opens between the name
+   * and the amount (the amount sits at the foot, where a card's figure reads), and the banner
+   * crops by `object-cover` from its centre. A minimum, not a fixed height, so larger text still
+   * grows the card. Only the home deck passes it: the merchant pages keep their cards as they are.
+   */
+  tall?: boolean
 }
 
 /**
@@ -103,7 +111,7 @@ function IssuerBlock({ to, children }: { to?: string; children: ReactNode }) {
   )
 }
 
-export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
+export function Pass({ pass, to, issuerTo, loadingIssuer, tall }: PassProps) {
   const balance = pass.storeCard.primaryFields?.[0]
   const expiry = pass.storeCard.auxiliaryFields?.[0]
   const logoUrl = pass.userInfo.logoUrl
@@ -138,7 +146,10 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
 
   const card = (
     <div
-      className="relative isolate overflow-hidden rounded-2xl border border-mono-200 dark:border-mono-800"
+      className={`relative isolate overflow-hidden rounded-2xl border border-mono-200 dark:border-mono-800 ${
+        tall ? 'flex min-h-[225px] flex-col' : ''
+      }`}
+      data-pass-tall={tall || undefined}
       style={{
         // Still painted under the picture: it is the whole card when there is
         // no picture or the link is dead, exactly as before.
@@ -162,7 +173,7 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
         </div>
       )}
 
-      <div className="relative p-5">
+      <div className={tall ? 'relative flex flex-1 flex-col p-5' : 'relative p-5'}>
         {/*
           The imani mark, top right (#419): whose wallet this voucher lives in,
           beside whose stall issued it. The bare mark with no wordmark and no
@@ -245,7 +256,7 @@ export function Pass({ pass, to, issuerTo, loadingIssuer }: PassProps) {
           // The amount alone (#419): the big figure on a voucher is plainly
           // what it is worth, so the "Balance" label is not printed. It stays on
           // the pass record, which mirrors the Java mapper.
-          <div className="mt-5">
+          <div className={tall ? 'mt-auto pt-5' : 'mt-5'}>
             <p className="text-amount">{fieldValue(balance)}</p>
           </div>
         )}

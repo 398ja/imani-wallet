@@ -13,7 +13,8 @@
  *     E2E_VALIDITY_DAYS=1 reproduces the probe's 1-day coupon and skips the 6-day step.
  *  4. Asserts: badges (text, tone, aria-label) on the list, deck and merchant page; one bell
  *     entry per threshold with no duplicate after a reload; the banner and its dismissal; the
- *     Expired group; the fixed detail page (no "active", no QR, "Expired on …").
+ *     Expired group; the opened voucher row (no "Ready to use", no QR, "Expired on …"). An old
+ *     `/coupon/:id` link opens that row in its stall's list (the detail screen is gone).
  *
  *   E2E_BASE=http://localhost:<edge> E2E_BUNDLE_DIR=<dist> E2E_CLAIM_HOST_VIA=http://localhost:<edge> \
  *   E2E_SHOTS=<dir> npx tsx e2e/voucherExpiry.e2e.ts
@@ -50,6 +51,12 @@ function check(name: string, ok: boolean, detail?: unknown): void {
     console.log(`  FAIL ${name}${detail === undefined ? '' : ` :: ${JSON.stringify(detail).slice(0, 600)}`}`)
     errors.push(name)
   }
+}
+/** The voucher row the page opened (aria-expanded), its panel's text. */
+const openedRow = async (p: Page) => {
+  const button = p.locator('[aria-expanded="true"][aria-controls]').first()
+  const id = await button.getAttribute('aria-controls')
+  return id ? (await p.locator(`[id="${id}"]`).innerText()).replace(/\s+/g, ' ') : ''
 }
 const text = async (p: Page) => (await p.locator('body').innerText()).replace(/\s+/g, ' ')
 
@@ -229,7 +236,7 @@ async function main() {
     const deck = await badge(c)
     check('deck badge is amber, with text and a dated label', deck?.tone === 'soon' && /^Expires in 5 days$/.test(deck.text ?? '') && /^Expires in 5 days, on /.test(deck.label ?? ''), deck)
     const e7 = await expiringEntries(c)
-    check('one 7-day bell entry, linking to the coupon', e7.length === 1 && e7[0]!.id.endsWith(':7d') && e7[0]!.url === `/coupon/${encodeURIComponent(tokenId)}`, e7)
+    check('one 7-day bell entry, linking to the coupon', e7.length === 1 && e7[0]!.id.endsWith(':7d') && e7[0]!.url === `/merchants/${issuer}/vouchers?open=${encodeURIComponent(tokenId)}`, e7)
     // Filed at the FIRST open inside the window (the real-time reload, ~6 d 23 h left), so it says
     // the days left at that moment.
     check('entry body names the value and stall', /^Your €2\.50 voucher from Test Stall expires in [56] days\.$/.test(e7[0]?.body ?? ''), e7[0]?.body)
@@ -240,9 +247,10 @@ async function main() {
     await shoot(c, '3-6d-coupon-list')
     check('list badge', (await badge(c))?.tone === 'soon')
     await go(c, `/coupon/${encodeURIComponent(tokenId)}`)
-    await shoot(c, '4-6d-coupon-detail')
-    const detail = await text(c)
-    check('detail: countdown and "Use it before"', /· in 5 days/.test(detail) && /Use it before /.test(detail), detail.slice(0, 600))
+    await c.waitForTimeout(1000)
+    await shoot(c, '4-6d-coupon-open')
+    const detail = await openedRow(c)
+    check('old link opens the row in place: countdown and the amber badge', /· in 5 days/.test(detail) && (await badge(c))?.tone === 'soon', detail.slice(0, 600))
     // The bell, opened.
     await go(c, '/')
     const bell = c.locator('summary[aria-label^="Notifications"]').first()
@@ -273,8 +281,9 @@ async function main() {
   await shoot(c, '7-12h-coupon-list')
   check('list badge is red', (await badge(c))?.tone === 'urgent')
   await go(c, `/coupon/${encodeURIComponent(tokenId)}`)
-  await shoot(c, '8-12h-coupon-detail')
-  check('detail: red "Use it before"', (await c.locator('[role="status"][data-expiry-tone="urgent"]').count()) === 1)
+  await c.waitForTimeout(1000)
+  await shoot(c, '8-12h-coupon-open')
+  check('opened row: red badge', (await c.locator('[data-expiry-tone="urgent"]').count()) >= 1)
 
   // A real reload: the bell must not grow. The skewed clock would 401 NAP, so the clock goes back
   // to real time for the reload (still inside the 1-day window only if the coupon is), and the
@@ -302,10 +311,10 @@ async function main() {
   check('the expired row says when', /Expired \d/.test(await text(c)))
   await go(c, `/coupon/${encodeURIComponent(tokenId)}`)
   await c.waitForTimeout(1000)
-  await shoot(c, '11-expired-coupon-detail')
-  const detailX = await text(c)
-  check('detail: no "active"', !/\bStatus active\b/.test(detailX) && !/Status\s*active/.test(detailX), detailX.slice(0, 600))
-  check('detail: "Expired on …" and why', /Expired on /.test(detailX) && /This voucher expired on .+\. It can no longer be spent\./.test(detailX))
+  await shoot(c, '11-expired-coupon-open')
+  const detailX = await openedRow(c)
+  check('opened row: never "Ready to use"', !/Ready to use/.test(detailX), detailX.slice(0, 600))
+  check('opened row: "Expired" and "Expired on …"', /Expired on /.test(detailX) && /\bExpired\b/.test(detailX))
   check('detail: no redemption QR', (await c.locator('img[alt^="Redemption code"]').count()) === 0)
   check('no page errors', pageErrors.length === 0, pageErrors)
 

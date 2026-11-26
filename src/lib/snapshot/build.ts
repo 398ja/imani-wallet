@@ -190,6 +190,10 @@ function voucherRow(v: VoucherRow, ctx: ReduceContext, shape: SnapshotSources['p
     face_unit: closed('unit', v.face_unit),
     face_decimals: numOr(v.face_decimals),
     backing_strategy: closed('backingStrategy', v.backing_strategy),
+    // Face minor units per sat. Stored on newer rows; derived from face and sats on older ones, as
+    // the wallet itself values them (merchants.ts `issuanceRatioOf`). The customer no longer sees
+    // it (the voucher detail screen is gone), so this is the only place it is still read.
+    issuance_ratio: ratioOf(v),
     status: closed('voucherStatus', v.status),
     source_transport: closed('sourceTransport', r.source_transport),
     expires_at: numOr(v.expires_at) ?? timeStr(v.expires_at),
@@ -203,7 +207,18 @@ function voucherRow(v: VoucherRow, ctx: ReduceContext, shape: SnapshotSources['p
     proof_count: s?.amounts.length,
     proof_amounts: s?.amounts,
     has_dleq: s?.hasDleq,
+    // The sender's note on a voucher, by shape only, as a transaction's (rule 3). Its text, when
+    // opted in, goes to the operator-only envelope keyed by `token`.
+    memo_summary: memoSummary(r.memo, ctx),
   }
+}
+
+function ratioOf(v: VoucherRow): number | undefined {
+  const stored = numOr((v as unknown as Rec).issuance_ratio)
+  if (stored !== undefined && stored > 0) return stored
+  const face = numOr(v.face_value)
+  const sats = numOr(v.token_amount)
+  return face !== undefined && sats !== undefined && sats > 0 ? Number((face / sats).toFixed(6)) : undefined
 }
 
 function transactionRow(t: TransactionRow, ctx: ReduceContext, stalls: Set<string>, self: string) {
@@ -396,6 +411,11 @@ function assemble(sources: SnapshotSources, opts: BuildOptions, kCorr: Uint8Arra
       const p = transactions[i].tx
       if (m !== undefined && p) operatorMemos[p] = m
     })
+    sources.vouchers.forEach((v, i) => {
+      const m = name.memo((v as unknown as Rec).memo)
+      const p = vouchers[i].token
+      if (m !== undefined && p) operatorMemos[p] = m
+    })
   }
   const errors = sources.errors.map((e) => errorRow(e))
   const consoleOut = consoleRows.map((e) => consoleRow(e, ps))
@@ -557,7 +577,7 @@ export function dataVocabulary(): { words: string[]; fields: string[]; templates
 const FIELD_NAMES = new Set<string>(('rows keys unknown_key_count idb_stores balances proof_sum_mismatches money_in_flight ' +
   'pending_sends cashback cashback_stash cashlink_claims cashlink_moving checkout_codes stall terminals takings ' +
   'payment_requests count amount amounts states oldest newest token voucher template bundle purchase issuer ' +
-  'token_amount proof_sum face_value face_unit face_decimals backing_strategy status source_transport expires_at ' +
+  'token_amount proof_sum face_value face_unit face_decimals backing_strategy issuance_ratio status source_transport expires_at ' +
   'created_at updated_at swap_completed_at materialized_at received_via keyset_ids swap_proofs proof_count ' +
   'proof_amounts has_dleq tx type direction timestamp delivery_state delivered_at bundle_most_recent_part_at send ' +
   'request payment counterparty bundle_parts redemption_status memo_summary length words has_digits has_url ' +

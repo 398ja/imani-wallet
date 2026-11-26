@@ -323,6 +323,7 @@
   "has_url",
   "id",
   "idb_stores",
+  "issuance_ratio",
   "issuer",
   "keys",
   "keyset_ids",

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { ChevronDown } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
@@ -13,6 +13,7 @@ import {
   IdentityInline,
   Pagination,
   usePagination,
+  PAGE_SIZE,
 } from '../components/ui'
 import { listVouchers, transactionsWith, onWalletChanged } from '../lib/wallet'
 import { couponsFor, fullyRedeemedRows, issuerKey, redeemedFor } from '../lib/merchants'
@@ -103,6 +104,11 @@ const SORT_OPTIONS: Array<{ value: CouponSort; label: string }> = [
 
 export function CouponsPage() {
   const { pubkey = '' } = useParams()
+  // The voucher to arrive with open: an old `/coupon/:id` link (a bell entry, a bookmark) lands
+  // here as `?open=<token id>` (CouponRedirect). Any row of a voucher held as several opens it.
+  const [search] = useSearchParams()
+  const [openKeys, setOpenKeys] = useState<Set<string>>(new Set())
+  const wanted = search.get('open')
   const [rows, setRows] = useState<VoucherRow[]>([])
   const [redeemed, setRedeemed] = useState<VoucherRow[]>([])
   // cashu-mint#540: this merchant's coupons the mint refused as redeemed in full. Still held, so
@@ -155,10 +161,44 @@ export function CouponsPage() {
    * redeemed heading appears on whichever page the boundary falls in, exactly
    * as it does when the whole list fits on one.
    */
-  const { visible, page, pageCount, setPage } = usePagination([
-    ...held.map((voucher) => ({ voucher, redeemed: false })),
-    ...heldRedeemed.map((voucher) => ({ voucher, redeemed: true })),
-  ])
+  const sequence = useMemo(
+    () => [
+      ...held.map((voucher) => ({ voucher, redeemed: false })),
+      ...heldRedeemed.map((voucher) => ({ voucher, redeemed: true })),
+    ],
+    [held, heldRedeemed],
+  )
+  const { visible, page, pageCount, setPage } = usePagination(sequence)
+
+  /*
+    Arriving with `?open=`: open that voucher and turn to its page, once, when the rows that hold
+    it have loaded. A render-phase update keyed on the id, as usePagination does, rather than an
+    effect: nothing renders against the closed state first. An expired voucher opens inside the
+    Expired group (ExpiredGroup reads `openKeys` too).
+  */
+  const [handled, setHandled] = useState<string | null>(null)
+  if (wanted && handled !== wanted) {
+    const index = sequence.findIndex((item) => item.voucher.rows.some((r) => r.token_id === wanted))
+    const expiredHit = groupByVoucher(expired).find((v) => v.rows.some((r) => r.token_id === wanted))
+    const key = index >= 0 ? sequence[index]!.voucher.key : expiredHit?.key
+    if (key) {
+      setHandled(wanted)
+      setOpenKeys(new Set([key]))
+      if (index >= 0) setPage(Math.floor(index / PAGE_SIZE) + 1)
+    }
+  }
+  // Bring the opened voucher into view once it has rendered open.
+  useEffect(() => {
+    if (!handled) return
+    [...document.querySelectorAll<HTMLElement>("[data-voucher-row]")].find((el) => el.dataset.voucherRow === handled)?.scrollIntoView?.({ block: 'center' })
+  }, [handled, page])
+  const toggle = (key: string) => (open: boolean) =>
+    setOpenKeys((prev) => {
+      const next = new Set(prev)
+      if (open) next.add(key)
+      else next.delete(key)
+      return next
+    })
 
   // Where the spent ones start ON THIS PAGE, so the heading is drawn once and
   // only when this page actually contains the first of them.
@@ -199,7 +239,7 @@ export function CouponsPage() {
       footer={
         <>
           <Pagination page={page} pageCount={pageCount} onPage={setPage} />
-          <ExpiredGroup rows={expired} />
+          <ExpiredGroup rows={expired} openKeys={openKeys} onToggle={toggle} />
         </>
       }
     >
@@ -220,7 +260,11 @@ export function CouponsPage() {
                 Redeemed
               </p>
             )}
-            <CouponListItem row={asOneVoucher(item.voucher)} />
+            <CouponListItem
+              row={asOneVoucher(item.voucher)}
+              open={openKeys.has(item.voucher.key)}
+              onToggle={toggle(item.voucher.key)}
+            />
           </Fragment>
         ))
       )}
@@ -237,11 +281,21 @@ export function CouponsPage() {
  * go?" can find the answer. A plain `<details>`, as the history rows use: keyboard-operable and
  * stateless.
  */
-function ExpiredGroup({ rows }: { rows: VoucherRow[] }) {
+function ExpiredGroup({
+  rows,
+  openKeys,
+  onToggle,
+}: {
+  rows: VoucherRow[]
+  openKeys: Set<string>
+  onToggle: (key: string) => (open: boolean) => void
+}) {
   const vouchers = groupByVoucher(rows)
   if (vouchers.length === 0) return null
+  // Open already when a deep link asked for one of these, so the voucher is not hidden behind it.
+  const holdsOpen = vouchers.some((v) => openKeys.has(v.key))
   return (
-    <details className="group mt-4 overflow-hidden rounded-2xl border border-mono-200 dark:border-mono-800">
+    <details open={holdsOpen || undefined} className="group mt-4 overflow-hidden rounded-2xl border border-mono-200 dark:border-mono-800">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium text-mono-600 outline-none ring-inset ring-mono-400 press-row focus-visible:ring-2 dark:text-mono-300 [&::-webkit-details-marker]:hidden">
         <span className="flex-1">Expired ({vouchers.length})</span>
         <ChevronDown
@@ -254,7 +308,12 @@ function ExpiredGroup({ rows }: { rows: VoucherRow[] }) {
       </p>
       <div className="divide-y divide-mono-200 border-t border-mono-200 dark:divide-mono-800 dark:border-mono-800">
         {vouchers.map((voucher) => (
-          <CouponListItem key={voucher.key} row={asOneVoucher(voucher)} />
+          <CouponListItem
+            key={voucher.key}
+            row={asOneVoucher(voucher)}
+            open={openKeys.has(voucher.key)}
+            onToggle={onToggle(voucher.key)}
+          />
         ))}
       </div>
     </details>

@@ -1,12 +1,47 @@
+import { useEffect, useId, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronDown, ChevronRight, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  Ban,
+  CalendarClock,
+  CalendarPlus,
+  CalendarX,
+  Check,
+  CheckCheck,
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  Copy,
+  Gift,
+  Hash,
+  Hourglass,
+  ShoppingBag,
+  Undo2,
+} from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { vouchers } from '../../lib/bundleWording'
 import { formatFace, formatDate, displayDecimals } from '../../lib/format'
 import { entryVoucherCount, worstValidation, type HistoryEntry } from '../../lib/historyGroups'
 import { isRedeemed } from '../../lib/merchants'
-import { expiryState } from '../../lib/couponExpiry'
+import { countdown, expiryState, type ExpiryState } from '../../lib/couponExpiry'
+import {
+  COPIED,
+  COPY_ID,
+  HIDE_DETAILS,
+  NO_EXPIRY,
+  SHOW_DETAILS,
+  VOUCHER_FIELD,
+  VOUCHER_SOURCE,
+  VOUCHER_STATUS,
+  expiredOn,
+  expiredShort,
+  voucherSourceKind,
+  type VoucherSourceKind,
+  type VoucherStatusKind,
+} from '../../lib/voucherRowCopy'
+import { voucherStatusKind } from '../../lib/voucherStatus'
 import { ExpiryBadge } from './ExpiryBadge'
 import { CardPaymentBadge } from '../CardPaymentBadge'
 import { useHolderCardPaymentState } from '../../hooks/useCardPaymentState'
@@ -65,64 +100,231 @@ function CheckoutCodeListItem({ tx, code }: { tx: WalletTransaction; code: Check
  */
 
 /**
- * A coupon: face value, when it arrived.
+ * A voucher: one row that opens in place (no detail screen since the voucher-rows change).
  *
- * A redeemed one is dimmed and says so. It is a receipt, not money — the value
- * behind it was burnt when it came back (burn.ts) — and one row that looks like
- * every other is exactly how a used coupon gets handed out a second time.
+ * Closed, it reads at a glance: the amount, large, with the expiry badge beside it, and one quiet
+ * line under it (status for anything not ready to use, then the date that matters: when it ran
+ * out for an expired one, when it arrived otherwise). Open, it lists everything a holder acts on:
+ * status, received, expires, where it came from and the voucher id with a copy button. Nothing
+ * else. The backing, ratio, issuance id, event id and the rest of the old screen are support
+ * facts; they stay in the support snapshot (snapshot/build.ts) and are shown nowhere.
  *
- * An expired one (#265) is dimmed the same way and says when it ran out, in place of when it
- * arrived: that is the date that explains why it no longer counts. A live one inside a week of
- * its expiry carries the badge beside its value.
+ * A redeemed or expired voucher is dimmed and says so. It is a receipt, not money, and a row that
+ * looks like every other is exactly how a used voucher gets handed out a second time (#265).
  *
- * `now` is a seam for tests; screens pass nothing.
+ * Controlled from the list (`open`, `onToggle`) so a deep link can arrive with one row open; used
+ * uncontrolled elsewhere. `now` is a seam for tests.
  */
-export function CouponListItem({ row, now }: { row: VoucherRow; now?: number }) {
-  const redeemed = isRedeemed(row)
+export function CouponListItem({
+  row,
+  now,
+  open: openProp,
+  onToggle,
+}: {
+  row: VoucherRow
+  now?: number
+  open?: boolean
+  onToggle?: (open: boolean) => void
+}) {
+  const [ownOpen, setOwnOpen] = useState(false)
+  const open = openProp ?? ownOpen
+  const toggle = () => {
+    if (openProp === undefined) setOwnOpen(!open)
+    onToggle?.(!open)
+  }
+  const id = useId()
+  const panelId = `voucher-${id}`
+  const status = voucherStatusKind(row, now)
   const expiry = expiryState(row, now)
-  const expired = !redeemed && expiry.kind === 'expired'
-  // imani-wallet#277: the same badge as the detail screen, for a refunded or disputed card voucher.
-  const cardPayment = useHolderCardPaymentState(redeemed ? undefined : cardReferenceOfRow(row))
-  const dimmed = redeemed || expired
+  const spent = status !== 'active' && status !== 'pending' && status !== 'expired' && status !== 'other'
+  const expired = status === 'expired'
+  const dimmed = status !== 'active' && status !== 'pending'
+  // imani-wallet#277: the badge for a refunded or disputed card voucher.
+  const cardPayment = useHolderCardPaymentState(isRedeemed(row) ? undefined : cardReferenceOfRow(row))
+  const decimals = displayDecimals(row.face_unit, row.face_decimals)
+  const money = (minor: number) => formatFace(minor, { unit: row.face_unit ?? '', decimals })
+  const amount = money(row.face_value ?? 0)
+  const dateLine =
+    expired && expiry.kind === 'expired' ? expiredShort(expiry.dateText) : formatDate(row.created_at)
+
   return (
-    <Link
-      to={`/coupon/${encodeURIComponent(row.token_id)}`}
-      className={`flex items-center gap-3 p-4 press-row ${
-        dimmed ? 'opacity-60' : ''
-      }`}
-    >
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span
-            className={
-              redeemed
-                ? 'font-medium text-mono-500 line-through'
-                : expired
-                  ? 'font-medium text-mono-500'
-                  : 'font-medium text-mono-900 dark:text-mono-50'
-            }
-          >
-            {formatFace(row.face_value ?? 0, {
-              unit: row.face_unit ?? '',
-              // Currency first, stored row second: pre-DEV-238 rows say 2 for XAF.
-              decimals: displayDecimals(row.face_unit, row.face_decimals),
-            })}
-          </span>
-          {!redeemed && <ExpiryBadge state={expiry} />}
-          <CardPaymentBadge
-            state={cardPayment}
-            money={(minor) =>
-              formatFace(minor, { unit: row.face_unit ?? '', decimals: displayDecimals(row.face_unit, row.face_decimals) })
-            }
-          />
-        </p>
-        <p className="text-sm text-mono-500">
-          {redeemed ? 'Redeemed · ' : ''}
-          {expired && expiry.kind === 'expired' ? `Expired ${expiry.dateText}` : formatDate(row.created_at)}
-        </p>
+    <div data-voucher-row={row.token_id} className={open ? 'bg-mono-50/70 dark:bg-mono-900/40' : undefined}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={toggle}
+        className="flex min-h-16 w-full items-center gap-3 px-4 py-3.5 text-left outline-none ring-inset ring-mono-400 press-row focus-visible:ring-2"
+      >
+        <div className={`min-w-0 flex-1 ${dimmed ? 'opacity-60' : ''}`}>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span
+              className={`text-[17px] font-semibold tabular-nums tracking-[-0.01em] ${
+                spent ? 'text-mono-500 line-through' : expired ? 'text-mono-500' : 'text-mono-900 dark:text-mono-50'
+              }`}
+            >
+              {amount}
+            </span>
+            {status === 'active' && <ExpiryBadge state={expiry} />}
+            <CardPaymentBadge state={cardPayment} money={money} />
+          </p>
+          <p className="mt-0.5 truncate text-[13px] text-mono-500">
+            {status !== 'active' && status !== 'expired' ? `${VOUCHER_STATUS[status]} · ` : ''}
+            {dateLine}
+          </p>
+        </div>
+        <span className="sr-only">{open ? HIDE_DETAILS : SHOW_DETAILS}</span>
+        {/*
+          Turns toward the content it reveals and back. A transition, not a keyframe: it reverses
+          from wherever it is when the row is tapped again mid-turn.
+        */}
+        <ChevronDown
+          aria-hidden
+          className={`h-4 w-4 shrink-0 text-mono-400 transition-transform duration-300 ease-spring motion-reduce:transition-none ${
+            open ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      {/*
+        Opens in place on a grid row going 0fr → 1fr, the content's own height with no measuring.
+        A CSS transition rather than an animation, so a second tap mid-open reverses from where the
+        panel is rather than jumping to an end (interruptible), on a critically damped spring curve
+        (`ease-spring`). Under reduced motion it simply appears: no height change, no slide.
+        Closed, the panel is `inert`: out of the tab order and the accessibility tree.
+      */}
+      <div
+        id={panelId}
+        role="region"
+        aria-label={amount}
+        inert={!open}
+        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-spring motion-reduce:transition-none ${
+          open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+        }`}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <VoucherFacts row={row} status={status} expiry={expiry} />
+        </div>
       </div>
-      <ChevronRight className="h-4 w-4 shrink-0 text-mono-400" />
-    </Link>
+    </div>
+  )
+}
+
+const STATUS_TONE: Record<VoucherStatusKind, { Icon: typeof CircleCheck; className: string }> = {
+  active: { Icon: CircleCheck, className: 'bg-green-50 text-green-800 ring-green-300 dark:bg-green-950/50 dark:text-green-300 dark:ring-green-800' },
+  pending: { Icon: Hourglass, className: 'bg-sky-50 text-sky-800 ring-sky-300 dark:bg-sky-950/50 dark:text-sky-300 dark:ring-sky-800' },
+  expired: { Icon: CalendarX, className: 'bg-mono-100 text-mono-700 ring-mono-300 dark:bg-mono-900 dark:text-mono-300 dark:ring-mono-700' },
+  spent: { Icon: CheckCheck, className: 'bg-mono-100 text-mono-700 ring-mono-300 dark:bg-mono-900 dark:text-mono-300 dark:ring-mono-700' },
+  redeemed: { Icon: CheckCheck, className: 'bg-mono-100 text-mono-700 ring-mono-300 dark:bg-mono-900 dark:text-mono-300 dark:ring-mono-700' },
+  swapped: { Icon: Undo2, className: 'bg-mono-100 text-mono-700 ring-mono-300 dark:bg-mono-900 dark:text-mono-300 dark:ring-mono-700' },
+  refused: { Icon: Ban, className: 'bg-mono-100 text-mono-700 ring-mono-300 dark:bg-mono-900 dark:text-mono-300 dark:ring-mono-700' },
+  other: { Icon: Ban, className: 'bg-mono-100 text-mono-700 ring-mono-300 dark:bg-mono-900 dark:text-mono-300 dark:ring-mono-700' },
+}
+
+const SOURCE_ICON: Record<VoucherSourceKind, typeof Gift> = {
+  cashlink: Gift,
+  returned: Undo2,
+  bought: ShoppingBag,
+  recovered: Undo2,
+  received: ArrowDownLeft,
+}
+
+/** The status pill: words always, a glyph per state, colour last (never colour alone). */
+export function VoucherStatusBadge({ status }: { status: VoucherStatusKind }) {
+  const { Icon, className } = STATUS_TONE[status]
+  return (
+    <span
+      data-voucher-status={status}
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${className}`}
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      {VOUCHER_STATUS[status]}
+    </span>
+  )
+}
+
+/** The opened row's facts: an icon, a label, a value. Status first, the id last. */
+function VoucherFacts({ row, status, expiry }: { row: VoucherRow; status: VoucherStatusKind; expiry: ExpiryState }) {
+  const SourceIcon = SOURCE_ICON[voucherSourceKind(row.source_transport)]
+  // A countdown only for a voucher that can still be spent: a spent one's expiry is history.
+  const counting = status === 'active' || status === 'pending'
+  const expires =
+    expiry.kind === 'live'
+      ? counting
+        ? `${expiry.dateText} · ${countdown(expiry.msLeft)}`
+        : expiry.dateText
+      : expiry.kind === 'expired'
+        ? expiredOn(expiry.dateText)
+        : NO_EXPIRY
+  return (
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-2.5 px-4 pb-4 pt-0.5 text-sm">
+      <Fact icon={CircleCheck} label={VOUCHER_FIELD.status}>
+        <VoucherStatusBadge status={status} />
+      </Fact>
+      <Fact icon={CalendarPlus} label={VOUCHER_FIELD.received}>
+        {formatDate(row.created_at)}
+      </Fact>
+      <Fact icon={expiry.kind === 'expired' ? CalendarX : CalendarClock} label={VOUCHER_FIELD.expires}>
+        {expires}
+      </Fact>
+      <Fact icon={SourceIcon} label={VOUCHER_FIELD.source}>
+        {VOUCHER_SOURCE[voucherSourceKind(row.source_transport)]}
+      </Fact>
+      <Fact icon={Hash} label={VOUCHER_FIELD.id}>
+        <VoucherId id={row.token_id} />
+      </Fact>
+    </dl>
+  )
+}
+
+function Fact({ icon: Icon, label, children }: { icon: typeof Hash; label: string; children: React.ReactNode }) {
+  return (
+    <>
+      <dt className="flex items-center gap-2 text-[13px] text-mono-500">
+        <Icon className="h-4 w-4 shrink-0 text-mono-400" aria-hidden="true" />
+        {label}
+      </dt>
+      <dd className="flex min-w-0 justify-end text-right tabular-nums text-mono-800 dark:text-mono-200">{children}</dd>
+    </>
+  )
+}
+
+/**
+ * The id, truncated in the middle's place (the end, with an ellipsis, in monospace so it never
+ * reflows) and copied whole. The full id is the button's title and the copy, never lost to the
+ * ellipsis. A 44px target by padding, not by a bigger glyph.
+ */
+function VoucherId({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(t)
+  }, [copied])
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(id)
+      setCopied(true)
+    } catch {
+      // No clipboard (an insecure origin, a refused permission): the id stays selectable.
+    }
+  }
+  return (
+    <span className="flex min-w-0 items-center justify-end gap-1">
+      <span title={id} className="min-w-0 truncate font-mono text-[13px] text-mono-700 select-all dark:text-mono-300">
+        {id}
+      </span>
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={COPY_ID}
+        className="pressable -my-2.5 -mr-2.5 shrink-0 rounded-full p-2.5 text-mono-400 outline-none ring-mono-400 hover:text-mono-600 focus-visible:ring-2 dark:hover:text-mono-300"
+      >
+        {copied ? <Check className="h-4 w-4 text-green-600" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+      </button>
+      <span className="sr-only" aria-live="polite">
+        {copied ? COPIED : ''}
+      </span>
+    </span>
   )
 }
 

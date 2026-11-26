@@ -450,6 +450,7 @@ export function MerchantsPage({ pubkey = '' }: { pubkey?: string }) {
                 // further to the case where the name is still a hex key.
                 loadingIssuer={branding[merchant.pubkey] === undefined}
                 to={`/merchants/${merchant.pubkey}`}
+                tall
               />
               <p className="mt-2 text-center text-sm text-mono-500">
                 {merchant.voucherCount} voucher{merchant.voucherCount === 1 ? '' : 's'}

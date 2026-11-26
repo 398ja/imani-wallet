@@ -93,7 +93,7 @@ import { BuyCancelledPage, BuyDonePage } from './pages/BuyReturnPages'
 import { PublicProfilePage } from './pages/PublicProfilePage'
 import { CouponsPage, ExpiringCouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { useExpiryReminders } from './hooks/useExpiryReminders'
-import { CouponPage, TransactionPage } from './pages/RecordDetailPages'
+import { CouponRedirect, TransactionPage } from './pages/RecordDetailPages'
 import { ScanPage } from './pages/ScanPage'
 import { ReceiptCheckPage } from './pages/ReceiptCheckPage'
 import { ReceiptScanPage } from './pages/ReceiptScanPage'
@@ -777,7 +777,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/merchants/:pubkey/coupons" element={<VouchersRedirect />} />
         <Route path="/coupons/expiring" element={<ExpiringCouponsPage pubkey={pubkey} />} />
         <Route path="/merchants/:pubkey/transactions" element={<TransactionsPage />} />
-        <Route path="/coupon/:tokenId" element={<CouponPage />} />
+        <Route path="/coupon/:tokenId" element={<CouponRedirect />} />
         <Route
           path="/transaction/:id"
           element={<TransactionPage pubkey={pubkey} trading={trading} />}
