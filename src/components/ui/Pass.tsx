@@ -185,7 +185,7 @@ export function Pass({ pass, to, issuerTo, loadingIssuer, tall }: PassProps) {
         <span role="img" aria-label="imani" className="absolute right-5 top-5 text-white">
           <ImaniMark
             outlined
-            className="h-9 w-9"
+            className="h-[18px] w-[18px]"
             style={{ filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.45))' }}
           />
         </span>
