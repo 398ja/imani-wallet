@@ -185,6 +185,7 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
             pass={toMerchantPass(merchant, branding)}
             loadingIssuer={loadingIssuer}
             to={`/merchants/${pubkey}/vouchers`}
+            tall
           />
           <p className="mt-2 text-center text-sm text-mono-500">
             {couponCount === 1 ? '1 voucher' : `${couponCount} vouchers`} · tap to see them

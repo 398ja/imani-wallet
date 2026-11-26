@@ -66,7 +66,8 @@ interface PassProps {
    * unchanged, so the stall's banner has room to be seen. The extra height opens between the name
    * and the amount (the amount sits at the foot, where a card's figure reads), and the banner
    * crops by `object-cover` from its centre. A minimum, not a fixed height, so larger text still
-   * grows the card. Only the home deck passes it: the merchant pages keep their cards as they are.
+   * grows the card. Only the home deck and the customer's stall page (MerchantPage, the next screen) pass it, so the card
+   * keeps its size as you tap through. Merchant-side pages keep their cards as they are.
    */
   tall?: boolean
 }
@@ -184,7 +185,7 @@ export function Pass({ pass, to, issuerTo, loadingIssuer, tall }: PassProps) {
         <span role="img" aria-label="imani" className="absolute right-5 top-5 text-white">
           <ImaniMark
             outlined
-            className="h-9 w-9"
+            className="h-[18px] w-[18px]"
             style={{ filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.45))' }}
           />
         </span>
