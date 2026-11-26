@@ -160,7 +160,7 @@ export function runExpiryReminders(pubkey: string, rows: VoucherRow[], opts: Rem
         type: 'voucher_expiring',
         title: 'Voucher expiring',
         body: reminderBody(candidate, opts.names),
-        url: `/coupon/${encodeURIComponent(candidate.row.token_id)}`,
+        url: voucherUrl(candidate.row),
         receivedAt: now,
       })
       if (isNew) added += 1
@@ -213,4 +213,13 @@ export function bannerState(pubkey: string, rows: VoucherRow[], now = Date.now()
 export function dismissBanner(pubkey: string, rows: VoucherRow[], now = Date.now()): void {
   const merged = new Set([...readIds(BANNER_KEY(pubkey)), ...bannerKeys(pubkey, rows, now)])
   writeIds(BANNER_KEY(pubkey), [...merged])
+}
+
+/**
+ * Where a reminder opens: the voucher, open in its stall's list (the detail screen is gone). A
+ * voucher with no issuer has no list, so it keeps the old link, which says it is not held.
+ */
+export function voucherUrl(row: { token_id: string; issuer_id?: string }): string {
+  const id = encodeURIComponent(row.token_id)
+  return row.issuer_id ? `/merchants/${encodeURIComponent(row.issuer_id)}/vouchers?open=${id}` : `/coupon/${id}`
 }

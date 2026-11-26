@@ -393,3 +393,39 @@ describe('criterion 22: fail closed', () => {
     expect(() => finalScan({ 'data/x.json': '{"a":"send#1"}' }, [])).not.toThrow()
   })
 })
+
+/**
+ * The voucher detail screen is gone (customer voucher rows open in place). Every fact it showed
+ * that the row does not (backing, backing strategy, issuance ratio, issuance id, merchant, face
+ * decimals, updated, source, received via, memo) must still reach support through the snapshot.
+ * It always read them from the store, not from the screen; this holds that true.
+ */
+describe('voucher facts no longer shown in the app stay in the snapshot', () => {
+  it('data/vouchers.json carries each of them, pseudonymised where they identify', async () => {
+    const sources = seededSources()
+    sources.vouchers[0] = {
+      ...sources.vouchers[0],
+      issuance_ratio: 2.5,
+      source_transport: 'gift_link',
+      memo: 'happy birthday from us all',
+    } as never
+    sources.vouchers[1] = { ...sources.vouchers[1], face_value: 1000, token_amount: 400 } as never
+    const { zip } = await buildSnapshot(sources, { ...baseOptions(), includeMemos: true })
+    const { files } = archiveText(zip)
+    const [v, derivedRatio] = JSON.parse(files['data/vouchers.json']).rows
+    expect(v.token_amount).toBe(500) // Backing (sats)
+    expect(v.backing_strategy).toBe('ledger') // Backing strategy
+    expect(v.issuance_ratio).toBe(2.5) // Issuance ratio, stored
+    expect(derivedRatio.issuance_ratio).toBe(2.5) // and derived from face / sats when not stored
+    expect(v.voucher).toMatch(/^voucher#\d+$/) // Issuance id
+    expect(v.issuer).toMatch(/^stall#\d+$/) // Merchant
+    expect(v.face_decimals).toBe(2) // Face decimals
+    expect(v.updated_at).toBeTruthy() // Updated
+    expect(v.source_transport).toBe('gift_link') // Source
+    expect(v.received_via).toMatch(/^event#\d+$/) // Received via
+    // Memo: its shape in data/, its scrubbed text for the operator only.
+    expect(v.memo_summary).toMatchObject({ words: 5, has_url: false })
+    expect(JSON.parse(files['envelope/operator_only/memos.json']).memos[v.token]).toBe('happy birthday from us all')
+    // Terms is a constant of the app (pass.ts TERMS), not a fact about a voucher: nothing to carry.
+  })
+})

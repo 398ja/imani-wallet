@@ -7,6 +7,13 @@ export default {
   darkMode: 'class',
   theme: {
     extend: {
+      transitionTimingFunction: {
+        // A critically damped spring (damping 1.0, apple-design §4) sampled as a CSS `linear()`
+        // curve: x(t) = 1 - (1 + ωt)e^(-ωt), ω = 9 over the transition's duration. Used on
+        // transitions (not keyframes), so a reversed toggle retargets from where it is.
+        spring:
+          'linear(0, 0.055, 0.173, 0.31, 0.442, 0.559, 0.657, 0.737, 0.801, 0.85, 0.888, 0.917, 0.939, 0.955, 0.967, 0.976, 0.983, 0.987, 0.991, 0.993, 0.995, 0.997, 0.998, 0.998, 1)',
+      },
       colors: {
         // Mono-inspired palette
         mono: {

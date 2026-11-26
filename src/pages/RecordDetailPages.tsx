@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { AlarmClock, CalendarX, ChevronRight, Clock, Info } from 'lucide-react'
+import { Link, Navigate, useParams } from 'react-router-dom'
+import { ChevronRight, Info } from 'lucide-react'
 import type { VoucherRow } from '@imani/wallet-storage'
 
 import { handlerFor } from '../lib/terminalAttribution'
@@ -13,7 +13,6 @@ import {
   DetailRow,
   RawDetails,
   Centered,
-  Pass,
   IdentityInline,
   ValidationBadge,
   Button,
@@ -23,18 +22,11 @@ import {
   getVoucherRow,
   getTransactionRow,
   listTransactions,
-  listVouchers,
   onWalletChanged,
   recheckCashbackRowOnOpen,
   recordCashbackStatus,
 } from '../lib/wallet'
-import { asOneVoucher, groupByVoucher, siblingsOf } from '../lib/voucherCount'
-import { issuanceRatioOf, isSpent } from '../lib/merchants'
-import { countdown, expiryState, isExpiringSoon } from '../lib/couponExpiry'
-import { formatFace, formatDate, formatSats } from '../lib/format'
-import { toCouponPass, TERMS, EMPTY_BRANDING } from '../lib/pass'
-import { useBranding } from '../hooks/useBranding'
-import { useExpiryClock } from '../hooks/useExpiryReminders'
+import { formatFace, formatDate } from '../lib/format'
 import { humanName } from '../lib/identity'
 import { spendSourceLabel } from '../lib/spendSource'
 import {
@@ -51,9 +43,7 @@ import { formatCashbackLink } from '../lib/claimLink'
 import { CancelCashback, ClaimLinkPanel } from '../components/CashbackClaimLink'
 import { GiftLinkSection } from '../components/GiftLinkSection'
 import { ReceiptSection } from '../components/ReceiptSection'
-import { CardPaymentNotice } from '../components/CardPaymentBadge'
-import { useHolderCardPaymentState } from '../hooks/useCardPaymentState'
-import { cardReferenceOfRow } from '../lib/cardVoucherRef'
+import { BACK_HOME, NO_LONGER_HELD } from '../lib/voucherRowCopy'
 
 /**
  * One record, in full.
@@ -66,194 +56,39 @@ import { cardReferenceOfRow } from '../lib/cardVoucherRef'
  */
 
 /**
- * The issuance ratio, spelled out rather than left as a bare float.
+ * An old voucher link (`/coupon/:tokenId`: a bell entry, a bookmark, a shared screenshot's URL).
  *
- * `issuance_ratio` is face MINOR UNITS PER SAT, and "1" alone tells a reader
- * nothing about which way round that is. It is also the number a future split
- * turns on — the smallest face amount a coupon can be divided into is
- * ceil(ratio), because a cashu proof is indivisible below one sat.
+ * The voucher detail screen is gone: a voucher opens in place in its stall's list, which shows
+ * everything a holder acts on. So the link goes to that list with the voucher open
+ * (`?open=<token id>`). A voucher with no issuer, or one no longer in the wallet, has no list to
+ * open in, and says so with a way home rather than a blank screen.
  */
-function ratioLabel(row: VoucherRow): string | undefined {
-  // Via issuanceRatioOf, not row.issuance_ratio: coupons received before the
-  // field was persisted store an explicit null, and the ratio is derivable from
-  // face/sats anyway. Reading the row directly would show the ratio on new
-  // coupons and omit it on old ones for no reason a user could see.
-  const ratio = issuanceRatioOf(row)
-  if (ratio === undefined) return undefined
-  const unit = row.face_unit ?? 'face'
-  return `${Number(ratio.toFixed(6))} per sat (${unit} minor units)`
-}
-
-export function CouponPage() {
+export function CouponRedirect() {
   const { tokenId = '' } = useParams()
   const [row, setRow] = useState<VoucherRow | null | undefined>(undefined)
-  // Every row this voucher is filed as (voucherCount.ts). The list links here with the voucher's
-  // first row; the screen is about the voucher, so it shows the voucher's whole value.
-  const [siblings, setSiblings] = useState<VoucherRow[]>([])
-  /*
-    Seeded from what this device already knows about the stall, so a coupon you
-    have opened before names its issuer on the first frame instead of showing a
-    truncated key while a kind-0 lookup runs. The hook replaces a bare
-    `merchantBranding().then(setBranding)` that started every visit at empty.
-  */
-  const { branding, loading: loadingIssuer } = useBranding(row?.issuer_id)
-  // The countdown, the callout and the expired state are functions of the clock (#265).
-  useExpiryClock()
-  // imani-wallet#277: a card voucher whose payment was refunded or is disputed.
-  const cardPayment = useHolderCardPaymentState(row ? cardReferenceOfRow(row) : undefined)
 
   useEffect(() => {
-    const load = async () => {
-      const found = await getVoucherRow(tokenId)
-      setRow(found)
-      setSiblings(found ? siblingsOf(found, await listVouchers()) : [])
+    let live = true
+    getVoucherRow(tokenId).then((found) => live && setRow(found))
+    return () => {
+      live = false
     }
-    load()
-    // A coupon can be spent from another screen while this one is open.
-    return onWalletChanged(load)
   }, [tokenId])
 
   if (row === undefined) return <Centered>Loading…</Centered>
-  if (row === null) return <Centered>This voucher is no longer in your wallet.</Centered>
-
-  const voucher = siblings.length > 1 ? asOneVoucher(groupByVoucher(siblings)[0]!) : row
-  const backTo = row.issuer_id ? `/merchants/${row.issuer_id}` : '/'
-  // #265: read once per render from the clock. An expired coupon is not "active" whatever its
-  // stored status says: storage keeps the status of the proofs, and they are unspent; what ended
-  // is the stall's promise to honour them.
-  const expiry = expiryState(row)
-  // `isSpent`, not `isRedeemed`: a coupon swapped back to sats, spent or refused as redeemed in
-  // full is not money either, so it is neither "expired" nor told to "use it before" (#269 review).
-  const spent = isSpent(row)
-  const expired = expiry.kind === 'expired' && !spent
-  const status = expired ? 'Expired' : (row.status ?? 'active')
-  const expiresValue =
-    expiry.kind === 'live'
-      ? `${expiry.dateText} · ${countdown(expiry.msLeft)}`
-      : expiry.kind === 'expired'
-        ? `Expired on ${expiry.dateText}`
-        : formatDate(row.expires_at) || 'No expiry'
-
+  if (row === null || !row.issuer_id) {
+    return (
+      <Screen>
+        <BackLink to="/" label={BACK_HOME} />
+        <Centered>{NO_LONGER_HELD}</Centered>
+      </Screen>
+    )
+  }
   return (
-    <Screen>
-      <BackLink to={backTo} label="Back" />
-
-      {/*
-        The pass replaces what used to be a bare amount-and-name panel, in the
-        same design as the stall's card (#419): banner, framed avatar, name and
-        the amount. The amount is this coupon's face value (its row's
-        `face_value`, which a partial spend rewrites to the change; see
-        `balanceField` in pass.ts). No QR: it is not needed to spend a coupon.
-      */}
-      <div className="mb-6">
-        {/*
-          `issuerTo`, not `to`: the card is this page's subject, so only the
-          stall's name and picture move.
-
-          Reaching the stall used to depend on the back arrow, which only points
-          there when the customer ARRIVED from it — open a coupon from a
-          notification, a search or a deep link and the issuer was unreachable,
-          with their avatar sitting on the card looking tappable. Guarded on
-          issuer_id because a coupon can exist without one.
-
-          `/profile`, not `/merchants`: the second is my relationship with this
-          stall — which is the page I am already on the detail of — while this
-          asks who they are and offers to buy from them.
-        */}
-        <Pass
-          pass={toCouponPass(voucher, branding ?? EMPTY_BRANDING)}
-          loadingIssuer={loadingIssuer}
-          issuerTo={row.issuer_id ? `/profile/${row.issuer_id}` : undefined}
-        />
-      </div>
-
-      <CardPaymentNotice
-        state={cardPayment}
-        money={(minor) =>
-          formatFace(minor, { unit: row.face_unit ?? '', decimals: row.face_decimals ?? 0 })
-        }
-        audience="holder"
-      />
-
-      {expired && expiry.kind === 'expired' && (
-        <p
-          role="status"
-          className="mb-6 flex items-start gap-3 rounded-2xl bg-mono-100 p-4 text-[15px] leading-snug text-mono-700 dark:bg-mono-900 dark:text-mono-300"
-        >
-          <CalendarX className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
-          This voucher expired on {expiry.dateText}. It can no longer be spent.
-        </p>
-      )}
-      {!spent && isExpiringSoon(expiry) && (
-        <p
-          role="status"
-          data-expiry-tone={expiry.tone}
-          className={`mb-6 flex items-start gap-3 rounded-2xl p-4 text-[15px] font-medium leading-snug ring-1 ring-inset ${
-            expiry.tone === 'urgent'
-              ? 'bg-red-50 text-red-800 ring-red-300 dark:bg-red-950/50 dark:text-red-300 dark:ring-red-800'
-              : 'bg-amber-50 text-amber-900 ring-amber-300 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-800'
-          }`}
-        >
-          {expiry.tone === 'urgent' ? (
-            <AlarmClock className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
-          ) : (
-            <Clock className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
-          )}
-          Use it before {expiry.dateText}
-        </p>
-      )}
-
-      <ListSection title="Voucher">
-        {present([
-          ['Status', status],
-          ['Received', formatDate(row.created_at)],
-          // Exempt from the drop-empty rule the rest of this list follows:
-          // "expires 3 Sep" and "never expires" are different facts, and an
-          // absent row reads as the second while meaning the first is unknown.
-          // Whether a coupon runs out is the thing a holder needs to know.
-          // #265: with a countdown beside the date, so nobody has to subtract.
-          ['Expires', expiresValue],
-          // The sender's note, off the card since #419 (the card's line was
-          // mostly the "Gift Card" placeholder). Dropped when there is none.
-          // `memo` is not a declared VoucherRow field (it arrives untyped through
-          // the store), so only a non-empty string is shown.
-          ['Memo', typeof row.memo === 'string' && row.memo.trim() !== '' ? row.memo : undefined],
-          // The id identifies the record, so it stays visible rather than
-          // collapsing into Details with the derived and diagnostic fields.
-          ['Voucher id', row.token_id],
-        ]).map(([label, value]) => (
-          <DetailRow key={label} label={label} value={value} />
-        ))}
-      </ListSection>
-
-      <RawDetails
-        entries={present<React.ReactNode>([
-          // The backing trio, kept together: how many sats, under which
-          // strategy, at what ratio. `token_amount` is the authoritative sats
-          // field — imani-apps reads it at every display site and never decodes
-          // proofs at render time. Shown unconditionally, unlike the vanilla
-          // hero, which hides behind a Bitcoin flag read from /api/v1/config —
-          // an endpoint that 404s here, so the gate would hide it on every
-          // coupon. Strategy keeps imani-apps' label and raw enum value.
-          ['Backing', row.token_amount ? `${formatSats(row.token_amount)} sats` : undefined],
-          ['Backing strategy', row.backing_strategy],
-          ['Issuance ratio', ratioLabel(row)],
-          // The issuer's own record id, NOT the token id shown above — same
-          // screen, two different ids, and one name for both said nothing.
-          ['Issuance id', row.voucher_id],
-          ['Merchant', row.issuer_id ? <IdentityInline pubkey={row.issuer_id} /> : undefined],
-          ['Face decimals', row.face_decimals === undefined ? undefined : String(row.face_decimals)],
-          ['Updated', formatDate(row.updated_at)],
-          ['Source', row.source_transport],
-          ['Received via', row.received_via_event_id],
-          // The pass's back fields are voucherId / issuer / terms. The first two
-          // are already above as "Voucher id" and "Merchant", so only the terms
-          // are new — repeating the other two to mirror the record's grouping
-          // would show the same value twice in one block.
-          ['Terms', TERMS],
-        ])}
-      />
-    </Screen>
+    <Navigate
+      replace
+      to={`/merchants/${encodeURIComponent(row.issuer_id)}/vouchers?open=${encodeURIComponent(row.token_id)}`}
+    />
   )
 }
 

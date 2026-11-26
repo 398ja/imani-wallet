@@ -62,7 +62,7 @@ describe('runExpiryReminders: the bell', () => {
       id: 'coupon-expiring:t1:7d',
       type: 'voucher_expiring',
       title: 'Voucher expiring',
-      url: '/coupon/t1',
+      url: `/merchants/${STALL}/vouchers?open=t1`,
       readAt: null,
     })
     expect(items[0]!.body).toMatch(/^Your €2\.50 voucher from Test Stall expires in 6 days\.$/)
