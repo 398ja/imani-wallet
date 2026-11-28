@@ -288,6 +288,16 @@ export const proxy = {
    */
   '/api/v1/card-sales': { target: 'http://localhost:8791', changeOrigin: false },
   /*
+   * Checkout codes (#402): the code store, imani-checkout-codes, at the local stack's 28093. The
+   * wallet calls it same-origin (`httpCheckoutStore`), as the edge routes `/v1/checkout-codes` in
+   * staging and prod. Without this rule the path fell through to the SPA, every call got
+   * index.html back, and the "Coupon code" flow could not create a code.
+   *
+   * changeOrigin false: the customer signs NIP-98 for this origin, which is in the store's
+   * CHECKOUT_CODES_PUBLIC_BASE_URL list.
+   */
+  '/v1/checkout-codes': { target: 'http://localhost:28093', changeOrigin: false },
+  /*
    * A stall's own Stripe account, on merchant-service.
    *
    * Without a rule this falls into the '/api' catch-all and reaches
