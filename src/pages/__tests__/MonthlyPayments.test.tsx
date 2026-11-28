@@ -338,7 +338,7 @@ describe('Home banner and Settings row', () => {
     listInstalmentPlans.mockResolvedValue({ kind: 'ok', value: [] })
     const { unmount } = render(
       <MemoryRouter>
-        <SettingsPage merchant={false} pubkey={BUYER} />
+        <SettingsPage merchant={false} stallPubkey={BUYER} status={async () => ({ tier: 'free' }) as never} />
       </MemoryRouter>,
     )
     await act(async () => {})
@@ -349,7 +349,7 @@ describe('Home banner and Settings row', () => {
     listInstalmentPlans.mockResolvedValue({ kind: 'ok', value: [plan()] })
     render(
       <MemoryRouter>
-        <SettingsPage merchant={false} pubkey={BUYER} />
+        <SettingsPage merchant={false} stallPubkey={BUYER} status={async () => ({ tier: 'free' }) as never} />
       </MemoryRouter>,
     )
     expect(await screen.findByText('Monthly payments')).toBeTruthy()

@@ -376,6 +376,19 @@ describe('acceptsInstalments', () => {
     expect(mergeMerchantEvent(offering, JSON.stringify({ acceptsCards: true }), now()).acceptsInstalments).toBe(false)
   })
 
+  // Plans run on the stall's own Stripe account, so a PayPal stall never offers or reads as offering them.
+  it('is never published or read for a PayPal stall', () => {
+    const paypal = JSON.parse(
+      buildMerchantEvent(base({ acceptsCards: true, cardProcessor: 'paypal', acceptsInstalments: true })).content,
+    )
+    expect(paypal.cardProcessor).toBe('paypal')
+    expect('acceptsInstalments' in paypal).toBe(false)
+    expect(
+      mergeMerchantEvent(base(), JSON.stringify({ acceptsCards: true, cardProcessor: 'paypal', acceptsInstalments: true }), now())
+        .acceptsInstalments,
+    ).toBe(false)
+  })
+
   it('round-trips through publish and read', () => {
     const event = buildMerchantEvent(base({ acceptsCards: true, acceptsInstalments: true }))
     const merged = mergeMerchantEvent(emptyMerchant('a'.repeat(64)), event.content, event.created_at)

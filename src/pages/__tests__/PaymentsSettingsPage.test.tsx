@@ -14,7 +14,12 @@ const stripe = vi.hoisted(() => ({ status: { kind: 'ok', status: { status: 'not_
 const paypal = vi.hoisted(() => ({ status: { kind: 'ok', status: { status: 'not_connected', chargesEnabled: false, requirementsDue: [] } } as unknown, connected: 0 }))
 const published = vi.hoisted(() => ({ events: [] as unknown[], ok: 1 }))
 
-vi.mock('../../lib/stripeAccount', () => ({
+vi.mock('../../lib/stripeAccount', async (orig) => ({
+  // The real pure helpers (refusalWords and friends); only the network calls are replaced.
+  ...(await orig<typeof import('../../lib/stripeAccount')>()),
+  // Monthly payments split Connect Stripe into "I already have a Stripe account" (OAuth) and
+  // "Create a Stripe account" (the hosted onboarding these tests are about).
+  startStripeOAuth: async () => ({ kind: 'refused', reason: 'off', code: 'OAUTH_DISABLED' }),
   fetchStripeStatus: async () => stripe.status,
   refreshStripe: async () => stripe.status,
   connectStripe: async () => stripe.connect ?? stripe.status,
@@ -79,7 +84,7 @@ describe('Card payments through Stripe or PayPal', () => {
 
   it('offers no choice when PayPal is off, exactly as before', async () => {
     renderPage(essentials)
-    await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: /Create a Stripe account/ })).toBeTruthy())
     expect(screen.queryByTestId('card-processor-choice')).toBeNull()
   })
 
@@ -134,7 +139,7 @@ describe('Card payments by plan', () => {
     // Assert
     await waitFor(() => expect(screen.getByTestId('card-payments-locked')).toBeTruthy())
     expect(screen.getByText(/part of Essentials and above/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /Connect Stripe/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Create a Stripe account/ })).toBeNull()
   })
 
   it('offers Connect Stripe on Essentials', async () => {
@@ -142,7 +147,7 @@ describe('Card payments by plan', () => {
     renderPage(essentials)
 
     // Assert
-    await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: /Create a Stripe account/ })).toBeTruthy())
     expect(screen.queryByTestId('card-payments-locked')).toBeNull()
   })
 
@@ -250,7 +255,7 @@ describe('Card payments review regressions', () => {
     // Assert
     await waitFor(() => expect(screen.getByText('The merchant service is unreachable.')).toBeTruthy())
     expect(screen.queryByTestId('card-payments-locked')).toBeNull()
-    expect(screen.queryByRole('button', { name: /Connect Stripe/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Create a Stripe account/ })).toBeNull()
   })
 
   it('does not claim to take cards while the plan is unchecked and nothing is published', async () => {
@@ -279,7 +284,7 @@ describe('Card payments review regressions', () => {
       })
 
       // Assert
-      await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
+      await waitFor(() => expect(screen.getByRole('button', { name: /Create a Stripe account/ })).toBeTruthy())
     } finally {
       vi.useRealTimers()
     }
@@ -296,7 +301,7 @@ describe('Card payments review regressions', () => {
     fireEvent.click(screen.getByRole('button', { name: /Check again/ }))
 
     // Assert
-    await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: /Create a Stripe account/ })).toBeTruthy())
     expect(screen.queryByTestId('card-payments-locked')).toBeNull()
   })
 
@@ -309,10 +314,10 @@ describe('Card payments review regressions', () => {
       reason: 'Card payments are part of Essentials and above. Upgrade your plan to connect Stripe. Nothing was changed.',
     }
     renderPage(outage)
-    await waitFor(() => expect(screen.getByRole('button', { name: /Connect Stripe/ })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: /Create a Stripe account/ })).toBeTruthy())
 
     // Act
-    fireEvent.click(screen.getByRole('button', { name: /Connect Stripe/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Create a Stripe account/ }))
 
     // Assert
     await waitFor(() => expect(screen.getByText(/Upgrade your plan to connect Stripe/)).toBeTruthy())

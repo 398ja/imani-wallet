@@ -26,6 +26,12 @@ vi.mock('../../lib/instalments', async (orig) => ({
   ...(await orig<typeof import('../../lib/instalments')>()),
   fetchStallInstalmentSummary: m.summary,
 }))
+const pp = vi.hoisted(() => ({ status: vi.fn() }))
+vi.mock('../../lib/paypalAccount', async (orig) => ({
+  ...(await orig<typeof import('../../lib/paypalAccount')>()),
+  fetchPaypalStatus: pp.status,
+  refreshPaypal: pp.status,
+}))
 vi.mock('../../lib/nap', () => ({ getSigner: () => ({ signEvent: m.sign }) }))
 vi.mock('../../lib/relay', () => ({ publish: m.publish }))
 vi.mock('../../components/CardSalesSection', () => ({ CardSalesSection: () => null }))
@@ -118,6 +124,25 @@ describe('PaymentsSettingsPage monthly payments', () => {
     open(liveStatus(), record as MerchantProfile)
     expect(await screen.findByText('Monthly payments are available.')).toBeTruthy()
     expect((screen.getByRole('switch') as HTMLInputElement).disabled).toBe(true)
+  })
+
+  // Merge regression (PayPal on main): monthly payments are Stripe only. A PayPal stall sees no switch, no
+  // two-route connect, and a published offer it somehow carries is withdrawn on the first read.
+  it('a PayPal stall gets no monthly payments, and a stray offer is withdrawn', async () => {
+    const record: MerchantProfile = { ...merchant, cardProcessor: 'paypal', acceptsInstalments: true }
+    m.status.mockResolvedValue({ kind: 'ok', status: disconnected() })
+    pp.status.mockResolvedValue({ kind: 'ok', status: liveStatus({ instalmentsEligible: undefined, activePlans: undefined }) })
+    const onSaved = vi.fn()
+    render(
+      <MemoryRouter initialEntries={['/settings/payments']}>
+        <PaymentsSettingsPage merchant={record} onSaved={onSaved} paypal />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(onSaved.mock.calls.at(-1)?.[0].acceptsInstalments).toBe(false)
+    expect(onSaved.mock.calls.at(-1)?.[0].acceptsCards).toBe(true)
+    expect(screen.queryByRole('switch')).toBeNull()
+    expect(screen.queryByTestId('monthly-eligibility')).toBeNull()
   })
 
   it('says it could not check when eligibility is unknown', async () => {

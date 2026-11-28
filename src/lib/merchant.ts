@@ -108,14 +108,14 @@ export interface MerchantProfile {
    * cannot charge for. Only meaningful while `acceptsCards` is true.
    */
   cardProcessor?: 'stripe' | 'paypal'
+  /**
    * Whether this stall offers **Monthly payments** (an instalment plan, monthly payments spec).
    *
    * Follows `acceptsCards` exactly: self-asserted on the public record, only a literal `true`
    * counts, absent means off, withdrawn by republishing without it, and cleared by `salesClosed`.
    * It also needs `acceptsCards` with Stripe as the processor: plans run on the stall's own Stripe
-   * account, so a PayPal stall cannot offer them. The
-   * adapter re-checks eligibility at plan start, so a wrong flag costs a shopper one failed tap and
-   * never a wrong charge.
+   * account, so a PayPal stall cannot offer them. The adapter re-checks eligibility at plan start,
+   * so a wrong flag costs a shopper one failed tap and never a wrong charge.
    */
   acceptsInstalments?: boolean
   /**
