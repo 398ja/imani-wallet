@@ -16,6 +16,8 @@ const m = vi.hoisted(() => ({
   publish: vi.fn(),
   sign: vi.fn(),
   summary: vi.fn(),
+  saveSettings: vi.fn(),
+  readSettings: vi.fn(),
 }))
 vi.mock('../../lib/stripeAccount', async (orig) => ({
   ...(await orig<typeof import('../../lib/stripeAccount')>()),
@@ -25,6 +27,8 @@ vi.mock('../../lib/stripeAccount', async (orig) => ({
 vi.mock('../../lib/instalments', async (orig) => ({
   ...(await orig<typeof import('../../lib/instalments')>()),
   fetchStallInstalmentSummary: m.summary,
+  saveStallInstalmentSettings: m.saveSettings,
+  fetchStallInstalmentSettings: m.readSettings,
 }))
 const pp = vi.hoisted(() => ({ status: vi.fn() }))
 vi.mock('../../lib/paypalAccount', async (orig) => ({
@@ -78,6 +82,8 @@ beforeEach(() => {
   m.sign.mockImplementation(async (e: object) => ({ ...e, created_at: 1, id: 'x', sig: 'y', pubkey: merchant.pubkey }))
   m.publish.mockResolvedValue({ ok: 1 })
   m.summary.mockResolvedValue({ kind: 'ok', value: { activePlans: 7, monthlyTotals: [{ currency: 'gbp', amountMinor: 34000 }] } })
+  m.saveSettings.mockImplementation(async (s: { enabled: boolean }) => ({ kind: 'ok', value: { enabled: s.enabled, intervals: ['month'] } }))
+  m.readSettings.mockResolvedValue({ enabled: true, intervals: ['month'] })
   localStorage.clear()
 })
 afterEach(cleanup)
@@ -178,5 +184,76 @@ describe('PaymentsSettingsPage monthly payments', () => {
     const content = JSON.parse(m.sign.mock.calls.at(-1)![0].content)
     expect(content.acceptsCards).toBeUndefined()
     expect(content.acceptsInstalments).toBeUndefined()
+  })
+
+  // The staging e2e found plans starting on a stall that never switched them on: the switch was only
+  // published. Turning on now saves it where plan start enforces it, BEFORE publishing.
+  it('turning on saves the enforced setting first, then publishes', async () => {
+    open(liveStatus())
+    fireEvent.click(await screen.findByRole('switch'))
+    fireEvent.click(screen.getByLabelText(/accept the monthly payments terms/))
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on monthly payments' }))
+    await waitFor(() => expect(m.publish).toHaveBeenCalledTimes(1))
+    expect(m.saveSettings).toHaveBeenCalledWith({ enabled: true })
+    expect(m.saveSettings.mock.invocationCallOrder[0]).toBeLessThan(m.publish.mock.invocationCallOrder[0])
+  })
+
+  // If the enforced save fails, "Pay monthly" must not be shown for plans that would be refused.
+  it('a failed save on turning on publishes nothing and says why', async () => {
+    m.saveSettings.mockResolvedValue({ kind: 'error', reason: 'Could not reach the payment service. Nothing was changed. Try again.' })
+    const onSaved = open(liveStatus())
+    fireEvent.click(await screen.findByRole('switch'))
+    fireEvent.click(screen.getByLabelText(/accept the monthly payments terms/))
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on monthly payments' }))
+    expect(await screen.findByText(/Could not reach the payment service/)).toBeTruthy()
+    expect(m.publish).not.toHaveBeenCalled()
+    expect(onSaved).not.toHaveBeenCalledWith(expect.objectContaining({ acceptsInstalments: true }))
+  })
+
+  // Turning off still hides the tab if the save fails, and says the switch-off must be retried.
+  it('turning off publishes even if the save fails, and says so', async () => {
+    m.saveSettings.mockResolvedValue({ kind: 'error', reason: 'Try again.' })
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    const sw = (await screen.findByRole('switch')) as HTMLInputElement
+    await waitFor(() => expect(sw.checked).toBe(true))
+    fireEvent.click(sw)
+    await waitFor(() => expect(m.publish).toHaveBeenCalled())
+    expect(m.saveSettings).toHaveBeenCalledWith({ enabled: false })
+    expect(await screen.findByText(/could not be switched off everywhere/)).toBeTruthy()
+  })
+
+  // A stall that opted in before the switch was enforced is carried over on its next visit...
+  it('carries over an opt-in published before the switch was enforced', async () => {
+    m.readSettings.mockResolvedValue({ enabled: false, intervals: [] })
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    await waitFor(() => expect(m.saveSettings).toHaveBeenCalledWith({ enabled: true }))
+    expect(m.publish).not.toHaveBeenCalled()
+  })
+
+  // ...but never when the read failed, nor when the offer is being withdrawn on that same read.
+  it('does not carry over on an unreadable answer, nor while withdrawing', async () => {
+    m.readSettings.mockResolvedValue(null)
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    await screen.findByRole('switch')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(m.saveSettings).not.toHaveBeenCalled()
+    cleanup()
+
+    m.readSettings.mockResolvedValue({ enabled: false, intervals: [] })
+    open(liveStatus({ instalmentsEligible: false }), { ...merchant, acceptsInstalments: true })
+    await waitFor(() => expect(m.publish).toHaveBeenCalledTimes(1))
+    expect(m.saveSettings).toHaveBeenCalledWith({ enabled: false })
+    expect(m.saveSettings).not.toHaveBeenCalledWith({ enabled: true })
+  })
+
+  // A stall that switched off (saved), whose publish then failed, still shows the old offer: the
+  // explicit opt-out stands, it is not "carried over" back on.
+  it('never turns back on a stall that saved itself off', async () => {
+    m.readSettings.mockResolvedValue({ enabled: false, intervals: ['month'] })
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    await screen.findByRole('switch')
+    await waitFor(() => expect(m.readSettings).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(m.saveSettings).not.toHaveBeenCalled()
   })
 })
