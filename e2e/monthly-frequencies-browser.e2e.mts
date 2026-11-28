@@ -248,6 +248,18 @@ try {
   await b.getByRole('tab', { name: 'Pay over time' }).click({ timeout: 30_000 })
   const often2 = b.getByRole('radiogroup', { name: 'How often' })
   check('the Buy page no longer offers Weekly', await until(async () => (await often2.getByRole('radio').count()) === 2 && (await often2.getByRole('radio', { name: 'Weekly' }).count()) === 0, 10_000))
+
+  console.log('F5 the stall turns them off on its screen')
+  // Through the screen, not only the API, so the published offer goes too: an earlier run that only
+  // saved off left the record on, and the next run's switch started on (wallet#699 now withdraws it).
+  await s.goto(`${BASE}/settings/payments`, { waitUntil: 'load' })
+  await unlock(s)
+  const sw3 = s.getByRole('switch', { name: /payments/i })
+  await sw3.waitFor({ timeout: 45_000 })
+  check('the switch shows on', await until(async () => sw3.isChecked(), 20_000))
+  await sw3.click({ force: true })
+  check('payment-adapter holds the opt-out, keeping monthly and yearly', await until(async () => { const x = await settings(); return x.enabled === false && x.intervals?.join() === 'month,year' }), JSON.stringify(await settings()))
+  check('the profile withdraws acceptsInstalments', await until(async () => (await publishedInstalments()) !== true, 30_000))
 } finally {
   // Back to how the stall was: off, monthly only. Open Checkout sessions are expired.
   const off = await signedPost('/api/v1/checkout/plans/settings', { enabled: false, intervals: ['month'] }).catch(() => null)
