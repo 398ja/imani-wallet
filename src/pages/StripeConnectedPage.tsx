@@ -28,10 +28,17 @@ function failureWords(result: { reason: string; code?: string }): string {
  * and a ref does not survive the remount.
  */
 const posted = new Set<string>()
+/**
+ * Codes posted and not yet answered. Only these may leave the page on "Connecting…" with no query:
+ * a StrictMode remount while the first post is out. A later visit (say, the browser's Back after a
+ * finished attempt) has nothing in flight and must say the code is spent, not wait forever.
+ */
+const inFlight = new Set<string>()
 
 /** For tests only. */
 export function resetStripeConnectedGuard() {
   posted.clear()
+  inFlight.clear()
 }
 
 type View =
@@ -60,13 +67,14 @@ export function StripeConnectedPage() {
     }
     if (!code || !state) {
       // A reload lands here with the query already gone: the code is spent either way.
-      if (!posted.size) setView({ kind: 'failed', words: 'That took too long, or was already used. Start again.' })
+      if (!inFlight.size) setView({ kind: 'failed', words: 'That took too long, or was already used. Start again.' })
       return
     }
     if (posted.has(code)) return
     posted.add(code)
+    inFlight.add(code)
 
-    void completeStripeOAuth(code, state).then((result) => {
+    void completeStripeOAuth(code, state).finally(() => inFlight.delete(code)).then((result) => {
       if (result.kind === 'ok') {
         navigate('/settings/payments?stripe=return', { replace: true })
       } else {

@@ -62,6 +62,20 @@ describe('StripeConnectedPage', () => {
     expect(m.complete).toHaveBeenCalledTimes(1)
   })
 
+  // Review regression: coming back to the page after a finished attempt (Back button, a second tab)
+  // has no query and nothing in flight, so it must say the code is spent, not hang on "Connecting…".
+  it('a later visit with no query after a finished attempt says Start again, not Connecting', async () => {
+    m.complete.mockResolvedValue({ kind: 'refused', reason: 'x', code: 'OAUTH_STATE_INVALID' })
+    open('?code=ac_once&state=st')
+    expect(await screen.findByRole('button', { name: 'Start again' })).toBeTruthy()
+    cleanup()
+
+    open('')
+    expect(await screen.findByText(/That took too long, or was already used/)).toBeTruthy()
+    expect(screen.queryByText(/Connecting your Stripe account/)).toBeNull()
+    expect(m.complete).toHaveBeenCalledTimes(1)
+  })
+
   it('access_denied: nothing was connected, Connect again, no post', async () => {
     open('?error=access_denied&error_description=no')
     expect(await screen.findByText('Nothing was connected.')).toBeTruthy()

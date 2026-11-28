@@ -205,7 +205,10 @@ export function BuyPage({
     setMonthlyRefusal(result.refusal)
   }
 
-  if (busy) return <Centered>Taking you to the payment page…</Centered>
+  // Not on the monthly path: the amount and term live in MonthlyPaymentForm, and unmounting it for
+  // the tap-time recheck would throw away what the buyer typed whenever the answer is a refusal.
+  // The form takes `busy` and disables itself instead.
+  if (busy && !showMonthly) return <Centered>Taking you to the payment page…</Centered>
 
   if (buyerPubkey === null) {
     return <GuestBuy pubkey={pubkey} offersMonthly={offersMonthly} />

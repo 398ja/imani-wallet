@@ -13,9 +13,10 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 const STALL = 'b'.repeat(64)
 const BUYER = 'a'.repeat(64)
 
+let stallStatus: { status: string; sellsByCard: boolean } = { status: 'open', sellsByCard: true }
 vi.mock('../../lib/merchantStatus', async (orig) => ({
   ...(await orig<typeof import('../../lib/merchantStatus')>()),
-  fetchStallStatus: async () => ({ status: 'open', sellsByCard: true, eventId: 'e' }),
+  fetchStallStatus: async () => ({ ...stallStatus, eventId: 'e' }),
 }))
 let readiness = 'ready'
 vi.mock('../../lib/cardSalesEnrolment', () => ({ cardSalesReadiness: async () => readiness }))
@@ -74,6 +75,7 @@ beforeEach(() => {
   invalidateInstalmentPlans()
   record = { acceptsInstalments: true, issuanceCurrency: 'gbp' }
   readiness = 'ready'
+  stallStatus = { status: 'open', sellsByCard: true }
 })
 afterEach(() => {
   cleanup()
@@ -145,6 +147,8 @@ describe('Buy page, Pay monthly', () => {
     fireEvent.click(screen.getByRole('button', { name: /Start monthly payments/ }))
 
     const reason = await screen.findByText('Monthly payments start at £20.')
+    // Review regression: the refusal keeps what the buyer typed (the form is not unmounted while busy).
+    expect((screen.getByLabelText('Amount each month') as HTMLInputElement).value).toBe('10')
     const button = screen.getByRole('button', { name: /Start monthly payments/ }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
     expect(button.getAttribute('aria-describedby')).toBe(reason.id)
@@ -165,6 +169,38 @@ describe('Buy page, Pay monthly', () => {
     const describedBy = button.getAttribute('aria-describedby')
     expect(describedBy).toBeTruthy()
     expect(document.getElementById(describedBy!)?.textContent).toBeTruthy()
+  })
+
+  // Review regression: the monthly path re-asks at the tap exactly as the one-off does, so a stall
+  // that closed or stopped card sales after the page loaded is never sent to Stripe.
+  it('a stall that closed after the page loaded is never sent to Stripe', async () => {
+    buy()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Pay monthly' }))
+    fireEvent.change(screen.getByLabelText('Amount each month'), { target: { value: '40' } })
+    stallStatus = { status: 'closed', sellsByCard: false }
+    fireEvent.click(screen.getByRole('button', { name: /Start monthly payments/ }))
+
+    // The page's own stall note wins over the tap's words, and Start stays disabled beside it.
+    await screen.findByText(/closed right now/)
+    expect((screen.getByRole('button', { name: /Start monthly payments/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(startInstalments).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem(PENDING_PURCHASE_KEY)).toBeNull()
+  })
+
+  it('card sales that stopped after the page loaded disable Start and never reach Stripe', async () => {
+    buy()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Pay monthly' }))
+    fireEvent.change(screen.getByLabelText('Amount each month'), { target: { value: '40' } })
+    const button = screen.getByRole('button', { name: /Start monthly payments/ }) as HTMLButtonElement
+    await waitFor(() => expect(button.disabled).toBe(false))
+    readiness = 'not-ready'
+    fireEvent.click(button)
+
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: /Start monthly payments/ }) as HTMLButtonElement).disabled).toBe(true),
+    )
+    expect(startInstalments).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem(PENDING_PURCHASE_KEY)).toBeNull()
   })
 
   it('has no guest path: a visitor is sent to log in and come back', async () => {

@@ -109,6 +109,17 @@ describe('PaymentsSettingsPage monthly payments', () => {
     expect((screen.getByRole('switch') as HTMLInputElement).disabled).toBe(true)
   })
 
+  // Review regression: reconcileInstalmentOffer withdraws the offer from a stall without cards, so
+  // the switch must not let one opt in there (it would be published, then withdrawn on next read).
+  it.each([
+    ['cards are not offered', { ...merchant, acceptsCards: false }],
+    ['sales are closed', { ...merchant, salesClosed: true }],
+  ])('disables the switch when %s, even on an eligible live account', async (_why, record) => {
+    open(liveStatus(), record as MerchantProfile)
+    expect(await screen.findByText('Monthly payments are available.')).toBeTruthy()
+    expect((screen.getByRole('switch') as HTMLInputElement).disabled).toBe(true)
+  })
+
   it('says it could not check when eligibility is unknown', async () => {
     open(liveStatus({ instalmentsEligible: false, instalmentsEligibilityKnown: false }))
     expect(await screen.findByText(/We couldn.t check your account yet/)).toBeTruthy()
