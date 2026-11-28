@@ -64,6 +64,7 @@ function plan(over: Partial<InstalmentPlan> = {}): InstalmentPlan {
     status: 'ACTIVE',
     amountMinor: 4000,
     currency: 'gbp',
+    interval: 'month',
     totalInstalments: 6,
     instalmentsPaid: 3,
     cancelRequested: false,
@@ -132,7 +133,7 @@ describe('Buy page, Pay monthly', () => {
     fireEvent.click(screen.getByRole('button', { name: /Start monthly payments/ }))
 
     await screen.findByText('stop here')
-    expect(startInstalments).toHaveBeenCalledWith({ stallPubkey: STALL, buyerPubkey: BUYER, amountMinor: 4000, term: 3 })
+    expect(startInstalments).toHaveBeenCalledWith({ stallPubkey: STALL, buyerPubkey: BUYER, amountMinor: 4000, term: 3, interval: 'month' })
     expect(JSON.parse(sessionStorage.getItem(PENDING_PURCHASE_KEY) ?? '{}')).toEqual({ stallPubkey: STALL, kind: 'monthly' })
   })
 

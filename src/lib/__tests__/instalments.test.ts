@@ -45,6 +45,7 @@ function plan(over: Partial<InstalmentPlan> = {}): InstalmentPlan {
     status: 'ACTIVE',
     amountMinor: 4000,
     currency: 'gbp',
+    interval: 'month',
     totalInstalments: 6,
     instalmentsPaid: 3,
     cancelRequested: false,
@@ -140,9 +141,24 @@ describe('startRefusal', () => {
   })
 
   // A stall that switched off (enforced by payment-adapter) reads as "doesn't offer", never as an error.
-  it('words NOT_OFFERED and INTERVAL_NOT_OFFERED as a stall that does not offer them', () => {
+  it('words NOT_OFFERED as a stall that does not offer them', () => {
     expect(startRefusal(409, { code: 'NOT_OFFERED', error: 'x' })).toEqual({ kind: 'not-offered', reason: "This stall doesn't offer monthly payments." })
-    expect(startRefusal(409, { code: 'INTERVAL_NOT_OFFERED', intervals: ['week'] }).kind).toBe('not-offered')
+    expect(startRefusal(409, { code: 'NOT_OFFERED' }, 'week').reason).toBe("This stall doesn't offer regular payments.")
+  })
+
+  // The stall changed how often it takes payments while the form was open: say what it takes now,
+  // in the chooser's order, and carry it so the form can offer exactly those.
+  it('words INTERVAL_NOT_OFFERED with what the stall takes now', () => {
+    expect(startRefusal(409, { code: 'INTERVAL_NOT_OFFERED', intervals: ['year', 'week', 'day'] }, 'month')).toEqual({
+      kind: 'interval-not-offered',
+      intervals: ['week', 'year'],
+      reason: 'This stall now takes weekly or yearly payments only. Choose again.',
+    })
+    expect(startRefusal(409, { code: 'INTERVAL_NOT_OFFERED' }, 'year')).toEqual({
+      kind: 'interval-not-offered',
+      intervals: [],
+      reason: "This stall doesn't offer yearly payments.",
+    })
   })
 
   it('does not show an overlong upstream message', () => {
@@ -194,7 +210,15 @@ describe('signed requests', () => {
     const r = await fetchStallInstalmentSummary(STALL, signer)
 
     expect(fetchMock.mock.calls[0][0]).toBe(`${PLANS_PATH}/summary?stall=${STALL}`)
-    expect(r).toEqual({ kind: 'ok', value: { activePlans: 7, monthlyTotals: [{ currency: 'gbp', amountMinor: 34000 }] } })
+    // An adapter from before intervals: its monthly totals are its totals.
+    expect(r).toEqual({
+      kind: 'ok',
+      value: {
+        activePlans: 7,
+        monthlyTotals: [{ currency: 'gbp', amountMinor: 34000 }],
+        totals: [{ currency: 'gbp', interval: 'month', amountMinor: 34000 }],
+      },
+    })
   })
 
   it('a Stripe failure on Stop says nothing was changed', async () => {
@@ -267,7 +291,9 @@ describe('words', () => {
 describe('pendingPurchase kind', () => {
   it('remembers a monthly purchase with its kind', () => {
     rememberPurchase(STALL, 'monthly')
-    expect(rememberedPurchase()).toEqual({ stallPubkey: STALL, kind: 'monthly' })
+    // A record of a monthly plan reads back as monthly; the stored record is what it always was.
+    expect(rememberedPurchase()).toEqual({ stallPubkey: STALL, kind: 'monthly', interval: 'month' })
+    expect(JSON.parse(sessionStorage.getItem(PENDING_PURCHASE_KEY) ?? '{}')).toEqual({ stallPubkey: STALL, kind: 'monthly' })
     expect(rememberedStall()).toBe(STALL)
   })
 

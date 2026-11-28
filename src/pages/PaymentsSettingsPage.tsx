@@ -19,10 +19,18 @@ import { paypalEnabled, processorName, processorOf, type CardProcessor } from '.
 import { reconcileCardOffer } from '../lib/cardOffer'
 import { reconcileInstalmentOffer } from '../lib/instalmentOffer'
 import {
+  ADVERB,
+  PLAN_INTERVALS,
   fetchStallInstalmentSettings,
   fetchStallInstalmentSummary,
   formatMoney,
+  isMonthlyOnly,
+  listWords,
+  paymentsNoun,
+  paymentsTitle,
+  perPeriod,
   saveStallInstalmentSettings,
+  type PlanInterval,
   type StallInstalmentSummary,
 } from '../lib/instalments'
 import { CARD_PAYMENTS_PLAN_NAME, cardPaymentsPlan, type CardPaymentsPlan } from '../lib/cardPaymentsAccess'
@@ -109,6 +117,18 @@ export function PaymentsSettingsPage({
   const [offeringMonthly, setOfferingMonthly] = useState(false)
   const [termsAccepted, setTermsAccepted] = useState(false)
   const [summary, setSummary] = useState<StallInstalmentSummary | null>(null)
+  /**
+   * How often the stall lets buyers pay, as payment-adapter holds it (that is what plan start
+   * enforces). Monthly until read, and for a stall that never saved one: what every stall had
+   * before weekly and yearly plans. The tick boxes edit this; turning on saves it with the switch.
+   */
+  const [intervals, setIntervalsState] = useState<PlanInterval[]>(['month'])
+  /** Beside the state, so `apply` (one function for the page's life) words a withdrawal right. */
+  const intervalsRef = useRef<PlanInterval[]>(['month'])
+  const setIntervals = useCallback((next: PlanInterval[]) => {
+    intervalsRef.current = next
+    setIntervalsState(next)
+  }, [])
   /** The plan as last read, for `apply` without making it a new function per read. */
   const planRef = useRef<CardPaymentsPlan>('unknown')
   /**
@@ -220,7 +240,7 @@ export function PaymentsSettingsPage({
           ? next.acceptsCards === true
             ? 'Shoppers can now buy your vouchers by card.'
             : `Card payments are off: ${change.reason}.`
-          : `Monthly payments are off: ${monthly.kind === 'republish' ? monthly.reason : ''}.`,
+          : `${paymentsTitle(intervalsRef.current)} are off: ${monthly.kind === 'republish' ? monthly.reason : ''}.`,
       )
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -269,21 +289,61 @@ export function PaymentsSettingsPage({
   const setMonthly = async (on: boolean) => {
     setBusy(true)
     setNote(null)
+    setError(null)
     try {
-      const saved = await saveStallInstalmentSettings({ enabled: on })
+      // Turning on saves the frequencies ticked in the disclosure with it. Turning off sends none,
+      // so the stall's choice is kept for the next time it turns them on.
+      const saved = await saveStallInstalmentSettings(on ? { enabled: true, intervals } : { enabled: false })
       if (saved.kind !== 'ok' && on) {
         setError(saved.reason)
         return
       }
+      const offered = saved.kind === 'ok' && saved.value.intervals.length > 0 ? saved.value.intervals : intervals
+      if (saved.kind === 'ok' && saved.value.intervals.length > 0) setIntervals(saved.value.intervals)
       await publishRecord(
         { ...current.current, acceptsInstalments: on },
-        on ? 'Shoppers can now pay you monthly.' : 'Monthly payments are off. Plans already running carry on.',
+        on
+          ? `Shoppers can now pay you ${listWords(offered.map((i) => ADVERB[i].toLowerCase()))}.`
+          : `${paymentsTitle(offered)} are off. Plans already running carry on.`,
       )
       if (saved.kind !== 'ok') {
-        setError(`Monthly payments are hidden from shoppers, but could not be switched off everywhere. ${saved.reason}`)
+        setError(`${paymentsTitle(offered)} are hidden from shoppers, but could not be switched off everywhere. ${saved.reason}`)
       }
       setOfferingMonthly(false)
       setTermsAccepted(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * A tick box changed. Before turning on, it only changes what the disclosure will save. While on,
+   * it is saved at once, where plan start enforces it: a frequency unticked here is refused to the
+   * next buyer who picks it, and plans already running at it carry on. At least one stays ticked
+   * (the last one's box is disabled), because "on, but at no frequency" offers nothing.
+   */
+  const toggleInterval = async (interval: PlanInterval, ticked: boolean) => {
+    const next = PLAN_INTERVALS.filter((i) => (i === interval ? ticked : intervals.includes(i)))
+    if (next.length === 0) return
+    if (current.current.acceptsInstalments !== true) {
+      setIntervals(next)
+      return
+    }
+    const before = intervals
+    setIntervals(next)
+    setBusy(true)
+    setNote(null)
+    setError(null)
+    try {
+      const saved = await saveStallInstalmentSettings({ enabled: true, intervals: next })
+      if (saved.kind === 'ok') {
+        setIntervals(saved.value.intervals.length > 0 ? saved.value.intervals : next)
+        setNote(`Shoppers can now pay you ${listWords((saved.value.intervals.length > 0 ? saved.value.intervals : next).map((i) => ADVERB[i].toLowerCase()))}.`)
+      } else {
+        // Not saved, so not in force: show what is.
+        setIntervals(before)
+        setError(saved.reason)
+      }
     } finally {
       setBusy(false)
     }
@@ -320,6 +380,18 @@ export function PaymentsSettingsPage({
       cancelled = true
     }
   }, [merchant.acceptsInstalments, merchant.pubkey])
+
+  // The stall's saved frequencies, for the tick boxes. Read whether or not it is on, so a stall
+  // that turned off and comes back finds the choice it made. Unreadable or never saved: monthly.
+  useEffect(() => {
+    let cancelled = false
+    void fetchStallInstalmentSettings(merchant.pubkey).then((saved) => {
+      if (!cancelled && saved !== null && saved.intervals.length > 0) setIntervals(saved.intervals)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [merchant.pubkey])
 
   useEffect(() => {
     // On mount, and after Stripe redirects back. `refresh` re-reads Stripe
@@ -583,10 +655,10 @@ export function PaymentsSettingsPage({
         <div className="mb-6">
           <p className="mb-3 text-[15px] leading-relaxed text-mono-500" data-testid="monthly-eligibility">
             {eligible ? (
-              'Monthly payments are available.'
+              `${paymentsTitle(intervals)} are available.`
             ) : status?.instalmentsEligibilityKnown ? (
               <>
-                Your Stripe account setup means monthly payments aren&rsquo;t available.{' '}
+                Your Stripe account setup means {paymentsNoun(intervals)} aren&rsquo;t available.{' '}
                 <details className="inline">
                   <summary className="inline cursor-pointer underline">Why?</summary>
                   <span className="block">
@@ -601,8 +673,12 @@ export function PaymentsSettingsPage({
           </p>
 
           <Switch
-            label="Monthly payments"
-            hint="Let customers pay you a set amount each month and get a voucher each time."
+            label={paymentsTitle(intervals)}
+            hint={
+              isMonthlyOnly(intervals)
+                ? 'Let customers pay you a set amount each month and get a voucher each time.'
+                : `Let customers pay you a set amount ${listWords(intervals.map((i) => `each ${i}`))} and get a voucher each time.`
+            }
             checked={monthlyOn || offeringMonthly}
             disabled={busy || (!monthlyOn && !canOfferMonthly)}
             onChange={(on) => {
@@ -617,10 +693,14 @@ export function PaymentsSettingsPage({
             }}
           />
 
+          {(monthlyOn || offeringMonthly) && (
+            <IntervalChoice intervals={intervals} disabled={busy} onToggle={(i, on) => void toggleInterval(i, on)} />
+          )}
+
           {offeringMonthly && !monthlyOn && (
             <div className="expand-row mt-3 rounded-xl bg-mono-100 p-4 text-sm leading-relaxed dark:bg-mono-900">
               <p className="mb-2">
-                <strong>You pay Stripe&rsquo;s fees, not Imani.</strong> Each monthly payment costs about 1.5% + 20p
+                <strong>You pay Stripe&rsquo;s fees, not Imani.</strong> Each {isMonthlyOnly(intervals) ? 'monthly ' : ''}payment costs about 1.5% + 20p
                 to process, plus 0.7% for recurring billing. On a £40 payment that is roughly £1.08 (2.7%). Small
                 payments cost proportionally more, so the minimum is £20.
               </p>
@@ -630,7 +710,7 @@ export function PaymentsSettingsPage({
                 reserve.
               </p>
               <p className="mb-3">
-                <strong>A customer can stop at any time.</strong> Monthly payments are a convenience, not a contract.
+                <strong>A customer can stop at any time.</strong> {paymentsTitle(intervals)} are a convenience, not a contract.
                 Vouchers already issued stay valid.
               </p>
               <label className="mb-3 flex items-start gap-2">
@@ -640,20 +720,16 @@ export function PaymentsSettingsPage({
                   checked={termsAccepted}
                   onChange={(e) => setTermsAccepted(e.target.checked)}
                 />
-                <span>I&rsquo;ve read and accept the monthly payments terms.</span>
+                <span>I&rsquo;ve read and accept the {paymentsNoun(intervals)} terms.</span>
               </label>
               <Button size="sm" disabled={busy || !termsAccepted} onClick={() => setMonthly(true)}>
-                Turn on monthly payments
+                Turn on {paymentsNoun(intervals)}
               </Button>
             </div>
           )}
 
           {monthlyOn && summary !== null && (
-            <p className="mt-3 text-[15px] leading-relaxed text-mono-500">
-              {summary.activePlans} {summary.activePlans === 1 ? 'person pays' : 'people pay'} you monthly
-              {summary.monthlyTotals.length > 0 &&
-                `, ${summary.monthlyTotals.map((t) => formatMoney(t.amountMinor, t.currency)).join(' + ')} a month`}
-            </p>
+            <p className="mt-3 text-[15px] leading-relaxed text-mono-500">{summaryLine(summary)}</p>
           )}
         </div>
       )}
@@ -873,5 +949,70 @@ function LockedCardPayments({ busy, name, onCheckAgain }: { busy: boolean; name:
         Check again
       </Button>
     </div>
+  )
+}
+
+/**
+ * "7 people pay you monthly, £340 a month": the stall's running plans. While every one is monthly,
+ * the words it always had. Otherwise "regularly", with one total per currency and interval, never
+ * added across them (£40 a month and £10 a week are two amounts, not £50).
+ */
+export function summaryLine(summary: StallInstalmentSummary): string {
+  const people = `${summary.activePlans} ${summary.activePlans === 1 ? 'person pays' : 'people pay'}`
+  // Defensive: a summary without `totals` (shaped before intervals) is its monthly totals. A missing
+  // field must never take the whole Card payments screen down with it.
+  const all = Array.isArray(summary.totals)
+    ? summary.totals
+    : (summary.monthlyTotals ?? []).map((t) => ({ ...t, interval: 'month' as const }))
+  const monthly = all.every((t) => t.interval === 'month')
+  const totals = all.map((t) => `${formatMoney(t.amountMinor, t.currency)} ${perPeriod(t.interval)}`)
+  if (monthly) {
+    return totals.length > 0
+      ? `${people} you monthly, ${all.map((t) => formatMoney(t.amountMinor, t.currency)).join(' + ')} a month`
+      : `${people} you monthly`
+  }
+  return `${people} you regularly, ${totals.join(' + ')}`
+}
+
+/**
+ * Weekly, Monthly, Yearly: which the stall offers. Real checkboxes, so each is announced with its
+ * state; the last one ticked cannot be unticked (an offer at no frequency is no offer).
+ */
+function IntervalChoice({
+  intervals,
+  disabled,
+  onToggle,
+}: {
+  intervals: readonly PlanInterval[]
+  disabled: boolean
+  onToggle: (interval: PlanInterval, ticked: boolean) => void
+}) {
+  return (
+    <fieldset className="mt-3" data-testid="instalment-intervals">
+      <legend className="mb-2 text-sm font-medium">Customers can pay</legend>
+      <div className="flex flex-wrap gap-x-5 gap-y-2">
+        {PLAN_INTERVALS.map((i) => {
+          const ticked = intervals.includes(i)
+          const last = ticked && intervals.length === 1
+          return (
+            <label key={i} className="flex items-center gap-2 text-[15px]">
+              <input
+                type="checkbox"
+                checked={ticked}
+                disabled={disabled || last}
+                aria-describedby={last ? 'instalment-intervals-last' : undefined}
+                onChange={(e) => onToggle(i, e.target.checked)}
+              />
+              {ADVERB[i]}
+            </label>
+          )
+        })}
+      </div>
+      {intervals.length === 1 && (
+        <p id="instalment-intervals-last" className="mt-1 text-xs text-mono-500">
+          Keep at least one. To stop offering them, turn the switch off.
+        </p>
+      )}
+    </fieldset>
   )
 }

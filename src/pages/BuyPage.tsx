@@ -14,7 +14,14 @@ import { cardSalesReason, type CardSalesReadiness } from '../lib/merchantActions
 import { rememberAfterLogin } from '../lib/afterLogin'
 import { fetchMerchantRecord } from '../lib/merchant'
 import { processorOf, type CardProcessor } from '../lib/cardProcessor'
-import { startInstalments, type PlanTerm, type StartRefusal } from '../lib/instalments'
+import {
+  fetchStallInstalmentSettings,
+  isMonthlyOnly,
+  startInstalments,
+  type PlanInterval,
+  type PlanTerm,
+  type StartRefusal,
+} from '../lib/instalments'
 import { MonthlyPaymentForm } from '../components/MonthlyPaymentForm'
 
 
@@ -61,6 +68,13 @@ export function BuyPage({
   /** Test seam: whether the stall's public record offers Monthly payments. Read from the relay otherwise. */
   offersMonthly?: boolean
 }) {
+  /*
+   * How often this stall lets buyers pay: its saved offer, the one payment-adapter enforces.
+   * Monthly until it answers, and when it cannot be read or names nothing, which is what every
+   * stall offered before weekly and yearly plans; payment-adapter refuses anything it does not
+   * offer, so a stale answer costs one refused tap, never a wrong charge.
+   */
+  const [offeredIntervals, setOfferedIntervals] = useState<{ stall: string; intervals: PlanInterval[] } | null>(null)
   const { pubkey = '' } = useParams()
   const navigate = useNavigate()
   const [mode, setMode] = useState<'one-off' | 'monthly'>('one-off')
@@ -116,10 +130,25 @@ export function BuyPage({
       live = false
     }
   }, [pubkey, offersMonthlyOverride])
+  useEffect(() => {
+    let live = true
+    fetchStallInstalmentSettings(pubkey)
+      .catch(() => null)
+      .then((offer) => {
+        if (live && offer !== null && offer.enabled && offer.intervals.length > 0) {
+          setOfferedIntervals({ stall: pubkey, intervals: offer.intervals })
+        }
+      })
+    return () => {
+      live = false
+    }
+  }, [pubkey])
   const offersMonthly =
     offersMonthlyOverride ?? (record !== null && record.stall === pubkey && record.monthly)
   const currency = record?.stall === pubkey ? record.currency : 'gbp'
   const showMonthly = offersMonthly && mode === 'monthly'
+  const intervals: PlanInterval[] = offeredIntervals?.stall === pubkey ? offeredIntervals.intervals : ['month']
+  const monthlyOnly = isMonthlyOnly(intervals)
 
   const minor = toMinorUnits(amount)
   /**
@@ -178,7 +207,7 @@ export function BuyPage({
   }
 
   /** Same checks as a one-off, at the tap, then the adapter decides the rest. */
-  const startMonthly = async (amountMinor: number, term: PlanTerm) => {
+  const startMonthly = async (amountMinor: number, term: PlanTerm, interval: PlanInterval = 'month') => {
     if (buyerPubkey === null) return
     setBusy(true)
     setMonthlyRefusal(null)
@@ -195,13 +224,17 @@ export function BuyPage({
       return
     }
     // Remembered with its kind, so the return page uses the right words without trusting the URL.
-    rememberPurchase(pubkey, 'monthly')
-    const result = await startInstalments({ stallPubkey: pubkey, buyerPubkey, amountMinor, term })
+    rememberPurchase(pubkey, 'monthly', interval)
+    const result = await startInstalments({ stallPubkey: pubkey, buyerPubkey, amountMinor, term, interval })
     if (result.kind === 'ok') {
       window.location.href = result.checkoutUrl
       return
     }
     setBusy(false)
+    // The stall changed how often it takes payments while this form was open: offer what it takes now.
+    if (result.refusal.kind === 'interval-not-offered' && result.refusal.intervals.length > 0) {
+      setOfferedIntervals({ stall: pubkey, intervals: result.refusal.intervals })
+    }
     setMonthlyRefusal(result.refusal)
   }
 
@@ -211,7 +244,7 @@ export function BuyPage({
   if (busy && !showMonthly) return <Centered>Taking you to the payment page…</Centered>
 
   if (buyerPubkey === null) {
-    return <GuestBuy pubkey={pubkey} offersMonthly={offersMonthly} />
+    return <GuestBuy pubkey={pubkey} offersMonthly={offersMonthly} monthlyOnly={monthlyOnly} />
   }
 
   return (
@@ -223,7 +256,9 @@ export function BuyPage({
       <h1 className="mb-2 text-title font-semibold">Buy a voucher</h1>
       <p className="mb-6 text-callout text-mono-500">
         {showMonthly
-          ? 'You pay this stall directly by card, once a month. A voucher arrives in your wallet with each payment.'
+          ? monthlyOnly
+            ? 'You pay this stall directly by card, once a month. A voucher arrives in your wallet with each payment.'
+            : 'You pay this stall directly by card, a set amount each time. A voucher arrives in your wallet with each payment.'
           : 'You pay this stall directly by card. The voucher arrives in your wallet.'}
       </p>
 
@@ -240,7 +275,7 @@ export function BuyPage({
                 mode === m ? 'bg-white shadow-sm dark:bg-mono-800' : 'text-mono-500'
               }`}
             >
-              {m === 'one-off' ? 'One payment' : 'Pay monthly'}
+              {m === 'one-off' ? 'One payment' : monthlyOnly ? 'Pay monthly' : 'Pay over time'}
             </button>
           ))}
         </div>
@@ -248,7 +283,10 @@ export function BuyPage({
 
       {showMonthly ? (
         <MonthlyPaymentForm
+          // No `key`: a narrowed offer (a refusal naming what the stall takes now) must keep the amount
+          // the buyer typed. The form moves its own choice onto one the stall offers.
           currency={currency}
+          intervals={intervals}
           unavailable={stallNote ?? (cardSales !== 'ready' ? cardSalesReason(cardSales) : null)}
           refusal={monthlyRefusal}
           busy={busy}
@@ -343,7 +381,7 @@ function toMinorUnits(raw: string): number | null {
 }
 
 /** A visitor with no wallet: the stall's gifting page, or a wallet. */
-function GuestBuy({ pubkey, offersMonthly }: { pubkey: string; offersMonthly: boolean }) {
+function GuestBuy({ pubkey, offersMonthly, monthlyOnly }: { pubkey: string; offersMonthly: boolean; monthlyOnly: boolean }) {
   const navigate = useNavigate()
   const identity = useIdentity(pubkey)
   const gifting = giftingPageUrl(identity?.nip05)
@@ -360,7 +398,7 @@ function GuestBuy({ pubkey, offersMonthly }: { pubkey: string; offersMonthly: bo
       <Link to="/" className={`${buttonClasses(gifting ? 'secondary' : 'primary', 'lg')} w-full`}>
         Create a wallet
       </Link>
-      {/* Monthly payments need a wallet key to deliver a voucher to every month, so there is no
+      {/* Regular payments need a wallet key to deliver a voucher to every time, so there is no
           guest path: log in, and come straight back here. */}
       {offersMonthly && (
         <button
@@ -371,7 +409,7 @@ function GuestBuy({ pubkey, offersMonthly }: { pubkey: string; offersMonthly: bo
             navigate('/login')
           }}
         >
-          Log in to pay monthly
+          {monthlyOnly ? 'Log in to pay monthly' : 'Log in to pay over time'}
         </button>
       )}
       {!gifting && (

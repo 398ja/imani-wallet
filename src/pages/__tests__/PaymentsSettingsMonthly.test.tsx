@@ -194,7 +194,8 @@ describe('PaymentsSettingsPage monthly payments', () => {
     fireEvent.click(screen.getByLabelText(/accept the monthly payments terms/))
     fireEvent.click(screen.getByRole('button', { name: 'Turn on monthly payments' }))
     await waitFor(() => expect(m.publish).toHaveBeenCalledTimes(1))
-    expect(m.saveSettings).toHaveBeenCalledWith({ enabled: true })
+    // Turning on saves the frequencies ticked in the disclosure (monthly unless changed).
+    expect(m.saveSettings).toHaveBeenCalledWith({ enabled: true, intervals: ['month'] })
     expect(m.saveSettings.mock.invocationCallOrder[0]).toBeLessThan(m.publish.mock.invocationCallOrder[0])
   })
 
