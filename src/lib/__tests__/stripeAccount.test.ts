@@ -212,7 +212,7 @@ describe('what a refusal actually says', () => {
 
   it('shows the service’s own message instead of a guess about the network', async () => {
     const result = await connect(502, { message: 'Stripe Connect is disabled' })
-    expect(result).toEqual({ kind: 'refused', reason: 'Stripe Connect is disabled' })
+    expect(result).toMatchObject({ kind: 'refused', reason: 'Stripe Connect is disabled', status: 502 })
   })
 
   /*

@@ -3,7 +3,7 @@ import { CheckCircle2, XCircle } from 'lucide-react'
 
 import { Screen, buttonClasses } from '../components/ui'
 import { useBranding } from '../hooks/useBranding'
-import { rememberedStall } from '../lib/pendingPurchase'
+import { rememberedPurchase, rememberedStall } from '../lib/pendingPurchase'
 
 /**
  * Where Stripe Checkout sends a BUYER back to (imani-wallet#267 item 3).
@@ -35,9 +35,13 @@ import { rememberedStall } from '../lib/pendingPurchase'
  * it reads as the same control the Buy screen used a minute ago.
  */
 export function BuyDonePage() {
-  const stall = rememberedStall()
+  const remembered = rememberedPurchase()
+  const stall = remembered?.stallPubkey
   const { branding } = useBranding(stall)
   const name = branding?.organizationName
+  // The kind comes from THIS device, written before leaving for Stripe. Nothing in the URL can
+  // turn a one-off into "monthly" or the other way round.
+  if (remembered?.kind === 'monthly') return <MonthlyDone stall={stall} />
   return (
     <Screen>
       <div className="flex flex-col items-center pt-16 text-center">
@@ -50,6 +54,34 @@ export function BuyDonePage() {
           </p>
         </div>
         <Link to="/" className={`${buttonClasses('primary', 'lg')} w-full`}>
+          Go to my vouchers
+        </Link>
+        {stall && (
+          <Link to={`/merchants/${stall}`} className={`${buttonClasses('ghost', 'lg')} mt-2 w-full`}>
+            Back to the stall
+          </Link>
+        )}
+      </div>
+    </Screen>
+  )
+}
+
+/** The first payment of Monthly payments went through (monthly payments spec). */
+function MonthlyDone({ stall }: { stall: string | undefined }) {
+  return (
+    <Screen>
+      <div className="flex flex-col items-center pt-16 text-center">
+        <div role="status" className="flex flex-col items-center">
+          <CheckCircle2 className="mb-4 h-12 w-12 text-green-600 dark:text-green-500" aria-hidden />
+          <h1 className="mb-2 text-title font-semibold">Monthly payments started</h1>
+          <p className="mb-8 text-callout text-mono-500">
+            Your first payment went through. A voucher arrives with each payment, starting with this one.
+          </p>
+        </div>
+        <Link to="/settings/monthly-payments" className={`${buttonClasses('primary', 'lg')} w-full`}>
+          See monthly payments
+        </Link>
+        <Link to="/" className={`${buttonClasses('ghost', 'lg')} mt-2 w-full`}>
           Go to my vouchers
         </Link>
         {stall && (

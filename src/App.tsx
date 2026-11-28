@@ -71,6 +71,7 @@ import {
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
 import { PaymentsSettingsPage } from './pages/PaymentsSettingsPage'
+import { StripeConnectedPage } from './pages/StripeConnectedPage'
 import { NotificationSettingsPage } from './pages/NotificationSettingsPage'
 import { ReceiptSettingsPage } from './pages/ReceiptSettingsPage'
 import { ReceiptAckPrompt } from './components/ReceiptAckPrompt'
@@ -90,6 +91,7 @@ import { finishCashlinkIntentsNow, finishPendingCashlinkClaims, reconcileGiftLin
 import { runCashlinkExpiryNoticesAfterReconcile } from './lib/cashlinkExpiryNotice'
 import { BuyPage } from './pages/BuyPage'
 import { BuyCancelledPage, BuyDonePage } from './pages/BuyReturnPages'
+import { MonthlyPaymentDetailPage, MonthlyPaymentsPage } from './pages/MonthlyPaymentsPages'
 import { PublicProfilePage } from './pages/PublicProfilePage'
 import { CouponsPage, ExpiringCouponsPage, TransactionsPage } from './pages/RecordListPages'
 import { useExpiryReminders } from './hooks/useExpiryReminders'
@@ -816,6 +818,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             have no stall record, and selling is chosen at registration. Only the
             trading SCREENS are gated on `active` (see `canTrade`). */}
         <Route path="/settings" element={<SettingsPage merchant={merchant !== null} stallPubkey={pubkey} />} />
+        {/* Monthly payments: every account that pays a stall monthly (monthly payments spec). */}
+        <Route path="/settings/monthly-payments" element={<MonthlyPaymentsPage buyerPubkey={pubkey} />} />
+        <Route path="/settings/monthly-payments/:planId" element={<MonthlyPaymentDetailPage />} />
         {/* Every role: what is running, the legal pages, support (no predicate). */}
         <Route path="/settings/about" element={<AboutPage />} />
         {/* #589: only reachable with a support snapshot code; the page hides itself when unconfigured. */}
@@ -855,6 +860,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
             )
           }
         />
+        {/* Stripe's OAuth return. Not merchant-gated: the merchant record may still be loading,
+            and the one-time code must be stripped from the URL on first render regardless. */}
+        <Route path="/settings/payments/stripe-connected" element={<StripeConnectedPage />} />
         <Route
           path="/settings/ledger"
           element={

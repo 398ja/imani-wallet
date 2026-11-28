@@ -30,6 +30,7 @@ import {
   rubberband,
 } from '../lib/spring'
 import { formatFace } from '../lib/format'
+import { PastDueBanner } from '../components/MonthlyPaymentNotices'
 
 /** A child React already gave a stable key, so the deck can reuse it. */
 function isKeyed(child: ReactNode): child is ReactElement & { key: string } {
@@ -392,6 +393,8 @@ export function MerchantsPage({ pubkey = '' }: { pubkey?: string }) {
 
   return (
     <Screen>
+      {/* Monthly payments: a failed instalment, learned on load (there is no push). */}
+      {pubkey && <PastDueBanner buyerPubkey={pubkey} />}
       {/* No name-and-handle heading: the app header carries both on every
           screen, so the handle a customer gives out to be paid is already up
           there — printing it again here was the same two lines twice. */}

@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info, LifeBuoy, HeartPulse, Globe, Lock, ReceiptText } from 'lucide-react'
+import { ChevronRight, User, Shield, Download, Store, ShieldCheck, BadgeCheck, Tablet, CreditCard, Bell, Info, LifeBuoy, HeartPulse, Globe, Lock, ReceiptText, CalendarClock } from 'lucide-react'
+import { useInstalmentPlans } from '../hooks/useInstalmentPlans'
 
 import { fleetConfig, supportSnapshotConfig } from '../lib/config'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
@@ -36,7 +37,8 @@ export function SettingsPage({
    * False for a customer, and the Merchant section is then absent entirely.
    */
   merchant: boolean
-  /** The account's key, which is the stall's when `merchant`. Absent in older callers and tests. */
+  /** The account's key, which is the stall's when `merchant`. Absent in older callers and tests. Also the
+   * Monthly payments row's key: absent, no row. */
   stallPubkey?: string
   /** Injected by tests. The licence check otherwise. */
   status?: (pubkey: string) => Promise<LicenceStatus>
@@ -74,6 +76,7 @@ export function SettingsPage({
           label="Receipts"
           hint="Confirm payments you receive"
         />
+        <MonthlyPaymentsRow pubkey={stallPubkey} />
       </ListSection>
 
       {/* #348: where this key is backed up, across every device of the account. Not on a
@@ -271,6 +274,16 @@ function FleetRow() {
   }, [])
   if (!on) return null
   return <SettingRow to="/settings/help/improve" icon={HeartPulse} label="Help improve Imani" hint="Share an anonymised health check now and then" />
+}
+
+/**
+ * Settings → Monthly payments, only once the customer has at least one (monthly payments spec):
+ * nobody who never used the feature sees a new row. Hidden while unknown, too.
+ */
+function MonthlyPaymentsRow({ pubkey }: { pubkey?: string }) {
+  const { plans } = useInstalmentPlans(pubkey)
+  if (plans === null || plans.length === 0) return null
+  return <SettingRow to="/settings/monthly-payments" icon={CalendarClock} label="Monthly payments" hint="Stalls you pay each month" />
 }
 
 /** The row into Settings → About. Shared with the terminal's Settings, so every role has the same one. */
