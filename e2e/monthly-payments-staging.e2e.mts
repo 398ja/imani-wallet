@@ -60,6 +60,17 @@ function nip98(sk: Uint8Array, url: string, method: string, body?: string): stri
 }
 
 async function call(method: string, path: string, opts: { sk?: Uint8Array; body?: unknown; signUrl?: string; signMethod?: string } = {}) {
+  // The edge rate-limits plan starts (10/min, burst 5); this suite sends more than that, so it waits
+  // out a 429 as a real client would rather than reporting the limit as a failure.
+  for (let attempt = 0; ; attempt++) {
+    const r = await callOnce(method, path, opts)
+    if (r.status !== 429 || attempt >= 4) return r
+    const wait = Number(r.json?.retryAfterSeconds ?? 6) + 1
+    await new Promise((done) => setTimeout(done, wait * 1000))
+  }
+}
+
+async function callOnce(method: string, path: string, opts: { sk?: Uint8Array; body?: unknown; signUrl?: string; signMethod?: string } = {}) {
   const body = opts.body === undefined ? undefined : JSON.stringify(opts.body)
   const headers: Record<string, string> = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
