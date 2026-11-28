@@ -16,8 +16,8 @@
  *   P1  (E2E_PAY=1) pay instalment 1 with 4242 in Stripe's hosted Checkout (Playwright); invoice.paid
  *       arrives; the plan turns ACTIVE with 1 paid and one voucher; the stall's summary counts it (when
  *       E2E_STALL_SK is given); stop asks Stripe to cancel at period end, and a second stop changes nothing
- *   W1  (E2E_STALL_SK) a weekly plan: Stripe prices it per week, the buyer sees it weekly, it stops.
- *       The stall's switch is then put back as it was found.
+ *   W1  a weekly plan (when the stall offers weeks): Stripe prices it per week, the buyer sees it weekly,
+ *       it stops. With E2E_STALL_SK the stall's switch is then put back as it was found.
  *
  * The eligible stall is passed in: E2E_STALL_SK (hex), or E2E_STALL_PUBKEY when only the public key is
  * known, for a stall that is READY at the card issuer (enrolled, plan allows cards) and whose connected
@@ -318,7 +318,11 @@ async function payInCheckout(url: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------- W1 a weekly plan
-if (stallSk && STRIPE_KEY && account) {
+// Needs the stall to offer weeks: switched on by O1 (E2E_STALL_SK), or already saved by the stall.
+const offersWeeks = stall
+  ? ((await call('GET', `/api/v1/checkout/plans/settings?stall=${stall}`)).json?.intervals ?? []).includes('week')
+  : false
+if (stall && STRIPE_KEY && account && offersWeeks) {
   console.log('W1 a weekly plan is priced weekly on the stall account, then stopped')
   const w = await call('POST', '/api/v1/checkout/plan', { body: { stallPubkey: stall, buyerPubkey: buyer, amountMinor: 2500, instalments: 8, interval: 'week' } })
   check('a weekly plan starts', w.status === 200 && typeof w.json?.planId === 'string', `${w.status} ${w.text.slice(0, 120)}`)
@@ -334,7 +338,7 @@ if (stallSk && STRIPE_KEY && account) {
   check('the buyer sees it as weekly', (listed.json ?? []).find((p: any) => p.planId === weeklyId)?.interval === 'week', '')
   const stop = await call('POST', `/api/v1/checkout/plans/${weeklyId}/cancel`, { sk: buyerSk })
   check('stopping the unpaid weekly plan closes it', stop.status === 200 && stop.json?.status === 'CANCELLED', `${stop.status}`)
-}
+} else skip('W1 weekly plan', 'the stall does not offer weekly payments (or no stall / STRIPE_SECRET_KEY)')
 
 // Leave the stall's switch as we found it.
 if (stallSk && settingsBefore) {
