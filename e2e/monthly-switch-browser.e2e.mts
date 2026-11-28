@@ -9,17 +9,22 @@
  *
  *   E2E_STALL_NSEC_FILE=... E2E_SHOTS=dir npx tsx e2e/monthly-switch-browser.e2e.mts
  *
- * No staging stall has an account that is really eligible (a Standard account paying its own fees)
- * AND enrolled for card sales, so the stall's browser sees its Stripe status read with the account
- * controls of an eligible one (fee payer `account`, losses `stripe`, currency matching the stall).
- * Only that read is changed; the switch, the save to payment-adapter, the published profile, the
- * buyer's page and the plan start are all real. E2E_PA_SQL (a command taking SQL on stdin) gives the
- * account those controls in payment-adapter for the plan start, and puts them back afterwards.
+ * The stall's account must be really eligible: a Standard account paying its own fees, in the stall's
+ * currency, with card sales on (caractere on staging). E2E_PAY=1 then pays the first instalment with
+ * 4242 in the same browser (6 months, the form's default), waits for the plan to show 1 of 6 paid, and
+ * stops it from the buyer's screen.
+ *
+ * E2E_STUB_ELIGIBLE=1 is only for a stall whose account is NOT eligible (raclette: Express, GBP for a
+ * CHF stall): the stall's browser then sees its Stripe status read with the account controls of an
+ * eligible one, and E2E_PA_SQL (a command taking SQL on stdin) gives the account those controls in
+ * payment-adapter around the plan starts, putting them back afterwards.
  */
 import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { chromium, type Page } from 'playwright'
-import { nip19, getPublicKey } from 'nostr-tools'
+import { nip19, getPublicKey, finalizeEvent } from 'nostr-tools'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
 import { registerCustomer, TEST_PASSPHRASE } from './register.mts'
 
 const BASE = 'https://wallet.staging.398ja.xyz'
@@ -55,10 +60,52 @@ async function publishedInstalments(): Promise<boolean | undefined> {
 }
 
 const browser = await chromium.launch()
+const STUB = process.env.E2E_STUB_ELIGIBLE === '1'
+const PAY = process.env.E2E_PAY === '1'
+const SK = nip19.decode(NSEC).data as Uint8Array
+
+/** A GET signed by the stall (NIP-98), for its own summary. */
+async function signedGet(path: string): Promise<any> {
+  const ev = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', BASE + path], ['method', 'GET']], content: '' }, SK)
+  const r = await fetch(BASE + path, { headers: { Authorization: 'Nostr ' + Buffer.from(JSON.stringify(ev)).toString('base64') } })
+  return r.json().catch(() => null)
+}
+
+/** A POST signed by the stall (NIP-98, with the body's hash). */
+async function signedPost(path: string, payload: unknown): Promise<any> {
+  const body = JSON.stringify(payload)
+  const hash = bytesToHex(sha256(new TextEncoder().encode(body)))
+  const ev = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags: [['u', BASE + path], ['method', 'POST'], ['payload', hash]], content: '' }, SK)
+  const r = await fetch(BASE + path, { method: 'POST', body, headers: { 'content-type': 'application/json', Authorization: 'Nostr ' + Buffer.from(JSON.stringify(ev)).toString('base64') } })
+  return r.json().catch(() => null)
+}
+
+/** Pays the Checkout page this tab is on with the 4242 test card (Payment Element layout). */
+async function payHere(page: Page) {
+  const inner = page.frames().find((f) => f.url().includes('elements-inner'))
+  const root = inner ?? page.mainFrame()
+  await page.locator('#email').fill('e2e-buyer@example.com').catch(() => {})
+  await root.locator('#linkAuthentication-emailInput, #email').first().fill('e2e-buyer@example.com', { timeout: 2000 }).catch(() => {})
+  await root.getByText('Card', { exact: true }).first().click({ timeout: 3000 }).catch(() => {})
+  await root.locator('#payment-numberInput, #cardNumber').first().fill('4242424242424242')
+  await root.locator('#payment-expiryInput, #cardExpiry').first().fill('12 / 34')
+  await root.locator('#payment-cvcInput, #cardCvc').first().fill('123')
+  await page.locator('#billingName').fill('E2E Buyer', { timeout: 2000 }).catch(() => {})
+  await root.locator('#payment-nameInput').first().fill('E2E Buyer', { timeout: 2000 }).catch(() => {})
+  await page.locator('#billingPostalCode').fill('SW1A 1AA', { timeout: 2000 }).catch(() => {})
+  await root.locator('#payment-postalCodeInput').first().fill('SW1A 1AA', { timeout: 2000 }).catch(() => {})
+  const optIn = root.locator('#payment-linkOptInInput, #enableStripePass')
+  if (await optIn.first().isChecked().catch(() => false)) await optIn.first().uncheck({ force: true }).catch(() => {})
+  await shot(page, 'p1-card')
+  for (const loc of [page.getByTestId('hosted-payment-submit-button'), root.getByTestId('payment-form-submit-button'), page.locator('button[type=submit]')]) {
+    if (await loc.first().isVisible().catch(() => false)) { await loc.first().click(); return }
+  }
+  throw new Error('no submit button on the Checkout page')
+}
 try {
   console.log(`B1 the stall turns monthly payments on (${STALL.slice(0, 8)})`)
   const sctx = await browser.newContext({ locale: 'en-GB', viewport: { width: 390, height: 844 } })
-  await sctx.route('**/api/v1/merchant/stripe/status', async (route) => {
+  if (STUB) await sctx.route('**/api/v1/merchant/stripe/status', async (route) => {
     const res = await route.fetch()
     const body = await res.json().catch(() => null)
     if (!body || !body.stripe_account_id) return route.fulfill({ response: res })
@@ -114,13 +161,50 @@ try {
   await b.locator('input[placeholder="40.00"]').fill('40.00').catch(() => {})
   await b.getByRole('radio').nth(1).click().catch(() => {})
   await shot(b, 'b2-monthly-form')
-  const sql = (q: string) => process.env.E2E_PA_SQL ? execFileSync('sh', ['-c', process.env.E2E_PA_SQL], { input: q }).toString().trim() : ''
+  const sql = (q: string) => STUB && process.env.E2E_PA_SQL ? execFileSync('sh', ['-c', process.env.E2E_PA_SQL], { input: q }).toString().trim() : ''
   sql(`UPDATE connected_stripe_account SET fee_payer='account', losses_payer='stripe' WHERE merchant_pubkey='${STALL}';`)
   await b.getByRole('button', { name: /Start monthly payments/ }).click().catch(() => {})
   const toStripe = await until(async () => b.url().startsWith('https://checkout.stripe.com'), 30_000)
   check('starting reaches Stripe Checkout (the server accepted the plan)', toStripe, `${b.url()} ${(await text(b)).slice(0, 200)}`)
-  if (toStripe) await b.waitForTimeout(3000)
+  if (toStripe) await b.waitForTimeout(5000)
   await shot(b, 'b2-stripe')
+
+  if (PAY && toStripe) {
+    console.log('P1 the buyer pays the first instalment with 4242, in the same browser')
+    await payHere(b)
+    const back = await until(async () => b.url().startsWith(`${BASE}/buy/done`), 60_000)
+    check('Stripe returns the buyer to the wallet', back, b.url())
+    await shot(b, 'p1-done')
+    // The buyer's Monthly payments screen, where the plan lives.
+    let shown = ''
+    const active = await until(async () => {
+      await b.goto(`${BASE}/settings/monthly-payments`, { waitUntil: 'load' })
+      await unlock(b)
+      await b.waitForTimeout(4000)
+      shown = await text(b)
+      return /1 of 6 paid/.test(shown)
+    }, 150_000)
+    check('the buyer sees the plan running, 1 of 6 paid', active, shown.slice(0, 300))
+    await shot(b, 'p1-plans')
+    const sum = await signedGet(`/api/v1/checkout/plans/summary?stall=${STALL}`)
+    check("the stall's summary counts it at £40.00 a month", sum?.activePlans >= 1 && (sum?.monthlyTotals ?? []).some((t: any) => t.amountMinor >= 4000), JSON.stringify(sum))
+    // Stop it from the buyer's own screen: Stripe cancels at period end.
+    await b.getByText(/1 of 6 paid/).first().click().catch(() => {})
+    await b.waitForTimeout(4000)
+    await shot(b, 'p1-detail')
+    const stopBtn = b.getByRole('button', { name: 'Stop monthly payments' })
+    if (await stopBtn.isVisible().catch(() => false)) {
+      const before = await text(b)
+      await stopBtn.click()
+      const dialog = b.getByRole('alertdialog')
+      check('stopping asks first, keeping is the default', await dialog.getByRole('button', { name: 'Keep paying' }).isVisible().catch(() => false), (await text(b)).slice(0, 300))
+      await shot(b, 'p1-confirm')
+      await dialog.getByRole('button', { name: 'Stop', exact: true }).click()
+      check('the buyer stops it from the plan screen', await until(async () => !(await stopBtn.isVisible().catch(() => false)) && (await text(b)) !== before, 20_000), (await text(b)).slice(0, 300))
+      await b.waitForTimeout(2000)
+      await shot(b, 'p1-stopped')
+    } else check('the plan screen has a Stop button', false, (await text(b)).slice(0, 300))
+  }
 
   console.log('B3 the stall turns it off')
   await s.goto(`${BASE}/settings/payments`, { waitUntil: 'load' })
@@ -150,7 +234,11 @@ try {
   const dj = await direct.json().catch(() => ({}))
   check('a direct plan start is refused NOT_OFFERED', direct.status === 409 && dj.code === 'NOT_OFFERED', `${direct.status} ${JSON.stringify(dj)}`)
 } finally {
-  if (process.env.E2E_PA_SQL) {
+  // Whatever happened above, leave the stall's switch off on the server, so the next run starts
+  // from "off" (a run that stopped halfway once left it on, and the next one failed at its first step).
+  const off = await signedPost('/api/v1/checkout/plans/settings', { enabled: false }).catch(() => null)
+  if (off?.enabled !== false) console.log(`  WARN  could not switch the stall off afterwards: ${JSON.stringify(off)}`)
+  if (STUB && process.env.E2E_PA_SQL) {
     execFileSync('sh', ['-c', process.env.E2E_PA_SQL], {
       input: `UPDATE connected_stripe_account SET fee_payer=NULL, losses_payer=NULL WHERE merchant_pubkey='${STALL}';`,
     })
