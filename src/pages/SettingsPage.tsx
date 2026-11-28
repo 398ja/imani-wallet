@@ -283,7 +283,16 @@ function FleetRow() {
 function MonthlyPaymentsRow({ pubkey }: { pubkey?: string }) {
   const { plans } = useInstalmentPlans(pubkey)
   if (plans === null || plans.length === 0) return null
-  return <SettingRow to="/settings/monthly-payments" icon={CalendarClock} label="Monthly payments" hint="Stalls you pay each month" />
+  // Monthly words while every plan is monthly, as before; "Regular payments" once any is not.
+  const monthly = plans.every((p) => p.interval === 'month')
+  return (
+    <SettingRow
+      to="/settings/monthly-payments"
+      icon={CalendarClock}
+      label={monthly ? 'Monthly payments' : 'Regular payments'}
+      hint={monthly ? 'Stalls you pay each month' : 'Stalls you pay regularly'}
+    />
+  )
 }
 
 /** The row into Settings → About. Shared with the terminal's Settings, so every role has the same one. */

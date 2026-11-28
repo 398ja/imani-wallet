@@ -7,7 +7,7 @@
  * trapped, returned), the home banner and the Settings row.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 const STALL = 'b'.repeat(64)
@@ -40,8 +40,10 @@ const startInstalments = vi.fn()
 const listInstalmentPlans = vi.fn()
 const readInstalmentPlan = vi.fn()
 const stopInstalmentPlan = vi.fn()
+const fetchStallInstalmentSettings = vi.fn()
 vi.mock('../../lib/instalments', async (orig) => ({
   ...(await orig<typeof import('../../lib/instalments')>()),
+  fetchStallInstalmentSettings: (...a: unknown[]) => fetchStallInstalmentSettings(...a),
   startInstalments: (...a: unknown[]) => startInstalments(...a),
   listInstalmentPlans: (...a: unknown[]) => listInstalmentPlans(...a),
   readInstalmentPlan: (...a: unknown[]) => readInstalmentPlan(...a),
@@ -64,6 +66,7 @@ function plan(over: Partial<InstalmentPlan> = {}): InstalmentPlan {
     status: 'ACTIVE',
     amountMinor: 4000,
     currency: 'gbp',
+    interval: 'month',
     totalInstalments: 6,
     instalmentsPaid: 3,
     cancelRequested: false,
@@ -76,6 +79,7 @@ beforeEach(() => {
   record = { acceptsInstalments: true, issuanceCurrency: 'gbp' }
   readiness = 'ready'
   stallStatus = { status: 'open', sellsByCard: true }
+  fetchStallInstalmentSettings.mockResolvedValue(null)
 })
 afterEach(() => {
   cleanup()
@@ -132,7 +136,7 @@ describe('Buy page, Pay monthly', () => {
     fireEvent.click(screen.getByRole('button', { name: /Start monthly payments/ }))
 
     await screen.findByText('stop here')
-    expect(startInstalments).toHaveBeenCalledWith({ stallPubkey: STALL, buyerPubkey: BUYER, amountMinor: 4000, term: 3 })
+    expect(startInstalments).toHaveBeenCalledWith({ stallPubkey: STALL, buyerPubkey: BUYER, amountMinor: 4000, term: 3, interval: 'month' })
     expect(JSON.parse(sessionStorage.getItem(PENDING_PURCHASE_KEY) ?? '{}')).toEqual({ stallPubkey: STALL, kind: 'monthly' })
   })
 
@@ -353,5 +357,146 @@ describe('Home banner and Settings row', () => {
       </MemoryRouter>,
     )
     expect(await screen.findByText('Monthly payments')).toBeTruthy()
+  })
+})
+
+describe('Weekly and yearly plans, buyer side', () => {
+  const offer = (intervals: string[]) => fetchStallInstalmentSettings.mockResolvedValue({ enabled: true, intervals })
+
+  it('a monthly-only stall shows no How often and keeps every monthly word', async () => {
+    offer(['month'])
+    buy()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Pay monthly' }))
+    await act(async () => {})
+    expect(screen.queryByRole('radiogroup', { name: 'How often' })).toBeNull()
+    expect(screen.getByRole('button', { name: /Start monthly payments/ })).toBeTruthy()
+  })
+
+  it('a stall offering more than one reads Pay over time, with How often defaulting to monthly', async () => {
+    offer(['week', 'month'])
+    buy()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Pay over time' }))
+    const often = screen.getByRole('radiogroup', { name: 'How often' })
+    expect(within(often).getByRole('radio', { name: 'Monthly' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(often).queryByRole('radio', { name: 'Yearly' })).toBeNull()
+    expect(fetchStallInstalmentSettings).toHaveBeenCalledWith(STALL)
+  })
+
+  it('choosing Weekly moves the field, terms and summary to weeks and starts a weekly plan', async () => {
+    offer(['week', 'month', 'year'])
+    startInstalments.mockResolvedValue({ kind: 'error', refusal: { kind: 'other', reason: 'stop here' } })
+    buy()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Pay over time' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Weekly' }))
+    fireEvent.change(screen.getByLabelText('Amount each week'), { target: { value: '10' } })
+    // The preset for weeks, not the monthly 6.
+    expect(screen.getByRole('radio', { name: '8 weeks' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByRole('radio', { name: '6 months' })).toBeNull()
+    expect(screen.getByText(/£10 a week for 8 weeks, £80 in total/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('radio', { name: '12 weeks' }))
+    fireEvent.click(screen.getByRole('button', { name: /Start weekly payments/ }))
+    await screen.findByText('stop here')
+    expect(startInstalments).toHaveBeenCalledWith({ stallPubkey: STALL, buyerPubkey: BUYER, amountMinor: 1000, term: 12, interval: 'week' })
+    expect(JSON.parse(sessionStorage.getItem(PENDING_PURCHASE_KEY) ?? '{}')).toEqual({ stallPubkey: STALL, kind: 'monthly', interval: 'week' })
+  })
+
+  it('a stall offering only yearly starts on yearly, with no How often to choose', async () => {
+    offer(['year'])
+    buy()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Pay over time' }))
+    expect(screen.queryByRole('radiogroup', { name: 'How often' })).toBeNull()
+    fireEvent.change(screen.getByLabelText('Amount each year'), { target: { value: '50' } })
+    expect(screen.getByText(/£50 a year for 3 years, £150 in total/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Start yearly payments/ })).toBeTruthy()
+  })
+
+  it('a refusal naming what the stall takes now narrows the choice and keeps the amount', async () => {
+    offer(['week', 'month'])
+    startInstalments.mockResolvedValue({
+      kind: 'error',
+      refusal: { kind: 'interval-not-offered', intervals: ['week'], reason: 'This stall now takes weekly payments only. Choose again.' },
+    })
+    buy()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Pay over time' }))
+    fireEvent.change(screen.getByLabelText('Amount each month'), { target: { value: '40' } })
+    fireEvent.click(screen.getByRole('radio', { name: '12 months' }))
+    fireEvent.click(screen.getByRole('button', { name: /Start monthly payments/ }))
+
+    expect(await screen.findByText('This stall now takes weekly payments only. Choose again.')).toBeTruthy()
+    expect((screen.getByLabelText('Amount each week') as HTMLInputElement).value).toBe('40')
+    // Review regression: "12" chosen as months is not carried over as 12 weeks; the weekly preset is.
+    expect(screen.getByRole('radio', { name: '8 weeks' }).getAttribute('aria-checked')).toBe('true')
+    const start = screen.getByRole('button', { name: /Start weekly payments/ }) as HTMLButtonElement
+    expect(start.disabled).toBe(false)
+  })
+
+  it('a stall not offering plans is never asked how often', async () => {
+    record = { issuanceCurrency: 'gbp' }
+    buy()
+    await screen.findByRole('button', { name: /Pay by card/ })
+    await act(async () => {})
+    expect(fetchStallInstalmentSettings).not.toHaveBeenCalled()
+  })
+
+  it('a guest is sent to log in to pay over time', async () => {
+    offer(['week', 'month'])
+    buy(null)
+    expect(await screen.findByRole('button', { name: 'Log in to pay over time' })).toBeTruthy()
+  })
+
+  it.each([
+    ['week', 'Weekly payments started'],
+    ['year', 'Yearly payments started'],
+  ] as const)('the return page names a %s plan', (interval, title) => {
+    rememberPurchase(STALL, 'monthly', interval)
+    render(
+      <MemoryRouter>
+        <BuyDonePage />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText(title)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'See regular payments' }).getAttribute('href')).toBe('/settings/monthly-payments')
+  })
+
+  it('the list is Regular payments once any plan is not monthly, each row in its own interval', async () => {
+    listInstalmentPlans.mockResolvedValue({
+      kind: 'ok',
+      value: [plan(), plan({ planId: 'p2', interval: 'week', amountMinor: 1000, totalInstalments: 8, instalmentsPaid: 1 })],
+    })
+    render(
+      <MemoryRouter>
+        <MonthlyPaymentsPage buyerPubkey={BUYER} />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText(/£10 a week · 1 of 8 paid/)).toBeTruthy()
+    expect(screen.getByText(/£40 a month · 3 of 6 paid/)).toBeTruthy()
+    expect(screen.getAllByText('Regular payments').length).toBeGreaterThan(0)
+  })
+
+  it('a list of only monthly plans keeps its title', async () => {
+    listInstalmentPlans.mockResolvedValue({ kind: 'ok', value: [plan(), plan({ planId: 'p2' })] })
+    render(
+      <MemoryRouter>
+        <MonthlyPaymentsPage buyerPubkey={BUYER} />
+      </MemoryRouter>,
+    )
+    await screen.findAllByText(/£40 a month/)
+    expect(screen.getAllByText('Monthly payments').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Regular payments')).toBeNull()
+  })
+
+  it('a weekly plan detail stops regular payments, in words, in the dialog too', async () => {
+    readInstalmentPlan.mockResolvedValue({ kind: 'ok', value: { plan: plan({ interval: 'week', amountMinor: 1000 }), voucherIds: [] } })
+    render(
+      <MemoryRouter initialEntries={['/settings/monthly-payments/p1']}>
+        <Routes>
+          <Route path="/settings/monthly-payments/:planId" element={<MonthlyPaymentDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText(/£10 a week/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop regular payments' }))
+    expect(screen.getByText('Stop regular payments to Green Acres?')).toBeTruthy()
   })
 })

@@ -31,7 +31,7 @@ export function reconcileInstalmentOffer(
       : merchant.acceptsCards !== true
         ? 'card payments are off'
         : !status.instalmentsEligible
-          ? 'your Stripe account setup means monthly payments aren’t available'
+          ? 'your Stripe account setup doesn’t allow them'
           : null
 
   if (reason === null) return { kind: 'unchanged' }

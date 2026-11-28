@@ -1,10 +1,12 @@
 /**
- * Monthly payments: a buyer pays a stall a fixed amount each month, by card, into the stall's
- * own Stripe account, and each paid instalment issues one voucher (monthly payments spec).
+ * Monthly payments: a buyer pays a stall a fixed amount each week, month or year (whichever the
+ * stall offers), by card, into the stall's own Stripe account, and each paid instalment issues one
+ * voucher (monthly payments spec).
  *
  * In code and docs this is an **Instalment plan** (`RecurringPlan` in payment-adapter). The
- * customer never sees that word: buttons say "Pay monthly" and "Start monthly payments", and
- * one payment within a plan is an instalment, never a "charge".
+ * customer never sees that word, nor "subscription" or "charge". A stall that offers monthly
+ * only, and a plan that is monthly, keep the original words ("Pay monthly", "Start monthly
+ * payments"); anything else says "Pay over time" and "regular payments" (`paymentsNoun`).
  *
  * ## Who is asking
  *
@@ -26,11 +28,42 @@ export const PLANS_PATH = '/api/v1/checkout/plans'
 /** Long enough for a session to be created, short enough not to feel hung. */
 const TIMEOUT_MS = 15000
 
-/** How long a plan runs: a fixed number of months, or until the buyer stops it. */
-export type PlanTerm = 3 | 6 | 12 | 'open'
+/** How often a buyer pays. Stripe's interval names, as payment-adapter takes and returns them. */
+export type PlanInterval = 'week' | 'month' | 'year'
 
-/** The term chips, in the order they are offered. */
-export const PLAN_TERMS: readonly PlanTerm[] = [3, 6, 12, 'open']
+/** Every interval, in the order a chooser lists them. */
+export const PLAN_INTERVALS: readonly PlanInterval[] = ['week', 'month', 'year']
+
+/** How long a plan runs: a fixed number of payments, or until the buyer stops it. */
+export type PlanTerm = number | 'open'
+
+/**
+ * The term chips per interval, in the order they are offered, and the one picked first. Inside
+ * payment-adapter's limits (2 to 52 weeks, 24 months, 5 years), so a chip is never refused.
+ */
+const TERMS: Record<PlanInterval, { terms: readonly PlanTerm[]; preset: PlanTerm }> = {
+  week: { terms: [4, 8, 12, 'open'], preset: 8 },
+  month: { terms: [3, 6, 12, 'open'], preset: 6 },
+  year: { terms: [2, 3, 5, 'open'], preset: 3 },
+}
+
+/** The term chips for an interval. */
+export function planTerms(interval: PlanInterval = 'month'): readonly PlanTerm[] {
+  return TERMS[interval].terms
+}
+
+/** The term chip picked when the form opens, or when the buyer changes how often. */
+export function presetTerm(interval: PlanInterval = 'month'): PlanTerm {
+  return TERMS[interval].preset
+}
+
+/** The month chips, kept for callers from before weekly and yearly plans. */
+export const PLAN_TERMS: readonly PlanTerm[] = TERMS.month.terms
+
+/** One interval from the wire: anything unknown is null, never guessed. */
+export function parseInterval(value: unknown): PlanInterval | null {
+  return typeof value === 'string' && (PLAN_INTERVALS as readonly string[]).includes(value) ? (value as PlanInterval) : null
+}
 
 /** payment-adapter's statuses. Anything else is read as `UNKNOWN`, never as active. */
 export type PlanStatus =
@@ -59,6 +92,8 @@ export interface InstalmentPlan {
   status: PlanStatus
   amountMinor: number
   currency: string
+  /** How often it charges. A plan from before intervals existed is monthly. */
+  interval: PlanInterval
   /** Null for a plan that runs until the buyer stops it. */
   totalInstalments: number | null
   instalmentsPaid: number
@@ -75,16 +110,21 @@ export interface InstalmentPlanDetail {
   voucherIds: string[]
 }
 
-/** The stall's view: how many people pay it monthly, and what that comes to, per currency. */
+/** The stall's view: how many people pay it regularly, and what that comes to. */
 export interface StallInstalmentSummary {
   activePlans: number
+  /** Monthly plans only, per currency (what the screen showed before weekly and yearly plans). */
   monthlyTotals: { currency: string; amountMinor: number }[]
+  /** Every running plan, per currency AND interval: £40 a month and £10 a week are never added up. */
+  totals: { currency: string; interval: PlanInterval; amountMinor: number }[]
 }
 
 /** Why a plan could not be started, as the screen needs to say it. */
 export type StartRefusal =
   | { kind: 'below-minimum'; minAmountMinor: number | null; reason: string }
   | { kind: 'not-offered'; reason: string }
+  /** The stall offers plans, but not this often; `intervals` (never empty) is what it does offer now. */
+  | { kind: 'interval-not-offered'; intervals: PlanInterval[]; reason: string }
   | { kind: 'not-eligible'; reason: string }
   | { kind: 'other'; reason: string }
 
@@ -99,7 +139,7 @@ export type StartResult =
  * deliver one to without it. The caller sends a guest through log-in-and-come-back instead.
  */
 export async function startInstalments(
-  params: { stallPubkey: string; buyerPubkey: string; amountMinor: number; term: PlanTerm },
+  params: { stallPubkey: string; buyerPubkey: string; amountMinor: number; term: PlanTerm; interval?: PlanInterval },
   fetchImpl: typeof fetch = fetch,
 ): Promise<StartResult> {
   const controller = new AbortController()
@@ -114,6 +154,8 @@ export async function startInstalments(
         amountMinor: params.amountMinor,
         // Left out, not null, for an open-ended plan: the adapter reads absent as "until cancelled".
         ...(params.term === 'open' ? {} : { instalments: params.term }),
+        // Left out for monthly, so the request is byte-for-byte what it was before intervals.
+        ...(params.interval && params.interval !== 'month' ? { interval: params.interval } : {}),
       }),
       signal: controller.signal,
     })
@@ -125,7 +167,7 @@ export async function startInstalments(
     if (response.ok) {
       return { kind: 'error', refusal: other('The payment page could not be opened. Nothing was charged.') }
     }
-    return { kind: 'error', refusal: startRefusal(response.status, body) }
+    return { kind: 'error', refusal: startRefusal(response.status, body, params.interval) }
   } catch (error) {
     return {
       kind: 'error',
@@ -149,25 +191,44 @@ function other(reason: string): StartRefusal {
  * text is the fallback, because "this stall cannot accept card payments yet" is worth showing
  * verbatim and beats a generic failure.
  */
-export function startRefusal(status: number, body: Record<string, unknown> | null): StartRefusal {
+export function startRefusal(
+  status: number,
+  body: Record<string, unknown> | null,
+  interval: PlanInterval = 'month',
+): StartRefusal {
   const code = typeof body?.code === 'string' ? body.code : undefined
   const error = typeof body?.error === 'string' && body.error.length <= 200 ? body.error : undefined
+  const words = paymentsNoun([interval])
   if (code === 'BELOW_MINIMUM') {
     const min = typeof body?.minAmountMinor === 'number' ? body.minAmountMinor : null
     return { kind: 'below-minimum', minAmountMinor: min, reason: error ?? 'That amount is below the minimum.' }
   }
   if (code === 'NOT_CONNECTED' || status === 404) {
-    return { kind: 'not-offered', reason: "This stall doesn't offer monthly payments." }
+    return { kind: 'not-offered', reason: `This stall doesn't offer ${words}.` }
   }
   if (code === 'ACCOUNT_NOT_ELIGIBLE') {
-    return { kind: 'not-eligible', reason: "This stall can't take monthly payments yet." }
+    return { kind: 'not-eligible', reason: `This stall can't take ${words} yet.` }
   }
-  // The stall switched monthly payments off (or never saved it where it is enforced), or does not
-  // offer this interval. Same words as a stall that never offered them.
-  if (code === 'NOT_OFFERED' || code === 'INTERVAL_NOT_OFFERED') {
-    return { kind: 'not-offered', reason: "This stall doesn't offer monthly payments." }
+  // The stall switched them off (or never saved it where it is enforced). Same words as a stall
+  // that never offered them.
+  if (code === 'NOT_OFFERED') {
+    return { kind: 'not-offered', reason: `This stall doesn't offer ${words}.` }
   }
-  return other(error ? `${capitalise(error)}${/[.!?]$/.test(error) ? '' : '.'} Nothing was charged.` : 'Monthly payments could not be started. Nothing was charged.')
+  // It offers plans, but not this often (it changed its offer while the form was open). Names
+  // what it does offer, so the buyer can pick again rather than give up.
+  if (code === 'INTERVAL_NOT_OFFERED') {
+    const offered = Array.isArray(body?.intervals)
+      ? PLAN_INTERVALS.filter((i) => (body.intervals as unknown[]).includes(i))
+      : []
+    // Without the list there is nothing to choose again from: read it as a stall that does not offer them.
+    if (offered.length === 0) return { kind: 'not-offered', reason: `This stall doesn't offer ${ADVERB[interval].toLowerCase()} payments.` }
+    return {
+      kind: 'interval-not-offered',
+      intervals: offered,
+      reason: `This stall now takes ${listWords(offered.map((i) => ADVERB[i].toLowerCase()))} payments only. Choose again.`,
+    }
+  }
+  return other(error ? `${capitalise(error)}${/[.!?]$/.test(error) ? '' : '.'} Nothing was charged.` : `${capitalise(words)} could not be started. Nothing was charged.`)
 }
 
 function capitalise(text: string): string {
@@ -241,15 +302,24 @@ export async function fetchStallInstalmentSummary(
   const result = await signedJson(`${PLANS_PATH}/summary?stall=${stallPubkey}`, 'GET', signer)
   if (result.kind !== 'ok') return result
   const body = (result.value ?? {}) as Record<string, unknown>
-  const totals = Array.isArray(body.monthlyTotals)
-    ? body.monthlyTotals
-        .map((t) => t as Record<string, unknown>)
-        .filter((t) => typeof t.currency === 'string' && typeof t.amountMinor === 'number')
-        .map((t) => ({ currency: t.currency as string, amountMinor: t.amountMinor as number }))
-    : []
+  const records = (value: unknown) =>
+    Array.isArray(value)
+      ? value
+          .filter((t): t is Record<string, unknown> => t !== null && typeof t === 'object')
+          .filter((t) => typeof t.currency === 'string' && typeof t.amountMinor === 'number' && Number.isFinite(t.amountMinor))
+      : []
+  const monthlyTotals = records(body.monthlyTotals).map((t) => ({ currency: t.currency as string, amountMinor: t.amountMinor as number }))
+  // An adapter from before intervals sends only `monthlyTotals`: those are its totals, all monthly.
+  // An unknown interval is dropped rather than shown as something it is not.
+  const totals = Array.isArray(body.totals)
+    ? records(body.totals).flatMap((t) => {
+        const interval = parseInterval(t.interval)
+        return interval ? [{ currency: t.currency as string, interval, amountMinor: t.amountMinor as number }] : []
+      })
+    : monthlyTotals.map((t) => ({ ...t, interval: 'month' as const }))
   return {
     kind: 'ok',
-    value: { activePlans: typeof body.activePlans === 'number' ? body.activePlans : 0, monthlyTotals: totals },
+    value: { activePlans: typeof body.activePlans === 'number' ? body.activePlans : 0, monthlyTotals, totals },
   }
 }
 
@@ -257,24 +327,19 @@ export const STOP_FAILED = "We couldn't reach Stripe. Nothing was changed. Try a
 
 export const SETTINGS_PATH = `${PLANS_PATH}/settings`
 
-/** How often a buyer may pay. Stripe's interval names. */
-export type PlanInterval = 'week' | 'month' | 'year'
-
 /** The stall's instalment offer as payment-adapter holds it: the switch the plan start enforces. */
 export interface StallInstalmentSettings {
   enabled: boolean
   intervals: PlanInterval[]
 }
 
-const INTERVALS: readonly PlanInterval[] = ['week', 'month', 'year']
-
 /**
  * Save the stall's offer where it is ENFORCED. The published `acceptsInstalments` only shows or
- * hides "Pay monthly"; payment-adapter refuses a plan unless this was saved, signed by the stall
- * (NIP-98 with the body's hash, so the signature cannot be replayed with other settings).
+ * hides the Buy page's tab; payment-adapter refuses a plan unless this was saved, signed by the
+ * stall (NIP-98 with the body's hash, so the signature cannot be replayed with other settings).
  *
- * `intervals` left out keeps whatever the stall already offers (monthly for a new stall), so this
- * screen, which only knows the on/off switch, never erases a frequency chosen elsewhere.
+ * `intervals` left out keeps whatever the stall already offers (monthly for a new stall), so a
+ * caller that only flips the switch never erases the frequencies the stall chose.
  */
 export async function saveStallInstalmentSettings(
   settings: { enabled: boolean; intervals?: PlanInterval[] },
@@ -295,7 +360,7 @@ export async function saveStallInstalmentSettings(
       return { kind: 'ok', value: parseSettings(body) }
     }
     if (response.status === 401) return { kind: 'error', reason: 'Your session has expired. Sign in again.' }
-    return { kind: 'error', reason: 'Monthly payments could not be saved. Nothing was changed. Try again.' }
+    return { kind: 'error', reason: 'Your payment settings could not be saved. Nothing was changed. Try again.' }
   } catch {
     return { kind: 'error', reason: 'Could not reach the payment service. Nothing was changed. Try again.' }
   } finally {
@@ -321,8 +386,9 @@ export async function fetchStallInstalmentSettings(
 }
 
 function parseSettings(body: Record<string, unknown>): StallInstalmentSettings {
+  // In the chooser's order, once each, whatever order or repeats the wire carries.
   const intervals = Array.isArray(body.intervals)
-    ? body.intervals.filter((i): i is PlanInterval => INTERVALS.includes(i as PlanInterval))
+    ? PLAN_INTERVALS.filter((i) => (body.intervals as unknown[]).includes(i))
     : []
   return { enabled: body.enabled === true, intervals }
 }
@@ -378,6 +444,7 @@ export function parsePlan(raw: unknown): InstalmentPlan | null {
     status,
     amountMinor: r.amountMinor,
     currency: typeof r.currency === 'string' ? r.currency.toLowerCase() : '',
+    interval: parseInterval(r.interval) ?? 'month',
     totalInstalments: typeof r.totalInstalments === 'number' && r.totalInstalments > 0 ? r.totalInstalments : null,
     instalmentsPaid: typeof r.instalmentsPaid === 'number' && r.instalmentsPaid >= 0 ? r.instalmentsPaid : 0,
     cancelRequested: r.cancelRequested === true,
@@ -413,20 +480,87 @@ export function formatMoney(amountMinor: number, currency: string): string {
   }
 }
 
+const UNIT: Record<PlanInterval, { one: string; many: string }> = {
+  week: { one: 'week', many: 'weeks' },
+  month: { one: 'month', many: 'months' },
+  year: { one: 'year', many: 'years' },
+}
+
+/** The chooser's words: "Weekly", "Monthly", "Yearly". */
+export const ADVERB: Record<PlanInterval, string> = { week: 'Weekly', month: 'Monthly', year: 'Yearly' }
+
+/** "a week", "a month", "a year": after an amount, "£40 a month". */
+export function perPeriod(interval: PlanInterval = 'month'): string {
+  return `a ${UNIT[interval].one}`
+}
+
+/** "each week", for the amount field's label. */
+export function eachPeriod(interval: PlanInterval = 'month'): string {
+  return `each ${UNIT[interval].one}`
+}
+
+/**
+ * Monthly-only keeps its own words, so nothing changes for a stall or a buyer that never sees
+ * another interval; anything else is "regular payments" (the customer never sees "subscription").
+ */
+export function isMonthlyOnly(intervals: readonly PlanInterval[]): boolean {
+  // `every`, not "one item, and it is month": a buyer's list of plans repeats intervals.
+  return intervals.every((i) => i === 'month')
+}
+
+/** "monthly payments" or "regular payments", lower case, for the middle of a sentence. */
+export function paymentsNoun(intervals: readonly PlanInterval[]): string {
+  return isMonthlyOnly(intervals) ? 'monthly payments' : 'regular payments'
+}
+
+/** "Monthly payments" or "Regular payments", for a title or a label. */
+export function paymentsTitle(intervals: readonly PlanInterval[]): string {
+  return capitalise(paymentsNoun(intervals))
+}
+
+/** "weekly, monthly or yearly". */
+export function listWords(words: readonly string[]): string {
+  if (words.length <= 1) return words.join('')
+  return `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`
+}
+
 /**
  * The live summary under the form, doing the arithmetic so the customer does not have to.
  * "£40 a month for 6 months, £240 in total. First payment today. A new voucher arrives with
  * each payment."
  */
-export function planSummary(amountMinor: number, currency: string, term: PlanTerm): string {
-  const each = formatMoney(amountMinor, currency)
-  if (term === 'open') return `${each} a month until you cancel. First payment today.`
-  return `${each} a month for ${term} months, ${formatMoney(amountMinor * term, currency)} in total. First payment today. A new voucher arrives with each payment.`
+export function planSummary(amountMinor: number, currency: string, term: PlanTerm, interval: PlanInterval = 'month'): string {
+  const each = `${formatMoney(amountMinor, currency)} ${perPeriod(interval)}`
+  if (term === 'open') return `${each} until you cancel. First payment today.`
+  return `${each} for ${termLabel(term, interval)}, ${formatMoney(amountMinor * term, currency)} in total. First payment today. A new voucher arrives with each payment.`
 }
 
-/** The term chip's label. */
-export function termLabel(term: PlanTerm): string {
-  return term === 'open' ? 'Until I cancel' : `${term} months`
+/** The term chip's label: "6 months", "8 weeks", "Until I cancel". */
+export function termLabel(term: PlanTerm, interval: PlanInterval = 'month'): string {
+  if (term === 'open') return 'Until I cancel'
+  return `${term} ${term === 1 ? UNIT[interval].one : UNIT[interval].many}`
+}
+
+/**
+ * "7 people pay you monthly, £340 a month": the stall's running plans. While every one is monthly,
+ * the words it always had. Otherwise "regularly", with one total per currency and interval, never
+ * added across them (£40 a month and £10 a week are two amounts, not £50).
+ */
+export function summaryLine(summary: StallInstalmentSummary): string {
+  const people = `${summary.activePlans} ${summary.activePlans === 1 ? 'person pays' : 'people pay'}`
+  // Defensive: a summary without `totals` (shaped before intervals) is its monthly totals. A missing
+  // field must never take the whole Card payments screen down with it.
+  const all = Array.isArray(summary.totals)
+    ? summary.totals
+    : (summary.monthlyTotals ?? []).map((t) => ({ ...t, interval: 'month' as const }))
+  const monthly = all.every((t) => t.interval === 'month')
+  const totals = all.map((t) => `${formatMoney(t.amountMinor, t.currency)} ${perPeriod(t.interval)}`)
+  if (monthly) {
+    return totals.length > 0
+      ? `${people} you monthly, ${all.map((t) => formatMoney(t.amountMinor, t.currency)).join(' + ')} a month`
+      : `${people} you monthly`
+  }
+  return `${people} you regularly, ${totals.join(' + ')}`
 }
 
 /** Always visible beside the button. Wording pending legal review (spec, Open items). */
@@ -460,7 +594,7 @@ export function statusWords(plan: InstalmentPlan): StatusWords {
   }
   switch (plan.status) {
     case 'ACTIVE':
-      return { chip: 'Active', meaning: 'Paying monthly.', tone: 'ok' }
+      return { chip: 'Active', meaning: `Paying ${ADVERB[plan.interval].toLowerCase()}.`, tone: 'ok' }
     case 'PAST_DUE':
       return { chip: 'Payment failed', meaning: "Your last payment didn't go through. Stripe will try again.", tone: 'danger' }
     case 'COMPLETED':
@@ -482,7 +616,7 @@ export function statusWords(plan: InstalmentPlan): StatusWords {
     case 'PENDING':
       return { chip: 'Not finished', meaning: "You didn't finish paying.", tone: 'neutral' }
     default:
-      return { chip: 'Unknown', meaning: "We couldn't read this monthly payment's state.", tone: 'neutral' }
+      return { chip: 'Unknown', meaning: `We couldn't read this ${plan.interval === 'month' ? 'monthly ' : ''}payment's state.`, tone: 'neutral' }
   }
 }
 

@@ -7,6 +7,9 @@ import { useBranding } from '../hooks/useBranding'
 import { invalidateInstalmentPlans, useInstalmentPlans } from '../hooks/useInstalmentPlans'
 import {
   formatMoney,
+  paymentsNoun,
+  paymentsTitle,
+  perPeriod,
   progressLabel,
   readInstalmentPlan,
   statusWords,
@@ -19,20 +22,22 @@ import {
 /**
  * Settings → Monthly payments (monthly payments spec, "Customer: managing").
  *
- * One row per plan, newest first: the stall, "£40 a month", "3 of 6 paid", and a status chip
- * that always carries words, never colour alone.
+ * One row per plan, newest first: the stall, "£40 a month" (or "£10 a week"), "3 of 6 paid", and
+ * a status chip that always carries words, never colour alone. Titled "Monthly payments" while
+ * every plan is monthly, as it always was; "Regular payments" once any is not.
  */
 export function MonthlyPaymentsPage({ buyerPubkey }: { buyerPubkey: string }) {
   const { plans } = useInstalmentPlans(buyerPubkey)
   if (plans === null) return <Centered>Loading…</Centered>
+  const title = paymentsTitle(plans.map((p) => p.interval))
   return (
     <Screen>
       <BackLink to="/settings" label="Settings" />
-      <PageHeader title="Monthly payments" />
+      <PageHeader title={title} />
       {plans.length === 0 ? (
         <p className="text-[15px] text-mono-500">You don't pay any stall monthly.</p>
       ) : (
-        <ListSection title="Your monthly payments">
+        <ListSection title={`Your ${title.toLowerCase()}`}>
           {plans.map((plan) => (
             <PlanRow key={plan.planId} plan={plan} />
           ))}
@@ -51,7 +56,7 @@ function PlanRow({ plan }: { plan: InstalmentPlan }) {
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium text-mono-900 dark:text-mono-50">{branding?.organizationName ?? 'A stall'}</p>
         <p className="text-sm text-mono-500">
-          {formatMoney(plan.amountMinor, plan.currency)} a month · {progressLabel(plan)}
+          {formatMoney(plan.amountMinor, plan.currency)} {perPeriod(plan.interval)} · {progressLabel(plan)}
         </p>
       </div>
       <StatusChip words={words} />
@@ -80,7 +85,7 @@ export function StatusChip({ words }: { words: StatusWords }) {
 }
 
 /** One plan: what it is, the vouchers it issued, and Stop. */
-export function MonthlyPaymentDetailPage() {
+export function MonthlyPaymentDetailPage({ buyerPubkey }: { buyerPubkey?: string } = {}) {
   const { planId = '' } = useParams()
   const navigate = useNavigate()
   const [detail, setDetail] = useState<InstalmentPlanDetail | null>(null)
@@ -103,6 +108,8 @@ export function MonthlyPaymentDetailPage() {
 
   const { branding } = useBranding(detail?.plan.stallPubkey)
   const name = branding?.organizationName ?? 'this stall'
+  // The buyer's plans, shared with the list (one read), only to name the Back link as the list is titled.
+  const { plans } = useInstalmentPlans(buyerPubkey)
 
   if (detail === null) {
     return error ? (
@@ -117,6 +124,9 @@ export function MonthlyPaymentDetailPage() {
 
   const { plan, voucherIds } = detail
   const words = statusWords(plan)
+  // This plan's own words: "monthly payments" for a monthly one, "regular payments" otherwise.
+  const noun = paymentsNoun([plan.interval])
+  const listTitle = paymentsTitle(plans?.map((p) => p.interval) ?? [plan.interval])
   const stoppable =
     !plan.cancelRequested && (plan.status === 'ACTIVE' || plan.status === 'PAST_DUE' || plan.status === 'ATTENTION')
 
@@ -137,13 +147,14 @@ export function MonthlyPaymentDetailPage() {
 
   return (
     <Screen>
-      <BackLink to="/settings/monthly-payments" label="Monthly payments" />
-      <PageHeader title={branding?.organizationName ?? 'Monthly payment'} />
+      {/* Back to the list, named as the list is titled for this buyer's plans. */}
+      <BackLink to="/settings/monthly-payments" label={listTitle} />
+      <PageHeader title={branding?.organizationName ?? (plan.interval === 'month' ? 'Monthly payment' : 'Regular payment')} />
 
       <div className="mb-6 rounded-2xl border border-mono-200 p-4 dark:border-mono-800">
         <div className="flex items-center justify-between gap-3">
           <p className="text-[17px] font-semibold tracking-[-0.01em]">
-            {formatMoney(plan.amountMinor, plan.currency)} a month
+            {formatMoney(plan.amountMinor, plan.currency)} {perPeriod(plan.interval)}
           </p>
           <StatusChip words={words} />
         </div>
@@ -159,7 +170,7 @@ export function MonthlyPaymentDetailPage() {
 
       {voucherIds.length > 0 && (
         <div className="mb-6">
-          <ListSection title="Vouchers from this monthly payment">
+          <ListSection title={plan.interval === 'month' ? 'Vouchers from this monthly payment' : 'Vouchers from these payments'}>
             {voucherIds.map((id, i) => (
               <Link key={id} to={`/coupon/${encodeURIComponent(id)}`} className="flex items-center gap-3 p-4 press-row">
                 <span className="flex-1 text-mono-900 dark:text-mono-50">Payment {i + 1}</span>
@@ -178,7 +189,7 @@ export function MonthlyPaymentDetailPage() {
 
       {stoppable && (
         <Button ref={stopButton} size="lg" variant="outline" className="w-full" disabled={busy} onClick={() => setConfirming(true)}>
-          Stop monthly payments
+          Stop {noun}
         </Button>
       )}
 
@@ -193,6 +204,7 @@ export function MonthlyPaymentDetailPage() {
       {confirming && (
         <StopDialog
           stallName={name}
+          noun={noun}
           busy={busy}
           onKeep={() => {
             setConfirming(false)
@@ -212,11 +224,14 @@ export function MonthlyPaymentDetailPage() {
  */
 export function StopDialog({
   stallName,
+  noun = 'monthly payments',
   busy,
   onKeep,
   onStop,
 }: {
   stallName: string
+  /** "monthly payments", or "regular payments" for a weekly or yearly plan. */
+  noun?: string
   busy: boolean
   onKeep: () => void
   onStop: () => void
@@ -263,7 +278,7 @@ export function StopDialog({
         className="modal-surface material relative w-full max-w-sm rounded-3xl border border-mono-900/5 p-6 shadow-2xl shadow-mono-950/25 dark:border-mono-50/10 dark:shadow-black/50"
       >
         <h2 id="stop-plan-title" className="text-[17px] font-semibold leading-snug tracking-[-0.01em] text-mono-900 dark:text-mono-50">
-          Stop monthly payments to {stallName}?
+          Stop {noun} to {stallName}?
         </h2>
         <p id="stop-plan-body" className="mt-2 text-[13px] leading-snug text-mono-600 dark:text-mono-300">
           No more payments will be taken. Vouchers you've already received are yours to keep. For a refund of a

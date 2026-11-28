@@ -3,7 +3,7 @@ import { TriangleAlert } from 'lucide-react'
 
 import { useBranding } from '../hooks/useBranding'
 import { useInstalmentPlans } from '../hooks/useInstalmentPlans'
-import { formatMoney, isRunning, pastDue, type InstalmentPlan } from '../lib/instalments'
+import { formatMoney, isRunning, pastDue, perPeriod, type InstalmentPlan } from '../lib/instalments'
 
 /**
  * The wallet-home banner while any Monthly payment is past due (monthly payments spec, "Failed
@@ -28,12 +28,12 @@ function PastDueNotice({ plan, more }: { plan: InstalmentPlan; more: number }) {
       <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
       <div className="text-sm leading-relaxed">
         <p className="font-medium">
-          A monthly payment to {name} didn't go through.
+          {plan.interval === 'month' ? 'A monthly payment' : 'A payment'} to {name} didn't go through.
           {more > 0 ? ` And ${more} more.` : ''}
         </p>
         <p>Stripe will try again. Check the email Stripe sent you.</p>
         <Link to={`/settings/monthly-payments/${encodeURIComponent(plan.planId)}`} className="font-medium underline underline-offset-4">
-          See monthly payment
+          {plan.interval === 'month' ? 'See monthly payment' : 'See payment'}
         </Link>
       </div>
     </div>
@@ -51,7 +51,7 @@ export function StallMonthlyLine({ buyerPubkey, stallPubkey }: { buyerPubkey: st
   return (
     <p className="text-center text-sm text-mono-500">
       <Link to={`/settings/monthly-payments/${encodeURIComponent(plan.planId)}`} className="underline underline-offset-4">
-        You pay {formatMoney(plan.amountMinor, plan.currency)} a month.
+        You pay {formatMoney(plan.amountMinor, plan.currency)} {perPeriod(plan.interval)}.
       </Link>
     </p>
   )

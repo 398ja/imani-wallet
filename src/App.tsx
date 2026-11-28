@@ -820,7 +820,7 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
         <Route path="/settings" element={<SettingsPage merchant={merchant !== null} stallPubkey={pubkey} />} />
         {/* Monthly payments: every account that pays a stall monthly (monthly payments spec). */}
         <Route path="/settings/monthly-payments" element={<MonthlyPaymentsPage buyerPubkey={pubkey} />} />
-        <Route path="/settings/monthly-payments/:planId" element={<MonthlyPaymentDetailPage />} />
+        <Route path="/settings/monthly-payments/:planId" element={<MonthlyPaymentDetailPage buyerPubkey={pubkey} />} />
         {/* Every role: what is running, the legal pages, support (no predicate). */}
         <Route path="/settings/about" element={<AboutPage />} />
         {/* #589: only reachable with a support snapshot code; the page hides itself when unconfigured. */}
