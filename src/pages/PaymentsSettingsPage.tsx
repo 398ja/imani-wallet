@@ -221,13 +221,20 @@ export function PaymentsSettingsPage({
         // the published offer but no saved one, so every plan its buyers start would be refused. Its
         // consent was given (disclosure and terms), so carry it over, signed here by the stall. Only
         // when it NEVER saved one (no intervals: a saved row always has one): a stall that switched
-        // off here, whose publish then failed, must stay off. An unreadable answer changes nothing.
+        // off here, whose publish then failed, must stay off, and its record catches up: a published
+        // offer the server refuses shows buyers a tab that can never start a plan (the staging e2e
+        // found this after an off saved outside the screen). An unreadable answer changes nothing.
         if (afterCards.acceptsInstalments === true) {
-          void fetchStallInstalmentSettings(afterCards.pubkey).then((saved) => {
-            const neverSaved = saved !== null && !saved.enabled && saved.intervals.length === 0
-            if (neverSaved && current.current.acceptsInstalments === true) {
+          void fetchStallInstalmentSettings(afterCards.pubkey).then(async (saved) => {
+            if (saved === null || saved.enabled || current.current.acceptsInstalments !== true) return
+            if (saved.intervals.length === 0) {
               void saveStallInstalmentSettings({ enabled: true })
+              return
             }
+            await publishRecord(
+              { ...current.current, acceptsInstalments: false },
+              `${paymentsTitle(saved.intervals)} are off. Plans already running carry on.`,
+            )
           })
         }
         return
