@@ -248,13 +248,26 @@ describe('PaymentsSettingsPage monthly payments', () => {
   })
 
   // A stall that switched off (saved), whose publish then failed, still shows the old offer: the
-  // explicit opt-out stands, it is not "carried over" back on.
-  it('never turns back on a stall that saved itself off', async () => {
+  // explicit opt-out stands, it is not "carried over" back on, and the record catches up (staging
+  // e2e: buyers otherwise kept a Pay monthly tab every start of which was refused NOT_OFFERED).
+  it('never turns back on a stall that saved itself off, and withdraws the stale offer', async () => {
     m.readSettings.mockResolvedValue({ enabled: false, intervals: ['month'] })
+    const onSaved = open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    await screen.findByRole('switch')
+    await waitFor(() => expect(m.publish).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(m.sign.mock.calls.at(-1)![0].content).acceptsInstalments).toBeUndefined()
+    expect(onSaved).toHaveBeenLastCalledWith(expect.objectContaining({ acceptsInstalments: false }))
+    expect(m.saveSettings).not.toHaveBeenCalled()
+    expect(await screen.findByText('Monthly payments are off. Plans already running carry on.')).toBeTruthy()
+  })
+
+  it('a saved-on stall keeps its published offer, nothing published', async () => {
+    m.readSettings.mockResolvedValue({ enabled: true, intervals: ['month'] })
     open(liveStatus(), { ...merchant, acceptsInstalments: true })
     await screen.findByRole('switch')
     await waitFor(() => expect(m.readSettings).toHaveBeenCalled())
     await new Promise((r) => setTimeout(r, 20))
+    expect(m.publish).not.toHaveBeenCalled()
     expect(m.saveSettings).not.toHaveBeenCalled()
   })
 })
