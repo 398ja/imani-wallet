@@ -162,6 +162,11 @@ export function startRefusal(status: number, body: Record<string, unknown> | nul
   if (code === 'ACCOUNT_NOT_ELIGIBLE') {
     return { kind: 'not-eligible', reason: "This stall can't take monthly payments yet." }
   }
+  // The stall switched monthly payments off (or never saved it where it is enforced), or does not
+  // offer this interval. Same words as a stall that never offered them.
+  if (code === 'NOT_OFFERED' || code === 'INTERVAL_NOT_OFFERED') {
+    return { kind: 'not-offered', reason: "This stall doesn't offer monthly payments." }
+  }
   return other(error ? `${capitalise(error)}${/[.!?]$/.test(error) ? '' : '.'} Nothing was charged.` : 'Monthly payments could not be started. Nothing was charged.')
 }
 
@@ -249,6 +254,78 @@ export async function fetchStallInstalmentSummary(
 }
 
 export const STOP_FAILED = "We couldn't reach Stripe. Nothing was changed. Try again."
+
+export const SETTINGS_PATH = `${PLANS_PATH}/settings`
+
+/** How often a buyer may pay. Stripe's interval names. */
+export type PlanInterval = 'week' | 'month' | 'year'
+
+/** The stall's instalment offer as payment-adapter holds it: the switch the plan start enforces. */
+export interface StallInstalmentSettings {
+  enabled: boolean
+  intervals: PlanInterval[]
+}
+
+const INTERVALS: readonly PlanInterval[] = ['week', 'month', 'year']
+
+/**
+ * Save the stall's offer where it is ENFORCED. The published `acceptsInstalments` only shows or
+ * hides "Pay monthly"; payment-adapter refuses a plan unless this was saved, signed by the stall
+ * (NIP-98 with the body's hash, so the signature cannot be replayed with other settings).
+ *
+ * `intervals` left out keeps whatever the stall already offers (monthly for a new stall), so this
+ * screen, which only knows the on/off switch, never erases a frequency chosen elsewhere.
+ */
+export async function saveStallInstalmentSettings(
+  settings: { enabled: boolean; intervals?: PlanInterval[] },
+  signer?: RequestSigner,
+): Promise<PlansResult<StallInstalmentSettings>> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  try {
+    const response = await signedFetch(
+      SETTINGS_PATH,
+      'POST',
+      settings.intervals ? { enabled: settings.enabled, intervals: settings.intervals } : { enabled: settings.enabled },
+      signer,
+      { signal: controller.signal },
+    )
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null
+    if (response.ok && body && typeof body.enabled === 'boolean') {
+      return { kind: 'ok', value: parseSettings(body) }
+    }
+    if (response.status === 401) return { kind: 'error', reason: 'Your session has expired. Sign in again.' }
+    return { kind: 'error', reason: 'Monthly payments could not be saved. Nothing was changed. Try again.' }
+  } catch {
+    return { kind: 'error', reason: 'Could not reach the payment service. Nothing was changed. Try again.' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** The stall's offer as payment-adapter holds it. Public, like the profile flag. Null if it could not be read. */
+export async function fetchStallInstalmentSettings(
+  stallPubkey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<StallInstalmentSettings | null> {
+  try {
+    const response = await fetchImpl(`${SETTINGS_PATH}?stall=${encodeURIComponent(stallPubkey)}`, {
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    })
+    if (!response.ok) return null
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null
+    return body && typeof body.enabled === 'boolean' ? parseSettings(body) : null
+  } catch {
+    return null
+  }
+}
+
+function parseSettings(body: Record<string, unknown>): StallInstalmentSettings {
+  const intervals = Array.isArray(body.intervals)
+    ? body.intervals.filter((i): i is PlanInterval => INTERVALS.includes(i as PlanInterval))
+    : []
+  return { enabled: body.enabled === true, intervals }
+}
 
 async function signedJson(
   path: string,

@@ -18,7 +18,13 @@ import { chooseCardAccount } from '../lib/cardAccount'
 import { paypalEnabled, processorName, processorOf, type CardProcessor } from '../lib/cardProcessor'
 import { reconcileCardOffer } from '../lib/cardOffer'
 import { reconcileInstalmentOffer } from '../lib/instalmentOffer'
-import { fetchStallInstalmentSummary, formatMoney, type StallInstalmentSummary } from '../lib/instalments'
+import {
+  fetchStallInstalmentSettings,
+  fetchStallInstalmentSummary,
+  formatMoney,
+  saveStallInstalmentSettings,
+  type StallInstalmentSummary,
+} from '../lib/instalments'
 import { CARD_PAYMENTS_PLAN_NAME, cardPaymentsPlan, type CardPaymentsPlan } from '../lib/cardPaymentsAccess'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { CardSalesSection, type CardSalesDeps } from '../components/CardSalesSection'
@@ -185,8 +191,28 @@ export function PaymentsSettingsPage({
         instalmentsEligible: processorRef.current === 'stripe' && result.status.instalmentsEligible === true,
       })
 
-      if (change.kind === 'unchanged' && monthly.kind === 'unchanged') return
+      if (change.kind === 'unchanged' && monthly.kind === 'unchanged') {
+        // The offer survives this read. A stall that switched on before the switch was enforced has
+        // the published offer but no saved one, so every plan its buyers start would be refused. Its
+        // consent was given (disclosure and terms), so carry it over, signed here by the stall. Only
+        // when it NEVER saved one (no intervals: a saved row always has one): a stall that switched
+        // off here, whose publish then failed, must stay off. An unreadable answer changes nothing.
+        if (afterCards.acceptsInstalments === true) {
+          void fetchStallInstalmentSettings(afterCards.pubkey).then((saved) => {
+            const neverSaved = saved !== null && !saved.enabled && saved.intervals.length === 0
+            if (neverSaved && current.current.acceptsInstalments === true) {
+              void saveStallInstalmentSettings({ enabled: true })
+            }
+          })
+        }
+        return
+      }
       const next = monthly.kind === 'republish' ? monthly.merchant : afterCards
+      // Withdrawn here too, where it is enforced, so a direct call cannot start a plan the screen
+      // just took away. Best effort: the published record is what this read is about.
+      if (current.current.acceptsInstalments === true && next.acceptsInstalments !== true) {
+        void saveStallInstalmentSettings({ enabled: false })
+      }
 
       await publishRecord(
         next,
@@ -232,15 +258,30 @@ export function PaymentsSettingsPage({
     }
   }
 
-  /** The stall's explicit opt-in (after the disclosure and terms) or opt-out. */
+  /**
+   * The stall's explicit opt-in (after the disclosure and terms) or opt-out.
+   *
+   * Saved to payment-adapter FIRST, because that is the switch plan start enforces; the published
+   * record only shows or hides "Pay monthly". Turning on stops if the save fails, so the tab is
+   * never shown for plans that would be refused. Turning off publishes regardless (hiding the tab
+   * is still right) and says the save must be retried, since plans could otherwise still start.
+   */
   const setMonthly = async (on: boolean) => {
     setBusy(true)
     setNote(null)
     try {
+      const saved = await saveStallInstalmentSettings({ enabled: on })
+      if (saved.kind !== 'ok' && on) {
+        setError(saved.reason)
+        return
+      }
       await publishRecord(
         { ...current.current, acceptsInstalments: on },
         on ? 'Shoppers can now pay you monthly.' : 'Monthly payments are off. Plans already running carry on.',
       )
+      if (saved.kind !== 'ok') {
+        setError(`Monthly payments are hidden from shoppers, but could not be switched off everywhere. ${saved.reason}`)
+      }
       setOfferingMonthly(false)
       setTermsAccepted(false)
     } finally {
