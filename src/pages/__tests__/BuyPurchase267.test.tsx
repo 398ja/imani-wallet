@@ -107,7 +107,7 @@ describe('Buy page, guest (#267 item 2, #410)', () => {
     fireEvent.click(pay)
     await screen.findByText('stop here')
     expect(startPurchase).toHaveBeenCalledWith({ stallPubkey: STALL, amountMinor: 2500, buyerPubkey: BUYER, processor: 'stripe' })
-    expect(JSON.parse(sessionStorage.getItem(PENDING_PURCHASE_KEY) ?? '{}')).toEqual({ stallPubkey: STALL })
+    expect(JSON.parse(sessionStorage.getItem(PENDING_PURCHASE_KEY) ?? '{}')).toEqual({ stallPubkey: STALL, kind: 'one-off' })
   })
 
   it('pays a PayPal stall through PayPal, as its record names', async () => {

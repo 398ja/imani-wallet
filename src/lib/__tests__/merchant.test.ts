@@ -333,3 +333,52 @@ describe('acceptsCards', () => {
     expect(merged.acceptsCards).toBe(true)
   })
 })
+
+/**
+ * Monthly payments: `acceptsInstalments` follows `acceptsCards` exactly (spec, "Offering monthly
+ * payments"): a literal true counts, absent is off, it needs acceptsCards, and salesClosed clears it.
+ */
+describe('acceptsInstalments', () => {
+  const now = () => Math.floor(Date.now() / 1000)
+
+  it('is published only when true and cards are offered', () => {
+    const on = JSON.parse(buildMerchantEvent(base({ acceptsCards: true, acceptsInstalments: true })).content)
+    expect(on.acceptsInstalments).toBe(true)
+
+    const noCards = JSON.parse(buildMerchantEvent(base({ acceptsCards: false, acceptsInstalments: true })).content)
+    expect('acceptsInstalments' in noCards).toBe(false)
+
+    const off = JSON.parse(buildMerchantEvent(base({ acceptsCards: true, acceptsInstalments: false })).content)
+    expect('acceptsInstalments' in off).toBe(false)
+  })
+
+  it('is never published by a closed stall', () => {
+    const closed = JSON.parse(
+      buildMerchantEvent(base({ acceptsCards: true, acceptsInstalments: true, salesClosed: true })).content,
+    )
+    expect('acceptsInstalments' in closed).toBe(false)
+  })
+
+  it('reads back as true only from an explicit true alongside acceptsCards', () => {
+    expect(mergeMerchantEvent(base(), JSON.stringify({ acceptsCards: true, acceptsInstalments: true }), now()).acceptsInstalments).toBe(true)
+    expect(mergeMerchantEvent(base(), JSON.stringify({ acceptsInstalments: true }), now()).acceptsInstalments).toBe(false)
+    expect(
+      mergeMerchantEvent(base(), JSON.stringify({ acceptsCards: true, acceptsInstalments: true, salesClosed: true }), now())
+        .acceptsInstalments,
+    ).toBe(false)
+  })
+
+  it('fails closed on a truthy non-boolean and on a record that stops asserting it', () => {
+    for (const value of ['true', 1, {}, [], 'yes']) {
+      expect(mergeMerchantEvent(base(), JSON.stringify({ acceptsCards: true, acceptsInstalments: value }), now()).acceptsInstalments).toBe(false)
+    }
+    const offering = base({ acceptsCards: true, acceptsInstalments: true })
+    expect(mergeMerchantEvent(offering, JSON.stringify({ acceptsCards: true }), now()).acceptsInstalments).toBe(false)
+  })
+
+  it('round-trips through publish and read', () => {
+    const event = buildMerchantEvent(base({ acceptsCards: true, acceptsInstalments: true }))
+    const merged = mergeMerchantEvent(emptyMerchant('a'.repeat(64)), event.content, event.created_at)
+    expect(merged.acceptsInstalments).toBe(true)
+  })
+})

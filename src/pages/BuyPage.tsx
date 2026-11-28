@@ -11,8 +11,11 @@ import { giftingOrigin, giftingPageUrl } from '../lib/giftingPage'
 import { useIdentity } from '../lib/identity'
 import { cardSalesReadiness } from '../lib/cardSalesEnrolment'
 import { cardSalesReason, type CardSalesReadiness } from '../lib/merchantActions'
+import { rememberAfterLogin } from '../lib/afterLogin'
 import { fetchMerchantRecord } from '../lib/merchant'
 import { processorOf, type CardProcessor } from '../lib/cardProcessor'
+import { startInstalments, type PlanTerm, type StartRefusal } from '../lib/instalments'
+import { MonthlyPaymentForm } from '../components/MonthlyPaymentForm'
 
 
 /**
@@ -50,9 +53,19 @@ import { processorOf, type CardProcessor } from '../lib/cardProcessor'
  * now takes cards. An unreadable record is Stripe, as an old record is: each checkout refuses a
  * stall it cannot charge for, so the worst case is one refused tap and nothing charged.
  */
-export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null }) {
+export function BuyPage({
+  buyerPubkey = null,
+  offersMonthly: offersMonthlyOverride,
+}: {
+  buyerPubkey?: string | null
+  /** Test seam: whether the stall's public record offers Monthly payments. Read from the relay otherwise. */
+  offersMonthly?: boolean
+}) {
   const { pubkey = '' } = useParams()
   const navigate = useNavigate()
+  const [mode, setMode] = useState<'one-off' | 'monthly'>('one-off')
+  const [monthlyRefusal, setMonthlyRefusal] = useState<StartRefusal | null>(null)
+  const [record, setRecord] = useState<{ stall: string; monthly: boolean; currency: string } | null>(null)
   const [amount, setAmount] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -85,6 +98,28 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
       live = false
     }
   }, [pubkey, buyerPubkey])
+
+  /*
+   * Monthly payments: the "Pay monthly" tab is HIDDEN, not disabled, unless the stall's public
+   * record says it offers them. A buyer should not see an option a stall never offered. Fails
+   * closed: no record, or a slow one, means no tab.
+   */
+  useEffect(() => {
+    if (offersMonthlyOverride !== undefined) return
+    let live = true
+    fetchMerchantRecord(pubkey)
+      .catch(() => null)
+      .then((m) => {
+        if (live) setRecord({ stall: pubkey, monthly: m?.acceptsInstalments === true, currency: m?.issuanceCurrency ?? 'gbp' })
+      })
+    return () => {
+      live = false
+    }
+  }, [pubkey, offersMonthlyOverride])
+  const offersMonthly =
+    offersMonthlyOverride ?? (record !== null && record.stall === pubkey && record.monthly)
+  const currency = record?.stall === pubkey ? record.currency : 'gbp'
+  const showMonthly = offersMonthly && mode === 'monthly'
 
   const minor = toMinorUnits(amount)
   /**
@@ -142,10 +177,38 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
     setError(result.reason)
   }
 
+  /** Same checks as a one-off, at the tap, then the adapter decides the rest. */
+  const startMonthly = async (amountMinor: number, term: PlanTerm) => {
+    if (buyerPubkey === null) return
+    setBusy(true)
+    setMonthlyRefusal(null)
+    const now = await stall.recheck()
+    if (now.status !== 'open' || !now.sellsByCard) {
+      setBusy(false)
+      setMonthlyRefusal({ kind: 'other', reason: `${(closedMessage(now.status === 'customer' ? 'unknown' : now.status) ?? "Card payments aren't available").replace(/\.$/, '')}. Nothing was charged.` })
+      return
+    }
+    const readiness = await cardSalesReadiness(pubkey).catch((): 'not-ready' => 'not-ready')
+    if (readiness !== 'ready') {
+      setCardSales(readiness)
+      setBusy(false)
+      return
+    }
+    // Remembered with its kind, so the return page uses the right words without trusting the URL.
+    rememberPurchase(pubkey, 'monthly')
+    const result = await startInstalments({ stallPubkey: pubkey, buyerPubkey, amountMinor, term })
+    if (result.kind === 'ok') {
+      window.location.href = result.checkoutUrl
+      return
+    }
+    setBusy(false)
+    setMonthlyRefusal(result.refusal)
+  }
+
   if (busy) return <Centered>Taking you to the payment page…</Centered>
 
   if (buyerPubkey === null) {
-    return <GuestBuy pubkey={pubkey} />
+    return <GuestBuy pubkey={pubkey} offersMonthly={offersMonthly} />
   }
 
   return (
@@ -156,63 +219,96 @@ export function BuyPage({ buyerPubkey = null }: { buyerPubkey?: string | null })
           tracking the system font ships by default. */}
       <h1 className="mb-2 text-title font-semibold">Buy a voucher</h1>
       <p className="mb-6 text-callout text-mono-500">
-        You pay this stall directly by card. The voucher arrives in your wallet.
+        {showMonthly
+          ? 'You pay this stall directly by card, once a month. A voucher arrives in your wallet with each payment.'
+          : 'You pay this stall directly by card. The voucher arrives in your wallet.'}
       </p>
 
-      <label className="mb-2 block text-sm font-medium" htmlFor="amount">
-        Amount
-      </label>
-      {/*
-        `inputMode="decimal"` puts a number pad under a thumb without the
-        spinners and scroll-to-change that `type="number"` brings.
-
-        The focus ring is the app's own rather than the browser default, which
-        differs per platform and would be the one control here that looks
-        borrowed.
-      */}
-      <input
-        id="amount"
-        inputMode="decimal"
-        autoComplete="off"
-        className="mb-2 w-full rounded-xl border border-mono-200 bg-transparent px-4 py-3 text-lg tabular-nums outline-none transition-colors duration-100 ease-out placeholder:text-mono-400 focus:border-mono-400 dark:border-mono-800 dark:focus:border-mono-600"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-        placeholder="25.00"
-        aria-describedby={malformed ? 'amount-hint' : undefined}
-        aria-invalid={malformed || undefined}
-      />
-
-      {malformed && (
-        <p id="amount-hint" className="mb-2 text-sm text-mono-500">
-          Enter an amount like 25.00.
-        </p>
+      {offersMonthly && (
+        <div role="tablist" aria-label="How to pay" className="mb-6 grid grid-cols-2 gap-1 rounded-xl bg-mono-100 p-1 dark:bg-mono-900">
+          {(['one-off', 'monthly'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => setMode(m)}
+              className={`pressable rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-100 ${
+                mode === m ? 'bg-white shadow-sm dark:bg-mono-800' : 'text-mono-500'
+              }`}
+            >
+              {m === 'one-off' ? 'One payment' : 'Pay monthly'}
+            </button>
+          ))}
+        </div>
       )}
 
-      {error && (
-        // `role="alert"`, like the shared `Alert`: it answers the tap the
-        // customer just made, so it is announced rather than painted silently.
-        <p role="alert" className="expand-row mb-4 mt-2 rounded-xl bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700 dark:bg-red-950/50 dark:text-red-300">
-          {error}
-        </p>
-      )}
+      {showMonthly ? (
+        <MonthlyPaymentForm
+          currency={currency}
+          unavailable={stallNote ?? (cardSales !== 'ready' ? cardSalesReason(cardSales) : null)}
+          refusal={monthlyRefusal}
+          busy={busy}
+          onStart={startMonthly}
+        />
+      ) : (
+        <>
+          <label className="mb-2 block text-sm font-medium" htmlFor="amount">
+            Amount
+          </label>
+          {/*
+            `inputMode="decimal"` puts a number pad under a thumb without the
+            spinners and scroll-to-change that `type="number"` brings.
 
-      {/* Disabled rather than hidden: an amount box with no button beside it
-          reads as broken, and the reason it cannot be pressed is visible in the
-          empty field. */}
-      <Button
-        size="lg"
-        className="mt-4 w-full"
-        disabled={minor === null || cardSales !== 'ready' || !stallSells || busy}
-        aria-describedby={cardSales !== 'ready' || !stallSells ? readinessId : undefined}
-        onClick={buy}
-      >
-        <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Pay by card
-      </Button>
-      {/* The reason sits under the button it disables (#281), and is announced with it. */}
-      {(stallNote || cardSales !== 'ready') && (
-        <p id={readinessId} className="mt-2 text-center text-xs text-mono-600 dark:text-mono-400">
-          {stallNote ?? (cardSales !== 'ready' ? cardSalesReason(cardSales) : null)}
-        </p>
+            The focus ring is the app's own rather than the browser default, which
+            differs per platform and would be the one control here that looks
+            borrowed.
+          */}
+          <input
+            id="amount"
+            inputMode="decimal"
+            autoComplete="off"
+            className="mb-2 w-full rounded-xl border border-mono-200 bg-transparent px-4 py-3 text-lg tabular-nums outline-none transition-colors duration-100 ease-out placeholder:text-mono-400 focus:border-mono-400 dark:border-mono-800 dark:focus:border-mono-600"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="25.00"
+            aria-describedby={malformed ? 'amount-hint' : undefined}
+            aria-invalid={malformed || undefined}
+          />
+
+          {malformed && (
+            <p id="amount-hint" className="mb-2 text-sm text-mono-500">
+              Enter an amount like 25.00.
+            </p>
+          )}
+
+          {error && (
+            // `role="alert"`, like the shared `Alert`: it answers the tap the
+            // customer just made, so it is announced rather than painted silently.
+            <p role="alert" className="expand-row mb-4 mt-2 rounded-xl bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-700 dark:bg-red-950/50 dark:text-red-300">
+              {error}
+            </p>
+          )}
+
+          {/* Disabled rather than hidden: an amount box with no button beside it
+              reads as broken, and the reason it cannot be pressed is visible in the
+              empty field. */}
+          <Button
+            size="lg"
+            className="mt-4 w-full"
+            disabled={minor === null || cardSales !== 'ready' || !stallSells || busy}
+            aria-describedby={cardSales !== 'ready' || !stallSells ? readinessId : undefined}
+            onClick={buy}
+          >
+            <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Pay by card
+          </Button>
+          {/* The reason sits under the button it disables (#281), and is announced with it. */}
+          {(stallNote || cardSales !== 'ready') && (
+            <p id={readinessId} className="mt-2 text-center text-xs text-mono-600 dark:text-mono-400">
+              {stallNote ?? (cardSales !== 'ready' ? cardSalesReason(cardSales) : null)}
+            </p>
+          )}
+        </>
       )}
 
       {/* A text button, not a second heavy one. Cancelling is the quiet path
@@ -244,7 +340,8 @@ function toMinorUnits(raw: string): number | null {
 }
 
 /** A visitor with no wallet: the stall's gifting page, or a wallet. */
-function GuestBuy({ pubkey }: { pubkey: string }) {
+function GuestBuy({ pubkey, offersMonthly }: { pubkey: string; offersMonthly: boolean }) {
+  const navigate = useNavigate()
   const identity = useIdentity(pubkey)
   const gifting = giftingPageUrl(identity?.nip05)
   return (
@@ -260,6 +357,20 @@ function GuestBuy({ pubkey }: { pubkey: string }) {
       <Link to="/" className={`${buttonClasses(gifting ? 'secondary' : 'primary', 'lg')} w-full`}>
         Create a wallet
       </Link>
+      {/* Monthly payments need a wallet key to deliver a voucher to every month, so there is no
+          guest path: log in, and come straight back here. */}
+      {offersMonthly && (
+        <button
+          type="button"
+          className="pressable mt-3 inline-block py-3 text-sm text-mono-500 underline"
+          onClick={() => {
+            rememberAfterLogin(`/buy/${pubkey}`)
+            navigate('/login')
+          }}
+        >
+          Log in to pay monthly
+        </button>
+      )}
       {!gifting && (
         <p className="mt-3 text-xs text-mono-500">
           {giftingOrigin()

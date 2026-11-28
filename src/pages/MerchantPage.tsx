@@ -25,6 +25,7 @@ import { useBranding } from '../hooks/useBranding'
 import { fetchMerchantRecord, type MerchantProfile } from '../lib/merchant'
 import { LocationMap } from '../components/LocationMap'
 import { CouponCodeAction, MerchantActions } from '../components/MerchantActions'
+import { StallMonthlyLine } from '../components/MonthlyPaymentNotices'
 import { checkoutCodesEnabled } from '../lib/checkoutCodePorts'
 import type { WalletTransaction } from '../lib/transactions'
 import { entryKey, groupHistory } from '../lib/historyGroups'
@@ -215,6 +216,7 @@ export function MerchantPage({ viewerPubkey }: { viewerPubkey?: string }) {
         ) : (
           <MerchantActions pubkey={pubkey} acceptsCards={acceptsCards} viewerPubkey={viewerPubkey} />
         )}
+        {!isSelf && <StallMonthlyLine buyerPubkey={viewerPubkey} stallPubkey={pubkey} />}
 
         {/* Send and Coupon code, one row down and quieter. Send is a different errand from
             Pay: Pay hands this stall its own coupon back at the till, Send gives one to a
