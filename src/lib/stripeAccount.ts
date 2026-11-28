@@ -87,14 +87,90 @@ export interface StripeAccountStatus {
    * Stripe having nothing more to ask, the second is a bug or an attack.
    */
   onboardingUrlRejected?: string
+  /** How the account was connected: `CREATED` (hosted onboarding) or `OAUTH`. Unknown is undefined. */
+  connectionType?: 'CREATED' | 'OAUTH'
+  /** Who Stripe bills for fees on this account, as the adapter reports it. */
+  feePayer?: string
+  /** Who bears losses (refunds, disputes) on this account. */
+  lossesPayer?: string
+  /**
+   * Whether monthly payments can be offered. Only a literal `true` counts; unknown (or absent, as on a
+   * PayPal status) is not eligible.
+   */
+  instalmentsEligible?: boolean
+  /** Whether the service actually said (true or false). Not knowing reads as not eligible, said differently. */
+  instalmentsEligibilityKnown?: boolean
+  /** Whether any instalment plan is running. Stop is refused while it is. Absent is none. */
+  activePlans?: boolean
 }
 
 export type StripeResult =
   | { kind: 'ok'; status: StripeAccountStatus }
   /** Nothing was changed; the merchant can try again. */
   | { kind: 'unreachable'; reason: string }
-  /** The service refused, with something worth showing. */
-  | { kind: 'refused'; reason: string }
+  /** The service refused, with something worth showing, and its code when it sent one. */
+  | { kind: 'refused'; reason: string; code?: string; status?: number }
+
+/** What a stall is told about a refusal code, and the next step offered. */
+export interface CodeWords {
+  words: string
+  offer: 'start-again' | 'stop' | 'choose-another' | 'learn-how' | 'upgrade' | 'try-again' | null
+}
+
+/**
+ * The spec's code-to-wording table (item 3). Null for a code with no mapping, so the caller falls
+ * back to the service's own message. `OAUTH_DISABLED` is not an error: the button is hidden.
+ */
+export function codeToWords(code: string | undefined, message = ''): CodeWords | null {
+  switch (code) {
+    case 'OAUTH_STATE_INVALID':
+      return { words: 'That took too long, or was already used. Start again.', offer: 'start-again' }
+    case 'OAUTH_CODE_REJECTED':
+      return { words: "Stripe didn't accept that. Start again.", offer: 'start-again' }
+    case 'MERCHANT_ALREADY_LINKED':
+      return /another merchant|already connected to another/i.test(message)
+        ? { words: 'That Stripe account is already connected to another stall.', offer: 'choose-another' }
+        : { words: 'You already have a Stripe account connected.', offer: 'stop' }
+    case 'OWNERSHIP_MISMATCH':
+      return { words: 'That Stripe account is already connected to another stall.', offer: 'choose-another' }
+    case 'ACTIVE_PLANS':
+      return { words: 'You have monthly payments running. Stop those first.', offer: 'learn-how' }
+    case 'NOT_IN_PLAN':
+      return message ? { words: message, offer: 'upgrade' } : null
+    case 'STRIPE_API_ERROR':
+      return { words: "Stripe couldn't be reached. Nothing was changed.", offer: 'try-again' }
+    default:
+      return null
+  }
+}
+
+/** Stripe's consent page to send the stall to, from `oauth/start`. */
+export type OAuthStartResult =
+  | { kind: 'ok'; authorizeUrl: string; expiresAt?: string }
+  | Exclude<StripeResult, { kind: 'ok' }>
+
+/**
+ * Begin the "I already have a Stripe account" route. The URL is checked against Stripe's own
+ * hosts before anyone navigates to it, for the open-redirect reason {@link stripeUrl} gives.
+ */
+export async function startStripeOAuth(): Promise<OAuthStartResult> {
+  const result = await rawCall('/oauth/start', { method: 'POST' })
+  if (result.kind !== 'ok') return result
+  const raw = (result.body ?? {}) as Record<string, unknown>
+  const url = stripeUrl(raw.authorize_url)
+  if (!url) {
+    return { kind: 'refused', reason: stripeUrlRejection(raw.authorize_url) ?? 'Stripe did not send a link.' }
+  }
+  return { kind: 'ok', authorizeUrl: url, expiresAt: typeof raw.expires_at === 'string' ? raw.expires_at : undefined }
+}
+
+/**
+ * Finish the OAuth route with Stripe's one-time code. Call EXACTLY ONCE per code and never retry:
+ * a code used twice makes Stripe revoke the connection. Hence no retry here, and the caller guards.
+ */
+export function completeStripeOAuth(code: string, state: string): Promise<StripeResult> {
+  return call('/oauth/complete', { method: 'POST', body: JSON.stringify({ code, state }) })
+}
 
 /**
  * Where Stripe sends the merchant back to.
@@ -114,6 +190,14 @@ function returnUrls(): { return_url: string; refresh_url: string } {
 }
 
 async function call(path: string, init: RequestInit): Promise<StripeResult> {
+  const result = await rawCall(path, init)
+  if (result.kind !== 'ok') return result
+  return { kind: 'ok', status: result.body === null ? disconnected() : parse(result.body) }
+}
+
+type RawResult = { kind: 'ok'; body: unknown } | Exclude<StripeResult, { kind: 'ok' }>
+
+async function rawCall(path: string, init: RequestInit): Promise<RawResult> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
@@ -128,7 +212,7 @@ async function call(path: string, init: RequestInit): Promise<StripeResult> {
 
     if (response.status === 204) {
       // Disconnect answers no content. Not an error, and not a status either.
-      return { kind: 'ok', status: disconnected() }
+      return { kind: 'ok', body: null }
     }
 
     if (!response.ok) {
@@ -138,10 +222,11 @@ async function call(path: string, init: RequestInit): Promise<StripeResult> {
           reason: 'Your session has expired. Sign in again to manage card payments.',
         }
       }
-      return { kind: 'refused', reason: await refusalReason(response) }
+      const { reason, code } = await refusalReason(response)
+      return { kind: 'refused', reason, code, status: response.status }
     }
 
-    return { kind: 'ok', status: parse(await response.json()) }
+    return { kind: 'ok', body: (await response.json()) ?? {} }
   } catch (error) {
     // Nothing changed. Said plainly, because a merchant who thinks they have
     // half-connected an account will go looking for a mess that is not there.
@@ -178,19 +263,20 @@ async function call(path: string, init: RequestInit): Promise<StripeResult> {
  * Deliberately NOT shown for 401: "session expired" is advice the merchant can
  * act on, and no upstream phrasing improves on it.
  */
-async function refusalReason(response: Response): Promise<string> {
+async function refusalReason(response: Response): Promise<{ reason: string; code?: string }> {
   const generic = 'Stripe could not be reached through your account. Please try again.'
   try {
-    const body: unknown = await response.json()
-    const message = (body as { message?: unknown })?.message
-    if (typeof message === 'string' && message.trim()) {
-      return message.length > 200 ? generic : message
-    }
+    const body = (await response.json()) as { message?: unknown; code?: unknown } | null
+    const message = body?.message
+    const code = typeof body?.code === 'string' && body.code.trim() ? body.code : undefined
+    const reason =
+      typeof message === 'string' && message.trim() ? (message.length > 200 ? generic : message) : generic
+    return { reason, code }
   } catch {
     // Not JSON. The generic sentence is still true, and a parse failure here
     // must never lose the refusal itself.
   }
-  return generic
+  return { reason: generic }
 }
 
 /** Where a stall stands with Stripe today. */
@@ -231,6 +317,9 @@ export function disconnected(): StripeAccountStatus {
     payoutsEnabled: false,
     detailsSubmitted: false,
     requirementsDue: [],
+    instalmentsEligible: false,
+    instalmentsEligibilityKnown: false,
+    activePlans: false,
   }
 }
 
@@ -264,6 +353,14 @@ function parse(body: unknown): StripeAccountStatus {
       raw.onboarding_url === undefined || raw.onboarding_url === null
         ? undefined
         : (stripeUrlRejection(raw.onboarding_url) ?? undefined),
+    connectionType:
+      raw.connection_type === 'CREATED' || raw.connection_type === 'OAUTH' ? raw.connection_type : undefined,
+    feePayer: str(raw.fee_payer),
+    lossesPayer: str(raw.losses_payer),
+    instalmentsEligible: raw.instalments_eligible === true,
+    instalmentsEligibilityKnown: typeof raw.instalments_eligible === 'boolean',
+    // Unknown reads as no plans: the adapter re-checks on Stop and refuses with ACTIVE_PLANS.
+    activePlans: raw.active_plans === true,
   }
 }
 
@@ -359,4 +456,24 @@ export function stripeUrlRejection(value: unknown): string | null {
   }
 
   return null
+}
+
+/** The next step a refusal offers, said as part of the sentence. */
+const OFFER_WORDS: Record<string, string> = {
+  stop: 'To use a different one, choose Stop taking card payments first.',
+  'choose-another': 'Choose another Stripe account.',
+  'learn-how': 'Customers can stop theirs from Monthly payments in their wallet, or you can cancel them in Stripe.',
+  upgrade: 'Upgrade your plan in Settings to take card payments.',
+  'try-again': 'Try again in a moment.',
+}
+
+/**
+ * A refusal in the stall's words: the spec's code table first, the service's own message
+ * otherwise. Shared by the Card payments screen and the OAuth return page.
+ */
+export function refusalWords(result: { reason: string; code?: string }): string {
+  const mapped = 'code' in result ? codeToWords(result.code, result.reason) : null
+  if (mapped === null) return result.reason
+  const offer = mapped.offer && mapped.offer !== 'start-again' ? OFFER_WORDS[mapped.offer] : undefined
+  return offer ? `${mapped.words} ${offer}` : mapped.words
 }

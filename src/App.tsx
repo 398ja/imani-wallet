@@ -71,6 +71,7 @@ import {
 } from './pages/MerchantRecordPages'
 import { MerchantEditPage } from './pages/MerchantEditPage'
 import { PaymentsSettingsPage } from './pages/PaymentsSettingsPage'
+import { StripeConnectedPage } from './pages/StripeConnectedPage'
 import { NotificationSettingsPage } from './pages/NotificationSettingsPage'
 import { ReceiptSettingsPage } from './pages/ReceiptSettingsPage'
 import { ReceiptAckPrompt } from './components/ReceiptAckPrompt'
@@ -859,6 +860,9 @@ function AuthedApp({ pubkey, onLoggedOut }: { pubkey: string; onLoggedOut: () =>
           path="/settings/ledger"
           element={
             // Merchant-only, same predicate as the stall editor: the redemption
+        {/* Stripe's OAuth return. Not merchant-gated: the merchant record may still be loading,
+            and the one-time code must be stripped from the URL on first render regardless. */}
+        <Route path="/settings/payments/stripe-connected" element={<StripeConnectedPage />} />
             // ledger is a record of coupons HONOURED, which a customer has none
             // of, and the ledger key is meaningless for them.
             // The STALL's key, not the ledger's. The ledger key is

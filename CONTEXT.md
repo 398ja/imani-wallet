@@ -175,6 +175,18 @@ both. Recorded as two rows, one in each party's own ledger, never as one shared
 record.
 _Avoid_: Sale, order, checkout
 
+**Instalment plan**:
+A customer paying a stall a set amount each month by card, receiving a voucher
+for each payment. Customer-facing name: Monthly payments. `RecurringPlan` in
+payment-adapter. Offered only when the stall publishes `acceptsInstalments` and
+its Stripe account is eligible (Imani bears no fees or losses).
+_Avoid_: Subscription, standing order, direct debit, plan
+
+**Instalment**:
+A single monthly payment within an instalment plan, each one a purchase that
+issues one voucher.
+_Avoid_: Charge (on any customer screen)
+
 **Obligation**:
 A voucher a stall owes because a purchase was paid. Recorded when payment is
 confirmed and discharged only when issuance is confirmed, never when it is

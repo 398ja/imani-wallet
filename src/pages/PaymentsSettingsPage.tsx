@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CreditCard, ExternalLink, Lock, TriangleAlert, Wallet } from 'lucide-react'
 
-import { Button, Screen, BackLink, PageHeader, Centered } from '../components/ui'
+import { Button, Screen, BackLink, PageHeader, Centered, Switch } from '../components/ui'
 import {
   connectStripe,
   disconnectStripe,
   fetchStripeStatus,
+  refusalWords,
+  startStripeOAuth,
   refreshStripe,
   type StripeAccountStatus,
   type StripeResult,
@@ -15,6 +17,8 @@ import { connectPaypal, disconnectPaypal, fetchPaypalStatus, refreshPaypal } fro
 import { chooseCardAccount } from '../lib/cardAccount'
 import { paypalEnabled, processorName, processorOf, type CardProcessor } from '../lib/cardProcessor'
 import { reconcileCardOffer } from '../lib/cardOffer'
+import { reconcileInstalmentOffer } from '../lib/instalmentOffer'
+import { fetchStallInstalmentSummary, formatMoney, type StallInstalmentSummary } from '../lib/instalments'
 import { CARD_PAYMENTS_PLAN_NAME, cardPaymentsPlan, type CardPaymentsPlan } from '../lib/cardPaymentsAccess'
 import { licenceStatus, type LicenceStatus } from '../lib/licenceStatus'
 import { CardSalesSection, type CardSalesDeps } from '../components/CardSalesSection'
@@ -93,6 +97,12 @@ export function PaymentsSettingsPage({
   const [note, setNote] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [plan, setPlan] = useState<CardPaymentsPlan>('unknown')
+  /** `OAUTH_DISABLED` hides the route rather than showing an error. */
+  const [oauthDisabled, setOauthDisabled] = useState(false)
+  /** Turning monthly payments on: the disclosure is open and waiting for the terms checkbox. */
+  const [offeringMonthly, setOfferingMonthly] = useState(false)
+  const [termsAccepted, setTermsAccepted] = useState(false)
+  const [summary, setSummary] = useState<StallInstalmentSummary | null>(null)
   /** The plan as last read, for `apply` without making it a new function per read. */
   const planRef = useRef<CardPaymentsPlan>('unknown')
   /**
@@ -147,7 +157,7 @@ export function PaymentsSettingsPage({
   const apply = useCallback(
     async (result: StripeResult) => {
       if (result.kind !== 'ok') {
-        setError(result.reason)
+        setError(refusalWords(result))
         // A failed read must not withdraw a working offer, so nothing is
         // republished here. Same rule as an unreachable gateway when confirming
         // issuance: unknown changes nothing.
@@ -167,41 +177,108 @@ export function PaymentsSettingsPage({
         planRef.current,
       )
 
-      if (change.kind === 'unchanged') return
+      // Composed AFTER the card reconcile, on its result, so one publish covers both: a stall
+      // whose cards were just withdrawn loses monthly payments in the same record. A PayPal
+      // status never says eligible, so a PayPal stall never keeps the offer.
+      const afterCards = change.kind === 'republish' ? change.merchant : current.current
+      const monthly = reconcileInstalmentOffer(afterCards, {
+        instalmentsEligible: processorRef.current === 'stripe' && result.status.instalmentsEligible === true,
+      })
 
-      // Local first. Everything after this can fail without losing the change,
-      // exactly as MerchantEditPage does.
-      saveMerchant(change.merchant)
-      current.current = change.merchant
-      onSaved(change.merchant)
+      if (change.kind === 'unchanged' && monthly.kind === 'unchanged') return
+      const next = monthly.kind === 'republish' ? monthly.merchant : afterCards
 
-      try {
-        const signed = await getSigner().signEvent(buildMerchantEvent(change.merchant))
-        // Stamp what we published BEFORE the publish can fail, or a later read
-        // of an older event looks newer and reverts this on screen.
-        const published = { ...change.merchant, eventAt: signed.created_at }
-        saveMerchant(published)
-        current.current = published
-        onSaved(published)
-
-        const { ok } = await publish(signed)
-        setNote(
-          ok === 0
-            ? 'Saved on this device, but not sent yet. Shoppers may not see this for a while.'
-            : change.merchant.acceptsCards === true
-              ? 'Shoppers can now buy your vouchers by card.'
-              : `Card payments are off: ${change.reason}.`,
-        )
-      } catch {
-        // `getSigner()` throws on a locked session, and this used to escape
-        // `act()` and leave every button disabled with no explanation. The
-        // change is saved locally either way, so this reports rather than
-        // reverts.
-        setNote('Saved on this device, but it could not be published. Shoppers may not see this yet.')
-      }
+      await publishRecord(
+        next,
+        change.kind === 'republish'
+          ? next.acceptsCards === true
+            ? 'Shoppers can now buy your vouchers by card.'
+            : `Card payments are off: ${change.reason}.`
+          : `Monthly payments are off: ${monthly.kind === 'republish' ? monthly.reason : ''}.`,
+      )
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [onSaved],
   )
+
+  /**
+   * Save locally, sign and publish one stall record. Shared by the reconcile and by the stall's
+   * own monthly payments switch, so both follow exactly the same order.
+   */
+  async function publishRecord(next: MerchantProfile, sentNote: string) {
+    // Local first. Everything after this can fail without losing the change,
+    // exactly as MerchantEditPage does.
+    saveMerchant(next)
+    current.current = next
+    onSaved(next)
+
+    try {
+      const signed = await getSigner().signEvent(buildMerchantEvent(next))
+      // Stamp what we published BEFORE the publish can fail, or a later read
+      // of an older event looks newer and reverts this on screen.
+      const published = { ...next, eventAt: signed.created_at }
+      saveMerchant(published)
+      current.current = published
+      onSaved(published)
+
+      const { ok } = await publish(signed)
+      setNote(ok === 0 ? 'Saved on this device, but not sent yet. Shoppers may not see this for a while.' : sentNote)
+    } catch {
+      // `getSigner()` throws on a locked session, and this used to escape
+      // `act()` and leave every button disabled with no explanation. The
+      // change is saved locally either way, so this reports rather than
+      // reverts.
+      setNote('Saved on this device, but it could not be published. Shoppers may not see this yet.')
+    }
+  }
+
+  /** The stall's explicit opt-in (after the disclosure and terms) or opt-out. */
+  const setMonthly = async (on: boolean) => {
+    setBusy(true)
+    setNote(null)
+    try {
+      await publishRecord(
+        { ...current.current, acceptsInstalments: on },
+        on ? 'Shoppers can now pay you monthly.' : 'Monthly payments are off. Plans already running carry on.',
+      )
+      setOfferingMonthly(false)
+      setTermsAccepted(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** "I already have a Stripe account": off to Stripe's consent page. */
+  const startOAuth = async () => {
+    setBusy(true)
+    setNote(null)
+    try {
+      const result = await startStripeOAuth()
+      if (result.kind === 'ok') {
+        window.location.href = result.authorizeUrl
+        return
+      }
+      if (result.kind === 'refused' && result.code === 'OAUTH_DISABLED') {
+        // Not an error: this route simply is not offered here.
+        setOauthDisabled(true)
+        return
+      }
+      setError(refusalWords(result))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (merchant.acceptsInstalments !== true) return
+    let cancelled = false
+    void fetchStallInstalmentSummary(merchant.pubkey).then((result) => {
+      if (!cancelled && result.kind === 'ok') setSummary(result.value)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [merchant.acceptsInstalments, merchant.pubkey])
 
   useEffect(() => {
     // On mount, and after Stripe redirects back. `refresh` re-reads Stripe
@@ -311,6 +388,15 @@ export function PaymentsSettingsPage({
     live &&
     status?.defaultCurrency !== undefined &&
     status.defaultCurrency.toLowerCase() !== merchant.issuanceCurrency.toLowerCase()
+  const stripe = processor === 'stripe'
+  const oauth = stripe && status?.connectionType === 'OAUTH'
+  const eligible = stripe && status?.instalmentsEligible === true
+  const monthlyOn = merchant.acceptsInstalments === true
+  // Needs the published card offer too: `reconcileInstalmentOffer` withdraws monthly payments from a
+  // stall without `acceptsCards` (or with sales closed), so an opt-in there would not stick.
+  const cardsOffered = merchant.acceptsCards === true && merchant.salesClosed !== true
+  const canOfferMonthly = eligible && live && !currencyMismatch && cardsOffered
+  const plansRunning = stripe && status?.activePlans === true
 
   // Only once Stripe has ANSWERED not connected. A failed Stripe read (status null) shows its error
   // on the ordinary screen rather than an upgrade prompt over a stall that may be connected.
@@ -452,6 +538,85 @@ export function PaymentsSettingsPage({
       {/* #410: once shoppers can pay by card, the stall's own gifting page and its indexing opt-in. */}
       {offering && !currencyMismatch && <GiftingPageSection merchant={merchant} onToggleIndexing={toggleIndexing} />}
 
+      {connected && stripe && !notInPlan && (
+        <div className="mb-6">
+          <p className="mb-3 text-[15px] leading-relaxed text-mono-500" data-testid="monthly-eligibility">
+            {eligible ? (
+              'Monthly payments are available.'
+            ) : status?.instalmentsEligibilityKnown ? (
+              <>
+                Your Stripe account setup means monthly payments aren&rsquo;t available.{' '}
+                <details className="inline">
+                  <summary className="inline cursor-pointer underline">Why?</summary>
+                  <span className="block">
+                    On this account, Imani would be billed for Stripe&rsquo;s fees or for losses such as refunds and
+                    disputes.
+                  </span>
+                </details>
+              </>
+            ) : (
+              'We couldn’t check your account yet.'
+            )}
+          </p>
+
+          <Switch
+            label="Monthly payments"
+            hint="Let customers pay you a set amount each month and get a voucher each time."
+            checked={monthlyOn || offeringMonthly}
+            disabled={busy || (!monthlyOn && !canOfferMonthly)}
+            onChange={(on) => {
+              if (on) {
+                setOfferingMonthly(true)
+              } else if (offeringMonthly && !monthlyOn) {
+                setOfferingMonthly(false)
+                setTermsAccepted(false)
+              } else {
+                void setMonthly(false)
+              }
+            }}
+          />
+
+          {offeringMonthly && !monthlyOn && (
+            <div className="expand-row mt-3 rounded-xl bg-mono-100 p-4 text-sm leading-relaxed dark:bg-mono-900">
+              <p className="mb-2">
+                <strong>You pay Stripe&rsquo;s fees, not Imani.</strong> Each monthly payment costs about 1.5% + 20p
+                to process, plus 0.7% for recurring billing. On a £40 payment that is roughly £1.08 (2.7%). Small
+                payments cost proportionally more, so the minimum is £20.
+              </p>
+              <p className="mb-2">
+                <strong>Refunds and disputes are yours.</strong> Payments go straight to your Stripe account. If a
+                customer asks for a refund or disputes a payment, it comes from your balance. Stripe may also hold a
+                reserve.
+              </p>
+              <p className="mb-3">
+                <strong>A customer can stop at any time.</strong> Monthly payments are a convenience, not a contract.
+                Vouchers already issued stay valid.
+              </p>
+              <label className="mb-3 flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={termsAccepted}
+                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                />
+                <span>I&rsquo;ve read and accept the monthly payments terms.</span>
+              </label>
+              <Button size="sm" disabled={busy || !termsAccepted} onClick={() => setMonthly(true)}>
+                Turn on monthly payments
+              </Button>
+            </div>
+          )}
+
+          {monthlyOn && summary !== null && (
+            <p className="mt-3 text-[15px] leading-relaxed text-mono-500">
+              {summary.activePlans} {summary.activePlans === 1 ? 'person pays' : 'people pay'} you monthly
+              {summary.monthlyTotals.length > 0 &&
+                `, ${summary.monthlyTotals.map((t) => formatMoney(t.amountMinor, t.currency)).join(' + ')} a month`}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="grid gap-3">
         {/* The choice, before connecting only: a connected stall switches by stopping first, so
             the published offer never names an account that is not set up. */}
@@ -481,13 +646,45 @@ export function PaymentsSettingsPage({
           </fieldset>
         )}
 
-        {!connected && !notInPlan && (
-          <Button size="lg" disabled={busy} onClick={() => act(processor === 'paypal' ? connectPaypal : connectStripe, true)}>
-            <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Connect {name}
+        {/* Stripe: two routes (monthly payments spec, "Connect: two routes"). The stall's own
+            account first, unless the deployment has not configured OAuth. */}
+        {!connected && !notInPlan && stripe && !oauthDisabled && (
+          <Button size="lg" disabled={busy} onClick={startOAuth}>
+            <CreditCard className="mr-2 h-5 w-5" aria-hidden /> I already have a Stripe account
           </Button>
         )}
 
-        {connected && !live && !notInPlan && (
+        {!connected && !notInPlan && (
+          <Button
+            size="lg"
+            variant={stripe && !oauthDisabled ? 'outline' : undefined}
+            disabled={busy}
+            onClick={() => act(processor === 'paypal' ? connectPaypal : connectStripe, true)}
+          >
+            {stripe && !oauthDisabled ? (
+              'Create a Stripe account'
+            ) : (
+              <>
+                <CreditCard className="mr-2 h-5 w-5" aria-hidden /> Connect {name}
+              </>
+            )}
+          </Button>
+        )}
+
+        {/* An account the stall already owns is finished in its own Dashboard, not through an
+            onboarding link Stripe may not even issue for it. */}
+        {connected && !live && !notInPlan && oauth && (
+          <a
+            href="https://dashboard.stripe.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex h-12 items-center justify-center rounded-xl bg-mono-900 px-5 font-medium text-mono-50 dark:bg-mono-50 dark:text-mono-900"
+          >
+            <ExternalLink className="mr-2 h-5 w-5" aria-hidden /> Open Stripe
+          </a>
+        )}
+
+        {connected && !live && !notInPlan && !oauth && (
           <Button size="lg" disabled={busy} onClick={() => act(processor === 'paypal' ? connectPaypal : connectStripe, true)}>
             <ExternalLink className="mr-2 h-5 w-5" aria-hidden /> Finish setting up
           </Button>
@@ -505,9 +702,20 @@ export function PaymentsSettingsPage({
         )}
 
         {connected && !confirming && (
-          <Button size="lg" variant="outline" disabled={busy} onClick={() => setConfirming(true)}>
+          <Button
+            size="lg"
+            variant="outline"
+            disabled={busy || plansRunning}
+            aria-describedby={plansRunning ? 'stop-blocked-reason' : undefined}
+            onClick={() => setConfirming(true)}
+          >
             Stop taking card payments
           </Button>
+        )}
+        {connected && plansRunning && (
+          <p id="stop-blocked-reason" className="text-sm leading-relaxed text-mono-500">
+            You have monthly payments running. Ask those customers to stop them, or stop them in Stripe, first.
+          </p>
         )}
       </div>
 
@@ -525,7 +733,15 @@ export function PaymentsSettingsPage({
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             <p className="text-sm leading-relaxed">
               Shoppers will stop seeing a Buy button straight away. Vouchers you
-              have already sold are not affected.
+              have already sold are not affected. Imani stops offering card payments for you.
+              {stripe && (
+                <>
+                  {' '}If you want to connect a different Stripe account, stop first, then connect again.
+                  Your earlier Stripe account stays in your Stripe login. Choose I already have a
+                  Stripe account to use it again.
+                  {oauth && ' You can also remove Imani in Stripe, under connected apps.'}
+                </>
+              )}
             </p>
           </div>
           <div className="mt-3 flex gap-2">
@@ -556,6 +772,9 @@ export function PaymentsSettingsPage({
         <p className="mb-2">
           You are paid directly, so the money is yours from the moment a shopper
           pays. Imani never holds it.
+        </p>
+        <p className="mb-2">
+          This is your own {name} account. {name}, not Imani, handles questions about payouts and verification.
         </p>
         <p>
           That also means disputes are yours to answer, and {name} may hold back
