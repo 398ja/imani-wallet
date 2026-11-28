@@ -7,17 +7,24 @@
  *       an Express account (ACCOUNT_NOT_ELIGIBLE)
  *   R3  signed routes: 401 unsigned / wrong URL / wrong verb; list works signed; another key's plan 404s;
  *       summary must be signed BY the stall (403 otherwise)
+ *   O1  the stall's own switch (payment-adapter enforces it): an unsaved stall reads off; a save must be
+ *       signed by that stall (401 / 403); with E2E_STALL_SK the stall is switched off (a plan is refused
+ *       NOT_OFFERED), then on for months and weeks (yearly is INTERVAL_NOT_OFFERED, `day` a 400)
  *   S1  start a plan on an eligible stall: a Stripe Checkout URL in subscription mode, on the stall's
  *       own account, a PENDING plan the buyer can list and read
  *   S2  stop that PENDING plan: Stripe's page is expired, the plan CANCELLED, a second stop is a 409
  *   P1  (E2E_PAY=1) pay instalment 1 with 4242 in Stripe's hosted Checkout (Playwright); invoice.paid
  *       arrives; the plan turns ACTIVE with 1 paid and one voucher; the stall's summary counts it (when
  *       E2E_STALL_SK is given); stop asks Stripe to cancel at period end, and a second stop changes nothing
+ *   W1  (E2E_STALL_SK) a weekly plan: Stripe prices it per week, the buyer sees it weekly, it stops.
+ *       The stall's switch is then put back as it was found.
  *
  * The eligible stall is passed in: E2E_STALL_SK (hex), or E2E_STALL_PUBKEY when only the public key is
  * known, for a stall that is READY at the card issuer (enrolled, plan allows cards) and whose connected
  * account is eligible (fee payer `account`, losses `stripe`). E2E_STALL_ACCOUNT names its acct_ when the
  * account carries no merchant_pubkey metadata (OAuth accounts do not). Without a stall S1/S2/P1 skip.
+ * Plans are now refused unless the stall has switched them on (O1): with E2E_STALL_PUBKEY alone the
+ * stall must already have saved that in its Payments settings.
  *
  *   STRIPE_SECRET_KEY=sk_test_... E2E_STALL_PUBKEY=... E2E_STALL_ACCOUNT=acct_... [E2E_PAY=1] \
  *     E2E_EXPRESS_STALL=<pubkey of an Express stall> npx tsx e2e/monthly-payments-staging.e2e.mts
@@ -142,6 +149,43 @@ console.log('R3 signed routes')
   const own = getPublicKey(buyerSk)
   const sumOwn = await call('GET', `/api/v1/checkout/plans/summary?stall=${own}`, { sk: buyerSk })
   check('a summary signed by that key answers {activePlans, monthlyTotals}', sumOwn.status === 200 && sumOwn.json?.activePlans === 0 && Array.isArray(sumOwn.json?.monthlyTotals), `${sumOwn.status} ${sumOwn.text.slice(0, 80)}`)
+}
+
+// ---------------------------------------------------------------- O1 the stall's own switch
+// payment-adapter enforces the stall's opt-in (it used to be only in the published profile, so this
+// suite could start plans on a stall that never turned them on). Needs the stall's secret key to sign.
+let settingsBefore: { enabled?: boolean; intervals?: string[] } | null = null
+async function saveSettings(sk: Uint8Array, body: unknown) {
+  return call('POST', '/api/v1/checkout/plans/settings', { sk, body })
+}
+console.log('O1 the stall switch is enforced at plan start')
+{
+  const stranger = getPublicKey(generateSecretKey())
+  const read = await call('GET', `/api/v1/checkout/plans/settings?stall=${stranger}`)
+  check('a stall that never saved an offer reads as off', read.status === 200 && read.json?.enabled === false, `${read.status} ${read.text.slice(0, 80)}`)
+  const unsigned = await call('POST', '/api/v1/checkout/plans/settings', { body: { enabled: true } })
+  check('saving unsigned is refused', unsigned.status === 401, `${unsigned.status}`)
+  const someoneSk = generateSecretKey()
+  const other = await saveSettings(someoneSk, { stallPubkey: stranger, enabled: true })
+  check('saving for another stall is refused (403)', other.status === 403, `${other.status}`)
+  // (A signature over one body carrying another is covered by StallInstalmentSettingsControllerTest.)
+  const own = await call('POST', '/api/v1/checkout/plans/settings', { sk: someoneSk, body: { enabled: true } })
+  check('a correctly signed save works for the signer itself', own.status === 200 && own.json?.enabled === true, `${own.status} ${own.text.slice(0, 80)}`)
+  await saveSettings(someoneSk, { enabled: false })
+
+  if (stallSk) {
+    settingsBefore = (await call('GET', `/api/v1/checkout/plans/settings?stall=${stall}`)).json
+    const off = await saveSettings(stallSk, { enabled: false })
+    check('the stall switches plans off, signed', off.status === 200 && off.json?.enabled === false, `${off.status}`)
+    const refused = await call('POST', '/api/v1/checkout/plan', { body: { stallPubkey: stall, buyerPubkey: buyer, amountMinor: 4000, instalments: 3 } })
+    check('a plan on a stall that switched off is refused: NOT_OFFERED', refused.status === 409 && refused.json?.code === 'NOT_OFFERED', `${refused.status} ${refused.text.slice(0, 120)}`)
+    const on = await saveSettings(stallSk, { enabled: true, intervals: ['month', 'week'] })
+    check('the stall switches plans on for months and weeks', on.status === 200 && on.json?.enabled === true && on.json?.intervals?.join() === 'week,month', `${on.status} ${on.text.slice(0, 80)}`)
+    const yearly = await call('POST', '/api/v1/checkout/plan', { body: { stallPubkey: stall, buyerPubkey: buyer, amountMinor: 4000, instalments: 3, interval: 'year' } })
+    check('an interval the stall does not offer is refused: INTERVAL_NOT_OFFERED', yearly.status === 409 && yearly.json?.code === 'INTERVAL_NOT_OFFERED', `${yearly.status} ${yearly.text.slice(0, 120)}`)
+    const daily = await call('POST', '/api/v1/checkout/plan', { body: { stallPubkey: stall, buyerPubkey: buyer, amountMinor: 4000, instalments: 3, interval: 'day' } })
+    check('an unknown interval is a 400', daily.status === 400, `${daily.status}`)
+  } else skip('O1 stall switch', 'E2E_STALL_SK not set')
 }
 
 // ---------------------------------------------------------------- S1/S2 start and stop
@@ -271,6 +315,34 @@ async function payInCheckout(url: string): Promise<void> {
   } finally {
     await browser.close()
   }
+}
+
+// ---------------------------------------------------------------- W1 a weekly plan
+if (stallSk && STRIPE_KEY && account) {
+  console.log('W1 a weekly plan is priced weekly on the stall account, then stopped')
+  const w = await call('POST', '/api/v1/checkout/plan', { body: { stallPubkey: stall, buyerPubkey: buyer, amountMinor: 2500, instalments: 8, interval: 'week' } })
+  check('a weekly plan starts', w.status === 200 && typeof w.json?.planId === 'string', `${w.status} ${w.text.slice(0, 120)}`)
+  const weeklyId: string = w.json?.planId ?? ''
+  const sessions = await stripe('GET', '/checkout/sessions', { limit: '5' }, account)
+  const s = (sessions.data ?? []).find((x: any) => x.metadata?.recurring_plan_id === weeklyId)
+  if (s) {
+    const items = await stripe('GET', `/checkout/sessions/${s.id}/line_items`, {}, account)
+    const li = items.data?.[0]
+    check('Stripe prices it at £25.00 a week', li?.amount_total === 2500 && li?.price?.recurring?.interval === 'week', JSON.stringify({ amount: li?.amount_total, recurring: li?.price?.recurring }))
+  } else check('the weekly session is on the stall account', false, 'no session carries the plan id')
+  const listed = await call('GET', '/api/v1/checkout/plans', { sk: buyerSk })
+  check('the buyer sees it as weekly', (listed.json ?? []).find((p: any) => p.planId === weeklyId)?.interval === 'week', '')
+  const stop = await call('POST', `/api/v1/checkout/plans/${weeklyId}/cancel`, { sk: buyerSk })
+  check('stopping the unpaid weekly plan closes it', stop.status === 200 && stop.json?.status === 'CANCELLED', `${stop.status}`)
+}
+
+// Leave the stall's switch as we found it.
+if (stallSk && settingsBefore) {
+  const restored = await saveSettings(stallSk, {
+    enabled: settingsBefore.enabled === true,
+    intervals: settingsBefore.intervals?.length ? settingsBefore.intervals : ['month'],
+  })
+  if (restored.status !== 200) console.log(`  WARN  could not restore the stall's settings: ${restored.status}`)
 }
 
 const failed = results.filter((r) => !r.ok)
