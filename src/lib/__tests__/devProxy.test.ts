@@ -53,6 +53,8 @@ const TEST_STACK: Record<number, string> = {
   8791: 'purchase-issuer (npx tsx services/purchase-issuer/server.ts)',
   // Not in the compose stack either: deploy/subscription-local, the subscription site (#407).
   18910: 'subscription (deploy/subscription-local)',
+  // Not in the compose stack either: imani-checkout-codes run on its own (#402), VITE_CHECKOUT_CODES_URL.
+  28093: 'checkout-codes (imani-checkout-codes, run locally)',
 }
 
 function targets(): { rule: string; target: string; port: number }[] {
