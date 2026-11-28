@@ -23,13 +23,12 @@ import {
   PLAN_INTERVALS,
   fetchStallInstalmentSettings,
   fetchStallInstalmentSummary,
-  formatMoney,
   isMonthlyOnly,
   listWords,
   paymentsNoun,
   paymentsTitle,
-  perPeriod,
   saveStallInstalmentSettings,
+  summaryLine,
   type PlanInterval,
   type StallInstalmentSummary,
 } from '../lib/instalments'
@@ -129,6 +128,12 @@ export function PaymentsSettingsPage({
     intervalsRef.current = next
     setIntervalsState(next)
   }, [])
+  /**
+   * The stall changed a tick box on this screen. Only then does turning on send frequencies: a
+   * stall that taps Turn on before its saved choice has been read must not overwrite it with this
+   * screen's default (payment-adapter keeps what it has when none are sent).
+   */
+  const intervalsTouched = useRef(false)
   /** The plan as last read, for `apply` without making it a new function per read. */
   const planRef = useRef<CardPaymentsPlan>('unknown')
   /**
@@ -293,7 +298,9 @@ export function PaymentsSettingsPage({
     try {
       // Turning on saves the frequencies ticked in the disclosure with it. Turning off sends none,
       // so the stall's choice is kept for the next time it turns them on.
-      const saved = await saveStallInstalmentSettings(on ? { enabled: true, intervals } : { enabled: false })
+      const saved = await saveStallInstalmentSettings(
+        on && intervalsTouched.current ? { enabled: true, intervals } : { enabled: on },
+      )
       if (saved.kind !== 'ok' && on) {
         setError(saved.reason)
         return
@@ -323,13 +330,15 @@ export function PaymentsSettingsPage({
    * (the last one's box is disabled), because "on, but at no frequency" offers nothing.
    */
   const toggleInterval = async (interval: PlanInterval, ticked: boolean) => {
-    const next = PLAN_INTERVALS.filter((i) => (i === interval ? ticked : intervals.includes(i)))
+    // From the ref, not the render: two quick ticks must build on each other.
+    const before = intervalsRef.current
+    const next = PLAN_INTERVALS.filter((i) => (i === interval ? ticked : before.includes(i)))
     if (next.length === 0) return
+    intervalsTouched.current = true
     if (current.current.acceptsInstalments !== true) {
       setIntervals(next)
       return
     }
-    const before = intervals
     setIntervals(next)
     setBusy(true)
     setNote(null)
@@ -386,12 +395,13 @@ export function PaymentsSettingsPage({
   useEffect(() => {
     let cancelled = false
     void fetchStallInstalmentSettings(merchant.pubkey).then((saved) => {
-      if (!cancelled && saved !== null && saved.intervals.length > 0) setIntervals(saved.intervals)
+      // A box ticked before this landed is the stall's newer choice: never overwrite it.
+      if (!cancelled && !intervalsTouched.current && saved !== null && saved.intervals.length > 0) setIntervals(saved.intervals)
     })
     return () => {
       cancelled = true
     }
-  }, [merchant.pubkey])
+  }, [merchant.pubkey, setIntervals])
 
   useEffect(() => {
     // On mount, and after Stripe redirects back. `refresh` re-reads Stripe
@@ -694,7 +704,7 @@ export function PaymentsSettingsPage({
           />
 
           {(monthlyOn || offeringMonthly) && (
-            <IntervalChoice intervals={intervals} disabled={busy} onToggle={(i, on) => void toggleInterval(i, on)} />
+            <IntervalChoice intervals={intervals} on={monthlyOn} disabled={busy} onToggle={(i, ticked) => void toggleInterval(i, ticked)} />
           )}
 
           {offeringMonthly && !monthlyOn && (
@@ -953,37 +963,18 @@ function LockedCardPayments({ busy, name, onCheckAgain }: { busy: boolean; name:
 }
 
 /**
- * "7 people pay you monthly, £340 a month": the stall's running plans. While every one is monthly,
- * the words it always had. Otherwise "regularly", with one total per currency and interval, never
- * added across them (£40 a month and £10 a week are two amounts, not £50).
- */
-export function summaryLine(summary: StallInstalmentSummary): string {
-  const people = `${summary.activePlans} ${summary.activePlans === 1 ? 'person pays' : 'people pay'}`
-  // Defensive: a summary without `totals` (shaped before intervals) is its monthly totals. A missing
-  // field must never take the whole Card payments screen down with it.
-  const all = Array.isArray(summary.totals)
-    ? summary.totals
-    : (summary.monthlyTotals ?? []).map((t) => ({ ...t, interval: 'month' as const }))
-  const monthly = all.every((t) => t.interval === 'month')
-  const totals = all.map((t) => `${formatMoney(t.amountMinor, t.currency)} ${perPeriod(t.interval)}`)
-  if (monthly) {
-    return totals.length > 0
-      ? `${people} you monthly, ${all.map((t) => formatMoney(t.amountMinor, t.currency)).join(' + ')} a month`
-      : `${people} you monthly`
-  }
-  return `${people} you regularly, ${totals.join(' + ')}`
-}
-
-/**
  * Weekly, Monthly, Yearly: which the stall offers. Real checkboxes, so each is announced with its
  * state; the last one ticked cannot be unticked (an offer at no frequency is no offer).
  */
 function IntervalChoice({
   intervals,
+  on,
   disabled,
   onToggle,
 }: {
   intervals: readonly PlanInterval[]
+  /** Already offered (not just being set up): unticking the last one would mean switching off. */
+  on: boolean
   disabled: boolean
   onToggle: (interval: PlanInterval, ticked: boolean) => void
 }) {
@@ -1010,7 +1001,7 @@ function IntervalChoice({
       </div>
       {intervals.length === 1 && (
         <p id="instalment-intervals-last" className="mt-1 text-xs text-mono-500">
-          Keep at least one. To stop offering them, turn the switch off.
+          {on ? 'Keep at least one. To stop offering them, turn the switch off.' : 'Choose at least one.'}
         </p>
       )}
     </fieldset>

@@ -194,8 +194,8 @@ describe('PaymentsSettingsPage monthly payments', () => {
     fireEvent.click(screen.getByLabelText(/accept the monthly payments terms/))
     fireEvent.click(screen.getByRole('button', { name: 'Turn on monthly payments' }))
     await waitFor(() => expect(m.publish).toHaveBeenCalledTimes(1))
-    // Turning on saves the frequencies ticked in the disclosure (monthly unless changed).
-    expect(m.saveSettings).toHaveBeenCalledWith({ enabled: true, intervals: ['month'] })
+    // Untouched tick boxes send no frequencies: the server keeps the stall's (monthly for a new one).
+    expect(m.saveSettings).toHaveBeenCalledWith({ enabled: true })
     expect(m.saveSettings.mock.invocationCallOrder[0]).toBeLessThan(m.publish.mock.invocationCallOrder[0])
   })
 
@@ -256,5 +256,89 @@ describe('PaymentsSettingsPage monthly payments', () => {
     await waitFor(() => expect(m.readSettings).toHaveBeenCalled())
     await new Promise((r) => setTimeout(r, 20))
     expect(m.saveSettings).not.toHaveBeenCalled()
+  })
+})
+
+describe('PaymentsSettingsPage, how often customers can pay', () => {
+  const box = (name: string) => screen.getByRole('checkbox', { name }) as HTMLInputElement
+
+  it('ticks the saved frequencies, and saves a change at once while on', async () => {
+    m.readSettings.mockResolvedValue({ enabled: true, intervals: ['month', 'year'] })
+    m.saveSettings.mockImplementation(async (s: { intervals?: string[] }) => ({ kind: 'ok', value: { enabled: true, intervals: s.intervals } }))
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    await waitFor(() => expect(box('Yearly').checked).toBe(true))
+    expect(box('Monthly').checked).toBe(true)
+    expect(box('Weekly').checked).toBe(false)
+
+    fireEvent.click(box('Weekly'))
+    await waitFor(() => expect(m.saveSettings).toHaveBeenCalledWith({ enabled: true, intervals: ['week', 'month', 'year'] }))
+    expect(await screen.findByText('Shoppers can now pay you weekly, monthly or yearly.')).toBeTruthy()
+  })
+
+  it('puts the box back when the save fails', async () => {
+    m.saveSettings.mockResolvedValue({ kind: 'error', reason: 'Your payment settings could not be saved. Try again.' })
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    await screen.findByTestId('instalment-intervals')
+    fireEvent.click(box('Weekly'))
+    expect(await screen.findByText('Your payment settings could not be saved. Try again.')).toBeTruthy()
+    expect(box('Weekly').checked).toBe(false)
+    expect(box('Monthly').checked).toBe(true)
+  })
+
+  it('the last frequency cannot be unticked, and says why', async () => {
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    await screen.findByTestId('instalment-intervals')
+    const monthly = box('Monthly')
+    expect(monthly.disabled).toBe(true)
+    expect(document.getElementById(monthly.getAttribute('aria-describedby') ?? '')?.textContent).toContain('turn the switch off')
+    expect(document.querySelectorAll('#instalment-intervals-last').length).toBe(1)
+  })
+
+  it('while setting up, ticks are kept and sent with Turn on, not saved one by one', async () => {
+    m.saveSettings.mockImplementation(async (s: { enabled: boolean; intervals?: string[] }) => ({
+      kind: 'ok',
+      value: { enabled: s.enabled, intervals: s.intervals ?? ['month'] },
+    }))
+    open(liveStatus())
+    fireEvent.click(await screen.findByRole('switch'))
+    fireEvent.click(box('Weekly'))
+    fireEvent.click(box('Monthly'))
+    expect(m.saveSettings).not.toHaveBeenCalled()
+    // Not yet on: the hint asks for a choice rather than talking about the switch.
+    expect(screen.getByText('Choose at least one.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Turn on regular payments' })).toBeTruthy()
+    fireEvent.click(screen.getByLabelText(/accept the/))
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on regular payments' }))
+    await waitFor(() => expect(m.saveSettings).toHaveBeenCalledWith({ enabled: true, intervals: ['week'] }))
+  })
+
+  // Review regression: a tick made before the saved choice was read must survive the read.
+  it('a slow settings read never overwrites a box the stall already ticked', async () => {
+    let land: (v: unknown) => void = () => {}
+    m.readSettings.mockReturnValue(new Promise((r) => (land = r)))
+    open(liveStatus())
+    fireEvent.click(await screen.findByRole('switch'))
+    fireEvent.click(box('Yearly'))
+    land({ enabled: false, intervals: ['week'] })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(box('Yearly').checked).toBe(true)
+    expect(box('Monthly').checked).toBe(true)
+    expect(box('Weekly').checked).toBe(false)
+  })
+
+  it('the summary names each interval and never adds them together', async () => {
+    m.summary.mockResolvedValue({
+      kind: 'ok',
+      value: {
+        activePlans: 2,
+        monthlyTotals: [{ currency: 'gbp', amountMinor: 4000 }],
+        totals: [
+          { currency: 'gbp', interval: 'month', amountMinor: 4000 },
+          { currency: 'gbp', interval: 'week', amountMinor: 1000 },
+        ],
+      },
+    })
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    expect(await screen.findByText('2 people pay you regularly, £40 a month + £10 a week')).toBeTruthy()
   })
 })

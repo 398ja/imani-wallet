@@ -57,7 +57,9 @@ export function MonthlyPaymentForm({
   // Monthly first when it is offered: it is what a buyer expects, and what every stall had before.
   const [interval, setIntervalState] = useState<PlanInterval>(offered.includes('month') ? 'month' : offered[0])
   const [amount, setAmount] = useState('')
-  const [term, setTerm] = useState<PlanTerm>(presetTerm(interval))
+  // The term together with the interval it was chosen for: "12" chosen as 12 weeks must never be
+  // read as 12 months when the interval changes under it (the stall narrowed its offer).
+  const [chosen, setChosen] = useState<{ interval: PlanInterval; term: PlanTerm }>({ interval, term: presetTerm(interval) })
   const reasonId = useId()
   const hintId = useId()
   const amountId = useId()
@@ -66,13 +68,14 @@ export function MonthlyPaymentForm({
   // choice it no longer offers, which would be refused again on the next tap.
   const current: PlanInterval = offered.includes(interval) ? interval : offered.includes('month') ? 'month' : offered[0]
   const terms = planTerms(current)
-  const currentTerm: PlanTerm = terms.includes(term) ? term : presetTerm(current)
+  const currentTerm: PlanTerm =
+    chosen.interval === current && terms.includes(chosen.term) ? chosen.term : presetTerm(current)
 
   const chooseInterval = (next: PlanInterval) => {
     if (next === current) return
     setIntervalState(next)
     // The chips are different per interval ("8 weeks" is not "8 months"), so start from its preset.
-    setTerm(presetTerm(next))
+    setChosen({ interval: next, term: presetTerm(next) })
   }
 
   const minor = toMinorUnits(amount)
@@ -142,7 +145,7 @@ export function MonthlyPaymentForm({
         <legend className="mb-2 block text-sm font-medium">How long</legend>
         <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="How long">
           {terms.map((t) => (
-            <Chip key={String(t)} checked={currentTerm === t} onClick={() => setTerm(t)}>
+            <Chip key={String(t)} checked={currentTerm === t} onClick={() => setChosen({ interval: current, term: t })}>
               {termLabel(t, current)}
             </Chip>
           ))}

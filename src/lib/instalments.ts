@@ -123,7 +123,7 @@ export interface StallInstalmentSummary {
 export type StartRefusal =
   | { kind: 'below-minimum'; minAmountMinor: number | null; reason: string }
   | { kind: 'not-offered'; reason: string }
-  /** The stall offers plans, but not this often; `intervals` is what it does offer now. */
+  /** The stall offers plans, but not this often; `intervals` (never empty) is what it does offer now. */
   | { kind: 'interval-not-offered'; intervals: PlanInterval[]; reason: string }
   | { kind: 'not-eligible'; reason: string }
   | { kind: 'other'; reason: string }
@@ -220,12 +220,12 @@ export function startRefusal(
     const offered = Array.isArray(body?.intervals)
       ? PLAN_INTERVALS.filter((i) => (body.intervals as unknown[]).includes(i))
       : []
+    // Without the list there is nothing to choose again from: read it as a stall that does not offer them.
+    if (offered.length === 0) return { kind: 'not-offered', reason: `This stall doesn't offer ${ADVERB[interval].toLowerCase()} payments.` }
     return {
       kind: 'interval-not-offered',
       intervals: offered,
-      reason: offered.length > 0
-        ? `This stall now takes ${listWords(offered.map((i) => ADVERB[i].toLowerCase()))} payments only. Choose again.`
-        : `This stall doesn't offer ${ADVERB[interval].toLowerCase()} payments.`,
+      reason: `This stall now takes ${listWords(offered.map((i) => ADVERB[i].toLowerCase()))} payments only. Choose again.`,
     }
   }
   return other(error ? `${capitalise(error)}${/[.!?]$/.test(error) ? '' : '.'} Nothing was charged.` : `${capitalise(words)} could not be started. Nothing was charged.`)
@@ -504,7 +504,8 @@ export function eachPeriod(interval: PlanInterval = 'month'): string {
  * another interval; anything else is "regular payments" (the customer never sees "subscription").
  */
 export function isMonthlyOnly(intervals: readonly PlanInterval[]): boolean {
-  return intervals.length === 0 || (intervals.length === 1 && intervals[0] === 'month')
+  // `every`, not "one item, and it is month": a buyer's list of plans repeats intervals.
+  return intervals.every((i) => i === 'month')
 }
 
 /** "monthly payments" or "regular payments", lower case, for the middle of a sentence. */
@@ -538,6 +539,28 @@ export function planSummary(amountMinor: number, currency: string, term: PlanTer
 export function termLabel(term: PlanTerm, interval: PlanInterval = 'month'): string {
   if (term === 'open') return 'Until I cancel'
   return `${term} ${term === 1 ? UNIT[interval].one : UNIT[interval].many}`
+}
+
+/**
+ * "7 people pay you monthly, £340 a month": the stall's running plans. While every one is monthly,
+ * the words it always had. Otherwise "regularly", with one total per currency and interval, never
+ * added across them (£40 a month and £10 a week are two amounts, not £50).
+ */
+export function summaryLine(summary: StallInstalmentSummary): string {
+  const people = `${summary.activePlans} ${summary.activePlans === 1 ? 'person pays' : 'people pay'}`
+  // Defensive: a summary without `totals` (shaped before intervals) is its monthly totals. A missing
+  // field must never take the whole Card payments screen down with it.
+  const all = Array.isArray(summary.totals)
+    ? summary.totals
+    : (summary.monthlyTotals ?? []).map((t) => ({ ...t, interval: 'month' as const }))
+  const monthly = all.every((t) => t.interval === 'month')
+  const totals = all.map((t) => `${formatMoney(t.amountMinor, t.currency)} ${perPeriod(t.interval)}`)
+  if (monthly) {
+    return totals.length > 0
+      ? `${people} you monthly, ${all.map((t) => formatMoney(t.amountMinor, t.currency)).join(' + ')} a month`
+      : `${people} you monthly`
+  }
+  return `${people} you regularly, ${totals.join(' + ')}`
 }
 
 /** Always visible beside the button. Wording pending legal review (spec, Open items). */
@@ -593,7 +616,7 @@ export function statusWords(plan: InstalmentPlan): StatusWords {
     case 'PENDING':
       return { chip: 'Not finished', meaning: "You didn't finish paying.", tone: 'neutral' }
     default:
-      return { chip: 'Unknown', meaning: `We couldn't read the state of these ${paymentsNoun([plan.interval])}.`, tone: 'neutral' }
+      return { chip: 'Unknown', meaning: `We couldn't read this ${plan.interval === 'month' ? 'monthly ' : ''}payment's state.`, tone: 'neutral' }
   }
 }
 

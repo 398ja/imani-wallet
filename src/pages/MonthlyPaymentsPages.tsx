@@ -149,7 +149,7 @@ export function MonthlyPaymentDetailPage({ buyerPubkey }: { buyerPubkey?: string
     <Screen>
       {/* Back to the list, named as the list is titled for this buyer's plans. */}
       <BackLink to="/settings/monthly-payments" label={listTitle} />
-      <PageHeader title={branding?.organizationName ?? paymentsTitle([plan.interval])} />
+      <PageHeader title={branding?.organizationName ?? (plan.interval === 'month' ? 'Monthly payment' : 'Regular payment')} />
 
       <div className="mb-6 rounded-2xl border border-mono-200 p-4 dark:border-mono-800">
         <div className="flex items-center justify-between gap-3">
@@ -170,7 +170,7 @@ export function MonthlyPaymentDetailPage({ buyerPubkey }: { buyerPubkey?: string
 
       {voucherIds.length > 0 && (
         <div className="mb-6">
-          <ListSection title={`Vouchers from these ${noun}`}>
+          <ListSection title={plan.interval === 'month' ? 'Vouchers from this monthly payment' : 'Vouchers from these payments'}>
             {voucherIds.map((id, i) => (
               <Link key={id} to={`/coupon/${encodeURIComponent(id)}`} className="flex items-center gap-3 p-4 press-row">
                 <span className="flex-1 text-mono-900 dark:text-mono-50">Payment {i + 1}</span>

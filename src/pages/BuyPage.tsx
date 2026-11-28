@@ -130,7 +130,10 @@ export function BuyPage({
       live = false
     }
   }, [pubkey, offersMonthlyOverride])
+  const offersPlans = offersMonthlyOverride ?? (record !== null && record.stall === pubkey && record.monthly)
   useEffect(() => {
+    // Only for a stall whose record offers plans: every other Buy page needs no extra request.
+    if (!offersPlans) return
     let live = true
     fetchStallInstalmentSettings(pubkey)
       .catch(() => null)
@@ -142,7 +145,7 @@ export function BuyPage({
     return () => {
       live = false
     }
-  }, [pubkey])
+  }, [pubkey, offersPlans])
   const offersMonthly =
     offersMonthlyOverride ?? (record !== null && record.stall === pubkey && record.monthly)
   const currency = record?.stall === pubkey ? record.currency : 'gbp'

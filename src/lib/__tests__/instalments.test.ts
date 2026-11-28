@@ -154,9 +154,9 @@ describe('startRefusal', () => {
       intervals: ['week', 'year'],
       reason: 'This stall now takes weekly or yearly payments only. Choose again.',
     })
+    // Nothing named to choose from: read as not offered (review fix), never an empty choice.
     expect(startRefusal(409, { code: 'INTERVAL_NOT_OFFERED' }, 'year')).toEqual({
-      kind: 'interval-not-offered',
-      intervals: [],
+      kind: 'not-offered',
       reason: "This stall doesn't offer yearly payments.",
     })
   })
