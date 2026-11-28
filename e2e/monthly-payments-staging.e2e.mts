@@ -328,7 +328,7 @@ if (stall && STRIPE_KEY && account && offersWeeks) {
   check('a weekly plan starts', w.status === 200 && typeof w.json?.planId === 'string', `${w.status} ${w.text.slice(0, 120)}`)
   const weeklyId: string = w.json?.planId ?? ''
   const sessions = await stripe('GET', '/checkout/sessions', { limit: '5' }, account)
-  const s = (sessions.data ?? []).find((x: any) => x.metadata?.recurring_plan_id === weeklyId)
+  const s = (sessions.data ?? []).find((x: any) => x.metadata?.plan_id === weeklyId)
   if (s) {
     const items = await stripe('GET', `/checkout/sessions/${s.id}/line_items`, {}, account)
     const li = items.data?.[0]
