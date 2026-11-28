@@ -108,6 +108,16 @@ export interface MerchantProfile {
    * cannot charge for. Only meaningful while `acceptsCards` is true.
    */
   cardProcessor?: 'stripe' | 'paypal'
+   * Whether this stall offers **Monthly payments** (an instalment plan, monthly payments spec).
+   *
+   * Follows `acceptsCards` exactly: self-asserted on the public record, only a literal `true`
+   * counts, absent means off, withdrawn by republishing without it, and cleared by `salesClosed`.
+   * It also needs `acceptsCards` with Stripe as the processor: plans run on the stall's own Stripe
+   * account, so a PayPal stall cannot offer them. The
+   * adapter re-checks eligibility at plan start, so a wrong flag costs a shopper one failed tap and
+   * never a wrong charge.
+   */
+  acceptsInstalments?: boolean
   /**
    * #558 "Close my stall": selling has stopped for good (no Sell, no card sales) while redeeming
    * and receiving go on, so customers can still spend what they hold. Only a literal `true` counts.
@@ -373,6 +383,14 @@ export function buildMerchantEvent(merchant: MerchantProfile): EventTemplate {
     // before PayPal says, so a Stripe stall's record is byte-for-byte what it always was.
     if (merchant.cardProcessor === 'paypal') content.cardProcessor = 'paypal'
   }
+  if (
+    merchant.acceptsInstalments === true &&
+    merchant.acceptsCards === true &&
+    merchant.salesClosed !== true &&
+    merchant.cardProcessor !== 'paypal'
+  ) {
+    content.acceptsInstalments = true
+  }
   if (merchant.salesClosed === true) content.salesClosed = true
   if (merchant.giftingIndexable === true) content.giftingIndexable = true
   // Republished as read, so saving the profile here never drops a shop another client connected.
@@ -438,6 +456,12 @@ export function mergeMerchantEvent(
     // Absent or anything else is Stripe, for the reason `acceptsCards` reads absent as false: the
     // record is the only evidence, and it is evidence only of what it literally says.
     cardProcessor: parsed.cardProcessor === 'paypal' ? 'paypal' : undefined,
+    // Same rule as acceptsCards, and never without it, nor on a PayPal stall (plans are Stripe only).
+    acceptsInstalments:
+      parsed.acceptsInstalments === true &&
+      parsed.acceptsCards === true &&
+      parsed.salesClosed !== true &&
+      parsed.cardProcessor !== 'paypal',
     salesClosed: parsed.salesClosed === true,
     giftingIndexable: parsed.giftingIndexable === true,
     // Absent or malformed means no shop, for the reason `acceptsCards` gives: a record that stops
