@@ -169,6 +169,7 @@ try {
   await often.getByRole('radio', { name: 'Weekly' }).click({ force: true })
   await b.getByLabel('Amount each week').fill('25')
   check('the summary is in weeks', await until(async () => /£25(\.00)? a week for 8 weeks, £200(\.00)? in total/.test(await text(b)), 5000), (await text(b)).slice(0, 400))
+  await b.waitForTimeout(500)
   await shot(b, 'f2-weekly')
   await b.getByRole('button', { name: /Start weekly payments/ }).click()
   const toStripe = await until(async () => b.url().startsWith('https://checkout.stripe.com'), 30_000)
@@ -220,6 +221,10 @@ try {
   await b.getByRole('radiogroup', { name: 'How often' }).getByRole('radio', { name: 'Yearly' }).click({ force: true })
   await b.getByLabel('Amount each year').fill('60')
   check('the summary is in years', await until(async () => /£60(\.00)? a year for 3 years, £180(\.00)? in total/.test(await text(b)), 5000), (await text(b)).slice(0, 400))
+  // The weekly payment's "Payment received" toast can sit over the Start button for a while (it took
+  // the click once): wait for it to go before pressing Start.
+  await until(async () => !/Payment received/.test(await text(b)), 20_000)
+  await b.waitForTimeout(500)
   await shot(b, 'f3-yearly')
   await b.getByRole('button', { name: /Start yearly payments/ }).click()
   check('starting reaches Stripe Checkout', await until(async () => b.url().startsWith('https://checkout.stripe.com'), 30_000), b.url())
