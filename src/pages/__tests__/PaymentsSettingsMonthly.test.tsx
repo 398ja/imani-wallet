@@ -298,6 +298,36 @@ describe('PaymentsSettingsPage, how often customers can pay', () => {
     expect(box('Monthly').checked).toBe(true)
   })
 
+  // Staging regression: the save landed but its answer was lost. The screen asks what is in force
+  // instead of putting back a box the server already took away.
+  it('a lost answer to a save that landed shows the saved choice, not an error', async () => {
+    m.readSettings.mockResolvedValue({ enabled: true, intervals: ['week', 'month'] })
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    await waitFor(() => expect(box('Weekly').checked).toBe(true))
+    m.saveSettings.mockResolvedValue({ kind: 'error', reason: 'Could not reach the payment service. Nothing was changed. Try again.' })
+    m.readSettings.mockResolvedValue({ enabled: true, intervals: ['month'] })
+    fireEvent.click(box('Weekly'))
+    expect(await screen.findByText('Shoppers can now pay you monthly.')).toBeTruthy()
+    expect(box('Weekly').checked).toBe(false)
+    expect(screen.queryByText(/Could not reach/)).toBeNull()
+  })
+
+  it('a failed save that did not land shows what is in force, with the error', async () => {
+    m.readSettings.mockResolvedValue({ enabled: true, intervals: ['week', 'month'] })
+    open(liveStatus(), { ...merchant, acceptsInstalments: true })
+    await waitFor(() => expect(box('Weekly').checked).toBe(true))
+    m.saveSettings.mockResolvedValue({ kind: 'error', reason: 'Could not reach the payment service. Nothing was changed. Try again.' })
+    fireEvent.click(box('Weekly'))
+    expect(await screen.findByText(/Could not reach the payment service/)).toBeTruthy()
+    expect(box('Weekly').checked).toBe(true)
+  })
+
+  it('the Stop reason names regular payments for a stall offering weekly', async () => {
+    m.readSettings.mockResolvedValue({ enabled: true, intervals: ['week'] })
+    open(liveStatus({ activePlans: true }), { ...merchant, acceptsInstalments: true })
+    await waitFor(() => expect(screen.getByText(/You have regular payments running/)).toBeTruthy())
+  })
+
   it('the last frequency cannot be unticked, and says why', async () => {
     open(liveStatus(), { ...merchant, acceptsInstalments: true })
     await screen.findByTestId('instalment-intervals')

@@ -352,13 +352,23 @@ export function PaymentsSettingsPage({
     setError(null)
     try {
       const saved = await saveStallInstalmentSettings({ enabled: true, intervals: next })
+      const confirm = (inForce: PlanInterval[]) => {
+        setIntervals(inForce)
+        setNote(`Shoppers can now pay you ${listWords(inForce.map((i) => ADVERB[i].toLowerCase()))}.`)
+      }
       if (saved.kind === 'ok') {
-        setIntervals(saved.value.intervals.length > 0 ? saved.value.intervals : next)
-        setNote(`Shoppers can now pay you ${listWords((saved.value.intervals.length > 0 ? saved.value.intervals : next).map((i) => ADVERB[i].toLowerCase()))}.`)
+        confirm(saved.value.intervals.length > 0 ? saved.value.intervals : next)
       } else {
-        // Not saved, so not in force: show what is.
-        setIntervals(before)
-        setError(saved.reason)
+        // A failed answer is not proof nothing changed (staging: the save landed, the answer was
+        // lost, and the screen put back a box the server had already taken away). Ask what is in
+        // force and show that; only an unreadable answer falls back to what was there before.
+        const inForce = await fetchStallInstalmentSettings(merchant.pubkey).catch(() => null)
+        if (inForce !== null && inForce.enabled && inForce.intervals.join() === next.join()) {
+          confirm(inForce.intervals)
+        } else {
+          setIntervals(inForce !== null && inForce.intervals.length > 0 ? inForce.intervals : before)
+          setError(saved.reason)
+        }
       }
     } finally {
       setBusy(false)
@@ -848,7 +858,7 @@ export function PaymentsSettingsPage({
         )}
         {connected && plansRunning && (
           <p id="stop-blocked-reason" className="text-sm leading-relaxed text-mono-500">
-            You have monthly payments running. Ask those customers to stop them, or stop them in Stripe, first.
+            You have {paymentsNoun(intervals)} running. Ask those customers to stop them, or stop them in Stripe, first.
           </p>
         )}
       </div>
